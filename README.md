@@ -10,7 +10,7 @@ trace。
 
 | | |
 |---|---|
-| 阶段 | v0.1 契约已定，实现未开始（见 `docs/spec.md`、`design/DESIGN.md`） |
+| 阶段 | **骨架就绪**：cargo workspace 可编译、`serve` 可起（`/health` 200 + 三协议端点 `501` 桩）、五档成本/配额/breakeven 纯函数与 `RawBody` 字节原语已实现并有单测；**转发与 trace 未实现**（Round 2）。见 `autowork/STATE.md` |
 | 选模型 | **显式指定** (provider, model) 或别名；自动选择是插件槽，v0.1 不启用 |
 | 协议 | 入站/出站均支持 OpenAI chat completions / OpenAI responses / Anthropic messages |
 | 成本 | P0 缓存保真 → P1 输入侧载荷压缩 → P2 输出侧纪律 → P3 provider 套利 |
@@ -90,7 +90,7 @@ autowork/                 迭代循环侧（Python 编排 + router replay 做策
 
 - [Spec (WHAT)](docs/spec.md) — 协议契约、配置 schema、观测与计账口径
 - [Design (HOW)](design/DESIGN.md) — crate 布局、插件运行时、成本引擎、缓存策略
-- [Decisions (WHY)](design/decisions/) — ADR-001…005
+- [Decisions (WHY)](design/decisions/) — ADR-001…008
 - [Autowork](autowork/program.md) — 迭代章程、gate、方向池
 
 ## Ops
