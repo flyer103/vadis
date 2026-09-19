@@ -4,8 +4,8 @@
 
 #![forbid(unsafe_code)]
 
-#[ignore = "CONF-12: depends on the translation matrix (R2)"]
+#[ignore = "CONF-12: depends on the translation matrix"]
 #[tokio::test]
 async fn conf_12_tool_call_roundtrip() {
-    unimplemented!("translation matrix lands in Round 2");
+    unimplemented!("the cross-protocol translation matrix is not implemented in v0.1");
 }

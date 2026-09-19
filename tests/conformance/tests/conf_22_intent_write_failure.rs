@@ -3,11 +3,11 @@
 //! zero attempts, the client receives the §8 `internal` body with
 //! `details.stage = "intent"`, and no intent row exists for the request.
 //!
-//! The forwarding pipeline lands in R2-2d; this file asserts the failure
-//! semantics at the seam that enforces them: `write_intent_then` never runs
-//! the effect, and the §8 error body carries `details.stage = "intent"`.
-//! The pipeline twin (fake ProviderClient recording zero attempts through the
-//! real proxy) is kept `#[ignore]`d below until R2-2d.
+//! This file asserts the failure semantics at the seam that enforces them:
+//! `write_intent_then` never runs the effect, and the §8 error body carries
+//! `details.stage = "intent"`. The pipeline twin (fake ProviderClient recording
+//! zero attempts through the real proxy) is kept `#[ignore]`d below: the fake
+//! `ProviderClient` double it needs does not exist yet.
 
 use router_core::error::{ErrorBody, ErrorCode};
 use router_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
@@ -82,7 +82,8 @@ fn conf_22_intent_failure_blocks_upstream() {
 }
 
 /// The full-pipeline twin: the fake ProviderClient records zero attempts and
-/// the real proxy returns the §8 body, once R2-2d lands the forwarding path.
+/// the real proxy returns the §8 body. It needs the same fake `ProviderClient`
+/// double, which does not exist yet.
 #[test]
-#[ignore = "CONF-22: depends on the forwarding pipeline (R2-2d) and the fake ProviderClient double"]
+#[ignore = "CONF-22: the fake ProviderClient double needed to inject an append failure does not exist yet"]
 fn conf_22_pipeline_intent_failure() {}

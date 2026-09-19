@@ -359,11 +359,12 @@ impl Forwarder {
             ));
         }
         if parsed.get("stream").and_then(|s| s.as_bool()) == Some(true) {
-            // SSE lands in R2-2e; never half-relay a stream buffered.
+            // A streaming request is not served on this path; never half-relay a
+            // stream buffered.
             return ForwardOutcome::Failure(ForwardFailure::new(
                 501,
                 ErrorCode::NotImplemented,
-                "streaming responses land in R2-2e; resend with stream: false",
+                "a streaming request is not served on this path; resend with stream: false",
             ));
         }
 
