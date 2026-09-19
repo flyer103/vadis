@@ -871,6 +871,7 @@ dependencies = [
  "axum",
  "clap",
  "router-core",
+ "router-providers",
  "router-proxy",
  "router-store",
  "serde_json",
