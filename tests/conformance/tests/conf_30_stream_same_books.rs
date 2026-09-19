@@ -376,3 +376,61 @@ async fn conf_30_d_stream_connect_failure_classifies_connect() {
     assert_eq!(errors[0]["details"]["error_class"], "connect_failure");
     assert_eq!(rec["usage_missing"], true);
 }
+
+/// (e) R6 after-first-byte: the stream dies mid-way. The relay truncates
+/// (CONF-13b's client-side behavior) **and** the books say so — the
+/// record carries the truncation in `errors[]`, usage never arrived so
+/// nothing is charged, and no accounting rows were written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_30_e_truncated_stream_records_its_truncation() {
+    let dir = testkit::tempdir("conf30e");
+    let upstream = testkit::MockUpstream::start().await.unwrap();
+    upstream.queue(testkit::CannedResponse::sse(vec![
+        SseChunk::event(b"data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n"),
+        // Abrupt close after one event: no usage, no [DONE].
+        SseChunk::abort_after(50),
+    ]));
+
+    let listen_port = testkit::free_port();
+    let config_path = dir.join("config.yaml");
+    std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
+    let serve_task = start_router(&config_path, listen_port);
+
+    let (status, body, _h) = testkit::http_post(
+        &format!("127.0.0.1:{listen_port}"),
+        "/v1/chat/completions",
+        turn_body("conf30-sess-f", "hi", None).as_bytes(),
+        &[],
+    );
+    serve_task.abort();
+    let _ = serve_task.await;
+
+    assert_eq!(status, 200, "the head was already committed");
+    assert!(!testkit::dechunk(&body).ends_with(b"data: [DONE]\n\n"));
+    // No retry: one attempt only.
+    assert_eq!(upstream.requests().len(), 1);
+
+    // The books: one line, truncation in errors[], nothing charged.
+    let records = read_records(&dir.join("state/traces"));
+    assert_eq!(records.len(), 1, "the truncated stream still left its line");
+    let rec = &records[0];
+    assert_eq!(rec["result"]["status"], 200);
+    assert_eq!(
+        rec["usage_missing"], true,
+        "an incomplete stream has no usage"
+    );
+    assert_eq!(rec["cost"]["total"], 0);
+    let errors = rec["errors"].as_array().expect("errors array");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e["details"]["error_class"] == "stream_truncated"),
+        "the truncation is recorded, never presented as complete"
+    );
+    let kinds: Vec<String> = event_kinds(&dir)
+        .into_iter()
+        .map(|(k, _)| k)
+        .filter(|k| k == "cost.computed" || k == "quota.charged")
+        .collect();
+    assert!(kinds.is_empty(), "a truncated stream charges nothing");
+}
