@@ -703,6 +703,7 @@ written).
 | CONF-25 | §10·state | **config-driven `serve`**: the listen address, the plugin set and the roster come from the config file — a config naming another address and another plugin set is what the process actually uses (`/health` reports the configured set, and the configured address is where it listens), with no hardcoded default surviving in the serving path | config parsing + `serve` (§12.10.2) |
 | CONF-26 | §10·invariant | **the client can speak TLS**: the workspace manifest declares `reqwest` with a TLS feature and does not re-enable its default features (an http-only client fails every real provider while every mock upstream stays plain http) | the workspace `Cargo.toml` (§12.10.1) |
 | CONF-27 | §10·fidelity + §12.10.7 | **the upstream receives the provider-native model id**: (a) client sends `provider/model` → the mock receives that provider's native id; (b) client sends an alias → the upstream request is **byte-identical** to (a)'s, and the trace's `decision.model` / `decision.requested_model` / `selection_source` say native id / client string / `alias`; (c) every other byte (whitespace, escapes, multi-byte UTF-8, trailing newline) is unchanged | the `model` rewrite (§12.10.7) + `decision.requested_model` (§12.6) |
+| CONF-28 | §6 + §8·observation | **a terminal failure still writes its trace line**: an upstream 400 (deterministic `format_error`, never retried) leaves exactly one `DecisionRecord` with `errors[].details.error_class == "format_error"`, `result.status == 502`, `usage_missing: true` and nothing charged; companion cases pin the same one-line invariant on the connect-failure and pre-route paths | the terminal-failure record path (`Accountant::finish_failure`, §12.6) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -715,6 +716,12 @@ consequences explicitly invited ("the last event before an upstream call is
 `upstream.submitted`"); CONF-21/22 come from ADR-009's projection rule (item 5) and its
 failure-mode table (item 8); CONF-23 from ADR-009 item 6/item 8; CONF-24 from spec §4.5's
 join key; CONF-25 from spec §4 (no behaviour outside the config).
+
+**Allocation of CONF-28.** Allocated by the operator's R2G4 gap ruling (failed requests must still
+write their trace line; the ID was named on the R2G4 card). The shared terminal-failure recorder
+(`Accountant::finish_failure`, called once from the buffered path's `forward` wrapper) is
+deliberately a reusable seam: R2G8 routes the streaming path's terminal outcomes through the same
+function instead of a second inlined copy.
 
 **Allocation of CONF-26 and CONF-27.** Two further owner-allocated IDs, recorded the same way (a human
 decision, not a loop outcome — ADR-012):

@@ -142,6 +142,32 @@ pub(crate) fn rewrite_outbound_model<'a>(
     cleaned.set_top_level_string("model", native_id)
 }
 
+/// What the buffered path learned about a request before its terminal
+/// outcome — enough to write the failure `DecisionRecord` when the
+/// outcome is a failure (spec §6: one line per request, failures
+/// included). `now_epoch_s` is the request's single clock read (AGENTS
+/// constraint 2), reused by the terminal record instead of a second one.
+struct RequestFacts<'a> {
+    request_id: &'a str,
+    received_event: Option<router_core::EventId>,
+    proto_in: WireApi,
+    proto_out: Option<WireApi>,
+    session: Option<String>,
+    turn_index: u32,
+    requested_model: Option<String>,
+    selection_source: &'static str,
+    decision_ms: u32,
+    started: Instant,
+    now_epoch_s: u64,
+    /// Prefix blocks of the cleaned body, set once mutation (a) ran.
+    blocks: Vec<PrefixBlock>,
+    /// The first route that failed over, for `result.failover_from`.
+    failover_from: Option<RouteSpec>,
+    /// The last attempt's wire latency (a single-attempt failure's
+    /// `result.upstream_ms`); `None` until an attempt answered.
+    upstream_ms: Option<u32>,
+}
+
 impl Forwarder {
     /// Forwards one buffered request. `proto_in` is the inbound endpoint's
     /// protocol; a native route (proto_in == the provider's `wire_api`)
@@ -149,6 +175,10 @@ impl Forwarder {
     /// everything else byte-identical. `headers` feed the session key
     /// sources (`header:<name>`); the body's `prompt_cache_key` wins when
     /// present (spec §4 key_sources order).
+    ///
+    /// Every terminal failure records its `DecisionRecord` before the
+    /// outcome leaves the engine (R2G4) — one shared call into
+    /// `Accountant::finish_failure`, never a second inlined copy.
     pub async fn forward(
         &self,
         proto_in: WireApi,
@@ -156,8 +186,79 @@ impl Forwarder {
         request_id: &str,
         headers: &[(String, String)],
     ) -> ForwardOutcome {
-        let started = Instant::now();
-        let now_epoch_s = (now_us() / 1_000_000).max(0) as u64;
+        let mut facts = RequestFacts {
+            request_id,
+            received_event: None,
+            proto_in,
+            proto_out: None,
+            session: None,
+            turn_index: 1,
+            requested_model: None,
+            selection_source: "explicit",
+            decision_ms: 0,
+            started: Instant::now(),
+            now_epoch_s: (now_us() / 1_000_000).max(0) as u64,
+            blocks: Vec::new(),
+            failover_from: None,
+            upstream_ms: None,
+        };
+        let outcome = self
+            .forward_inner(&mut facts, proto_in, body, request_id, headers)
+            .await;
+        if let ForwardOutcome::Failure(f) = &outcome {
+            self.record_failure_trace(&facts, f);
+        }
+        outcome
+    }
+
+    /// One trace line for a terminal failure (spec §6 / §8): the same
+    /// `Accountant` seam as the success path, so the failure record's
+    /// shape cannot drift from it. Missing facts stay missing — an
+    /// unparsable body has no `session` and no `blocks`, and the record
+    /// says so by leaving them empty rather than inventing values.
+    fn record_failure_trace(&self, facts: &RequestFacts<'_>, f: &ForwardFailure) {
+        crate::accounting::Accountant {
+            store: self.store.as_deref(),
+            trace: self.trace.as_deref(),
+            // No usage arrived on a failure path: the price table would
+            // price nothing (commit() skips everything at usage_missing),
+            // so the lookup is deliberately not performed.
+            accounting: None,
+        }
+        .finish_failure(
+            &crate::accounting::AccountCtx {
+                request_id: facts.request_id,
+                received_event: facts.received_event,
+                proto_in: facts.proto_in.as_str(),
+                proto_out: facts.proto_out.map(WireApi::as_str),
+                session: facts.session.as_deref(),
+                turn_index: facts.turn_index,
+                selection_source: facts.selection_source,
+                requested_model: facts.requested_model.as_deref(),
+                decision_ms: facts.decision_ms,
+                started: facts.started,
+                now_epoch_s: facts.now_epoch_s,
+            },
+            f,
+            &facts.blocks,
+            facts.upstream_ms,
+            facts
+                .failover_from
+                .as_ref()
+                .map(|r| format!("{}/{}", r.provider, r.model)),
+        );
+    }
+
+    async fn forward_inner(
+        &self,
+        facts: &mut RequestFacts<'_>,
+        proto_in: WireApi,
+        body: &[u8],
+        request_id: &str,
+        headers: &[(String, String)],
+    ) -> ForwardOutcome {
+        let started = facts.started;
+        let now_epoch_s = facts.now_epoch_s;
         let decision_start = Instant::now();
         // Parse only to read `model` and `stream`; the forwarded bytes are
         // the raw original, never a reserialization.
@@ -178,6 +279,7 @@ impl Forwarder {
                 "request body is missing the string field 'model'",
             ));
         };
+        facts.requested_model = Some(model.to_string());
         if model == "auto" {
             return ForwardOutcome::Failure(ForwardFailure::new(
                 400,
@@ -199,6 +301,7 @@ impl Forwarder {
             Ok(r) => r,
             Err(f) => return ForwardOutcome::Failure(f),
         };
+        facts.selection_source = selection_source;
         let Some(provider) = self.provider(&primary) else {
             return ForwardOutcome::Failure(ForwardFailure::new(
                 404,
@@ -254,6 +357,7 @@ impl Forwarder {
                 }
             };
         let outbound_hash = body_sha16(cleaned.as_bytes());
+        facts.blocks = extract_prefix_blocks(&cleaned).unwrap_or_default();
 
         // Session resolution (spec §4 key_sources): the body's
         // `prompt_cache_key` first, then the configured `header:<name>`
@@ -284,9 +388,11 @@ impl Forwarder {
                 }
             })
             .unwrap_or(1);
+        facts.session = session.clone();
+        facts.turn_index = turn_index;
 
         // Rows 1 + 3 of the §12.10.5 wiring (FULL + NORMAL).
-        let received_event = self.append_event(
+        facts.received_event = self.append_event(
             EventKind::RequestReceived,
             request_id,
             Some(&outbound_hash),
@@ -301,6 +407,8 @@ impl Forwarder {
             session.as_deref(),
         );
         let decision_ms = decision_start.elapsed().as_millis() as u32;
+        facts.decision_ms = decision_ms;
+        facts.proto_out = Some(provider.wire_api);
         self.append_event(
             EventKind::DecisionMade,
             request_id,
@@ -354,9 +462,9 @@ impl Forwarder {
             .bind_session(
                 &crate::accounting::AccountCtx {
                     request_id,
-                    received_event,
+                    received_event: facts.received_event,
                     proto_in: proto_in.as_str(),
-                    proto_out: provider.wire_api.as_str(),
+                    proto_out: Some(provider.wire_api.as_str()),
                     session: session.as_deref(),
                     turn_index,
                     selection_source,
@@ -385,7 +493,6 @@ impl Forwarder {
         }
 
         let mut attempted_providers: Vec<String> = Vec::new();
-        let mut failover_from: Option<RouteSpec> = None;
         let mut last_class: Option<ErrorClass> = None;
         let mut last_upstream_status: Option<u16> = None;
         let mut attempt_index: u32 = 0;
@@ -447,7 +554,9 @@ impl Forwarder {
             // cache_ledger rebuild reads (§12.10.6, CONF-21). `body_hash`
             // is that attempt's byte-final bytes (note R4): the rewrite is
             // done, so the hash names exactly what goes to the wire.
-            let mut blocks_now = extract_prefix_blocks(&cleaned).unwrap_or_default();
+            // Cloned (not taken): a failed attempt continues to the next
+            // candidate, which re-reads the same cleaned-body blocks.
+            let blocks_now = facts.blocks.clone();
             let intent_id = if let Some(store) = &self.store {
                 let intent = NewEvent {
                     kind: EventKind::UpstreamSubmitted,
@@ -496,6 +605,7 @@ impl Forwarder {
             let outcome = transport.send_boxed(req).await;
             let latency_us = attempt_started.elapsed().as_micros() as i64;
             let upstream_ms = Some((latency_us / 1000) as u32);
+            facts.upstream_ms = upstream_ms;
 
             match outcome {
                 AttemptOutcome::Responded(resp) => {
@@ -518,10 +628,11 @@ impl Forwarder {
                         session.as_deref(),
                     );
                     if (200..300).contains(&resp.status) {
-                        let mut blocks = std::mem::take(&mut blocks_now);
+                        let mut blocks = blocks_now;
                         if let Some(u) = &usage {
                             attribute_tokens(&mut blocks, u);
                         }
+                        facts.blocks = blocks.clone();
                         let route_acc =
                             crate::accounting::route_accounting(&self.config, candidate);
                         let accountant = crate::accounting::Accountant {
@@ -537,9 +648,9 @@ impl Forwarder {
                         // then replace (§12.10.6).
                         let ctx = crate::accounting::AccountCtx {
                             request_id,
-                            received_event,
+                            received_event: facts.received_event,
                             proto_in: proto_in.as_str(),
-                            proto_out: cand_provider.wire_api.as_str(),
+                            proto_out: Some(cand_provider.wire_api.as_str()),
                             session: session.as_deref(),
                             turn_index,
                             selection_source,
@@ -550,15 +661,15 @@ impl Forwarder {
                         };
                         let _accounted = accountant.finish(
                             &ctx,
-                            &ForwardOutcome::Success(ForwardSuccess {
+                            &ForwardSuccess {
                                 status: resp.status,
                                 content_type: resp.content_type.clone(),
                                 body: resp.body.clone(),
                                 route: candidate.clone(),
-                                failover_from: failover_from.clone(),
+                                failover_from: facts.failover_from.clone(),
                                 usage,
                                 prefix_blocks: blocks.clone(),
-                            }),
+                            },
                             &blocks,
                             upstream_ms,
                         );
@@ -570,7 +681,7 @@ impl Forwarder {
                             content_type: resp.content_type,
                             body: resp.body,
                             route: candidate.clone(),
-                            failover_from,
+                            failover_from: facts.failover_from.clone(),
                             usage,
                             prefix_blocks: blocks,
                         });
@@ -610,7 +721,7 @@ impl Forwarder {
                                 switch_cost,
                             );
                         }
-                        failover_from.get_or_insert_with(|| candidate.clone());
+                        failover_origin(&mut facts.failover_from, candidate);
                         attempt_index += 1;
                         continue;
                     }
@@ -649,7 +760,7 @@ impl Forwarder {
                                 switch_cost,
                             );
                         }
-                        failover_from.get_or_insert_with(|| candidate.clone());
+                        failover_origin(&mut facts.failover_from, candidate);
                         attempt_index += 1;
                         continue;
                     }
@@ -967,6 +1078,14 @@ impl Forwarder {
                 "error_class": class.as_str(),
             })),
         }
+    }
+}
+
+/// The first route the request failed over from (spec §6
+/// `result.failover_from`): set once, never overwritten by later hops.
+fn failover_origin(slot: &mut Option<RouteSpec>, failed: &RouteSpec) {
+    if slot.is_none() {
+        *slot = Some(failed.clone());
     }
 }
 

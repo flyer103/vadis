@@ -29,7 +29,7 @@ use router_core::trace::{
 use router_core::Usage;
 use serde_json::json;
 
-use crate::forward::{ForwardFailure, ForwardOutcome};
+use crate::forward::{ForwardFailure, ForwardSuccess};
 
 /// The route-resolved accounting inputs: the model's price table and the
 /// provider's quota plans covering that model, both converted once per
@@ -82,7 +82,10 @@ pub struct AccountCtx<'a> {
     /// The `request.received` row id — the trace's join anchor (CONF-24).
     pub received_event: Option<EventId>,
     pub proto_in: &'a str,
-    pub proto_out: &'a str,
+    /// The outbound protocol when a route was resolved; `None` on a
+    /// terminal failure that never reached one (spec §6 `protocol_out`
+    /// is nullable for exactly that record).
+    pub proto_out: Option<&'a str>,
     pub session: Option<&'a str>,
     pub turn_index: u32,
     pub selection_source: &'a str,
@@ -216,50 +219,63 @@ impl<'a> Accountant<'a> {
     /// the record, appends the trace line, then commits `cost.computed`
     /// and `quota.charged` with `trace_ref` naming that line. Returns the
     /// record plus the pointer (for callers that surface the join).
+    ///
+    /// Success outcomes only — every terminal failure goes through
+    /// [`Accountant::finish_failure`], so a `DecisionRecord` lands on
+    /// **all** terminal paths (spec §6's one line per request; failures
+    /// are when the analysis truth matters most).
     pub fn finish(
         &self,
         ctx: &AccountCtx<'_>,
-        outcome: &ForwardOutcome,
+        outcome: &ForwardSuccess,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
     ) -> AccountResult {
-        let mut extra_errors: Vec<TraceError> = Vec::new();
-        let (status, upstream_status, provider, model, usage, usage_missing, failover_from) =
-            match outcome {
-                ForwardOutcome::Success(s) => (
-                    s.status,
-                    Some(s.status),
-                    s.route.provider.clone(),
-                    s.route.model.clone(),
-                    s.usage,
-                    s.usage.is_none(),
-                    s.failover_from
-                        .as_ref()
-                        .map(|r| format!("{}/{}", r.provider, r.model)),
-                ),
-                ForwardOutcome::Failure(f) => {
-                    extra_errors.push(trace_error_for_failure(f));
-                    (
-                        f.status,
-                        None,
-                        String::new(),
-                        String::new(),
-                        None,
-                        true,
-                        None,
-                    )
-                }
-            };
+        let failover_from = outcome
+            .failover_from
+            .as_ref()
+            .map(|r| format!("{}/{}", r.provider, r.model));
         self.commit(
             ctx,
-            status,
-            upstream_status,
-            &provider,
-            &model,
-            usage,
-            usage_missing,
+            outcome.status,
+            Some(outcome.status),
+            &outcome.route.provider,
+            &outcome.route.model,
+            outcome.usage,
+            outcome.usage.is_none(),
             failover_from,
-            extra_errors,
+            Vec::new(),
+            blocks,
+            upstream_ms,
+        )
+    }
+
+    /// The **shared terminal-failure record** (R2G4): one call site per
+    /// forwarding path — upstream 4xx/5xx exhausted, connect failure,
+    /// timeout / unknown_outcome, parse/route/capability rejections —
+    /// landing one `DecisionRecord` with `errors[0]` naming the
+    /// client-facing failure (`error_class` / `stage` in `details`) and
+    /// `usage_missing: true` (no usage arrived, so nothing is charged and
+    /// no cost is invented, spec §8). The trace write itself already
+    /// follows §8: a failure there is recorded, never blocking.
+    pub fn finish_failure(
+        &self,
+        ctx: &AccountCtx<'_>,
+        failure: &ForwardFailure,
+        blocks: &[PrefixBlock],
+        upstream_ms: Option<u32>,
+        failover_from: Option<String>,
+    ) -> AccountResult {
+        self.commit(
+            ctx,
+            failure.status,
+            None,
+            "",
+            "",
+            None,
+            true,
+            failover_from,
+            vec![trace_error_for_failure(failure)],
             blocks,
             upstream_ms,
         )
@@ -382,8 +398,8 @@ impl<'a> Accountant<'a> {
             },
             protocol: ProtocolRec {
                 protocol_in: ctx.proto_in.to_string(),
-                protocol_out: Some(ctx.proto_out.to_string()),
-                translated: ctx.proto_in != ctx.proto_out,
+                protocol_out: ctx.proto_out.map(str::to_string),
+                translated: matches!(ctx.proto_out, Some(out) if out != ctx.proto_in),
                 lossy: Vec::new(),
             },
             decision: DecisionRec {
