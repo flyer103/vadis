@@ -2,9 +2,11 @@
 //! one attempt per call. This layer **makes no decisions** — it surfaces
 //! the raw material of a classification and hands it up.
 //!
-//! Non-streaming path only in this round (R2-2d): an attempt buffers the
-//! response body. The SSE relay lands with R2-2e; a `stream: true` inbound
-//! request is answered `501` by the proxy, never half-relayed.
+//! Both attempt shapes live here: `send` buffers the whole response body
+//! before returning, `stream::open` + `read_chunk` yield the response head
+//! first and then the upstream's body bytes as they arrive. A `stream: true`
+//! inbound request is served by the SSE relay; the buffered engine answers it
+//! `501`, never half-relayed.
 
 #![forbid(unsafe_code)]
 

@@ -16,7 +16,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Start the HTTP proxy (R2: config-driven; forwarding lands with the data plane)
+    /// Start the HTTP proxy (config-driven)
     Serve {
         /// Path to the router config file
         #[arg(long)]
