@@ -6,4 +6,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod breakeven;
+pub mod cost;
 pub mod error;
+pub mod peak;
+pub mod quota;
+
+pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};
+pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
+pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
+pub use quota::{charge, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWindow};
