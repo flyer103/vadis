@@ -1,56 +1,165 @@
 # Operations
 
-Status: outline only. Behaviour under failure is normative in `docs/spec.md` §8; this
-chapter is the day-2 view for whoever runs the gateway.
+Status: written for v0.1. Behaviour under failure is normative in `docs/spec.md` §8 and the
+store's contract is §4.5; this chapter is the day-2 view for whoever runs the gateway.
 
 router is a single local process for a single operator. Operating it is mostly about
 knowing what it persists, what it deliberately does not, and what it does when an upstream
 misbehaves.
 
-## Outline
+## Run it
 
-- **Run it**: `serve` with a config file; liveness via the health endpoint; all logs and
-  accounting go to the trace files you configured.
-- **Trace lifecycle**: files append and roll over; v0.1 has no automatic retention or
-  cleanup, so archiving is a manual operations job and the path is configurable so state can
-  live outside the repository.
-- **Local state store**: session stickiness, the cache ledger and the quota counters live in
-  a local store beside the traces ([`docs/spec.md` §4.5](../docs/spec.md), ADR-009). It is a
-  startup prerequisite, a lost projection is rebuilt from its own event log, and it must be
-  backed up with the traces — it is not reconstructible from a trace alone.
-- **No server-side session state**: the gateway does not store conversations. Requests
-  arriving with server-side state are routed stickily and tagged in the trace so the
-  assumption is continuously auditable rather than assumed.
+```bash
+router serve --config config.yaml
+```
+
+Everything the process does comes from that file: the listen address, the plugin set, the
+roster, the aliases, the fallback chain, the trace directory and the state path. There is
+no hidden default address and no built-in plugin list to reconcile with it.
+
+Three startup outcomes are worth knowing before the first request:
+
+| At startup | What happens |
+|---|---|
+| the config does not validate | the process **exits non-zero** and names the offending key and the reason. It never silently falls back to a default: a config you edited that "did not take effect" is the most expensive silent failure there is |
+| an env var named by `api_key_env` is missing | **not** a startup failure: that provider is marked unavailable and reported by `/health`; the rest of the roster still serves |
+| the state store cannot be opened or migrated | the process **exits non-zero** with the reason. There is no in-memory degraded mode — a gateway that enforced quota from numbers it could not recover would report figures it could not stand behind |
+
+Liveness is `GET /health`, which reports what this process actually loaded: the plugin
+set, each provider's key presence, and the resolved state path. A plugin listed as
+`disabled` in the config appears as disabled rather than missing.
+
+A change to the config is applied as a diff — plugins reload without restarting the
+process. A change to the listen address is not a reload; restart for that one. Nothing in
+the serving path depends on wall-clock time or turn order, so a restart does not change
+what a request looks like upstream.
+
+## What it persists
+
+| Artifact | Where | Lifecycle |
+|---|---|---|
+| trace files | `<config dir>/<trace.dir>/YYYY-MM-DDTHH.jsonl` | append-only, rolled hourly; v0.1 has **no** automatic retention or cleanup, so archiving is a manual operations job |
+| the state store | `<config dir>/state/router.db` | one SQLite file in WAL mode, holding the event log and the projections built from it |
+| request and response bodies | **nowhere** | never written to either artifact; the log keeps a body hash plus a pointer to the trace line |
+
+The parts of the book that matter here: the trace is the only analysis channel, and the
+store is never read by the analysis side (ADR-005, ADR-010). Both paths are resolved
+relative to the config file's directory, so the state can live outside the repository
+(`state/` is gitignored).
+
+## The state store, and its writer
+
+- **One writer per state directory.** While `serve` runs it holds the database file
+  exclusively. A second `serve` pointed at the same state directory is **refused at
+  startup** with a stated reason, rather than becoming a second writer on one file.
+- **Consequence for inspection:** you cannot casually open the file with a SQLite tool while
+  the gateway is running (and you will get a busy error rather than a corrupt read). Stop
+  `serve` first, inspect, then start it again. A dedicated `router state`-style surface is a
+  separate change, not part of v0.1.
+- **The store is a startup prerequisite** (see the table above). An unreadable file is a
+  permissions problem to fix, not a mode to run in.
+
+### Backup
+
+Back up the store **and** the traces, together, and treat both as operator data:
+
+- the store's projections (quota counters, sticky bindings) are rebuildable from the store's
+  own event log — but **not** from a trace, and not from a log you did not back up;
+- a trace is not reconstructible from the store either, and it is the only record of what
+  each request cost;
+- for a consistent copy, **stop `serve` and copy the database together with its `-wal` and
+  `-shm` sidecar files** (copying only `router.db` while a WAL is pending loses the tail of
+  the log). A SQLite-aware backup taken while stopped is equally fine.
+
+Nobody else keeps a copy of that state: clients are stateless and resend their whole
+conversation every turn, so the gateway is the only place a request's lifecycle is recorded
+at all.
+
+## The outcome router cannot verify (`unknown_outcome`)
+
+Sometimes the gateway knows it *intended* to call the upstream and cannot know what
+happened: the process died mid-request, the client disconnected mid-stream, an upstream
+died after the request bytes were fully written, or a stall hit the attempt timeout after the
+write. The body may have been billed. Router does not guess:
+
+- the request is **recorded and reported** as `unknown_outcome`;
+- the quota is **not charged again** (a conservative local re-charge would silently eat your
+  plan, which is worse than a visible undercount), and no cost is invented for it;
+- reconciliation is **yours**, against the provider's own bill;
+- `router stats` reports how many requests in the window are in this state, so the ambiguity
+  shows up as a number instead of being absorbed into a total.
+
+Read the honest boundary with it too: v0.1 does not verify that an upstream honours an
+idempotency key, so if the upstream does not deduplicate, "was this request billed?" is
+undecidable at the protocol layer. No local bookkeeping can answer it, and a retry — the
+client's or the gateway's — can legitimately be billed twice. That is why the design keeps
+the intent row, refuses a retry after a full write, and leaves the decision to the client,
+which at least knows its own idempotency story.
+
+## No server-side session state
+
+The gateway does not store conversations. Requests that arrive with server-side state are
+routed stickily and tagged in the trace, so the assumption is continuously auditable rather
+than assumed. No bodies are kept — only hashes and pointers — so there is no "router keeps
+your conversations" surface at all.
+
+## Failover, cooldowns and degradation
+
 - **Failover**: a configured ordered chain of routes is tried when an upstream errors,
   rate-limits or exhausts its quota; switching routes loses the prefix cache, and the
   re-prefill cost plus the origin route are recorded. An exhausted chain is a clean gateway
-  error, not a hang. A provider whose plan or account is exhausted is marked unavailable for a
-  cooldown (ADR-011), so requests stop being spent on a route that is known to be dead instead
-  of rediscovering that one request at a time.
+  error, not a hang.
+- **Cooldown**: a failure that is about the *account* (an exhausted plan, a billing refusal)
+  marks the whole provider unavailable for a cooldown, so requests stop being spent
+  rediscovering a dead route one request at a time. A rate limit cools the route instead.
+  The cooldown is state: it survives a restart, is reported by `/health` and counted by
+  `router stats`.
+- **Retry discipline**: a retry happens only where the evidence says the attempt was not
+  billed. A failure after the request bytes were fully written is never retried by the
+  gateway — see the unknown-outcome section.
 - **Degradation rules**: a failed transform falls back to the original payload and the
   request is still served; a prefix discontinuity warns by default and can be made
-  rejecting; unknown fields pass through.
-- **Config changes**: editable config is re-read as a diff — reload do not restart; nothing
-  in the serving path depends on wall-clock time or turn order, so restarts do not change
-  what a request looks like upstream.
-- **Upgrades and rollback**: one logical change per commit on a round branch, merged only
-  when the round's gates pass; a round that fails leaves documentation and no broken code. A
-  bounded parameter may also be adopted online: it is tried on a share of *new* sessions only
-  (never changed mid-session, which would discard the prefix cache), and it reverts by itself
-  when its declared signals go wrong (ADR-012, ADR-013).
-- **Troubleshooting entry points**: client sees 503 with nothing in the logs → check the
-  proxy prerequisite first; endpoint returns "not implemented" → that path is staged for a
-  later round; costs moved → compare prefix continuity between turns; a provider seems to be
-  skipped entirely → it is inside a cooldown, which the health endpoint reports.
+  rejecting; unknown fields pass through; a failed trace write never blocks a request but is
+  recorded rather than hidden.
+
+## Upgrades and rollback
+
+One logical change per commit on a round branch, merged only when the round's gates pass; a
+round that fails leaves documentation and no broken code. The store's schema is migrated
+**forward only** — a database written by a newer build is refused by an older one rather
+than read on a guess. Restore a backup if you need to go back. A bounded parameter may also
+be adopted online: it is tried on a share of *new* sessions only (never changed mid-session,
+which would discard the prefix cache), and it reverts by itself when its declared signals go
+wrong (ADR-012, ADR-013).
+
+## Troubleshooting entry points
+
+| Symptom | First thing to check |
+|---|---|
+| the client sees `503` and nothing reaches the logs | the local-proxy prerequisite (`NO_PROXY=127.0.0.1,localhost`) — see [Connecting clients](connecting-clients.md) |
+| the process exits immediately at startup | the config (it names the offending key) or the state store (permissions, a migration, or a second instance holding the writer lock) |
+| an endpoint returns "not implemented" | that path is staged for a later round; nothing is wrong with your setup |
+| costs moved | prefix continuity between turns in the same session, before anything else |
+| a provider seems to be skipped entirely | it is inside a cooldown, which `/health` reports |
+| "nothing is being charged" | check `unknown_outcome` counts and whether usage was missing for those requests — a reported ambiguity is not a bug, an invented number would be |
+| a request went somewhere you did not ask for | the guard hit and the fallback chain applied, or the route was in a cooldown; the trace records the origin route and the switch cost |
 
 ## Authoritative sources
 
-- [`docs/spec.md` §8](../docs/spec.md) — unified error body, error-type-to-HTTP table,
+- [`docs/spec.md` §8](../docs/spec.md) — unified error body, the error-type-to-HTTP table,
   response headers and degradation behaviour.
+- [`docs/spec.md` §4.1](../docs/spec.md) — trace output parameters and path resolution.
 - [`docs/spec.md` §4.2](../docs/spec.md) — the failover chain as configured.
-- [`docs/spec.md` §4.5](../docs/spec.md) — the local state store and the event-log / trace split.
+- [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: the event-log / trace
+  split, the join key, durability tiers and the failure behaviour.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
+- [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the store's DDL, the writer lock, the
+  migrations and where each event is written.
+- [`design/decisions/ADR-009-persistence-boundary-sqlite-wal-store.md`](../design/decisions/ADR-009-persistence-boundary-sqlite-wal-store.md)
+  — the storage boundary, durability tiers and the startup-prerequisite rule.
+- [`design/decisions/ADR-010-event-log-as-state-truth.md`](../design/decisions/ADR-010-event-log-as-state-truth.md)
+  — write-ahead, the `unknown_outcome` rules and the honest boundary around idempotency.
 - [`design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md`](../design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md)
   — the error taxonomy, the provider cooldown and what a failover costs the cache.
 - [`design/decisions/ADR-013-online-iteration-rails.md`](../design/decisions/ADR-013-online-iteration-rails.md)

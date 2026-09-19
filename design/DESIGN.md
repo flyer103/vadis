@@ -219,6 +219,7 @@ This is the foundation of autowork: a policy cannot be re-implemented in Python 
 | conformance | fidelity (upstream-visible prefix hash == the client's), SSE event-sequence equivalence, tool-call round trip, unknown-field passthrough, error-code mapping |
 | cache | same-session two turns `prefix_continuity == 1.0`; re-measure after enabling each transform (regression guard) |
 | accounting | every transform carries a `verified/inferred` label; gates read verified only |
+| state | write-ahead ordering on a fixed event log, projection == rebuild from `events`, an intent-write failure rejecting before anything reaches the upstream, startup refusal when the store cannot be opened or a second writer holds it, config-driven `serve` (CONF-20…25, §12.10) |
 | interaction | one onboarding smoke run each with the real codex/hermes (including verification of the `NO_PROXY` prerequisite) |
 
 ## 11. Risks and mitigations
@@ -637,7 +638,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-19`)
+### 12.8 conformance case table (`CONF-01…CONF-25`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
@@ -665,6 +666,24 @@ written).
 | CONF-17 | §10·accounting | every `TransformRecord.verdict ∈ {Verified, Inferred}` and gates read `Verified` only | the accounting implementation |
 | CONF-18 | §10·interaction | one smoke run each with the real codex/hermes (including verification of the `NO_PROXY` prerequisite) — manual / network-enabled CI only | end to end |
 | CONF-19 | §9·replay | two `router replay` runs over the same trace produce cost/cache reports identical field by field | the replay subcommand |
+| CONF-20 | §10·state | **ordered write invariant**: on one request run through the pipeline with a recording store and a fake provider, the event row with the highest `event_id` at the instant the attempt's request bytes are handed to the wire is that attempt's `upstream.submitted` intent — nothing is written between the intent commit and the attempt | `trait Store` + the ordered write path (§12.10.5) |
+| CONF-21 | §10·state | **projection == rebuild**: running the same request set twice — once projecting incrementally, once rebuilding from `events` — yields row-by-row identical `sessions` / `cache_ledger` / `quota_counters` / `provider_cooldown` contents | the projections (§12.10.4) |
+| CONF-22 | §10·state | **intent write failure ⇒ nothing reached the upstream**: with a store double whose intent write fails, the fake provider records zero attempts, the client receives the §8 `internal` body with `details.stage = "intent"`, and no intent row exists for the request | store + the intent path (§12.10.5) |
+| CONF-23 | §10·state | **startup refusal, both kinds**: (a) a store that cannot be opened or migrated makes `serve` exit **non-zero** with the reason (never a silent in-memory fallback); (b) a second `serve` on the same state directory is refused at startup with a *distinguishable* "locked" reason | store startup + `router-cli` (§12.10.4) |
+| CONF-24 | §10·state | **trace ↔ event join**: every `DecisionRecord` carries an `event_id` that exists in `events` with `kind = request.received` and the same `request_id`; the request's accounting rows carry a `trace_ref` that resolves to that record's own line | store + trace (§12.10.5) |
+| CONF-25 | §10·state | **config-driven `serve`**: the listen address, the plugin set and the roster come from the config file — a config naming another address and another plugin set is what the process actually uses (`/health` reports the configured set, and the configured address is where it listens), with no hardcoded default surviving in the serving path | config parsing + `serve` (§12.10.2) |
+
+**Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
+decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
+never-mutable path rule), which is why the allocation is recorded here rather than appearing
+as an edit to an existing case. The cases are asserted by the round that lands the
+implementation they name (R2-2b for CONF-25; R2-2c for CONF-20…24); their case files land
+with those items and carry `#[ignore = "CONF-NN: depends on <item>"]` until then. The IDs
+are allocated once: they are not renumbered and not reused. CONF-20 is the case ADR-010's
+consequences explicitly invited ("the last event before an upstream call is
+`upstream.submitted`"); CONF-21/22 come from ADR-009's projection rule (item 5) and its
+failure-mode table (item 8); CONF-23 from ADR-009 item 6/item 8; CONF-24 from spec §4.5's
+join key; CONF-25 from spec §4 (no behaviour outside the config).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -691,6 +710,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q11 | the plugin `inject` is not in spec §4's schema (DESIGN §4 requires it) | already landed in `config.example.yaml` and marked GAP | out-of-order loading safety |
 | Q12 | the `fallback` chain schema and its switching granularity (global / per model) are not given in spec §4 | a global ordered route list | failover (D5) |
 | Q13 | whether an alias may point at `auto` or carry parameter overrides | `provider/model` only | selection semantics (§3) |
+| Q14 | how `prefix_blocks[].tokens` is counted (spec §6 requires a per-block token count; the dependency allowlist has no tokenizer) | proportional attribution of the measured `usage.input_total` over the prefix region by block byte length; every figure derived from it (`prefix_tokens`, `reprefill_tokens`, `switch_cost_nano`) is therefore `inferred` (spec §7), while `prefix_continuity` — the fidelity metric — uses only block hashes and is unaffected | cache-metric comparability; the inferred/verified split (§12.10.6) |
 
 ADR disposition (R1-4): the three originally proposed ADRs have been written as the orchestrator ruled —
 `ADR-006` "integer NanoUsd fixed-point accounting", `ADR-007` "span-faithful forwarding (no
@@ -705,5 +725,444 @@ historical register)**
 |---|---|
 | already written into `docs/spec.md` | Q2 → §4.1; Q3 → §4.4 (the retrieval channel explicitly marked "not implemented in this version"); Q5 → §6 "the definition of `prefix_blocks[]`"; Q10 → §6 "failure details" + §8 (the error body + the type→HTTP table); Q11 → §4.3; Q12 → §4.2 |
 | already ruled by ADR-008 | Q4 (override semantics = the first hit takes effect; the trust gate is not enabled in v0.1, and the trigger condition for re-evaluation is written in that ADR) |
-| takes the default value (not written into the spec; annotated in `config.example.yaml` comments) | Q1 (quota = `input_total + output`), Q7 (`p_stay = input_hit`), Q9 (over context → hand it to the upstream), Q13 (an alias is only `provider/model`) |
+| takes the default value (not written into the spec; annotated in `config.example.yaml` comments) | Q1 (quota = `input_total + output`), Q7 (`p_stay = input_hit`), Q9 (over context → hand it to the upstream), Q13 (an alias is only `provider/model`), Q14 (added in R2-2a: prefix-block tokens are a proportional estimate of the measured usage, so everything derived from them is `inferred` — §12.10.6) |
 | left for Round 2 / D3 | Q8 (the 400 criterion for `stateful_inbound`), Q6 (holidays not modeled = a known deviation) |
+
+### 12.10 Data plane and storage landing (the R2 blueprint)
+
+The sections above name the two R2 deliverables without landing them: the **data plane**
+(provider adaptation and the byte-level streaming relay, §12.10.1–§12.10.3) and the
+**store** (`trait Store`, the `events` table, its projections and the event wiring,
+§12.10.4–§12.10.6). This section lands their shape so `router-providers`, `router-proxy`,
+`router-cli` and the new `router-store` can be implemented in parallel against one sketch.
+
+It adds no field to spec §6, no error type to spec §8 and no key to spec §4. Where it
+touches a contract it cites it; the two places where a contract's *wording* is narrower than
+its intent are flagged explicitly as refinements (notes R1 and R2 in §12.10.5) rather than
+quietly reinterpreted.
+
+#### 12.10.1 Provider adaptation: `trait ProviderClient` and the `reqwest` implementation
+
+```rust
+// crates/router-providers (§12.1 allowlist: reqwest, tokio, futures)
+pub struct UpstreamPlan<'a> {
+    pub route: &'a RouteSpec,
+    pub protocol_out: Protocol,       // the provider's wire_api; the encoding was decided in §7
+    pub base_url: &'a str,            // already carries the version segment (spec §4)
+    pub api_key: &'a SecretKey,       // Debug prints <redacted>; never serialized, never logged
+    pub attempt: u32,                 // 0-based attempt index within one inbound request
+    pub stream: bool,                 // the inbound request asked for SSE
+}
+
+/// The raw material of a classification. `router-providers` surfaces it and decides nothing
+/// (ADR-011 item 1); the proxy, the guards and the plugins never read an upstream error body.
+pub struct ErrorEvidence<'a> {
+    pub status: Option<u16>,
+    pub headers: &'a HeaderMap,
+    pub body: &'a [u8],
+    pub wrote_full_request: bool,     // ADR-011 item 6: the retry rule turns on exactly this flag
+}
+
+pub enum AttemptOutcome {
+    Responded(UpstreamResponse),      // an answer (any status) arrived
+    NotSent(TransportError),          // connect/TLS failure: no request bytes went out, nothing billed
+    WrittenNoResponse(TransportError),// full write, no response: ADR-010 item 4's crash window
+}
+pub struct UpstreamResponse { pub status: u16, pub headers: HeaderMap, pub body: UpstreamBody }
+pub enum UpstreamBody { Buffered(Bytes), Stream(BoxStream<'static, Result<Bytes, TransportError>>) }
+
+pub trait ProviderClient {
+    fn wire_api(&self) -> Protocol;                       // no I/O: the declared native format
+    fn build(&self, plan: &UpstreamPlan<'_>) -> Result<http::Request<Bytes>, ProviderError>;
+    fn send(&self, req: http::Request<Bytes>) -> impl Future<Output = AttemptOutcome> + Send;
+}
+```
+
+- **No `async-trait`** (it is not in the allowlist): `send` returns `impl Future`, the trait is
+  used through generics, and the proxy is monomorphized over the real client and its test
+  double. dyn-compatibility is not needed anywhere — §12.1 lists exactly one real
+  implementation.
+- **One attempt per call.** `send` never retries and never fails over; the attempt index is a
+  parameter, not a loop counter (ADR-011: retry is a *decision*, taken above this layer).
+- **URL assembly** is the only place a path is composed: `base_url` already contains the
+  version segment, and the client appends `chat → /chat/completions`,
+  `responses → /responses`, `anthropic → /v1/messages` and nothing else (spec §4).
+- **Auth** never leaks: `chat`/`responses` send `Authorization: Bearer <key>`; `anthropic`
+  sends `x-api-key` plus `anthropic-version` (falling back to `Authorization: Bearer` for
+  providers that document it). Auth header values exist only in the outbound request —
+  `SecretKey` has no `Display`, its `Debug` prints `<redacted>`, it is not `Serialize`, and no
+  log line, trace field or event payload can carry it (§12.10.2).
+- **One `reqwest::Client` per provider**, built at startup so the connection pool is reused:
+  `.connect_timeout(server.upstream_attempt_timeout)`,
+  `.redirect(reqwest::redirect::Policy::none())`, and **automatic decompression disabled**
+  (see R9 in §12.10.3). The inbound `server.request_timeout` bounds the whole request and is
+  enforced by the caller, not by the client.
+- **Test double.** `ProviderClient` ships a fake that returns a canned `AttemptOutcome` and
+  records the bytes it was handed. Every case that must not touch the network uses it —
+  CONF-20 and CONF-22 (the ordered-write invariant and the intent-write rejection) are only
+  assertable through it.
+
+#### 12.10.2 Config landing (spec §4 + §4.5)
+
+Types live in `router-core` (pure, unit-testable): §12.5's `RouterConfig` is the type of the
+file — exactly spec §4, `deny_unknown_fields`. File I/O lives in `router-cli`, which produces
+a **resolved** form for `router-proxy`:
+
+```rust
+pub struct ResolvedConfig {
+    pub config_dir: PathBuf,               // the anchor for every relative path (spec §4.1)
+    pub server: ServerCfg,
+    pub trace_dir: PathBuf,                // = config_dir / trace.dir       (spec §4.1)
+    pub state_db: PathBuf,                 // = config_dir / state/router.db (spec §4.5, ADR-009 item 6)
+    pub rules: Vec<(PluginId, PathBuf)>,   // per plugins[*].config.rules_file, resolved the same way
+    pub router: RouterConfig,              // the validated file itself (roster, aliases, fallback, plugins)
+}
+```
+
+- **Resolution rule, in one place.** A relative path is resolved against the directory
+  containing the config file — never the CWD — for `trace.dir`, every `rules_file` and
+  `state/` alike (spec §4.1; ADR-009 item 6). `config_dir` is the only place that rule is
+  written, so the three paths cannot drift apart.
+- **Load-time validation** (each failure exits non-zero, naming the config path and the
+  reason; there is no partially-started process — CONF-25's counterpart, and the reason
+  `deny_unknown_fields` is worth the friction):
+
+  | Check | Example failure |
+  |---|---|
+  | an alias target resolves to a roster route | `aliases.coding-fast: unknown route zai/glm-9` |
+  | a `quota` entry references only its **own** provider's model ids (spec §4.0) | a cross-provider reference |
+  | `wire_api ∈ supports`, and every `supports` entry is a known protocol | a declaration that contradicts itself |
+  | `fallback` entries are `provider/model` roster routes (aliases do not take part, spec §4.2) | an alias or an unknown route in the chain |
+  | no duplicate provider `name`; no duplicate model `id` within a provider | an ambiguous roster |
+  | the §12.5 parsing rules for duration / context / price / peak multiplier | the §12.5 error verbatim, with the field path |
+  | no unknown key — **including a `state:` section** | the message states that the state path is fixed in v0.1 (spec §4.5) and that a `state:` section is an additive future key |
+
+- **A missing `api_key_env` value is not a load error** (§12.5): that provider is marked
+  unavailable and reported by `/health`; the rest of the roster still serves. A missing *key*
+  in the file is, of course, a load error.
+- **`/health` reports what was actually loaded** (the R2-2b/2c contract): the plugin set
+  (with `disabled` entries shown as disabled), each provider's key presence, the resolved
+  `trace_dir` and `state_db`, and the store's status. Before R2-2c lands, the store's status
+  is reported honestly as `pending` (the path is resolved, opening is not implemented yet);
+  once it lands, the value is `open` or the refusal reason (CONF-23).
+- **No defaults outside the file.** The R1-2 stub's hardcoded `127.0.0.1:8790` address and
+  hardcoded five-plugin list are removed and may not reappear in the serving path; the listen
+  address, plugin set and roster come from the config and are asserted to do so by CONF-25.
+
+#### 12.10.3 The streaming data plane: SSE byte-level requirements
+
+The relay is a **byte-level** operation. Its requirements are stated as R1–R11 so a reviewer
+can check an implementation against them one at a time.
+
+**R1 — no re-framing.** Router never parses SSE events in order to re-emit them. The bytes
+that reach the client are the bytes the upstream sent, in the order they arrived; router does
+not insert, delete, reorder, rewrite or normalize `event:` / `data:` / `id:` / `retry:` lines,
+does not merge or split events to a preferred size, and does not append a terminal marker
+(§12.8 CONF-13 asserts the native path's equivalence event by event).
+
+**R2 — write through, no buffering.** Each read is written to the client as soon as it is
+available; router never accumulates the body to flush it at the end. Accumulating would
+destroy the interactive property, change the observed timing of the stream and defeat R4's
+idle detection. Time-to-first-event is the upstream's, not the stream's.
+
+**R3 — the head goes first, and carries the truth.** The response head (the upstream's status
+plus §12.7's response headers, including all three `X-Router-*` values required by spec §8)
+is written before the first body byte. A streaming response never gains a `content-length`
+that router invented; a buffered response keeps the upstream's.
+
+**R4 — bounded idle.** After the head is sent, a gap with no upstream bytes longer than
+`server.upstream_attempt_timeout` is a failure: the relay ends (R6), it does not hang. The
+inbound `server.request_timeout` (default 10m) remains the outer bound on the whole request,
+including the stream.
+
+**R5 — a client disconnect cancels the upstream.** Dropping the response future drops the
+upstream body stream, which closes that connection: router does not keep draining a stream
+nobody is reading (that would bill tokens with no reader). If the stream had not completed,
+the request is an `unknown_outcome` (§12.10.5): the upstream may already have billed it, so
+the quota is not charged again and no cost is invented (ADR-010 item 4).
+
+**R6 — mid-stream failure semantics** (three cases; the boundary is *our* head):
+
+| Failure | Before our head is sent | After the first event is forwarded |
+|---|---|---|
+| connect/TLS failure, or an upstream error status with a non-SSE body | the ordinary error path: classify (ADR-011) → retry / fail over per the attempt budget → the client receives the §8 error body. The three headers have not been sent yet, so this is still a normal request | not reachable (the head already carries the upstream's status) |
+| the stream ends without completing (`Timeout`, a closed connection, an upstream error event) | — | failover is **impossible** — the client's output is already committed. Router stops relaying and terminates the stream using the protocol's own in-band failure shape where one exists (`anthropic`: `event: error`; `responses`: the `error`/`response.failed` event) and otherwise ends the stream **without** the protocol's terminal marker (chat completions: no `[DONE]`). The classification is recorded in the trace's `errors[]` |
+
+Standing rule for both columns: router **never fabricates** a successful terminal event, never
+appends `[DONE]`, and never presents a truncated stream as complete.
+
+**R7 — observe without mutating.** The usage/accounting tap reads a *copy* of the relayed
+bytes through a read-only fan-out (a `futures` tee on the stream), never on the relay path
+itself. Consequence: a bug in the accounting tap cannot change what a client sees, and the
+byte boundary holds even where the observation is wrong.
+
+**R8 — streamed usage honesty.** Usage is taken from the protocol's own carrier: the terminal
+events of `responses` / `anthropic`, and for `chat` only when the client requested it
+(`stream_options.include_usage`). No carrier ⇒ `usage_missing = true`, zero usage, no invented
+cost and no plan charge (spec §6/§7 are unchanged by this; the alternative would be a
+fabricated number).
+
+**R9 — no compression rewriting.** The client's `reqwest` is configured not to add
+`accept-encoding` and not to decompress transparently. If the client asked for gzip, the
+compressed bytes and the `content-encoding` header travel together as opaque bytes: a
+decompressed body with a stripped `content-encoding` is a rewrite of upstream-visible bytes
+(AGENTS constraint 1), and `reqwest`'s default behaviour does exactly that.
+
+**R10 — redirects are not followed** (`redirect::Policy::none()`): following one would hide
+the very status the classifier needs, and may re-send the body — an unrecorded second paid
+attempt. A 3xx is evidence, not instructions.
+
+**R11 — the streaming path is the same request.** The SSE path shares the pipeline, the
+events, the trace record and the cost path with the buffered path; `result.status` is the
+status already sent to the client, and a stream that never completed is marked through
+`errors[]` + `usage_missing` rather than through a fabricated status.
+
+#### 12.10.4 `trait Store`, the `events` table and the projections
+
+The DDL below is the v0.1 schema (store DDL version 1). `events` is contractual (ADR-010 item
+2); a projection's column set is implementation-defined because it is rebuildable (ADR-009
+item 2).
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE schema_version (                 -- the store's own forward-only DDL version
+    version    INTEGER NOT NULL,              -- 1 = this DDL
+    applied_at TEXT    NOT NULL               -- RFC3339 UTC
+);
+
+CREATE TABLE events (                         -- the truth (ADR-010 item 2)
+    event_id       INTEGER PRIMARY KEY AUTOINCREMENT,  -- the ordering anchor; the join key's second half
+    ts_us          INTEGER NOT NULL,                   -- unix microseconds; observation, never a join key
+    kind           TEXT    NOT NULL,                   -- ADR-010's vocabulary (see the note below)
+    request_id     TEXT,                               -- NULL only for store-level events
+    session        TEXT,
+    schema_version INTEGER NOT NULL,                   -- the payload's own version, per row: old rows are never rewritten
+    payload        TEXT    NOT NULL,                   -- JSON: the event's essentials
+    body_hash      TEXT,                               -- first 16 hex of sha256(router-visible bytes); never the body
+    trace_ref      TEXT                                -- "<trace file>:<line>", written only where R2 allows it
+);
+CREATE INDEX idx_events_request ON events(request_id, event_id);   -- replay one request, in order
+CREATE INDEX idx_events_kind_ts ON events(kind, ts_us);            -- the reason mix / counters over a window
+CREATE INDEX idx_events_session ON events(session, event_id);      -- a session's history
+
+-- projections: rebuildable from `events`; losing one regresses statistics, never correctness
+CREATE TABLE sessions (                       -- the sticky table (ADR-004)
+    session_key   TEXT PRIMARY KEY,
+    provider      TEXT    NOT NULL,
+    model         TEXT    NOT NULL,
+    requests_seen INTEGER NOT NULL DEFAULT 0, -- the source of `turn_index` (§12.10.5)
+    expires_at_us INTEGER NOT NULL,
+    last_event    INTEGER NOT NULL
+);
+CREATE TABLE cache_ledger (                   -- the last prefix block set seen per session (spec §6)
+    session_key TEXT    NOT NULL,
+    block_index INTEGER NOT NULL,
+    kind        TEXT    NOT NULL,             -- block kind: message | tool | input_item | system
+    tokens      INTEGER NOT NULL,
+    hash        TEXT    NOT NULL,
+    last_event  INTEGER NOT NULL,
+    PRIMARY KEY (session_key, block_index)
+);
+CREATE TABLE quota_counters (                 -- tokens charged per plan window (spec §4 quota)
+    provider        TEXT    NOT NULL,
+    plan_idx        INTEGER NOT NULL,
+    window_start_us INTEGER NOT NULL,
+    tokens_used     INTEGER NOT NULL,
+    last_event      INTEGER NOT NULL,
+    PRIMARY KEY (provider, plan_idx, window_start_us)
+);
+CREATE TABLE provider_cooldown (              -- ADR-011 demotions: provider-wide or route-scoped
+    scope      TEXT    NOT NULL,              -- 'provider' | 'route'
+    provider   TEXT    NOT NULL,
+    model      TEXT    NOT NULL DEFAULT '',   -- '' = provider-wide (SQLite treats NULLs as distinct in a PK)
+    until_us   INTEGER NOT NULL,
+    reason     TEXT    NOT NULL,              -- the FailoverReason that caused it
+    last_event INTEGER NOT NULL,
+    PRIMARY KEY (scope, provider, model)
+);
+```
+
+- **No `CHECK` on `events.kind`, deliberately.** The vocabulary grows (ADR-010 item 2's list,
+  plus `error.classified` from ADR-011); a `CHECK` would force a DDL migration per new event
+  kind, and DDL migrations are exactly what must not be coupled to the truth's vocabulary. The
+  closed set is enforced in code (`EventKind`), and a reader tolerates an unknown kind instead
+  of failing (rows written by a newer binary stay readable — ADR-009 item 7).
+- **`trait Store`** is the lower seam: `router-core`'s service traits (`CacheLedger`,
+  `SessionTable`, `QuotaStore`, §12.2) are implemented *over* it, and `router-core` stays
+  I/O-free.
+
+```rust
+// crates/router-store (ADR-009 item 1). The only crate with `rusqlite` in its allowlist.
+pub struct EventId(pub i64);
+pub struct NewEvent<'a> {
+    pub kind: EventKind, pub request_id: Option<&'a str>, pub session: Option<&'a str>,
+    pub body_hash: Option<&'a str>, pub trace_ref: Option<&'a str>,   // attempt index rides in the payload
+    pub payload: serde_json::Value,
+}
+pub enum StoreError {
+    Locked,                                        // another process holds this state directory
+    Unopenable(String),                            // missing directory, permissions, corruption
+    SchemaTooNew { found: u32, supported: u32 },   // forward-only migrations
+    Busy,                                          // SQLITE_BUSY past the busy timeout
+    Sql(String),
+}
+pub trait Store: Send + Sync {
+    /// Durable: committed before the caller performs the effect it authorizes (ADR-010 item 3).
+    fn append(&self, ev: NewEvent<'_>) -> Result<EventId, StoreError>;
+    /// Cheap and batchable; a lost projection is rebuilt, never a correctness problem (ADR-009 item 4).
+    fn project(&self, w: ProjectionWrite<'_>) -> Result<(), StoreError>;
+    /// The serving path's reads: sticky binding, quota state, cooldown, the session counter.
+    fn query(&self, q: Query<'_>) -> Result<QueryRow, StoreError>;
+    /// The state layer's correctness oracle: must converge with the incremental path, row for row (CONF-21).
+    fn rebuild(&self, which: Projection) -> Result<RebuildStats, StoreError>;
+    fn schema_version(&self) -> Result<u32, StoreError>;
+}
+```
+
+- **One connection, one writer.** `rusqlite::Connection` is not `Sync`, so the store owns one
+  behind a `Mutex`; a single connection is also what makes the writer lock workable. Reads on
+  the serving path take that mutex — microseconds at this scale, and it removes a whole class
+  of "two handles disagree" bugs.
+- **The writer lock is the database's own.** At open: WAL, `foreign_keys=ON`, a short
+  `busy_timeout`, then `PRAGMA locking_mode = EXCLUSIVE` followed by a write (the migration
+  step satisfies this). In EXCLUSIVE locking mode SQLite never releases the file locks, so a
+  second process on the same state directory fails with `StoreError::Locked` instead of
+  interleaving writes — ADR-009 item 8's rule, asserted by CONF-23(b). The cost is honest and
+  documented: while `serve` runs, no other process (a SQLite CLI included) can read the file;
+  `book/operations.md` says to stop the process to inspect, and a `router state` surface is a
+  separate change (ADR-010's consequences).
+- **Durability tiers are a property of the event class** (ADR-009 item 4): `append` (the
+  intent/accounting class) commits `synchronous=FULL` in its own transaction;
+  `project` writes are `NORMAL` and batched. When a request writes several events of the
+  same class, they are not stacked into one commit — the intent row must be durable *before*
+  its effect, and ADR-009's measurement is what says a per-row commit is affordable.
+- **Migrations** are forward-only: `const MIGRATIONS: &[Migration]` (`version` + `sql`),
+  applied in order, one transaction each, recorded in `schema_version`; a database whose
+  version exceeds the binary's maximum is refused with `SchemaTooNew` rather than read on a
+  guess; a DDL migration never rewrites `events` rows. A maintenance tick runs a **passive**
+  WAL checkpoint — never the request path.
+- **Failure modes map onto `StoreError`** (the behaviours are ADR-009 item 8's; this table
+  fixes which variant a caller matches on):
+
+  | ADR-009 item 8 failure | At this layer |
+  |---|---|
+  | open or migrate fails at startup | `Unopenable` / `SchemaTooNew` → `serve` exits non-zero with the reason; never an in-memory fallback |
+  | a second `serve` on the same state directory | `Locked` at open → exit non-zero, a *distinguishable* reason (CONF-23) |
+  | a FULL write fails mid-request | surfaced to the pipeline, which rejects before anything reaches the upstream: `500 internal`, `details.stage = "intent"` (CONF-22) |
+  | a NORMAL projection write fails | the request is unaffected; the projection is marked stale and repaired by `rebuild` or at the next startup |
+  | the process dies mid-request | an intent row without a completing response row is `unknown_outcome` (ADR-010 item 4) — the same rule that covers a client disconnect and an upstream death mid-stream (§12.10.3 R5/R6) |
+- **`router-store` is the only writer.** No other crate opens the database file: `rusqlite` is
+  in exactly one allowlist row (§12.1), which is what keeps "events is the truth" a structural
+  claim rather than a discipline.
+- **Measurement owed (ADR-009).** The numbers that authorize this design come from a Python
+  `sqlite3` harness; ADR-009's re-measurement clause makes it part of the R2-2 latency gate.
+  The gate's budget must name numbers measured through `rusqlite` in this real write path
+  (including a long payload and a database that has grown all day), not the harness figures.
+
+#### 12.10.5 Event wiring: where each event is written in the pipeline
+
+§12.3's pipeline is `parse → session resolution → transform chain → selector → guard chain → encode → forward → usage normalization → ledger/trace`.
+This table is the landing of ADR-010 item 2's vocabulary onto it — one row per event, so the
+ordered write path of ADR-010 item 3 is a checklist rather than an intention. Durability
+follows ADR-009 item 4's single question (*may this fact be recomputed?*).
+
+| # | Pipeline step | Event | Written | Durability | Payload essentials |
+|---|---|---|---|---|---|
+| 1 | receive: the inbound bytes are read and hashed | `request.received` | once per request that entered the pipeline, before any decision | FULL | `protocol_in`, `protocol_out: null` (note R1), `client`, `session?`, `turn_index`, `body_hash` |
+| 2 | transform chain, per step that changed the payload | `transform.applied` | after the step returns `Ok` and its report is built | NORMAL | plugin, added/saved tokens, `cache_impact`, verdict |
+| 3 | selector + guard chain | `decision.made` | once a route is chosen and the guards passed (or a `Downgrade` route taken) | NORMAL | provider, model, `selection_source`, plugin chain, `decision_ms`, `protocol_out` |
+| 4 | session binding (after selection, before the attempt) | `session.bound` | only when the binding is created or moved; a sticky hit writes nothing | FULL | session key, provider, model, ttl |
+| 5 | forward — the intent | `upstream.submitted` | **before** the attempt's request bytes are handed to the wire | **FULL** | route, `attempt_index`, `attempt_id`, `body_hash` of the outbound bytes |
+| 6 | forward — the outcome | `upstream.responded` | when the response head + body complete (buffered) or the stream ends (SSE) | FULL | status, raw `usage?`, latency, `wrote_full_request` |
+| 7 | classifier (a failure, `router-providers` → `router-core`) | `error.classified` | after `classify_upstream_error` returns, before the action's effect (ADR-011 item 8) | NORMAL | status, `reason`, `action`, matched table entry, `retry_after_s?`, `demotion?` |
+| 8 | failover: a route switch | `failover.triggered` | after the classification chose `FallbackProvider`, before the next `upstream.submitted` | FULL | reason, from → to, `reprefill_tokens` (inferred), `switch_cost_nano` (inferred) |
+| 9 | usage normalization | — | **no event**: usage lands in the trace; an upstream that reported none sets `usage_missing` and nothing is charged | — | — |
+| 10 | cost | `cost.computed` | once usage is known, **after** the trace line was appended (note R2) | FULL | the five-tier cost, `trace_ref` |
+| 11 | quota | `quota.charged` | with `cost.computed`, before a buffered response is released | FULL | provider, plan, tokens charged, remaining, `trace_ref` |
+| 12 | loader (not a request step) | `plugin.loaded` / `plugin.unloaded` | at each load/unload edge | NORMAL | plugin id, kind, tier, effective config digest |
+| 13 | loader (not a request step) | `config.applied` | at startup after validation, and on every accepted config diff | FULL | config digest, changed keys (keyed diff, ADR-002) |
+
+**The invariant to review at every state-changing call site** (ADR-010's consequence): *does
+the intent row precede the effect?* Row 5 is the one that carries money — it commits before
+the request bytes leave — and CONF-20 asserts it on a fixed trace.
+
+**R1 — refinement of ADR-010 item 2 (which row owns `protocol_out`).** ADR-010 lists
+"protocol in/out" among `request.received`'s essentials, but the outbound protocol does not
+exist at receive time: it *is* the selected provider's `wire_api`, decided at selection. The
+row therefore carries `protocol_in` with `protocol_out: null`, and row 3 carries the resolved
+`protocol_out`. No column moves, no row is ever rewritten, and nothing is lost: ADR-010's list
+summarizes what a request's events know collectively. Recorded so two implementers do not
+disagree about which row owns the field.
+
+**R2 — the trace line precedes the accounting rows.** ADR-009 item 3 gives the event a
+`trace_ref` pointer, and an event row is never rewritten (ADR-009 item 7) — so the only rows
+that can carry a *real* pointer are those written after the trace line exists. The
+end-of-request order is therefore: normalize usage → compute cost → **append the trace line**
+(it is complete at that point) → commit `cost.computed` + `quota.charged` with `trace_ref`
+naming that line → release the buffered response. The earlier rows (`request.received`,
+`decision.made`, `transform.applied`, `session.bound`, `upstream.submitted`,
+`upstream.responded`, `error.classified`) carry `trace_ref = NULL` by construction — they are
+written before the line exists, and rewriting them is forbidden. The join stays exact in both
+directions: from the trace, `identity.event_id` always resolves the request's
+`request.received` row; from the store, the accounting rows' `trace_ref` resolves the line.
+A trace-write failure leaves `trace_ref` null and records `errors[].kind = trace_write_failed`
+(the request is unaffected — spec §8).
+
+**R3 — release ordering on the streaming path.** ADR-010 item 3 commits `cost.computed` /
+`quota.charged` "before the response is released to the client". On the SSE path the head is
+released at the first event, long before usage exists, so that clause cannot hold literally
+there. It holds where it can, and the difference is stated rather than glossed: the **upstream
+attempt** is covered by its FULL intent row (row 5, always before the wire), and the accounting
+rows commit at stream end before the last byte is written through. A streamed response whose
+usage never arrived is reported as `usage_missing` and nothing is charged. This is ADR-010's
+own asymmetry (a missing response is recoverable ambiguity; an unrecorded upstream call is an
+unaccountable charge) applied to the streaming path.
+
+**`turn_index`** is `requests_seen` for that session from the projection, read at receive time
+and incremented by the binding write; with no session, or on the session's first request, it is
+1. It is a projection query — not a clock read and not a count of user messages — so a
+restarted process computes the same value its predecessor would have, which AGENTS constraint 2
+requires of observation as much as of content.
+
+**Requests that produce no state events.** A request whose body cannot be read or parsed never
+enters the pipeline: it is answered with the §8 `invalid_request` body and gets a trace line
+(§6 is one record per request) but no event rows — there is no request to anchor.
+A request rejected later by the pipeline (an unknown route, a guard `Reject`) keeps its
+`request.received` row and gets no intent row: nothing was sent, so nothing was billed, and
+the trace carries the reason.
+
+#### 12.10.6 Prefix blocks and the prefix hash: the computation points
+
+Both the trace's `prefix_blocks[]` and the event's `body_hash` are computed at **one** place:
+the encoder's output — the byte-final outbound body produced by §12.3's `encode` step, before
+row 5 of §12.10.5 is written (`upstream.submitted.body_hash` hashes exactly those bytes).
+
+- **One helper, several call sites.** `body_sha16(bytes) -> String` returns the first 16 hex
+  characters of the sha256. Its call sites are the event's `body_hash`, each
+  `PrefixBlock.hash`, and any future digest. The "same convention" clause of ADR-009 item 3 is
+  then enforced by construction rather than by discipline — two implementations cannot drift
+  because there is only one implementation.
+- **Extraction is a span scan, never a parse→reserialize.** A block's bytes are the member's
+  exact span in the outbound document, located by the same single-pass scanner §12.3.1 uses
+  for whitelist deletion (the block extractor and the deleter share the scanner, not the
+  policy). For the native path those spans are the client's own bytes; for a translated path
+  they are the encoder's output. The domain is spec §6's: `messages` / `input` / `tools`
+  members plus the system-instruction position — so deleting router-owned fields cannot change
+  a block hash (CONF-10 asserts exactly that).
+- **`tokens` per block (GAP-Q14).** The dependency allowlist has no tokenizer, and putting an
+  unverifiable one in the money path would be worse than estimating: block `tokens` is a
+  proportional attribution of the **measured** `usage.input_total` over the prefix region by
+  block byte length. Everything derived from it — `prefix_tokens`, `reprefill_tokens`,
+  `switch_cost_nano` (ADR-011 item 9's failover pricing) — is therefore `inferred` (spec §7)
+  and must be labelled so wherever it is reported. `prefix_continuity`, the fidelity metric,
+  compares block **hashes** only, so the gate keeps measuring exactly what it claims.
+- **Continuity** is computed against the previous request of the same session: hashes compared
+  from block 0, longest common block ratio (spec §6). A session with no previous request
+  records `continuity: null` — an absent measurement is absent, not 1.0 and not 0.0, because
+  either number would be an invention that a gate could act on.
+- **Where the results live.** `prefix.blocks[]` + `prefix.continuity` in the trace (§12.6);
+  `reprefill_tokens` / `switch_cost_nano` in `failover.triggered`'s payload (§12.10.5 row 8);
+  and the per-session block set as the `cache_ledger` projection (§12.10.4), which is what
+  makes continuity computable for the *next* request — including after a restart.
