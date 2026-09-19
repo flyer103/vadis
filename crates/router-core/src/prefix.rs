@@ -243,6 +243,10 @@ pub fn attribute_tokens(blocks: &mut [PrefixBlock], usage: &Usage) {
 /// Longest common block-prefix ratio (spec §6 `prefix_continuity`):
 /// compares hashes from block 0. `None` when there is no previous request
 /// in the session — an absent measurement is absent, not 1.0 and not 0.0.
+///
+/// A derived diagnostic ratio (spec §6 `prefix_continuity`), not a money path;
+/// ADR-006's integer-only rule governs accounting, not this diagnostic.
+#[allow(clippy::float_arithmetic)]
 pub fn prefix_continuity(prev: &[PrefixBlock], cur: &[PrefixBlock]) -> Option<f64> {
     if prev.is_empty() || cur.is_empty() {
         return None;

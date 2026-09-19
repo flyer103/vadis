@@ -8,8 +8,8 @@ mod health;
 mod stubs;
 
 pub use forward::{
-    BoxedAttempt, ForwardFailure, ForwardOutcome, ForwardSuccess, ProviderSend, ProviderTransport,
-    Forwarder,
+    BoxedAttempt, ForwardFailure, ForwardOutcome, ForwardSuccess, Forwarder, ProviderSend,
+    ProviderTransport,
 };
 pub use health::{health_json, AppState};
 pub use stubs::protocol_stub;

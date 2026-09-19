@@ -18,7 +18,9 @@ use bytes::Bytes;
 use http::Request as HttpRequest;
 use router_core::config::{ProviderCfg, RouteSpec, RouterConfig, WireApi};
 use router_core::error::ErrorCode;
-use router_core::error_class::{classify_upstream_error, Classification, ErrorClass, ErrorEvidence};
+use router_core::error_class::{
+    classify_upstream_error, Classification, ErrorClass, ErrorEvidence,
+};
 use router_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
 use router_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
 use router_core::{RawBody, Usage, ROUTER_OWNED_TOP_LEVEL_KEYS};
@@ -32,18 +34,19 @@ pub trait ProviderSend {
 }
 
 /// Object-safe wrapper so `Forwarder` can hold one transport per provider
-/// without making the whole serving state generic.
-pub type BoxedAttempt = Pin<Box<dyn Future<Output = AttemptOutcome> + Send>>;
+/// without making the whole serving state generic. The future is tied to
+/// `&self` and awaited immediately at the call site.
+pub type BoxedAttempt<'a> = Pin<Box<dyn Future<Output = AttemptOutcome> + Send + 'a>>;
 
 pub trait ProviderTransport: Send + Sync {
-    fn send_boxed(&self, req: HttpRequest<Bytes>) -> BoxedAttempt;
+    fn send_boxed<'a>(&'a self, req: HttpRequest<Bytes>) -> BoxedAttempt<'a>;
 }
 
 impl<T> ProviderTransport for T
 where
     T: ProviderSend + Send + Sync + 'static,
 {
-    fn send_boxed(&self, req: HttpRequest<Bytes>) -> BoxedAttempt {
+    fn send_boxed<'a>(&'a self, req: HttpRequest<Bytes>) -> BoxedAttempt<'a> {
         Box::pin(self.send(req))
     }
 }
@@ -114,7 +117,12 @@ impl Forwarder {
     /// protocol; a native route (proto_in == the provider's `wire_api`)
     /// forwards the client's bytes minus router-owned top-level keys,
     /// everything else byte-identical.
-    pub async fn forward(&self, proto_in: WireApi, body: &[u8], request_id: &str) -> ForwardOutcome {
+    pub async fn forward(
+        &self,
+        proto_in: WireApi,
+        body: &[u8],
+        request_id: &str,
+    ) -> ForwardOutcome {
         // Parse only to read `model` and `stream`; the forwarded bytes are
         // the raw original, never a reserialization.
         let parsed: Value = match serde_json::from_slice(body) {
@@ -383,10 +391,9 @@ impl Forwarder {
                         attempt_index += 1;
                         continue;
                     }
-                    return ForwardOutcome::Failure(self.exhausted_failure(
-                        last_upstream_status,
-                        cls.class,
-                    ));
+                    return ForwardOutcome::Failure(
+                        self.exhausted_failure(last_upstream_status, cls.class),
+                    );
                 }
                 AttemptOutcome::NotSent(err) => {
                     // No request bytes went out: nothing billed, failover
@@ -662,8 +669,10 @@ impl Forwarder {
     }
 
     fn exhausted_failure(&self, upstream_status: Option<u16>, class: ErrorClass) -> ForwardFailure {
-        let deterministic =
-            matches!(class, ErrorClass::FormatError | ErrorClass::ContentPolicyBlocked);
+        let deterministic = matches!(
+            class,
+            ErrorClass::FormatError | ErrorClass::ContentPolicyBlocked
+        );
         ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,

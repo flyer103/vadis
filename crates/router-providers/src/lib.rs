@@ -87,10 +87,7 @@ impl AttemptOutcome {
 /// The body is the encoder's output: for a native route, the client's own
 /// bytes minus the router-owned top-level keys (`RawBody`'s single
 /// permitted rewrite), everything else verbatim (AGENTS constraint 1).
-pub fn build_request(
-    plan: &UpstreamPlan<'_>,
-    body: &[u8],
-) -> Result<http::Request<Bytes>, String> {
+pub fn build_request(plan: &UpstreamPlan<'_>, body: &[u8]) -> Result<http::Request<Bytes>, String> {
     // URL assembly: base_url carries the version segment; append the
     // protocol's path and nothing else (spec §4, DESIGN §12.10.1).
     let path = match plan.protocol_out {
@@ -150,10 +147,7 @@ impl ReqwestProviderClient {
     /// Sends one attempt. Never retries, never fails over (ADR-011: retry
     /// is a *decision*, taken above this layer). The timeout covers the
     /// whole attempt.
-    pub async fn send(
-        &self,
-        req: http::Request<Bytes>,
-    ) -> AttemptOutcome {
+    pub async fn send(&self, req: http::Request<Bytes>) -> AttemptOutcome {
         let (parts, body) = req.into_parts();
         let url = parts.uri.to_string();
         let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
@@ -334,12 +328,18 @@ mod tests {
     #[test]
     fn url_assembly_and_auth_chat() {
         let req = build_request(&plan(), b"{}").unwrap();
-        assert_eq!(req.uri().to_string(), "https://p.example/v1/chat/completions");
+        assert_eq!(
+            req.uri().to_string(),
+            "https://p.example/v1/chat/completions"
+        );
         assert_eq!(
             req.headers().get("authorization").unwrap(),
             "Bearer sk-test"
         );
-        assert_eq!(req.headers().get("content-type").unwrap(), "application/json");
+        assert_eq!(
+            req.headers().get("content-type").unwrap(),
+            "application/json"
+        );
     }
 
     #[test]
@@ -362,7 +362,10 @@ mod tests {
         let mut p = plan();
         p.base_url = "https://p.example/v1/";
         let req = build_request(&p, b"{}").unwrap();
-        assert_eq!(req.uri().to_string(), "https://p.example/v1/chat/completions");
+        assert_eq!(
+            req.uri().to_string(),
+            "https://p.example/v1/chat/completions"
+        );
     }
 
     #[tokio::test]
