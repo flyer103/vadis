@@ -101,8 +101,8 @@ impl ForwardFailure {
 }
 
 /// The forwarding engine: one transport per provider, the api keys read at
-/// startup, and (optionally) the store. `store: None` only in tests
-/// without state.
+/// startup, and (optionally) the store and trace sink. `store: None` only
+/// in tests without state.
 pub struct Forwarder {
     pub config: RouterConfig,
     pub transports: HashMap<String, Arc<dyn ProviderTransport>>,
@@ -111,6 +111,12 @@ pub struct Forwarder {
     /// (DESIGN §12.10.1's auth rule).
     pub api_keys: HashMap<String, String>,
     pub store: Option<Arc<dyn Store>>,
+    /// The trace sink (R2-2f): one DecisionRecord per request. `None`
+    /// only in tests without a trace dir.
+    pub trace: Option<Arc<dyn router_core::TraceWriter>>,
+    /// Inbound headers per request (the session key sources live there;
+    /// the body's `prompt_cache_key` is checked at receive).
+    pub session_ttl_us: i64,
 }
 
 fn now_us() -> i64 {
@@ -124,13 +130,19 @@ impl Forwarder {
     /// Forwards one buffered request. `proto_in` is the inbound endpoint's
     /// protocol; a native route (proto_in == the provider's `wire_api`)
     /// forwards the client's bytes minus router-owned top-level keys,
-    /// everything else byte-identical.
+    /// everything else byte-identical. `headers` feed the session key
+    /// sources (`header:<name>`); the body's `prompt_cache_key` wins when
+    /// present (spec §4 key_sources order).
     pub async fn forward(
         &self,
         proto_in: WireApi,
         body: &[u8],
         request_id: &str,
+        headers: &[(String, String)],
     ) -> ForwardOutcome {
+        let started = Instant::now();
+        let now_epoch_s = (now_us() / 1_000_000).max(0) as u64;
+        let decision_start = Instant::now();
         // Parse only to read `model` and `stream`; the forwarded bytes are
         // the raw original, never a reserialization.
         let parsed: Value = match serde_json::from_slice(body) {
@@ -223,8 +235,38 @@ impl Forwarder {
         };
         let outbound_hash = body_sha16(outbound.as_bytes());
 
+        // Session resolution (spec §4 key_sources): the body's
+        // `prompt_cache_key` first, then the configured `header:<name>`
+        // sources, in declaration order.
+        let session: Option<String> = parsed
+            .get("prompt_cache_key")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                self.config.session.key_sources.iter().find_map(|src| {
+                    let name = src.strip_prefix("header:")?;
+                    headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                        .map(|(_, v)| v.clone())
+                })
+            });
+        let turn_index = session
+            .as_deref()
+            .and_then(|s| {
+                let q = self
+                    .store
+                    .as_ref()?
+                    .query(Query::SessionRequestsSeen { session_key: s });
+                match q {
+                    Ok(QueryRow::Count(n)) if n > 0 => Some(n as u32 + 1),
+                    _ => Some(1),
+                }
+            })
+            .unwrap_or(1);
+
         // Rows 1 + 3 of the §12.10.5 wiring (FULL + NORMAL).
-        self.append_event(
+        let received_event = self.append_event(
             EventKind::RequestReceived,
             request_id,
             Some(&outbound_hash),
@@ -232,11 +274,13 @@ impl Forwarder {
                 "protocol_in": proto_in.as_str(),
                 "protocol_out": null,
                 "client": null,
-                "session": null,
-                "turn_index": 1,
+                "session": session,
+                "turn_index": turn_index,
                 "body_hash": outbound_hash,
             }),
+            session.as_deref(),
         );
+        let decision_ms = decision_start.elapsed().as_millis() as u32;
         self.append_event(
             EventKind::DecisionMade,
             request_id,
@@ -246,8 +290,50 @@ impl Forwarder {
                 "model": primary.model,
                 "selection_source": selection_source,
                 "protocol_out": provider.wire_api.as_str(),
+                "decision_ms": decision_ms,
             }),
+            session.as_deref(),
         );
+        // Row 2 — the transform chain point is kept even when the chain is
+        // empty (this round's chain is passthrough; the wiring point lands
+        // with the transform chain itself, R2-3).
+        self.append_event(
+            EventKind::TransformApplied,
+            request_id,
+            None,
+            json!({
+                "plugin": null,
+                "chain": [],
+                "changed": false,
+            }),
+            session.as_deref(),
+        );
+
+        // Row 4 — session.bound (FULL) when a binding is created or moved;
+        // a sticky hit on an unchanged route writes nothing.
+        let sticky_hit = session.is_some()
+            && matches!(
+                self.store.as_ref().map(|s| {
+                    s.query(Query::SessionBinding {
+                        session_key: session.as_deref().unwrap_or(""),
+                    })
+                }),
+                Some(Ok(QueryRow::SessionBinding(Some(_))))
+            );
+        if session.is_some() && !sticky_hit {
+            self.append_event(
+                EventKind::SessionBound,
+                request_id,
+                None,
+                json!({
+                    "session_key": session,
+                    "provider": primary.provider,
+                    "model": primary.model,
+                    "ttl_us": self.session_ttl_us,
+                }),
+                session.as_deref(),
+            );
+        }
 
         // The candidate chain: the primary route, then the global fallback
         // list (spec §4.2), walked once. Provider-exclusion semantics: a
@@ -299,31 +385,44 @@ impl Forwarder {
             };
 
             // Row 5 — the intent, FULL, committed before the wire. Nothing
-            // is written between the commit and the attempt (CONF-20).
-            if let Some(store) = &self.store {
+            // is written between the commit and the attempt (CONF-20). The
+            // payload carries the session's `prefix_blocks` — the encoder
+            // computed them from exactly these bytes, which is what the
+            // cache_ledger rebuild reads (§12.10.6, CONF-21).
+            let mut blocks_now = extract_prefix_blocks(&outbound).unwrap_or_default();
+            let intent_id = if let Some(store) = &self.store {
                 let intent = NewEvent {
                     kind: EventKind::UpstreamSubmitted,
                     request_id: Some(request_id),
-                    session: None,
+                    session: session.as_deref(),
                     body_hash: Some(&outbound_hash),
                     trace_ref: None,
                     payload: json!({
                         "route": format!("{}/{}", candidate.provider, candidate.model),
                         "attempt_index": attempt_index,
                         "protocol_out": cand_provider.wire_api.as_str(),
+                        "prefix_blocks": blocks_now.iter().map(|b| json!({
+                            "index": b.index, "kind": b.kind.as_str(),
+                            "tokens": b.tokens, "hash": b.hash,
+                        })).collect::<Vec<_>>(),
                     }),
                 };
-                if store.append(intent).is_err() {
-                    // CONF-22: nothing reached the upstream; the client's
-                    // retry is safe.
-                    return ForwardOutcome::Failure(ForwardFailure {
-                        status: 500,
-                        code: ErrorCode::Internal,
-                        message: "the state store rejected the upstream intent".into(),
-                        details: Some(json!({"stage": "intent"})),
-                    });
+                match store.append(intent) {
+                    Ok(id) => Some(id),
+                    Err(_) => {
+                        // CONF-22: nothing reached the upstream; the
+                        // client's retry is safe.
+                        return ForwardOutcome::Failure(ForwardFailure {
+                            status: 500,
+                            code: ErrorCode::Internal,
+                            message: "the state store rejected the upstream intent".into(),
+                            details: Some(json!({"stage": "intent"})),
+                        });
+                    }
                 }
-            }
+            } else {
+                None
+            };
 
             let req = match router_providers::build_request(&plan, outbound.as_bytes()) {
                 Ok(r) => r,
@@ -335,9 +434,10 @@ impl Forwarder {
                     ))
                 }
             };
-            let started = Instant::now();
+            let attempt_started = Instant::now();
             let outcome = transport.send_boxed(req).await;
-            let latency_us = started.elapsed().as_micros() as i64;
+            let latency_us = attempt_started.elapsed().as_micros() as i64;
+            let upstream_ms = Some((latency_us / 1000) as u32);
 
             match outcome {
                 AttemptOutcome::Responded(resp) => {
@@ -357,12 +457,53 @@ impl Forwarder {
                             "wrote_full_request": true,
                             "usage": usage.map(|u| usage_json(&u)),
                         }),
+                        session.as_deref(),
                     );
                     if (200..300).contains(&resp.status) {
-                        let mut blocks = extract_prefix_blocks(&outbound).unwrap_or_default();
+                        let mut blocks = std::mem::take(&mut blocks_now);
                         if let Some(u) = &usage {
                             attribute_tokens(&mut blocks, u);
                         }
+                        // The cache_ledger put rides on the intent event
+                        // (§12.10.6): the block set the NEXT request's
+                        // continuity is measured against.
+                        let route_acc =
+                            crate::accounting::route_accounting(&self.config, candidate);
+                        let accountant = crate::accounting::Accountant {
+                            store: self.store.as_deref(),
+                            trace: self.trace.as_deref(),
+                            accounting: route_acc.as_ref(),
+                        };
+                        if let (Some(id), Some(s)) = (intent_id, session.as_deref()) {
+                            accountant.put_ledger(Some(s), &blocks, id);
+                        }
+                        // Note R2's order: trace line, then cost/quota rows.
+                        let ctx = crate::accounting::AccountCtx {
+                            request_id,
+                            received_event,
+                            proto_in: proto_in.as_str(),
+                            proto_out: cand_provider.wire_api.as_str(),
+                            session: session.as_deref(),
+                            turn_index,
+                            selection_source,
+                            decision_ms,
+                            started,
+                            now_epoch_s,
+                        };
+                        let _accounted = accountant.finish(
+                            &ctx,
+                            &ForwardOutcome::Success(ForwardSuccess {
+                                status: resp.status,
+                                content_type: resp.content_type.clone(),
+                                body: resp.body.clone(),
+                                route: candidate.clone(),
+                                failover_from: failover_from.clone(),
+                                usage,
+                                prefix_blocks: blocks.clone(),
+                            }),
+                            &blocks,
+                            upstream_ms,
+                        );
                         return ForwardOutcome::Success(ForwardSuccess {
                             status: resp.status,
                             content_type: resp.content_type,
@@ -394,7 +535,20 @@ impl Forwarder {
                     if let Some(next) =
                         self.next_candidate(&candidates, &attempted_providers, cls.class)
                     {
-                        self.record_failover(request_id, attempt_index, candidate, &next, &cls);
+                        {
+                            let (reprefill, switch_cost) =
+                                self.failover_cost(session.as_deref(), &next);
+                            self.record_failover(
+                                request_id,
+                                attempt_index,
+                                candidate,
+                                &next,
+                                &cls,
+                                session.as_deref(),
+                                reprefill,
+                                switch_cost,
+                            );
+                        }
                         failover_from.get_or_insert_with(|| candidate.clone());
                         attempt_index += 1;
                         continue;
@@ -420,7 +574,20 @@ impl Forwarder {
                     if let Some(next) =
                         self.next_candidate(&candidates, &attempted_providers, cls.class)
                     {
-                        self.record_failover(request_id, attempt_index, candidate, &next, &cls);
+                        {
+                            let (reprefill, switch_cost) =
+                                self.failover_cost(session.as_deref(), &next);
+                            self.record_failover(
+                                request_id,
+                                attempt_index,
+                                candidate,
+                                &next,
+                                &cls,
+                                session.as_deref(),
+                                reprefill,
+                                switch_cost,
+                            );
+                        }
                         failover_from.get_or_insert_with(|| candidate.clone());
                         attempt_index += 1;
                         continue;
@@ -566,17 +733,19 @@ impl Forwarder {
         request_id: &str,
         body_hash: Option<&str>,
         payload: Value,
-    ) {
-        if let Some(store) = &self.store {
-            let _ = store.append(NewEvent {
+        session: Option<&str>,
+    ) -> Option<router_core::EventId> {
+        let store = self.store.as_ref()?;
+        store
+            .append(NewEvent {
                 kind,
                 request_id: Some(request_id),
-                session: None,
+                session,
                 body_hash,
                 trace_ref: None,
                 payload,
-            });
-        }
+            })
+            .ok()
     }
 
     /// `error.classified` (NORMAL) — §12.10.5 row 7, ADR-011 item 8. Every
@@ -650,6 +819,7 @@ impl Forwarder {
     }
 
     /// `failover.triggered` (FULL), before the next intent (§12.10.5 row 8).
+    #[allow(clippy::too_many_arguments)]
     fn record_failover(
         &self,
         request_id: &str,
@@ -657,6 +827,9 @@ impl Forwarder {
         from: &RouteSpec,
         to: &RouteSpec,
         cls: &Classification,
+        session: Option<&str>,
+        reprefill: Option<u64>,
+        switch_cost_nano: Option<u64>,
     ) {
         self.append_event(
             EventKind::FailoverTriggered,
@@ -667,13 +840,46 @@ impl Forwarder {
                 "reason": cls.class.as_str(),
                 "from": format!("{}/{}", from.provider, from.model),
                 "to": format!("{}/{}", to.provider, to.model),
-                // ADR-011 item 9: reprefill/switch-cost come from the
-                // session's cache ledger; no ledger exists on this path
-                // yet, so the fields are honestly absent rather than 0.
-                "reprefill_tokens": Value::Null,
-                "switch_cost_nano": Value::Null,
+                // ADR-011 item 9: reprefill_tokens is the session's prefix
+                // token total from the ledger (an `inferred` figure,
+                // GAP-Q14) and switch_cost_nano prices it at the new
+                // route's input_miss — both null when no ledger exists.
+                "reprefill_tokens": reprefill,
+                "switch_cost_nano": switch_cost_nano,
             }),
+            session,
         );
+    }
+
+    /// The session's prefix token total from the `cache_ledger` projection
+    /// (ADR-011 item 9's `reprefill_tokens` source — `inferred`, GAP-Q14),
+    /// priced at `to`'s input_miss for `switch_cost_nano`.
+    fn failover_cost(&self, session: Option<&str>, to: &RouteSpec) -> (Option<u64>, Option<u64>) {
+        let Some(session) = session else {
+            return (None, None);
+        };
+        let Some(store) = &self.store else {
+            return (None, None);
+        };
+        let Ok(QueryRow::CacheLedger(blocks)) = store.query(Query::CacheLedgerBlocks {
+            session_key: session,
+        }) else {
+            return (None, None);
+        };
+        if blocks.is_empty() {
+            return (None, None);
+        }
+        let tokens: u64 = blocks.iter().map(|b| b.tokens).sum();
+        let cost_nano = crate::accounting::route_accounting(&self.config, to).map(|acc| {
+            // tokens × price(USD/1K) → NanoUsd, floored (§12.4 discipline).
+            let v = tokens as u128 * acc.price.input_miss.0 as u128 / 1000;
+            if v > u64::MAX as u128 {
+                u64::MAX
+            } else {
+                v as u64
+            }
+        });
+        (Some(tokens), cost_nano)
     }
 
     fn exhausted_failure(&self, upstream_status: Option<u16>, class: ErrorClass) -> ForwardFailure {

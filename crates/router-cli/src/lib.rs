@@ -142,11 +142,28 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     }
 
+    // The trace sink (R2-2f): one DecisionRecord per request under
+    // `trace.dir`, rolled hourly. A startup failure is a refusal — a
+    // router that cannot write its analysis truth must not serve (same
+    // line as CONF-23a; per-request failures are the non-blocking §8
+    // case, handled inside the forwarding path).
+    let trace_sink = match router_store::TraceSink::open(&rc.trace_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("router: trace dir {}: {e}", rc.trace_dir.display());
+            return 4;
+        }
+    };
+    let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> =
+        std::sync::Arc::new(trace_sink);
+
     let forwarder = std::sync::Arc::new(Forwarder {
         config: rc.router.clone(),
         transports,
         api_keys,
         store: Some(std::sync::Arc::new(store) as std::sync::Arc<dyn router_core::store::Store>),
+        trace: Some(trace_writer),
+        session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
     });
 
     /// One POST through the forwarding engine: body bytes in, the engine's
@@ -156,6 +173,7 @@ pub async fn serve(config_path: &str) -> i32 {
     async fn proxy_endpoint(
         forwarder: std::sync::Arc<Forwarder>,
         proto_in: WireApi,
+        headers: Vec<(String, String)>,
         body: axum::body::Bytes,
     ) -> Response {
         let request_id = request_id();
@@ -201,7 +219,9 @@ pub async fn serve(config_path: &str) -> i32 {
                 }
             };
         }
-        let outcome = forwarder.forward(proto_in, &body, &request_id).await;
+        let outcome = forwarder
+            .forward(proto_in, &body, &request_id, &headers)
+            .await;
         match outcome {
             ForwardOutcome::Success(s) => {
                 let mut resp = Response::new(axum::body::Body::from(s.body));
@@ -246,21 +266,39 @@ pub async fn serve(config_path: &str) -> i32 {
             "/v1/chat/completions",
             post({
                 let forwarder = forwarder.clone();
-                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Chat, body)
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let hs: Vec<(String, String)> = headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect();
+                    proxy_endpoint(forwarder, WireApi::Chat, hs, body)
+                }
             }),
         )
         .route(
             "/v1/responses",
             post({
                 let forwarder = forwarder.clone();
-                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Responses, body)
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let hs: Vec<(String, String)> = headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect();
+                    proxy_endpoint(forwarder, WireApi::Responses, hs, body)
+                }
             }),
         )
         .route(
             "/v1/messages",
             post({
                 let forwarder = forwarder.clone();
-                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Anthropic, body)
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let hs: Vec<(String, String)> = headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect();
+                    proxy_endpoint(forwarder, WireApi::Anthropic, hs, body)
+                }
             }),
         )
         .with_state(());

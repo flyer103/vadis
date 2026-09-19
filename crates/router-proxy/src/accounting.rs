@@ -217,9 +217,7 @@ impl<'a> Accountant<'a> {
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
     ) -> AccountResult {
-        let mut errors: Vec<TraceError> = Vec::new();
-        let overhead_ms = ctx.started.elapsed().as_millis() as u32;
-
+        let mut extra_errors: Vec<TraceError> = Vec::new();
         let (status, upstream_status, provider, model, usage, usage_missing, failover_from) =
             match outcome {
                 ForwardOutcome::Success(s) => (
@@ -227,25 +225,90 @@ impl<'a> Accountant<'a> {
                     Some(s.status),
                     s.route.provider.clone(),
                     s.route.model.clone(),
-                    s.usage.unwrap_or_default(),
+                    s.usage,
                     s.usage.is_none(),
                     s.failover_from
                         .as_ref()
                         .map(|r| format!("{}/{}", r.provider, r.model)),
                 ),
                 ForwardOutcome::Failure(f) => {
-                    errors.push(trace_error_for_failure(f));
+                    extra_errors.push(trace_error_for_failure(f));
                     (
                         f.status,
                         None,
                         String::new(),
                         String::new(),
-                        Usage::default(),
+                        None,
                         true,
                         None,
                     )
                 }
             };
+        self.commit(
+            ctx,
+            status,
+            upstream_status,
+            &provider,
+            &model,
+            usage,
+            usage_missing,
+            failover_from,
+            extra_errors,
+            blocks,
+            upstream_ms,
+        )
+    }
+
+    /// The stream path's entry (the relay owns its facts): same R2 order,
+    /// same events. `extra_errors` carries any truncation record.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_stream(
+        &self,
+        ctx: &AccountCtx<'_>,
+        status: u16,
+        provider: &str,
+        model: &str,
+        usage: Option<Usage>,
+        usage_missing: bool,
+        failover_from: Option<String>,
+        extra_errors: Vec<TraceError>,
+        blocks: &[PrefixBlock],
+        upstream_ms: Option<u32>,
+    ) -> AccountResult {
+        self.commit(
+            ctx,
+            status,
+            Some(status),
+            provider,
+            model,
+            usage,
+            usage_missing,
+            failover_from,
+            extra_errors,
+            blocks,
+            upstream_ms,
+        )
+    }
+
+    /// The shared end-of-request commit (note R2's order).
+    #[allow(clippy::too_many_arguments)]
+    fn commit(
+        &self,
+        ctx: &AccountCtx<'_>,
+        status: u16,
+        upstream_status: Option<u16>,
+        provider: &str,
+        model: &str,
+        usage: Option<Usage>,
+        usage_missing: bool,
+        failover_from: Option<String>,
+        extra_errors: Vec<TraceError>,
+        blocks: &[PrefixBlock],
+        upstream_ms: Option<u32>,
+    ) -> AccountResult {
+        let errors = extra_errors;
+        let overhead_ms = ctx.started.elapsed().as_millis() as u32;
+        let usage = usage.unwrap_or_default();
 
         let continuity = self.continuity(ctx.session, blocks);
 
@@ -269,7 +332,7 @@ impl<'a> Accountant<'a> {
                         .quota_plans
                         .iter()
                         .enumerate()
-                        .find(|(_, p)| p.models.iter().any(|m| m == &model))
+                        .find(|(_, p)| p.models.iter().any(|m| m == model))
                     {
                         let reset_day = match plan.window {
                             QuotaWindow::Monthly { reset_day } => reset_day,
@@ -278,7 +341,7 @@ impl<'a> Accountant<'a> {
                             window_start_for(ctx.now_epoch_s, reset_day) as i64 * 1_000_000;
                         let used = store
                             .query(Query::QuotaUsed {
-                                provider: &provider,
+                                provider,
                                 plan_idx: plan_idx as u32,
                                 window_start_us,
                             })
@@ -294,8 +357,7 @@ impl<'a> Accountant<'a> {
                             tokens_used: used,
                         };
                         let verdict = charge(plan, &mut st, &usage, ctx.now_epoch_s);
-                        quota_after =
-                            Some(QuotaAfter::from_verdict(&provider, plan, &st, &verdict));
+                        quota_after = Some(QuotaAfter::from_verdict(provider, plan, &st, &verdict));
                     }
                 }
             }
@@ -319,8 +381,8 @@ impl<'a> Accountant<'a> {
                 lossy: Vec::new(),
             },
             decision: DecisionRec {
-                provider,
-                model,
+                provider: provider.to_string(),
+                model: model.to_string(),
                 selection_source: ctx.selection_source.to_string(),
                 plugin_chain: Vec::new(),
                 decision_ms: ctx.decision_ms,
