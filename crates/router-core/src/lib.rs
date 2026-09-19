@@ -34,12 +34,16 @@ pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
 pub use prefix::{
     attribute_tokens, body_sha16, extract_prefix_blocks, prefix_continuity, BlockKind, PrefixBlock,
 };
-pub use quota::{charge, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWindow};
+pub use quota::{
+    charge, window_start_for, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWindow,
+};
 pub use store::{
-    write_intent_then, EventId, EventKind, NewEvent, Projection, ProjectionWrite, Query, QueryRow,
-    RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent, EVENT_SCHEMA_VERSION,
+    write_intent_then, EventId, EventKind, LedgerBlock, NewEvent, Projection, ProjectionWrite,
+    Query, QueryRow, RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent,
+    EVENT_SCHEMA_VERSION,
 };
 pub use trace::{
-    CostRec, DecisionRecord, IdentityRec, PrefixBlockRec, PrefixRec, ProtocolRec, QuotaAfter,
-    ResultRec, StateRec, TraceError, TransformRecord, TRACE_SCHEMA_VERSION,
+    verified_savings_tokens, CostRec, DecisionRecord, IdentityRec, PrefixBlockRec, PrefixRec,
+    ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TransformRecord,
+    TRACE_SCHEMA_VERSION,
 };

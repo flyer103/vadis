@@ -85,7 +85,7 @@ fn next_month(y: i64, m: u32) -> (i64, u32) {
 /// When `reset_day` exceeds the current month's day count, the last day of
 /// the month is used (a day-31 reset lands on month-end in 30-/28-day months,
 /// keeping the unit consistent).
-fn window_start_for(now_epoch_s: u64, reset_day: u8) -> u64 {
+pub fn window_start_for(now_epoch_s: u64, reset_day: u8) -> u64 {
     let (y, m, d, _, _) = crate::peak::timestamp_parts(now_epoch_s, crate::peak::Tz::Utc);
     let rd = reset_day as u32;
     let (wy, wm) = if d >= rd { (y, m) } else { prev_month(y, m) };

@@ -26,8 +26,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use router_core::store::{
-    CooldownRow, EventId, EventKind, NewEvent, Projection, ProjectionWrite, Query, QueryRow,
-    RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent, EVENT_SCHEMA_VERSION,
+    CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, Projection, ProjectionWrite, Query,
+    QueryRow, RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent,
+    EVENT_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags};
 
@@ -723,6 +724,27 @@ impl Store for SqliteStore {
                     Err(rusqlite::Error::QueryReturnedNoRows) => None,
                     Err(e) => return Err(map_err(false, e)),
                 })
+            }
+            Query::CacheLedgerBlocks { session_key } => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT block_index, kind, tokens, hash FROM cache_ledger \
+                         WHERE session_key = ?1 ORDER BY block_index",
+                    )
+                    .map_err(|e| map_err(false, e))?;
+                let blocks = stmt
+                    .query_map(params![session_key], |r| {
+                        Ok(LedgerBlock {
+                            index: r.get::<_, i64>(0)? as u32,
+                            kind: r.get(1)?,
+                            tokens: (r.get::<_, i64>(2)?).max(0) as u64,
+                            hash: r.get(3)?,
+                        })
+                    })
+                    .map_err(|e| map_err(false, e))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| map_err(false, e))?;
+                QueryRow::CacheLedger(blocks)
             }
             Query::AllEvents => QueryRow::Events(self.read_events(&conn)?),
         })

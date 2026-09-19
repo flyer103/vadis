@@ -247,6 +247,10 @@ pub enum Query<'a> {
         provider: &'a str,
         model: Option<&'a str>,
     },
+    /// The session's current prefix-block set (the `cache_ledger`
+    /// projection, block order) — what the *next* request's continuity
+    /// is measured against (spec §6, §12.10.6).
+    CacheLedgerBlocks { session_key: &'a str },
     /// The full event log in `event_id` order (bounded use: conformance and
     /// rebuild; the serving path never scans the log).
     AllEvents,
@@ -270,12 +274,22 @@ pub struct CooldownRow {
     pub reason: String,
 }
 
+/// One `cache_ledger` row, in block order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerBlock {
+    pub index: u32,
+    pub kind: String,
+    pub tokens: u64,
+    pub hash: String,
+}
+
 /// The answer to a `Query`.
 #[derive(Debug, Clone)]
 pub enum QueryRow {
     SessionBinding(Option<SessionBindingRow>),
     Count(i64),
     Cooldown(Option<CooldownRow>),
+    CacheLedger(Vec<LedgerBlock>),
     Events(Vec<StoredEvent>),
 }
 

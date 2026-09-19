@@ -254,6 +254,19 @@ impl TraceError {
     }
 }
 
+/// `verified_savings_tokens` (spec §6 metric definitions): counts only the
+/// transform gains whose `verdict` is `verified` — the gate-side filter
+/// that makes "only `verified` may enter a gate" (spec §7) a function, not
+/// a convention. Everything else an `inferred` row reports is deliberately
+/// invisible here.
+pub fn verified_savings_tokens(rec: &DecisionRecord) -> i64 {
+    rec.transforms
+        .iter()
+        .filter(|t| t.verdict == "verified")
+        .map(|t| t.saved_input_tokens.saturating_add(t.saved_output_tokens))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
