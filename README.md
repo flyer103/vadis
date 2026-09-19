@@ -1,5 +1,8 @@
 # router
 
+[![CI](https://github.com/flyer103/router/actions/workflows/ci.yml/badge.svg)](https://github.com/flyer103/router/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A multi-protocol LLM gateway: **a byte-faithful data plane + a revertible plugin runtime + a measurable cost engine**.
 
 For everyday agents (codex / hermes / claude code): point the client's base_url here and router decides
@@ -18,7 +21,7 @@ records every decision and every cent into a replayable trace.
 
 ## Requirements
 
-- **Rust**: a stable toolchain.
+- **Rust**: `rust-toolchain.toml` pins the toolchain the project is verified on, and `rustup` installs it for you. The minimum supported version is lower and is declared as `rust-version` in `Cargo.toml` (`[workspace.package]`) — currently **1.88**.
 - **A C compiler**: `rusqlite` is used with its `bundled` feature, so the pinned SQLite C library is compiled into `router-store` at build time — no system SQLite is needed, but a working `cc` is.
 - **Provider keys in the environment only**: the config file names the environment variable, never the value.
 
