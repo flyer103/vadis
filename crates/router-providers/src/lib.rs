@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod stream;
+
 use std::time::Duration;
 
 use bytes::Bytes;
