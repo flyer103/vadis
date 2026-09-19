@@ -1,61 +1,66 @@
 # Spec (WHAT) — router v0.1
 
-口径：本文是**对外行为与配置契约**的单一真相。实现细节见 `design/DESIGN.md`；为什么这么做见
-`design/decisions/`。
+Convention: this document is the single source of truth for **external behavior and the config
+contract**. Implementation details are in `design/DESIGN.md`; the why is in `design/decisions/`.
 
-## 1. 目标与非目标
+## 1. Goals and non-goals
 
-**是什么**：一个本地优先的多协议 LLM 网关。客户端（codex / hermes / claude code）把 base_url 指过来，
-router 按配置把请求送到指定的 (provider, model)，在此过程中**不破坏上游前缀缓存**地省 token，并把
-每次决定与每分钱记成可回放的 trace。
+**What it is**: a local-first multi-protocol LLM gateway. Clients (codex / hermes / claude code) point
+their base_url here; router sends each request to the configured (provider, model), saving tokens along
+the way **without breaking the upstream prefix cache**, and records every decision and every cent as a
+replayable trace.
 
-**v0.1 非目标**（明确的排除项，不要顺手加）：
+**v0.1 non-goals** (explicit exclusions — do not add them on the side):
 
-| 不做 | 原因 / 后续路径 |
+| Not doing | Reason / later path |
 |---|---|
-| 服务端会话状态（`store:true`、`previous_response_id`） | 实测客户端不使用（§7）；缺失时粘性路由保真 |
-| 自动选模型 / 效果优化 | 显式指定为主；`auto` 留给插件槽（ADR-004） |
-| 语义响应缓存、上下文摘要 | 与前缀缓存冲突面大，需先有实测账本（P4） |
-| 多用户、多租户、多节点、DB | 单操作者本地进程；状态仅落盘 snapshot |
-| bandit / MF / BT 等历史算法 | 作为实验资产，后期以 tier-A 插件形式回流 |
-| `tee` 原文的取回通道（retrieve 端点） | 规则可声明 `tee`，但存储位置与取回通道**本版不实现**（§4） |
+| Server-side session state (`store:true`, `previous_response_id`) | Measured: clients do not use it (§7); stickiness keeps fidelity when it is absent |
+| Automatic model selection / effect optimization | Explicit specification is primary; `auto` is left as a plugin slot (ADR-004) |
+| Semantic response cache, context summarization | Large conflict surface with prefix caching; a measured ledger is needed first (P4) |
+| Multi-user, multi-tenant, multi-node, DB | Single-operator local process; state only lands on disk as a snapshot |
+| Historical algorithms such as bandit / MF / BT | Kept as experiment assets; later returned as tier-A plugins |
+| A retrieval channel for `tee` original text (retrieve endpoint) | A rule may declare `tee`, but the storage location and retrieval channel are **not implemented in this version** (§4) |
 
-## 2. 协议契约
+## 2. Protocol contract
 
-三种入站协议语义等价（同一 router 决定链），按协议镜像上游语义：
+The three inbound protocols are semantically equivalent (the same router decision chain) and mirror
+upstream semantics per protocol:
 
-| 入站 | 端点 | 出站 native 条件 |
+| Inbound | Endpoint | Outbound native condition |
 |---|---|---|
 | OpenAI chat completions | `POST /v1/chat/completions` | provider `wire_api: chat` |
 | OpenAI responses | `POST /v1/responses` | provider `wire_api: responses` |
 | Anthropic messages | `POST /v1/messages` | provider `wire_api: anthropic` |
 
-**出站选择规则**（3×3）：入站协议与 provider 的 `wire_api` 相同 → **native passthrough**（字节保真）；
-不同 → **确定性翻译**（同一内容永远产出同一上游字节，保证前缀缓存稳定）。每个 provider 需在 config
-声明其支持能力；翻译格必须显式标注有损点。
+**Outbound selection rule** (3×3): inbound protocol equal to the provider's `wire_api` → **native
+passthrough** (byte-faithful); different → **deterministic translation** (the same content always yields
+the same upstream bytes, keeping the prefix cache stable). Every provider must declare its supported
+capabilities in config; every translation cell must explicitly mark its lossy points.
 
-有损点清单（翻译时必须逐条处理，不是"尽力而为"）：
+List of lossy points (each must be handled one by one when translating — not "best effort"):
 
-| 语义 | chat | responses | anthropic | 处理 |
+| Semantics | chat | responses | anthropic | Handling |
 |---|---|---|---|---|
-| 系统指令 | `messages[0].role=system` | `input[0].role=developer`（实测 codex 不填顶层 `instructions`） | 顶层 `system` | 映射；保持位置稳定（在 prefix 最前） |
-| 工具调用 | `tool_calls` + `role=tool` | `function_call` / `function_call_output` item | `tool_use` / `tool_result` block | 双向映射，保留 id 与顺序 |
-| 推理内容 | `reasoning` 字段 | `reasoning` item（`include:["reasoning.encrypted_content"]`） | `thinking` block | 不透传即丢弃并记录 lossy 标记；**禁止重新编码** |
-| 缓存断点 | 无 | `prompt_cache_key` | `cache_control` 断点 | 向 anthropic 上游翻译时按稳定规则注入断点（同内容 → 同位置） |
-| usage | `usage.prompt/completion_tokens` | `usage.input_tokens_details.cached_tokens` 等 | `usage.input_tokens/cache_read_input_tokens` | 归一化到内部 `Usage`（§6） |
+| System instruction | `messages[0].role=system` | `input[0].role=developer` (measured: codex does not fill the top-level `instructions`) | top-level `system` | Map; keep the position stable (at the very front of the prefix) |
+| Tool calls | `tool_calls` + `role=tool` | `function_call` / `function_call_output` item | `tool_use` / `tool_result` block | Map both ways, preserving id and order |
+| Reasoning content | `reasoning` field | `reasoning` item (`include:["reasoning.encrypted_content"]`) | `thinking` block | If it is not passed through, it is dropped and a lossy marker is recorded; **re-encoding is forbidden** |
+| Cache breakpoints | none | `prompt_cache_key` | `cache_control` breakpoints | When translating to an anthropic upstream, inject breakpoints by a stable rule (same content → same position) |
+| usage | `usage.prompt/completion_tokens` | `usage.input_tokens_details.cached_tokens` etc. | `usage.input_tokens/cache_read_input_tokens` | Normalize into the internal `Usage` (§6) |
 
-## 3. 选择语义
+## 3. Selection semantics
 
-`model` 字段接受三种形式：
+The `model` field accepts three forms:
 
-1. `provider/model` — 直接命中 roster 中的一条；
-2. **别名** — config `aliases:` 中定义的名字（例：`coding-fast → deepseek/deepseek-v4-pro`）；
-3. `auto` — v0.1 返回 `400` + 明确错误体（提示由插件接管）；结构上预留 `Selector` 槽。
+1. `provider/model` — hits one entry in the roster directly;
+2. **alias** — a name defined in config `aliases:` (example: `coding-fast → deepseek/deepseek-v4-pro`);
+3. `auto` — v0.1 returns `400` + an explicit error body (saying a plugin takes it over); the `Selector`
+   slot is reserved structurally.
 
-显式指定时，router 仍执行 **Guard 阶段**（配额/成本上限/能力/`max_tokens`），guard 命中则按配置
-策略处理（拒绝并说明原因，或降级到 `fallback` 链）。
+With an explicit specification, router still runs the **Guard stage** (quota / cost cap / capability /
+`max_tokens`); on a guard hit it acts per the configured policy (reject and explain why, or downgrade to
+the `fallback` chain).
 
-## 4. 配置 schema（`config.example.yaml` 的契约）
+## 4. Config schema (the contract of `config.example.yaml`)
 
 ```yaml
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m }
@@ -66,181 +71,209 @@ trace:    { dir: "./state/traces", rollover: hourly }
 providers:
   - name: deepseek
     base_url: https://api.deepseek.com/v1
-    api_key_env: DEEPSEEK_API_KEY      # secrets 只从 env 读
+    api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only
     wire_api: chat                     # chat | responses | anthropic
-    supports: [chat, responses]        # 可用于翻译的入站协议
+    supports: [chat, responses]        # inbound protocols this provider can be translated to
     models:
-      - id: <provider 内的唯一模型 id>
-        context: <上下文上限>
-        price:                         # 五档价，USD / 1K token：本文件只定 **schema 与口径**，不复制数值
-          input_miss: <基准价：缓存未命中>
-          input_hit: <缓存命中价>
-          cache_write: <缓存写入价；0 = 上游不单独计费>
-          output: <输出价>
+      - id: <unique model id within the provider>
+        context: <context limit>
+        price:                         # five-tier price, USD / 1K token: this file fixes only the **schema and convention**, it copies no values
+          input_miss: <base price: cache miss>
+          input_hit: <cache-hit price>
+          cache_write: <cache-write price; 0 = upstream does not charge separately>
+          output: <output price>
           peak: { multiplier: 2.0, windows: [{ days: [mon,tue,wed,thu,fri], start: "01:00", end: "04:00", tz: UTC }] }
-        source: "<官方定价页 URL> @<抓取日期>"   # 必填，可追溯（见下方「价格口径」）
-    quota:                             # 订阅制套餐（coding plan 等），可选
-      - { models: ["<本 provider 的模型 id>"], window: monthly, tokens: <套餐额度>,
-          reset_day: 1, over_quota: block }   # quota 只能引用**本 provider 自己的**模型
+        source: "<official pricing page URL> @<fetch date>"   # required, traceable (see "Price convention" below)
+    quota:                             # subscription plans (coding plan etc.), optional
+      - { models: ["<this provider's model id>"], window: monthly, tokens: <plan allowance>,
+          reset_day: 1, over_quota: block }   # quota may only reference **its own provider's** models
 
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
 
 plugins:
   - id: cache-guard
-    kind: builtin/cache_guard          # tier-A：编译进产品
+    kind: builtin/cache_guard          # tier-A: compiled into the product
     config: { strict_prefix: true }
   - id: tool-output-rules
-    kind: builtin/transform_rules      # 规则即数据（TOML + 内联测试）
+    kind: builtin/transform_rules      # rules as data (TOML + inline tests)
     config: { rules_file: ./rules/tool_output.toml, on_failure: passthrough }
   - id: judge-experiment
-    kind: process                      # tier-B：进程外插件
+    kind: process                      # tier-B: out-of-process plugin
     url: unix:///tmp/router-plugins/judge.sock
-    inject: [cache_ledger, session_table]   # 依赖声明（coeffect）：未满足时停在加载等待
-    isolate: false                     # 独立 realm：可与另一版本并存做 shadow 对比
+    inject: [cache_ledger, session_table]   # dependency declaration (coeffect): stays at load-waiting while unsatisfied
+    isolate: false                     # separate realm: can coexist with another version for shadow comparison
     intercept: { sample: 0.05, shadow: true }
     disabled: true
 
-fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # 有序 route 列表，全局粒度（§8）
+fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # ordered route list, global granularity (§8)
 ```
 
-### 4.0 价格口径（防双份漂移）
+### 4.0 Price convention (preventing two copies from drifting)
 
-**本文件不复制任何价格数值**——价格数值的唯一真相是 `config.example.yaml` 的每个模型条目，每处必须带
-`source`（官方定价页 URL + 抓取日期）。本文件只定义 schema 与口径：
+**This file copies no price figure** — the single source of truth for price figures is each model entry
+in `config.example.yaml`, and each of them must carry `source` (official pricing page URL + fetch date).
+This file defines only the schema and the convention:
 
-- 四档价是**基准价**；`peak.windows` 命中的时段按 `peak.multiplier` **乘算**（峰谷用乘法表达，不写两套价）。
-- `cache_write: 0` 表示上游不对缓存写入单独计费（如 DeepSeek 只区分命中/未命中）。
-- 币种统一 **USD / 1K token**；从官方页的「per 1M」转 1K 时**除以 1000**（不得用汇率近似替代官方美元价）。
-- 参照实例（@2026-09-19 官方页）：DeepSeek 高峰时段为 **UTC 01:00–04:00 与 06:00–10:00（周一至周五，
-  排除中国法定节假日）**，空闲为高峰半价 ⇒ 基准价取**空闲价**、`peak.multiplier: 2.0`。节假日不建模
-  （GAP-Q6，已知偏差：节假日会按 `peak` 计，偏高）。
-- 套餐 `quota` **只能引用本 provider 自己的模型**：跨 provider 引用会在 provider 不可用时语义不明。
+- The four price tiers are **base prices**; the periods matched by `peak.windows` are **multiplied** by
+  `peak.multiplier` (peak/off-peak is expressed by multiplication, not by writing two sets of prices).
+- `cache_write: 0` means the upstream does not charge separately for cache writes (e.g. DeepSeek only
+  distinguishes hit / miss).
+- Currency is uniformly **USD / 1K token**; converting the official page's "per 1M" to 1K means
+  **dividing by 1000** (an exchange-rate approximation must not stand in for the official USD price).
+- Reference instance (@2026-09-19 official page): DeepSeek's peak periods are **UTC 01:00–04:00 and
+  06:00–10:00 (Monday to Friday, excluding Chinese public holidays)**, off-peak is half the peak price
+  ⇒ the base price takes the **off-peak price**, `peak.multiplier: 2.0`. Holidays are not modeled
+  (GAP-Q6; known deviation: holidays are billed at `peak`, which is on the high side).
+- A plan's `quota` **may only reference models of its own provider**: a cross-provider reference would
+  have unclear semantics when that provider is unavailable.
 
-配置变更语义（对齐 Cordis 的 keyed diff，见 ADR-002）：`config` 变更 → 交给插件自行 diff 后 reload
-（不重建进程）；`disabled: true` → 卸载该 fiber 并完整回滚其 effect；`id`/`kind` 变更 → 重建该 entry。
+Config-change semantics (aligned with Cordis's keyed diff, see ADR-002): a `config` change → handed to
+the plugin to diff by itself and reload (the process is not rebuilt); `disabled: true` → unload that
+fiber and fully roll back its effects; an `id`/`kind` change → rebuild that entry.
 
-### 4.1 `trace`（观测介质的落盘参数）
+### 4.1 `trace` (the on-disk parameters of the observation medium)
 
-| 键 | 类型 / 取值 | 语义 |
+| Key | Type / value | Semantics |
 |---|---|---|
-| `dir` | 路径 | trace JSONL 的落盘目录。相对路径按**本 config 文件所在目录**解析（不是 CWD） |
-| `rollover` | `hourly` | 滚动粒度；`hourly` → 文件名 `YYYY-MM-DDTHH.jsonl`（UTC，小时起始）。v0.1 只定义该值 |
+| `dir` | path | Directory where trace JSONL is written. A relative path is resolved against **the directory containing this config file** (not the CWD) |
+| `rollover` | `hourly` | Rollover granularity; `hourly` → file name `YYYY-MM-DDTHH.jsonl` (UTC, hour start). v0.1 defines only this value |
 
-- 路径进 config（便于把 state 放到别处）；**保留期不进 config**：v0.1 不做自动清理，文件只追加、由运维手工归档；
-  将来要加 `retention` 属于新增键（不破坏既有配置）。
-- 写失败**不阻塞请求**（§8）；trace 内容见 §6。
+- The path goes into config (so that state can live elsewhere); **retention does not go into config**:
+  v0.1 does no automatic cleanup, files are append-only and archived by hand by the operator; adding
+  `retention` in the future is a new key (it does not break existing configs).
+- A write failure **does not block the request** (§8); trace contents are in §6.
 
-### 4.2 `fallback`（failover 链，§8）
+### 4.2 `fallback` (failover chain, §8)
 
-| 键 | 类型 | 语义 |
+| Key | Type | Semantics |
 |---|---|---|
-| `fallback` | 有序 `provider/model` 列表 | **全局粒度**（v0.1 无按模型/按别名的链）；空列表 = 不 failover |
+| `fallback` | ordered `provider/model` list | **Global granularity** (v0.1 has no per-model / per-alias chain); an empty list = no failover |
 
-上游 5xx / 429 / 配额耗尽时，按序切到"下一个**尚未尝试**的 route"；切换会失去前缀缓存，trace 必须记
-`failover_from` 与由此产生的 re-prefill 成本（§6「结果」）。链用尽 → `502 upstream_error`（上游尝试超时
-→ `504 upstream_timeout`）。列表项必须是 roster 中存在的 route（别名不参与 fallback）。
+On upstream 5xx / 429 / quota exhaustion, switch in order to "the next route **not yet attempted**";
+switching loses the prefix cache, so the trace must record `failover_from` and the resulting re-prefill
+cost (§6 "result"). Chain exhausted → `502 upstream_error` (upstream attempt timeout →
+`504 upstream_timeout`). List entries must be routes that exist in the roster (aliases do not take part
+in fallback).
 
-### 4.3 `inject`（插件依赖声明）
+### 4.3 `inject` (plugin dependency declaration)
 
-`inject: [<service>…]` 声明该插件依赖的服务槽（Cordis 的 coeffect 声明，ADR-002/DESIGN §4）。
-未满足时该 fiber 停在**加载等待**（不报错，也不影响其它插件），服务就绪后继续装载。
-服务名是产品定义的类型化槽名（例：`cache_ledger`、`session_table`），不是任意字符串。
+`inject: [<service>…]` declares the service slots this plugin depends on (Cordis's coeffect declaration,
+ADR-002/DESIGN §4). While unsatisfied, that fiber stays at **load-waiting** (it does not error, and it
+does not affect other plugins); it goes on loading once the service is ready. Service names are
+product-defined typed slot names (e.g. `cache_ledger`, `session_table`), not arbitrary strings.
 
-### 4.4 规则文件（`rules/*.toml`）与 `tee`
+### 4.4 Rule files (`rules/*.toml`) and `tee`
 
-`builtin/transform_rules` 的规则文件格式见 `rules/tool_output.toml`（ADR-003 的声明式管线：过滤阶段、
-`match_output`、行保留/剔除、截断、`on_empty`、内联测试）。
+The rule-file format of `builtin/transform_rules` is in `rules/tool_output.toml` (the declarative
+pipeline of ADR-003: filter stage, `match_output`, line keep/drop, truncation, `on_empty`, inline tests).
 
-- 规则可声明 `tee = true`。命中且确有删行时，在输出**末尾追加一行**：
-  `[router:tee sha256=<原始载荷 sha256 前 16 位 hex> lines_dropped=<n> bytes_original=<n>]`。
-- **原文的存储位置与取回通道（retrieve）在 v0.1 未实现**——本版**不提供**取回端点、不定义落盘目录。
-  trace 只记 `tee_id`（§6「transform」，未启用时为 `null`）。实现属于 P1 压缩方向（D3）之后的独立变更；
-  在它落地前，不要把 `tee` 当作"可回取原文"的能力使用。
+- A rule may declare `tee = true`. On a hit that did drop lines, **one line is appended** at the **end of
+  the output**:
+  `[router:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`.
+- **The original text's storage location and retrieval channel (retrieve) are not implemented in v0.1**
+  — this version **provides no** retrieval endpoint and defines no on-disk directory. The trace records
+  only `tee_id` (§6 "transform"; `null` when tee is not enabled). The implementation is a separate change
+  following the P1 compression direction (D3); before it lands, do not use `tee` as a "retrievable
+  original text" capability.
 
-## 5. 接入前提（必做）
+## 5. Onboarding prerequisite (mandatory)
 
-客户端必须绕开可能存在的本地系统代理，否则**请求根本到不了 router**：
+The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
 ```
 
-实测（2026-09-19）：macOS 系统代理配置为 `127.0.0.1:8080` 且例外列表含 `127.0.0.1`，但 `reqwest`
-（codex）不认例外列表，localhost 请求一样被送进代理，客户端最终报 `503 Service Unavailable`。
-`httpx`（hermes）同理。
+Measured (2026-09-19): the macOS system proxy is configured as `127.0.0.1:8080` with `127.0.0.1` in its
+exception list, but `reqwest` (codex) does not honor the exception list, so localhost requests are sent
+into the proxy all the same and the client finally reports `503 Service Unavailable`. The same holds for
+`httpx` (hermes).
 
-## 6. 观测契约（每请求一条 DecisionRecord）
+## 6. Observation contract (one DecisionRecord per request)
 
-| 字段组 | 内容 |
+| Field group | Contents |
 |---|---|
-| 身份 | `request_id`、`client`（UA 归一）、`session`（来自 §4 `key_sources`，优先 `prompt_cache_key`）、`thread_id`、`turn_index` |
-| 协议 | `protocol_in`、`protocol_out`、`translated`（bool）、`lossy[]` |
-| 决定 | `provider`、`model`、`selection_source`（explicit/alias/plugin）、`plugin_chain[]`、`decision_ms` |
-| 状态 | `stateful_inbound`（`store != false` 或 `previous_response_id` 非空）、`sticky_hit`、`cache_control_breaks` |
-| 前缀 | `prefix_blocks[]`（每块 token 数 + hash；**块粒度与 hash 定义见下**）、`prefix_continuity`（相对同 session 上一请求的最长公共块比例） |
-| transform | 每步：`plugin`、`added_input_tokens`、`saved_input_tokens`、`saved_output_tokens`、`cache_impact`、`verdict`（verified/inferred）、`tee_id`（可选；v0.1 未启用 tee 时为 `null`） |
-| usage | 归一化 `Usage { input_total, input_cached, cache_write, output, reasoning }` |
-| 成本 | `cost.input_miss`、`cost.input_hit`、`cost.cache_write`、`cost.output`、`cost.total`、`quota_after` |
-| 结果 | `status`、`upstream_status`、`failover_from`、`overhead_ms`、`upstream_ms` |
-| 失败明细 | `errors[]`（数组；**无失败 = 空数组，不省略**），每条 `{ kind, message, plugin?, details? }`；`kind ∈ {transform_error, upstream_error, trace_write_failed, internal}`（§8） |
+| identity | `request_id`, `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
+| protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
+| decision | `provider`, `model`, `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
+| state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
+| prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
+| transform | per step: `plugin`, `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1) |
+| usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
+| cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
+| result | `status`, `upstream_status`, `failover_from`, `overhead_ms`, `upstream_ms` |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal}` (§8) |
 
-**`prefix_blocks[]` 的定义**（可比较性的前提，两个实现不得各自发挥）：
+**Definition of `prefix_blocks[]`** (the precondition for comparability; two implementations must not
+each improvise):
 
-- 块 = 上游可见前缀区（`messages` / `input` / 系统指令位）里的**结构单元**：一条 message / 一个 tool 定义 /
-  一个 input item。**不是**定长 token 桶（结构与缓存断点对齐，见 ADR-007）。
-- 每块记 `tokens`（该块 token 数）与 `hash`；`hash = sha256(块原始字节)` 的 hex **前 16 位**。
-- 该定义域**不含** router 自有字段，故"删 router 自有字段"不改变任何块 hash（§2 字节边界）。
-- 落盘路径/滚动由 §4.1 的 `trace` 指定；写失败不阻塞请求（§8），并记 `errors[].kind = trace_write_failed`。
+- A block = a **structural unit** in the upstream-visible prefix region (`messages` / `input` / the
+  system instruction position): one message / one tool definition / one input item. It is **not** a
+  fixed-length token bucket (the structure aligns with cache breakpoints, see ADR-007).
+- Each block records `tokens` (that block's token count) and `hash`; `hash` = the **first 16 hex chars**
+  of `sha256(block raw bytes)`.
+- That domain **does not include** router-owned fields, so "deleting router-owned fields" changes no
+  block hash (§2 byte boundary).
+- The on-disk path / rollover is specified by `trace` in §4.1; a write failure does not block the request
+  (§8), and records `errors[].kind = trace_write_failed`.
 
-**指标定义**（`router stats` 暴露，autowork gate 引用）：
+**Metric definitions** (exposed by `router stats`, referenced by autowork gates):
 
 - `cache_hit_rate` = Σ`input_cached` / Σ`input_total`
-- `stateful_inbound_rate` = stateful 请求数 / 总请求数（用于持续确认"是否依赖 stateful"）
-- `prefix_continuity_p50` = 同 session 相邻请求的最长公共前缀块比例的中位数（**保真度指标**：掉下来
-  说明某个 transform 在破坏缓存）
-- `verified_savings_tokens` = 仅统计 `verdict=verified` 的 transform 收益
-- `overhead_ms_p99` = router 自身开销（不含上游）
+- `stateful_inbound_rate` = stateful requests / total requests (used to keep confirming "whether it
+  depends on stateful")
+- `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
+  same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
+- `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
+- `overhead_ms_p99` = router's own overhead (excluding upstream)
 
-## 7. 计账口径（不得含糊）
+## 7. Accounting convention (must not be ambiguous)
 
-| 口径 | 定义 | 用途 |
+| Convention | Definition | Use |
 |---|---|---|
-| `verified` | 来自上游 `usage` 的**实测差值**：同 session 内 transform 开/关的对照回合，或 `cached_tokens` 的可归因变化 | **只有它能进 gate、能对外报数** |
-| `inferred` | 本地 tokenizer 估算，无对照 | 只能用于调试与方向判断，必须标注 |
+| `verified` | the **measured delta** from upstream `usage`: a control turn with the transform on/off within the same session, or an attributable change in `cached_tokens` | **only it can enter a gate or be reported externally** |
+| `inferred` | local tokenizer estimate, no control | only for debugging and direction judgment; must be labeled |
 
-报告要求：任何"省了多少"的陈述必须说明口径、样本量、时间窗；混用口径视为错误。
+Reporting requirement: any statement of "how much was saved" must state the convention, the sample size
+and the time window; mixing conventions counts as an error.
 
-## 8. 降级与错误行为
+## 8. Degradation and error behavior
 
-**统一错误体**（所有非 2xx，含桩端点；客户端按此解析，不要依赖各家上游的错误形状）：
+**Unified error body** (every non-2xx, including the stub endpoints; clients parse this and should not
+rely on each upstream's own error shape):
 
 ```json
 {"error": {"type": "quota_exceeded", "message": "monthly quota exhausted for zai/glm-5.3",
            "request_id": "req-7", "details": {"provider": "zai", "over_quota": "block"}}}
 ```
 
-| `error.type` | HTTP | 触发 |
+| `error.type` | HTTP | Trigger |
 |---|---|---|
-| `invalid_request` | 400 | 请求体不可解析 / 缺 `model` / 字段类型错 |
-| `auto_not_supported` | 400 | `model: auto`（v0.1，§3） |
-| `capability_unsupported` | 400 | 入站协议 ∉ 该 provider `supports`（未声明的格 = 400，不给"尽力而为"的翻译） |
-| `stateful_unsupported` | 400 | stateful 入站且粘性无法保真（ADR-004） |
-| `cost_cap_exceeded` | 403 | guard 成本上限命中 |
-| `unknown_provider` / `unknown_model` | 404 | `provider/model` 或别名解析不到 |
-| `quota_exceeded` | 429 | `quota.over_quota = block` 且额度耗尽 |
-| `upstream_error` | 502 | 上游错误且 fallback 链用尽（`details.upstream_status`） |
-| `upstream_timeout` | 504 | 上游尝试超时且链用尽 |
-| `not_implemented` | 501 | v0.1 三个协议端点的桩（转发在 Round 2 落地） |
-| `internal` | 500 | 其它 |
+| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type |
+| `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
+| `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
+| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004) |
+| `cost_cap_exceeded` | 403 | guard cost cap hit |
+| `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
+| `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted |
+| `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
+| `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
+| `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (forwarding lands in Round 2) |
+| `internal` | 500 | everything else |
 
-响应头：`X-Router-Request-Id`（恒有）、`X-Router-Session`（解析出 session 时）、`X-Router-Lossy`（发生有损
-翻译时）。SSE 路径首个事件前必须已发这三个头。
+Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
+`X-Router-Lossy` (when a lossy translation happened). On the SSE path all three headers must already have
+been sent before the first event.
 
-行为条款：
+Behavior clauses:
 
-- transform 失败 → **回退原文**（fail-safe），trace 记 `errors[].kind = transform_error`，请求照常转发。
-- 上游 5xx / 429 / 配额耗尽 → 按 config 的 `fallback` 链切换（§4.2；切换会失去缓存，需记 `failover_from`
-  与由此产生的 re-prefill 成本）。
-- 前缀不连续（cache-guard 检测到）→ 按 `strict_prefix` 处理：默认告警 + 继续；严格模式拒绝该 transform。
-- trace 落盘失败 → **不影响请求**，记 `errors[].kind = trace_write_failed`（观测缺失必须显式，不静默）。
-- 未知字段：**必须原样透传**（协议演进友好），不得静默丢弃。
+- transform failure → **fall back to the original** (fail-safe), the trace records
+  `errors[].kind = transform_error`, and the request is forwarded as usual.
+- upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
+  cache, so `failover_from` and the resulting re-prefill cost must be recorded).
+- prefix discontinuity (detected by cache-guard) → handled per `strict_prefix`: default is warn +
+  continue; strict mode rejects that transform.
+- trace write failure → **does not affect the request**, records `errors[].kind = trace_write_failed`
+  (a missing observation must be explicit, never silent).
+- unknown fields: **must be passed through verbatim** (friendly to protocol evolution), and must not be
+  silently dropped.
