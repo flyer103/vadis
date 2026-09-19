@@ -114,11 +114,18 @@ async fn conf_28_upstream_400_writes_one_failure_line() {
         "the upstream's own status is recorded"
     );
 
-    // Result fields per spec §6: the client-facing status and the
-    // failover origin (absent here — format_error never fails over).
+    // Result fields per spec §6: the client-facing status, the upstream's
+    // own status mirrored into result.upstream_status (R2G8's field
+    // completion — the record answers "which provider said what"), and
+    // the failover origin (absent here — format_error never fails over).
     assert_eq!(rec["result"]["status"], 502);
-    assert_eq!(rec["result"]["upstream_status"], serde_json::Value::Null);
+    assert_eq!(rec["result"]["upstream_status"], 400);
     assert_eq!(rec["result"]["failover_from"], serde_json::Value::Null);
+
+    // The attempted route is named, not blank (R2G8): the failure record
+    // answers "which provider died" first.
+    assert_eq!(rec["decision"]["provider"], "mock");
+    assert_eq!(rec["decision"]["model"], "glm");
 
     // No usage arrived: usage_missing, zero usage, nothing charged.
     assert_eq!(rec["usage_missing"], true);

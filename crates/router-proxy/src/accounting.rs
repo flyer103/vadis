@@ -258,24 +258,44 @@ impl<'a> Accountant<'a> {
     /// `usage_missing: true` (no usage arrived, so nothing is charged and
     /// no cost is invented, spec §8). The trace write itself already
     /// follows §8: a failure there is recorded, never blocking.
+    ///
+    /// `attempted_route` names the route that actually failed (the
+    /// failure-analysis first question — "which provider died") and
+    /// `upstream_status` mirrors the upstream's own status into
+    /// `result.upstream_status` alongside `errors[].details` (R2G8's
+    /// field completion: both paths, both fields, no blanks).
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_failure(
         &self,
         ctx: &AccountCtx<'_>,
         failure: &ForwardFailure,
+        attempted_route: Option<(&str, &str)>,
+        upstream_status: Option<u16>,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
         failover_from: Option<String>,
     ) -> AccountResult {
+        // The details carry the upstream status when one exists; it also
+        // mirrors into result.upstream_status so the record answers both
+        // "what did the client see" and "what did the upstream say".
+        let mut failure = failure.clone();
+        if let Some(status) = upstream_status {
+            let details = failure.details.get_or_insert_with(|| serde_json::json!({}));
+            if let Some(obj) = details.as_object_mut() {
+                obj.entry("upstream_status")
+                    .or_insert_with(|| serde_json::json!(status));
+            }
+        }
         self.commit(
             ctx,
             failure.status,
-            None,
-            "",
-            "",
+            upstream_status,
+            attempted_route.map(|(p, _)| p).unwrap_or(""),
+            attempted_route.map(|(_, m)| m).unwrap_or(""),
             None,
             true,
             failover_from,
-            vec![trace_error_for_failure(failure)],
+            vec![trace_error_for_failure(&failure)],
             blocks,
             upstream_ms,
         )

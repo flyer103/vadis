@@ -83,6 +83,7 @@ pub struct ForwardSuccess {
     pub prefix_blocks: Vec<PrefixBlock>,
 }
 
+#[derive(Clone)]
 pub struct ForwardFailure {
     pub status: u16,
     pub code: ErrorCode,
@@ -127,6 +128,60 @@ fn now_us() -> i64 {
         .unwrap_or(0)
 }
 
+/// Session key resolution (spec §4 key_sources), shared by both forwarding
+/// paths so a streamed request is the same request: the body's
+/// `prompt_cache_key` first, then the configured `header:<name>` sources,
+/// in declaration order. One implementation — the buffered and streaming
+/// paths cannot disagree about who is asking.
+pub(crate) fn resolve_session_key(
+    config: &RouterConfig,
+    parsed: &Value,
+    headers: &[(String, String)],
+) -> Option<String> {
+    parsed
+        .get("prompt_cache_key")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            config.session.key_sources.iter().find_map(|src| {
+                let name = src.strip_prefix("header:")?;
+                headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| v.clone())
+            })
+        })
+}
+
+/// The turn index for a session: `requests_seen` from the projection + 1,
+/// 1 on the session's first request, 1 with no session (§12.10.5).
+pub(crate) fn turn_index_for(store: &Option<Arc<dyn Store>>, session: Option<&str>) -> u32 {
+    session
+        .and_then(|s| {
+            let q = store
+                .as_ref()?
+                .query(Query::SessionRequestsSeen { session_key: s });
+            match q {
+                Ok(QueryRow::Count(n)) if n > 0 => Some(n as u32 + 1),
+                _ => Some(1),
+            }
+        })
+        .unwrap_or(1)
+}
+
+/// Whether the session already has a binding row (the sticky-hit input).
+pub(crate) fn session_sticky_hit(store: &Option<Arc<dyn Store>>, session: Option<&str>) -> bool {
+    session.is_some()
+        && matches!(
+            store.as_ref().map(|s| {
+                s.query(Query::SessionBinding {
+                    session_key: session.unwrap_or(""),
+                })
+            }),
+            Some(Ok(QueryRow::SessionBinding(Some(_))))
+        )
+}
+
 /// The one shared outbound-body composition step (DESIGN §12.10.7): both
 /// forwarding paths compose the upstream body through this function's two
 /// mutations only — a hand-copied second composition is where the byte
@@ -147,25 +202,33 @@ pub(crate) fn rewrite_outbound_model<'a>(
 /// outcome is a failure (spec §6: one line per request, failures
 /// included). `now_epoch_s` is the request's single clock read (AGENTS
 /// constraint 2), reused by the terminal record instead of a second one.
-struct RequestFacts<'a> {
-    request_id: &'a str,
-    received_event: Option<router_core::EventId>,
-    proto_in: WireApi,
-    proto_out: Option<WireApi>,
-    session: Option<String>,
-    turn_index: u32,
-    requested_model: Option<String>,
-    selection_source: &'static str,
-    decision_ms: u32,
-    started: Instant,
-    now_epoch_s: u64,
+/// Shared with the streaming path (R2G8): both paths' failures record
+/// through the same facts shape.
+pub(crate) struct RequestFacts<'a> {
+    pub(crate) request_id: &'a str,
+    pub(crate) received_event: Option<router_core::EventId>,
+    pub(crate) proto_in: WireApi,
+    pub(crate) proto_out: Option<WireApi>,
+    pub(crate) session: Option<String>,
+    pub(crate) turn_index: u32,
+    pub(crate) requested_model: Option<String>,
+    pub(crate) selection_source: &'static str,
+    pub(crate) decision_ms: u32,
+    pub(crate) started: Instant,
+    pub(crate) now_epoch_s: u64,
     /// Prefix blocks of the cleaned body, set once mutation (a) ran.
-    blocks: Vec<PrefixBlock>,
+    pub(crate) blocks: Vec<PrefixBlock>,
     /// The first route that failed over, for `result.failover_from`.
-    failover_from: Option<RouteSpec>,
+    pub(crate) failover_from: Option<RouteSpec>,
     /// The last attempt's wire latency (a single-attempt failure's
     /// `result.upstream_ms`); `None` until an attempt answered.
-    upstream_ms: Option<u32>,
+    pub(crate) upstream_ms: Option<u32>,
+    /// The last route actually attempted (the failure record's
+    /// `decision.provider`/`model` — "which provider died", R2G8).
+    pub(crate) attempted_route: Option<RouteSpec>,
+    /// The last upstream status that arrived, when one did (mirrored into
+    /// `result.upstream_status` on the failure record, R2G8).
+    pub(crate) last_upstream_status: Option<u16>,
 }
 
 impl Forwarder {
@@ -201,6 +264,8 @@ impl Forwarder {
             blocks: Vec::new(),
             failover_from: None,
             upstream_ms: None,
+            attempted_route: None,
+            last_upstream_status: None,
         };
         let outcome = self
             .forward_inner(&mut facts, proto_in, body, request_id, headers)
@@ -216,7 +281,8 @@ impl Forwarder {
     /// shape cannot drift from it. Missing facts stay missing — an
     /// unparsable body has no `session` and no `blocks`, and the record
     /// says so by leaving them empty rather than inventing values.
-    fn record_failure_trace(&self, facts: &RequestFacts<'_>, f: &ForwardFailure) {
+    /// Shared by both forwarding paths (R2G8).
+    pub(crate) fn record_failure_trace(&self, facts: &RequestFacts<'_>, f: &ForwardFailure) {
         crate::accounting::Accountant {
             store: self.store.as_deref(),
             trace: self.trace.as_deref(),
@@ -240,6 +306,11 @@ impl Forwarder {
                 now_epoch_s: facts.now_epoch_s,
             },
             f,
+            facts
+                .attempted_route
+                .as_ref()
+                .map(|r| (r.provider.as_str(), r.model.as_str())),
+            facts.last_upstream_status,
             &facts.blocks,
             facts.upstream_ms,
             facts
@@ -359,35 +430,11 @@ impl Forwarder {
         let outbound_hash = body_sha16(cleaned.as_bytes());
         facts.blocks = extract_prefix_blocks(&cleaned).unwrap_or_default();
 
-        // Session resolution (spec §4 key_sources): the body's
-        // `prompt_cache_key` first, then the configured `header:<name>`
-        // sources, in declaration order.
-        let session: Option<String> = parsed
-            .get("prompt_cache_key")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                self.config.session.key_sources.iter().find_map(|src| {
-                    let name = src.strip_prefix("header:")?;
-                    headers
-                        .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                        .map(|(_, v)| v.clone())
-                })
-            });
-        let turn_index = session
-            .as_deref()
-            .and_then(|s| {
-                let q = self
-                    .store
-                    .as_ref()?
-                    .query(Query::SessionRequestsSeen { session_key: s });
-                match q {
-                    Ok(QueryRow::Count(n)) if n > 0 => Some(n as u32 + 1),
-                    _ => Some(1),
-                }
-            })
-            .unwrap_or(1);
+        // Session resolution (spec §4 key_sources) — the shared helper, so
+        // the buffered and streaming paths resolve the same client the
+        // same way.
+        let session = resolve_session_key(&self.config, &parsed, headers);
+        let turn_index = turn_index_for(&self.store, session.as_deref());
         facts.session = session.clone();
         facts.turn_index = turn_index;
 
@@ -444,15 +491,7 @@ impl Forwarder {
         // drives the next turn's `turn_index` — a missed projection write
         // would freeze the counter, so it goes through the accountant's
         // bind_session, the one writer).
-        let sticky_hit = session.is_some()
-            && matches!(
-                self.store.as_ref().map(|s| {
-                    s.query(Query::SessionBinding {
-                        session_key: session.as_deref().unwrap_or(""),
-                    })
-                }),
-                Some(Ok(QueryRow::SessionBinding(Some(_))))
-            );
+        let sticky_hit = session_sticky_hit(&self.store, session.as_deref());
         if session.is_some() {
             crate::accounting::Accountant {
                 store: self.store.as_deref(),
@@ -606,10 +645,12 @@ impl Forwarder {
             let latency_us = attempt_started.elapsed().as_micros() as i64;
             let upstream_ms = Some((latency_us / 1000) as u32);
             facts.upstream_ms = upstream_ms;
+            facts.attempted_route = Some(candidate.clone());
 
             match outcome {
                 AttemptOutcome::Responded(resp) => {
                     last_upstream_status = Some(resp.status);
+                    facts.last_upstream_status = Some(resp.status);
                     // Row 6 — the outcome, FULL. `wrote_full_request` is
                     // true by construction on the answered path.
                     let usage = normalize_usage(cand_provider.wire_api, &resp.body);
@@ -875,7 +916,7 @@ impl Forwarder {
         }
     }
 
-    fn provider_in_cooldown(&self, provider: &str) -> bool {
+    pub(crate) fn provider_in_cooldown(&self, provider: &str) -> bool {
         let Some(store) = &self.store else {
             return false;
         };
@@ -888,53 +929,12 @@ impl Forwarder {
         )
     }
 
-    /// The next unattempted candidate after a failure, when the class may
-    /// fail over. Provider-exclusion: a provider already attempted in this
-    /// request is never re-attempted (spec §4.2 + ADR-011 item 4).
-    fn next_candidate(
-        &self,
-        candidates: &[RouteSpec],
-        attempted_providers: &[String],
-        class: ErrorClass,
-    ) -> Option<RouteSpec> {
-        if !class.fails_over() {
-            return None;
-        }
-        candidates
-            .iter()
-            .find(|c| {
-                !attempted_providers.contains(&c.provider)
-                    && !self.provider_in_cooldown(&c.provider)
-                    && self.transports.contains_key(&c.provider)
-            })
-            .cloned()
-    }
-
-    fn append_event(
-        &self,
-        kind: EventKind,
-        request_id: &str,
-        body_hash: Option<&str>,
-        payload: Value,
-        session: Option<&str>,
-    ) -> Option<router_core::EventId> {
-        let store = self.store.as_ref()?;
-        store
-            .append(NewEvent {
-                kind,
-                request_id: Some(request_id),
-                session,
-                body_hash,
-                trace_ref: None,
-                payload,
-            })
-            .ok()
-    }
-
     /// `error.classified` (NORMAL) — §12.10.5 row 7, ADR-011 item 8. Every
     /// classification writes one event, even when the action is abort.
-    /// Returns the event id the demotion projection rides on.
-    fn record_classification(
+    /// Returns the event id the demotion projection rides on. Shared by
+    /// both forwarding paths (R2G8): the same failure gets the same row
+    /// whichever medium carried it.
+    pub(crate) fn record_classification(
         &self,
         request_id: &str,
         attempt_index: u32,
@@ -975,11 +975,54 @@ impl Forwarder {
             .ok()
     }
 
+    /// The next unattempted candidate after a failure, when the class may
+    /// fail over. Provider-exclusion: a provider already attempted in this
+    /// request is never re-attempted (spec §4.2 + ADR-011 item 4).
+    fn next_candidate(
+        &self,
+        candidates: &[RouteSpec],
+        attempted_providers: &[String],
+        class: ErrorClass,
+    ) -> Option<RouteSpec> {
+        if !class.fails_over() {
+            return None;
+        }
+        candidates
+            .iter()
+            .find(|c| {
+                !attempted_providers.contains(&c.provider)
+                    && !self.provider_in_cooldown(&c.provider)
+                    && self.transports.contains_key(&c.provider)
+            })
+            .cloned()
+    }
+
+    pub(crate) fn append_event(
+        &self,
+        kind: EventKind,
+        request_id: &str,
+        body_hash: Option<&str>,
+        payload: Value,
+        session: Option<&str>,
+    ) -> Option<router_core::EventId> {
+        let store = self.store.as_ref()?;
+        store
+            .append(NewEvent {
+                kind,
+                request_id: Some(request_id),
+                session,
+                body_hash,
+                trace_ref: None,
+                payload,
+            })
+            .ok()
+    }
+
     /// A demotion is state, not a local variable (ADR-011 item 4): the
     /// `provider_cooldown` projection, provider-wide, TTL from the
     /// provider's own clock or the declared default, anchored on the
     /// classification event.
-    fn apply_demotion(
+    pub(crate) fn apply_demotion(
         &self,
         provider: &str,
         cls: &Classification,
@@ -1002,8 +1045,9 @@ impl Forwarder {
     }
 
     /// `failover.triggered` (FULL), before the next intent (§12.10.5 row 8).
+    /// Shared by both forwarding paths (R2G8).
     #[allow(clippy::too_many_arguments)]
-    fn record_failover(
+    pub(crate) fn record_failover(
         &self,
         request_id: &str,
         attempt_index: u32,
@@ -1037,7 +1081,11 @@ impl Forwarder {
     /// The session's prefix token total from the `cache_ledger` projection
     /// (ADR-011 item 9's `reprefill_tokens` source — `inferred`, GAP-Q14),
     /// priced at `to`'s input_miss for `switch_cost_nano`.
-    fn failover_cost(&self, session: Option<&str>, to: &RouteSpec) -> (Option<u64>, Option<u64>) {
+    pub(crate) fn failover_cost(
+        &self,
+        session: Option<&str>,
+        to: &RouteSpec,
+    ) -> (Option<u64>, Option<u64>) {
         let Some(session) = session else {
             return (None, None);
         };

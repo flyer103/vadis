@@ -675,7 +675,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-29`)
+### 12.8 conformance case table (`CONF-01…CONF-30`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
@@ -713,6 +713,7 @@ written).
 | CONF-27 | §10·fidelity + §12.10.7 | **the upstream receives the provider-native model id**: (a) client sends `provider/model` → the mock receives that provider's native id; (b) client sends an alias → the upstream request is **byte-identical** to (a)'s, and the trace's `decision.model` / `decision.requested_model` / `selection_source` say native id / client string / `alias`; (c) every other byte (whitespace, escapes, multi-byte UTF-8, trailing newline) is unchanged | the `model` rewrite (§12.10.7) + `decision.requested_model` (§12.6) |
 | CONF-28 | §6 + §8·observation | **a terminal failure still writes its trace line**: an upstream 400 (deterministic `format_error`, never retried) leaves exactly one `DecisionRecord` with `errors[].details.error_class == "format_error"`, `result.status == 502`, `usage_missing: true` and nothing charged; companion cases pin the same one-line invariant on the connect-failure and pre-route paths | the terminal-failure record path (`Accountant::finish_failure`, §12.6) |
 | CONF-29 | §8·error behaviour | **a connection failure is not a timeout**: with the upstream pointed at a closed local port (connect refused, nothing written), `error.classified` carries `reason = "connect_failure"` and `action = "fallback_provider"` — never the `timeout` + `abort` pair the flattened no-status arm produced — and the client's terminal failure names the same class | `classify_upstream_error`'s no-status arm (§12.10.1's `transport_cause`, ADR-011 item 6 row 1) |
+| CONF-30 | §6 + §7·streaming observation | **the streaming path keeps the same books as the buffered path**: over a mock SSE upstream returning usage, a streamed request leaves one `DecisionRecord` with `session` resolved from `prompt_cache_key`, `cost.computed` written, and `session.bound` in the event log; the same session's second streaming turn records `prefix.continuity == 1.0` (a first-message swap drops it below 1.0); a stream whose usage never arrived keeps `usage_missing: true` and an absent cost. Pre-relay connect failure classifies `connect_failure` with `transport_cause` evidence, same as the buffered path | the stream relay's terminal accounting (`Accountant::finish_stream`, §12.10.5 note R3) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -737,6 +738,16 @@ classified `timeout`): the reason name `connect_failure` is defined in §8's fai
 because ADR-011's v0.1 enum sketch lists no transport class — the ADR's *taxonomy* (item 6's evidence
 rows: "no connection was ever established" is a distinct, failover-eligible row) is what the class
 implements, so this is a wiring-table entry, not a new ADR decision.
+
+**Allocation of CONF-30.** Allocated by the operator's R2G8 ruling (the streaming path must run the
+same closing stages as the buffered path). Measured motivation: a real codex agent loop through the
+router left the trace directory **empty** for its streamed requests — session resolution,
+`session.bound`, prefix blocks, `cost.computed` and the `DecisionRecord` itself existed only on the
+buffered path, so codex/hermes traffic (which is permanently streaming) produced no analysis truth at
+all. R3 above already carries the design (the accounting rows commit at stream end, before the last
+byte is written through; a stream without usage is `usage_missing`, nothing charged); CONF-30 pins it,
+and pins the classification parity the same ruling ordered: a pre-relay connect failure on the stream
+path classifies `connect_failure` from `transport_cause` evidence, never `timeout`.
 
 **Allocation of CONF-26 and CONF-27.** Two further owner-allocated IDs, recorded the same way (a human
 decision, not a loop outcome — ADR-012):

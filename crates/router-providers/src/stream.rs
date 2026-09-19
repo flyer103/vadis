@@ -54,8 +54,11 @@ pub enum StreamRead {
 /// head (classify + fail over per ADR-011 — nothing has been relayed).
 pub enum StreamOpen {
     Head(StreamHead),
-    /// No request bytes went out.
-    NotSent(router_core::error::ErrorCode, String),
+    /// No request bytes went out. The transport kind is the
+    /// classification evidence (R2G5/R2G8: the buffered and streaming
+    /// paths feed the classifier the same inputs, so a connect failure is
+    /// `connect_failure` on both).
+    NotSent(crate::TransportKind, router_core::error::ErrorCode, String),
 }
 
 /// The streaming transport (DESIGN §12.10.1's seam, stream side). One
@@ -132,7 +135,15 @@ impl ReqwestStreamClient {
                         "request fully written but no response head (unknown_outcome): {e}"
                     ))
                 } else {
+                    let kind = if e.is_timeout() {
+                        crate::TransportKind::Timeout
+                    } else if e.is_connect() {
+                        crate::TransportKind::Connect
+                    } else {
+                        crate::TransportKind::Other
+                    };
                     Ok(StreamOpen::NotSent(
+                        kind,
                         router_core::error::ErrorCode::UpstreamError,
                         e.to_string(),
                     ))

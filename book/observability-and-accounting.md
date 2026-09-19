@@ -101,6 +101,12 @@ Two consequences that surprise people, both deliberate:
   ended before its terminal event is another), the record says usage is missing, the cost
   is left uncomputed and no plan charge is invented. Reporting an invented number would
   violate the convention at exactly the moment it matters most.
+- **Streaming requests keep the same books.** A streamed request is recorded exactly like a
+  buffered one — session, prefix, usage, cost, one trace line — with the one difference the
+  medium forces: the record is written when the stream ends, not when a body completes. Two
+  stream-specific observations ride on the event log's `upstream.responded` row
+  (`stream_completed`, `bytes_relayed`); a stream that died mid-way says so there and in the
+  record's errors, and is never billed twice.
 
 Any statement of "how much was saved" must carry three things: the convention, the sample
 size, and the time window. Mixing conventions in one number is an error, not a rounding

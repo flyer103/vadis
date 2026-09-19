@@ -185,7 +185,10 @@ pub async fn serve(config_path: &str) -> i32 {
             .and_then(|v| v.get("stream").and_then(|s| s.as_bool()))
             .unwrap_or(false);
         if is_stream {
-            return match forwarder.forward_stream(proto_in, &body, &request_id).await {
+            return match forwarder
+                .forward_stream(proto_in, &body, &request_id, &headers)
+                .await
+            {
                 router_proxy::StreamOutcome::Success(s) => {
                     // axum's body wants a TryStream; the relay never errs,
                     // so every item is Ok — the truncation semantics are
