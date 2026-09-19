@@ -104,6 +104,7 @@ providers:
     api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only
     wire_api: chat                     # chat | responses | anthropic
     supports: [chat, responses]        # inbound protocols this provider can be translated to
+    account: api                       # coding_plan | api (absent ⇒ api): the metered account (§4.6)
     models:
       - id: <unique model id within the provider>   # the provider-native id; this is what goes upstream (§2)
         context: <context limit>
@@ -114,9 +115,21 @@ providers:
           output: <output price>
           peak: { multiplier: 2.0, windows: [{ days: [mon,tue,wed,thu,fri], start: "01:00", end: "04:00", tz: UTC }] }
         source: "<official pricing page URL> @<fetch date>"   # required, traceable (see "Price convention" below)
+  - name: coding-plan                # a second entry for the same family: the **subscription** account
+    base_url: <the plan endpoint>
+    api_key_env: CODING_PLAN_KEY
+    wire_api: anthropic                # chat | responses | anthropic
+    supports: [chat, responses, anthropic]
+    account: coding_plan               # coding_plan | api (absent ⇒ api): the subscription account (§4.6)
+    models:
+      - id: <the model id this account serves; it must equal plan_policy.family>
+        context: <context limit>
+        price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 2.0, windows: [<…>] } }
+        source: "<official pricing page URL> @<fetch date>"
     quota:                             # subscription plans (coding plan etc.), optional
       - { models: ["<this provider's model id>"], window: monthly, tokens: <plan allowance>,
           reset_day: 1, over_quota: block }   # quota may only reference **its own provider's** models
+                                              # under §4.6 the local counter is a warning, never the authority
 
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
 
@@ -136,7 +149,22 @@ plugins:
     disabled: true
 
 fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # ordered route list, global granularity (§8)
+
+plan_policy:                          # optional; §4.6 — the subscription first, the metered account as the spill
+  family: <the model id both routes carry>
+  primary: <provider>/<model>         # required; its provider must be `account: coding_plan`
+  overflow: <provider>/<model>        # required; its provider must be `account: api`
+  on_primary_exhausted: spill          # spill | block   (default spill)
+  recover: probe                       # probe | none    (default probe)
+  cooldown: 15m                        # default 15m
+  overflow_monthly_cap_usd: <float>    # optional; absent = no cap
 ```
+
+**The account belongs to the provider entry; the plan policy is one top-level section.** `account` says whether
+a provider entry is a subscription (`coding_plan`) or the pay-per-token API (`api`, the default when the key is
+absent): the key, the endpoint and the allowance belong to the account and not to a model (ADR-011 item 4), so
+the flag sits on the provider. `plan_policy` names one **family** — the model id that two routes (one per
+account) both serve — and is optional; its semantics, its defaults and its hard rules are §4.6.
 
 **Roster ids are provider-native.** `models[].id` is the exact string that provider's API expects, and it
 is what the outbound request carries (§2). A client never needs to know it: it writes a `provider/model`
@@ -189,7 +217,8 @@ On upstream 5xx / 429 / quota exhaustion, switch in order to "the next route **n
 switching loses the prefix cache, so the trace must record `failover_from` and the resulting re-prefill
 cost (§6 "result"). Chain exhausted → `502 upstream_error` (upstream attempt timeout →
 `504 upstream_timeout`). List entries must be routes that exist in the roster (aliases do not take part
-in fallback).
+in fallback). For a request covered by `plan_policy` (§4.6), the family's `overflow` route is tried **before**
+this list's own entries: the family's designated spill target does not have to be repeated here.
 
 ### 4.3 `inject` (plugin dependency declaration)
 
@@ -249,6 +278,62 @@ One request leaves two records, and they have different jobs:
   **projection** write does not affect the request (it is rebuilt); a failed **trace** write keeps the §8
   rule (it never blocks the request).
 
+### 4.6 `account` and `plan_policy` (plan-first routing)
+
+**What it is.** A subscription account and a metered account can serve the same model. `plan_policy` names that
+pair and makes the router prefer the subscription: while the plan is usable the family is routed to `primary`;
+when the upstream declares the plan exhausted the family continues on `overflow` (a real, metered spend) and
+comes back when the upstream allows it again (ADR-014).
+
+**`account` (a provider-entry property).** `coding_plan` | `api`; **absent ⇒ `api`**. It states what the
+provider entry *is* — the account its key, endpoint and allowance belong to. A provider that declares
+`account: coding_plan` may carry a `quota` plan (spec §4) but is **not required to**: a plan whose token
+allowance is not published is still a plan, and §4.6's rules must not be reachable only by operators who can
+supply a number nobody has (GAP-Q1).
+
+**`plan_policy` (one top-level section, optional).** At most one policy in v0.1; a second family is an additive
+future key (the `state:` / `retention` precedent), never a reshaped section.
+
+| Key | Type | Default | Semantics |
+|---|---|---|---|
+| `family` | string | required | The model id both routes carry — and the key of the state: the account state, the probe deadline and the switch records are per family. Load error unless both routes' model id equals it. |
+| `primary` | `provider/model` | required | The subscription route. Load error unless it is a roster route whose provider is `account: coding_plan`, and — when that provider declares a `quota` — unless the family's model is covered by `quota.models` (§4.0's own-provider rule). |
+| `overflow` | `provider/model` | required | The metered route. Load error unless it is a roster route, distinct from `primary`, whose provider is `account: api`, carrying the same model id. It need not appear in `fallback`: for a request inside a family it is the first candidate after `primary` (§4.2). |
+| `on_primary_exhausted` | `spill` \| `block` | `spill` | `spill`: the family continues on `overflow` at its real price. `block`: the request is refused with a **readable** reason (§8 `quota_exceeded`, 429) instead of being served from the metered account — the mode for an operator who would rather fail than spend. |
+| `recover` | `probe` \| `none` | `probe` | `probe`: after `cooldown`, the next session's first request is admitted as a probe on `primary`; success switches the family back and is recorded. `none`: no automatic probe — the family returns at the plan's own window boundary when one is declared, and otherwise only by an operator action. |
+| `cooldown` | duration | `15m` | The minimum interval between the move away from `primary` and the first admitted probe. A floor, not a schedule: ADR-011's cooldown for that provider must also allow the attempt, and rule 3 below may defer the probe further. |
+| `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative value is a load error. |
+
+**Hard rules** (the parts an implementation may not improvise; ADR-014 items 1–11 are normative):
+
+1. **The switch granularity is the session.** A session (§6 `session`) is pinned to an account while it lives;
+   it changes account only when **forced** (the primary is exhausted) or when the primary has been **proven
+   usable again**. A per-request choice between the two accounts is forbidden.
+2. **A probe happens only at a session boundary** — a new session, or a session's first request
+   (`turn_index == 1`) — and **never mid-session**. A session already on `overflow` is moved back only when the
+   upstream has judged `primary` usable (for example because another session's probe succeeded), and that move
+   **must be recorded** (`result.plan_switch`, §6; the `plan.switched` event). A request with no session never
+   probes.
+3. **The upstream is the authority on exhaustion; the local counter is a warning.** Only an upstream `403`
+   classified `quota_exhausted` (ADR-011) may move the account. The local `quota_counters` count may neither
+   refuse a request nor force a spill on its own (GAP-Q1: its denominator may be a placeholder); it is recorded
+   in `cost.quota_after`, surfaced by `/health` and `router stats`, and it may **defer** a probe until the
+   plan's declared window boundary has passed.
+4. **Costs.** In-plan requests are accounted at the plan's marginal cost **0** and record `quota_after`;
+   overflow requests are accounted at the model's **real price**. The account a request was billed under is not
+   a trace field of its own: it follows from `decision.provider`'s `account`.
+5. **A switch is priced as a failover**, because it changes the account's upstream cache namespace: the trace
+   records the re-prefill (`result.plan_switch.reprefill_tokens` / `switch_cost_nano`), `inferred` at decision
+   time and `verified` once the switched attempt's usage has landed (§6; ADR-011 item 9's convention).
+
+**Relation to the Guard stage (§3).** This policy **is one guard rule** and adds no pipeline stage: the chain
+already asks "may this request go on this route?", and the answer uses the existing vocabulary — `Pass` (this
+route is allowed), `Downgrade(<the overflow route>)` (a different route must be taken, and it is recorded),
+`Reject { code, message }` (`block`, or the overflow cap). Its rule order is fixed: **probe admission → overflow
+cap → account state**. §3's sentence is unchanged ("on a guard hit it acts per the configured policy: reject and
+explain why, or downgrade to the `fallback` chain"); for a request inside a family, the family's `overflow` route
+is simply the first route the downgrade considers.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -278,7 +363,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | transform | per step: `plugin`, `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1) |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
-| result | `status`, `upstream_status`, `failover_from`, `overhead_ms`, `upstream_ms` |
+| result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal}` (§8) |
 
 **`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
@@ -287,6 +372,29 @@ id, which is also the string the outbound body carries (§2); `requested_model` 
 verbatim. An alias and a direct route that resolve to the same route therefore share `decision.model` and
 differ in `requested_model` and `selection_source`. Neither field is ever re-derived from the other: the
 first is read from the route, the second from the inbound bytes.
+
+**`result.plan_switch`** (an object, or `null` when the plan policy of §4.6 did not displace the request's
+account — the field is always present). Shape:
+`{ from, to, reason, probe, reprefill_tokens, switch_cost_nano }`: `from` / `to` are `provider/model` routes;
+`reason ∈ {primary_exhausted, primary_cooling_down, primary_recovered}`; `probe` is a boolean (this switch was
+the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the switch's cache price
+under §7's convention. It is the plan policy's own record and is **not** a second name for `failover_from` —
+the two answer different questions and are set by different facts:
+
+| what moved the request | `failover_from` | `plan_switch` |
+|---|---|---|
+| a failed attempt in this request (§4.2's walk) | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
+| ADR-011's cooldown refusing the resolved route **before** any attempt | set (ADR-011 item 4) | set, `reason: primary_cooling_down` |
+| the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason: primary_exhausted` |
+| the family's account state returning to `primary` | `null` | set, `reason: primary_recovered` |
+
+`reprefill_tokens` is the session's prefix token count (the §6 block-token attribution, so it is `inferred`);
+`switch_cost_nano = reprefill_tokens × p_miss(destination account)`, in integer NanoUsd (ADR-006), where an
+**in-plan** destination's marginal miss price is 0 (spec §4.6 rule 4, DESIGN §5) — so a return trip records the
+work in `reprefill_tokens` and a money cost of 0, by the same price table the whole accounting uses. Both
+figures become `verified` through the switched request's own measured usage and `cost.*` fields (the in-plan
+marginal price is 0, so the first post-spill request's measured total *is* the switch's verified cost); a switch
+with no following request keeps the `inferred` label and says so (§7's reporting rule).
 
 **Definition of `prefix_blocks[]`** (the precondition for comparability; two implementations must not
 each improvise):
@@ -337,9 +445,9 @@ rely on each upstream's own error shape):
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004) |
-| `cost_cap_exceeded` | 403 | guard cost cap hit |
+| `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
-| `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted |
+| `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
 | `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (forwarding lands in Round 2) |
