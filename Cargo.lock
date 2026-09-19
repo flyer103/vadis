@@ -487,6 +487,7 @@ name = "router-conformance"
 version = "0.1.0"
 dependencies = [
  "router-core",
+ "serde_json",
  "tokio",
 ]
 

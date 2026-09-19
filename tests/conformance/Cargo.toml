@@ -10,3 +10,5 @@ router-core = { path = "../../crates/router-core" }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# 仅供 CONF 用例做输出语义的交叉校验（断言解析）；不出现在任何被测代码路径。
+serde_json = { workspace = true }
