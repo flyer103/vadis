@@ -69,14 +69,21 @@ slot is reserved for a plugin.
 
 ## What you get back
 
-The upstream response, plus router's own additions:
+The upstream response. Two additions are **planned design intent, not served in v0.1** — do not
+build against them yet:
 
 - **`router_meta`** in the response body: the plugin chain that applied, the per-step
-  transform accounting, the resolved session and the cache state. This block is router's
-  and is removed again on the way out when the request is forwarded upstream.
+  transform accounting, the resolved session and the cache state. When it lands, this block is
+  router's own and is removed again on the way out when the request is forwarded upstream.
 - **`X-Router-Request-Id`** on every response, **`X-Router-Session`** when a session was
-  resolved, and **`X-Router-Lossy`** when the translation was lossy. On a streamed
-  response all three are already present in the response head, before the first event.
+  resolved, and **`X-Router-Lossy`** when the translation was lossy — the header set
+  [`docs/spec.md` §8](../docs/spec.md) requires. On a streamed response all three must already
+  be present in the response head, before the first event.
+
+What v0.1 sends today: `X-Router-Request-Id` on the streaming path, and
+`X-Router-Failover-From` on a response served by a fallback route instead of the primary one.
+The buffered path carries the request id inside an error body rather than as a header, and the
+other two headers land with the translation cells they describe.
 
 ## Session identity
 
@@ -120,9 +127,11 @@ not. Backup, inspection and what the store does when it cannot be opened are in
 5. If anything looks wrong, check prefix continuity between turns first — that number, not
    the model choice, is what tells you whether a transform is breaking the upstream cache.
 
-Until the data plane lands (see [Roadmap](roadmap.md)), the protocol endpoints answer
-`501 not_implemented`; the two prerequisites above are the ones you will still need on the
-day they work.
+The three protocol endpoints are served today (the [README](../README.md) status lists what has
+landed). What still answers `501 not_implemented` is a route that would need cross-protocol
+translation — an inbound protocol that is not the provider's own `wire_api` (see
+[Protocols](protocols.md)). The two prerequisites above are the ones you need before any of it
+can reach router.
 
 ## Authoritative sources
 
