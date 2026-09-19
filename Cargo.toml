@@ -34,7 +34,11 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # (reqwest, tokio, futures). http + bytes are reqwest's own foundation types,
 # pulled in explicitly so the adapter API names them without depending on
 # reqwest's re-exports staying stable.
-reqwest = { version = "0.12", default-features = false, features = ["http2"] }
+# `rustls-tls` is **load-bearing**: every real provider is https, and an
+# http-only client fails every upstream call instantly (found by the live
+# client smoke — the offline conformance mocks are plain http, so they cannot
+# catch it). Keep a TLS feature here or the data plane cannot reach a provider.
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls"] }
 http = "1"
 bytes = "1"
 # futures: named in the same allowlist row (the SSE tee lands with R2-2e).
