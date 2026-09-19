@@ -70,18 +70,18 @@ providers:
     wire_api: chat                     # chat | responses | anthropic
     supports: [chat, responses]        # 可用于翻译的入站协议
     models:
-      - id: deepseek-v4-pro
-        context: 128k
-        price:                         # 五档价，USD / 1K token
-          input_miss: 0.00042
-          input_hit: 0.000042
-          cache_write: 0.0
-          output: 0.00168
-          peak: { multiplier: 1.0, windows: [] }
-        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"   # 必填，可追溯
+      - id: <provider 内的唯一模型 id>
+        context: <上下文上限>
+        price:                         # 五档价，USD / 1K token：本文件只定 **schema 与口径**，不复制数值
+          input_miss: <基准价：缓存未命中>
+          input_hit: <缓存命中价>
+          cache_write: <缓存写入价；0 = 上游不单独计费>
+          output: <输出价>
+          peak: { multiplier: 2.0, windows: [{ days: [mon,tue,wed,thu,fri], start: "01:00", end: "04:00", tz: UTC }] }
+        source: "<官方定价页 URL> @<抓取日期>"   # 必填，可追溯（见下方「价格口径」）
     quota:                             # 订阅制套餐（coding plan 等），可选
-      - { models: ["kimi-k3"], window: monthly, tokens: 100_000_000, reset_day: 1,
-          over_quota: block }
+      - { models: ["<本 provider 的模型 id>"], window: monthly, tokens: <套餐额度>,
+          reset_day: 1, over_quota: block }   # quota 只能引用**本 provider 自己的**模型
 
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
 
@@ -102,6 +102,19 @@ plugins:
 
 fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # 有序 route 列表，全局粒度（§8）
 ```
+
+### 4.0 价格口径（防双份漂移）
+
+**本文件不复制任何价格数值**——价格数值的唯一真相是 `config.example.yaml` 的每个模型条目，每处必须带
+`source`（官方定价页 URL + 抓取日期）。本文件只定义 schema 与口径：
+
+- 四档价是**基准价**；`peak.windows` 命中的时段按 `peak.multiplier` **乘算**（峰谷用乘法表达，不写两套价）。
+- `cache_write: 0` 表示上游不对缓存写入单独计费（如 DeepSeek 只区分命中/未命中）。
+- 币种统一 **USD / 1K token**；从官方页的「per 1M」转 1K 时**除以 1000**（不得用汇率近似替代官方美元价）。
+- 参照实例（@2026-09-19 官方页）：DeepSeek 高峰时段为 **UTC 01:00–04:00 与 06:00–10:00（周一至周五，
+  排除中国法定节假日）**，空闲为高峰半价 ⇒ 基准价取**空闲价**、`peak.multiplier: 2.0`。节假日不建模
+  （GAP-Q6，已知偏差：节假日会按 `peak` 计，偏高）。
+- 套餐 `quota` **只能引用本 provider 自己的模型**：跨 provider 引用会在 provider 不可用时语义不明。
 
 配置变更语义（对齐 Cordis 的 keyed diff，见 ADR-002）：`config` 变更 → 交给插件自行 diff 后 reload
 （不重建进程）；`disabled: true` → 卸载该 fiber 并完整回滚其 effect；`id`/`kind` 变更 → 重建该 entry。
