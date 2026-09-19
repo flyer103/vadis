@@ -20,9 +20,14 @@ fn conf_26_reqwest_has_a_tls_backend() {
         .expect("the workspace manifest must declare reqwest");
 
     assert!(
-        ["rustls-tls", "native-tls", "rustls-tls-native-roots", "rustls-tls-webpki-roots"]
-            .iter()
-            .any(|f| line.contains(f)),
+        [
+            "rustls-tls",
+            "native-tls",
+            "rustls-tls-native-roots",
+            "rustls-tls-webpki-roots"
+        ]
+        .iter()
+        .any(|f| line.contains(f)),
         "reqwest is declared without a TLS feature, so the router cannot reach any real \
          (https) provider: {line}"
     );
