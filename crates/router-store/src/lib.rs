@@ -684,13 +684,13 @@ impl Store for SqliteStore {
                 // that lasts longer; report whichever blocks the route now.
                 let sql = match model {
                     Some(_) => {
-                        "SELECT scope, provider, model, until_us, reason FROM provider_cooldown\
-                         WHERE provider = ?1 AND (model = '' OR model = ?2) AND until_us > ?3\
+                        "SELECT scope, provider, model, until_us, reason FROM provider_cooldown \
+                         WHERE provider = ?1 AND (model = '' OR model = ?2) AND until_us > ?3 \
                          ORDER BY until_us DESC LIMIT 1"
                     }
                     None => {
-                        "SELECT scope, provider, model, until_us, reason FROM provider_cooldown\
-                         WHERE provider = ?1 AND model = '' AND until_us > ?2\
+                        "SELECT scope, provider, model, until_us, reason FROM provider_cooldown \
+                         WHERE provider = ?1 AND model = '' AND until_us > ?2 \
                          ORDER BY until_us DESC LIMIT 1"
                     }
                 };
