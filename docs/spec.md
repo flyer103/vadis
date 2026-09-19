@@ -396,6 +396,19 @@ figures become `verified` through the switched request's own measured usage and 
 marginal price is 0, so the first post-spill request's measured total *is* the switch's verified cost); a switch
 with no following request keeps the `inferred` label and says so (§7's reporting rule).
 
+**`prefix.continuity` is a predictor; the upstream's usage is the fact.** Two different numbers describe
+the same request and they are not rivals:
+
+- `prefix.continuity` is an **inferred** figure (spec §7): it is computed locally from the block hashes
+  of this request and the previous request of the same session, and its job is to *predict* whether the
+  upstream's prefix cache will hit. It is a diagnostic, not a measurement of what the upstream did.
+- The cache **hit rate as a fact** comes only from the upstream's own normalized `usage`:
+  `usage.input_cached / usage.input_total` (§6 `cache_hit_rate` is its aggregate form), and is therefore
+  **verified**. When `usage_missing: true` the ratio is **unknown** — it is not 0, and it must never be
+  treated as 0 in a verdict or a report; an absent measurement is absent.
+- A gate or an external saving claim adjudicates on the **verified** number only (AGENTS constraint 4);
+  `prefix.continuity` falling below 1.0 is a trigger to go look, not a verdict that cache was lost.
+
 **Definition of `prefix_blocks[]`** (the precondition for comparability; two implementations must not
 each improvise):
 
@@ -406,6 +419,14 @@ each improvise):
   of `sha256(block raw bytes)`.
 - That domain **does not include** router-owned fields, so "deleting router-owned fields" changes no
   block hash (§2 byte boundary).
+- **Blocks are enumerated in the provider's effective prompt (template) order** — the
+  system-instruction position first, then `tools`, then the `messages` / `input` items — **not** in
+  body byte order. A client may serialize `input` before `tools` (the measured codex shape does);
+  the provider's template places tools before the conversation, so a client's tail append in
+  template order is a true tail append upstream and must measure `prefix_continuity == 1.0`. This
+  enumeration order is a **measurement-definition change by user decision on 2026-09-20 (Plan A)**
+  under AGENTS constraint 9 / ADR-012; the decision and its evidence are recorded in the round 3
+  round file under `autowork/progress/`. The block **domain** is unchanged by it.
 - The on-disk path / rollover is specified by `trace` in §4.1; a write failure does not block the request
   (§8), and records `errors[].kind = trace_write_failed`.
 
@@ -450,7 +471,7 @@ rely on each upstream's own error shape):
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (forwarding lands in Round 2) |
+| `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing) |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
