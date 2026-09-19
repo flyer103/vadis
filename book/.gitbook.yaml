@@ -1,0 +1,12 @@
+# GitBook configuration for the user-facing book.
+
+# The book is for users of router: what it is, how to connect a client, how it
+# saves money, how to read its reports. Engineering contracts live elsewhere
+# (`docs/spec.md`, `design/`) and the book never copies their numbers or type
+# sketches — it links to them. See AGENTS.md, "Docs before code".
+
+root: ./
+
+structure:
+  readme: introduction.md
+  summary: SUMMARY.md

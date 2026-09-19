@@ -88,6 +88,7 @@ autowork/                 迭代循环侧（Python 编排 + router replay 做策
 
 ## 设计文档
 
+- [User book (start here)](book/SUMMARY.md) — user-facing guide: what router is, how to connect a client, the cost levers, how to read the reports.
 - [Spec (WHAT)](docs/spec.md) — 协议契约、配置 schema、观测与计账口径
 - [Design (HOW)](design/DESIGN.md) — crate 布局、插件运行时、成本引擎、缓存策略
 - [Decisions (WHY)](design/decisions/) — ADR-001…008
