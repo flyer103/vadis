@@ -111,7 +111,7 @@ autowork/                 the iteration loop side (Python orchestration; replay 
 
 ## Ops
 
-- No server-side session state: an inbound `store:true` / a non-empty `previous_response_id` → sticky routing + a trace marker.
+- No server-side session state: session identity is the client's own key (`prompt_cache_key`, then the configured headers, spec §4), never `store` / `previous_response_id`. v0.1 does not inspect those two fields — they are forwarded byte-for-byte like every other client field and take no part in routing, so `state.stateful_inbound` in the trace is `false` on every request. Detecting inbound state and marking the trace record is planned, not implemented (known gap G-F).
 - Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005) and no request or response body is stored.
 - Cache is the first-order cost lever: every rewrite must be **content-deterministic** (same content → same upstream bytes).
 - Metrics are described by the observation contract in `docs/spec.md`; offline replay is the only authoritative way to compute money.
