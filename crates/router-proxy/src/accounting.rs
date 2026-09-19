@@ -185,7 +185,10 @@ impl<'a> Accountant<'a> {
             .zip(cur_hashes)
             .take_while(|(a, b)| a == b)
             .count();
-        let denom = prev.len().max(blocks.len());
+        // Spec §6: the ratio is relative to the previous request, so the
+        // denominator is its block count (mirrors `prefix_continuity`,
+        // router-core — one formula, two call sites, same shape).
+        let denom = prev.len();
         Some(common as f64 / denom as f64)
     }
 

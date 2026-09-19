@@ -256,7 +256,12 @@ pub fn prefix_continuity(prev: &[PrefixBlock], cur: &[PrefixBlock]) -> Option<f6
         .zip(cur.iter())
         .take_while(|(a, b)| a.hash == b.hash)
         .count();
-    let denom = prev.len().max(cur.len());
+    // Spec §6: the ratio is *relative to the previous request* — the
+    // denominator is its block count. A growing conversation (the
+    // stateless-client shape: turn N's blocks are turn N-1's plus new
+    // ones, per the captured traffic) therefore preserves 1.0, which is
+    // exactly the cache-fidelity claim CONF-15 measures.
+    let denom = prev.len();
     Some(common as f64 / denom as f64)
 }
 
@@ -354,5 +359,18 @@ mod tests {
         assert_eq!(prefix_continuity(&a, &b), Some(2.0 / 3.0));
         assert_eq!(prefix_continuity(&a, &a), Some(1.0));
         assert_eq!(prefix_continuity(&[], &b), None);
+        // The stateless-client shape (CONF-15's object): turn N's blocks
+        // are turn N-1's plus new ones — the ratio stays 1.0 because the
+        // denominator is the *previous* request's block count (spec §6).
+        let mut grown = a.clone();
+        grown.push(PrefixBlock {
+            index: 3,
+            kind: BlockKind::Message,
+            hash: "dddddddddddddddd".into(),
+            byte_len: 9,
+            tokens: 0,
+        });
+        assert_eq!(prefix_continuity(&a, &grown), Some(1.0));
+        assert_eq!(prefix_continuity(&grown, &a), Some(3.0 / 4.0));
     }
 }

@@ -309,8 +309,12 @@ impl Forwarder {
             session.as_deref(),
         );
 
-        // Row 4 — session.bound (FULL) when a binding is created or moved;
-        // a sticky hit on an unchanged route writes nothing.
+        // Row 4 — session.bound (FULL) when the binding is created or
+        // moved; a sticky hit on an unchanged route writes nothing. The
+        // `sessions` projection rides on the event row (requests_seen
+        // drives the next turn's `turn_index` — a missed projection write
+        // would freeze the counter, so it goes through the accountant's
+        // bind_session, the one writer).
         let sticky_hit = session.is_some()
             && matches!(
                 self.store.as_ref().map(|s| {
@@ -320,18 +324,30 @@ impl Forwarder {
                 }),
                 Some(Ok(QueryRow::SessionBinding(Some(_))))
             );
-        if session.is_some() && !sticky_hit {
-            self.append_event(
-                EventKind::SessionBound,
-                request_id,
-                None,
-                json!({
-                    "session_key": session,
-                    "provider": primary.provider,
-                    "model": primary.model,
-                    "ttl_us": self.session_ttl_us,
-                }),
-                session.as_deref(),
+        if session.is_some() {
+            crate::accounting::Accountant {
+                store: self.store.as_deref(),
+                trace: self.trace.as_deref(),
+                accounting: None,
+            }
+            .bind_session(
+                &crate::accounting::AccountCtx {
+                    request_id,
+                    received_event,
+                    proto_in: proto_in.as_str(),
+                    proto_out: provider.wire_api.as_str(),
+                    session: session.as_deref(),
+                    turn_index,
+                    selection_source,
+                    decision_ms,
+                    started,
+                    now_epoch_s,
+                },
+                &primary.provider,
+                &primary.model,
+                sticky_hit,
+                false,
+                self.session_ttl_us,
             );
         }
 
