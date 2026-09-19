@@ -5,6 +5,7 @@
 
 mod forward;
 mod health;
+mod stream_forward;
 mod stubs;
 
 pub use forward::{
@@ -12,4 +13,5 @@ pub use forward::{
     ProviderTransport,
 };
 pub use health::{health_json, AppState};
+pub use stream_forward::{StreamOutcome, StreamSuccess};
 pub use stubs::protocol_stub;

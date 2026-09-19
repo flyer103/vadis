@@ -24,6 +24,19 @@ pub struct StreamHead {
     pub response: reqwest::Response,
 }
 
+impl StreamHead {
+    /// The buffered-path view of the head (status + selected headers, no
+    /// body) — what error classification consumes on a failure head.
+    pub fn as_upstream_response(&self) -> crate::UpstreamResponse {
+        crate::UpstreamResponse {
+            status: self.status,
+            retry_after: self.retry_after.clone(),
+            content_type: self.content_type.clone(),
+            body: Bytes::new(),
+        }
+    }
+}
+
 /// One read from the upstream body stream.
 #[derive(Debug)]
 pub enum StreamRead {

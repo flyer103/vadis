@@ -150,14 +150,57 @@ pub async fn serve(config_path: &str) -> i32 {
     });
 
     /// One POST through the forwarding engine: body bytes in, the engine's
-    /// outcome mapped to an HTTP response. The body is forwarded verbatim
-    /// (minus router-owned keys) — never parsed and reserialized.
+    /// outcome mapped to an HTTP response. `stream: true` bodies take the
+    /// SSE relay (R2-2e); both paths forward the body verbatim (minus
+    /// router-owned keys) — never parsed and reserialized.
     async fn proxy_endpoint(
         forwarder: std::sync::Arc<Forwarder>,
         proto_in: WireApi,
         body: axum::body::Bytes,
     ) -> Response {
         let request_id = request_id();
+        // The path split is decided by a shallow parse of `stream` only —
+        // the same field the buffered engine refuses on, so the two paths
+        // cannot both accept one request.
+        let is_stream = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("stream").and_then(|s| s.as_bool()))
+            .unwrap_or(false);
+        if is_stream {
+            return match forwarder.forward_stream(proto_in, &body, &request_id).await {
+                router_proxy::StreamOutcome::Success(s) => {
+                    // axum's body wants a TryStream; the relay never errs,
+                    // so every item is Ok — the truncation semantics are
+                    // carried by the stream simply ending (R6).
+                    use futures::StreamExt as _;
+                    let ok_items = s.body.map(Ok::<_, std::io::Error>);
+                    let mut resp = Response::new(axum::body::Body::from_stream(ok_items));
+                    *resp.status_mut() =
+                        StatusCode::from_u16(s.status).expect("upstream status maps");
+                    if let Some(ct) = s.content_type {
+                        if let Ok(v) = ct.parse() {
+                            resp.headers_mut()
+                                .insert(axum::http::header::CONTENT_TYPE, v);
+                        }
+                    }
+                    // R3: the three §8 headers go out with the head, before
+                    // the first event byte.
+                    if let Ok(v) = request_id.parse() {
+                        resp.headers_mut().insert("x-router-request-id", v);
+                    }
+                    resp
+                }
+                router_proxy::StreamOutcome::Failure(f) => {
+                    let mut body = ErrorBody::new(f.code, f.message, request_id);
+                    body.error.details = f.details;
+                    (
+                        StatusCode::from_u16(f.status).expect("failure status maps"),
+                        Json(body),
+                    )
+                        .into_response()
+                }
+            };
+        }
         let outcome = forwarder.forward(proto_in, &body, &request_id).await;
         match outcome {
             ForwardOutcome::Success(s) => {
