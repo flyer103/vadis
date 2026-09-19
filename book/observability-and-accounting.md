@@ -42,7 +42,11 @@ Read it in this order; each group answers a different question.
 3. **Decision** — `provider`, `model`, `selection_source` and the plugin chain. If the
    request did not go where you expected, this is the answer to "why".
 4. **State** — whether the inbound request carried server-side state, whether the sticky
-   binding was hit, and how many cache-control breakpoints were placed.
+   binding was hit, and how many cache-control breakpoints were placed. **This group is a
+   constant in v0.1**: every record carries `false` / `false` / `0`, because inbound state is
+   not detected and the sticky-binding read does not reach the record (known gap G-F). Do not
+   read `false` as "the client sent no server-side state", and do not expect the `true` of
+   the illustration below to appear yet.
 5. **Prefix** — the block-level breakdown of the upstream-visible prefix, and
    `prefix_continuity` against the previous request in the same session. **This is the
    fidelity number.** A block is a structural unit (a message, a tool definition, an input

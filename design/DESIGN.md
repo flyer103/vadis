@@ -657,6 +657,12 @@ spec §6 field groups → Rust paths (auditable line by line):
 | result | `status` `upstream_status` `failover_from` `plan_switch` `overhead_ms` `upstream_ms` | `result.*` (`plan_switch` is ADR-014's displacement record: spec §6 defines it, §12.10.8 lands it) |
 | failure details | `errors[]` (`kind` `message` `plugin?` `details?`) | `errors[].*` (the kind vocabulary is shared with the error body of §12.7; the difference between internal details and the client-facing response is explained above) |
 
+- The `state` group is **constant in v0.1** (known gap G-F): `Accountant::commit` — the record's single
+  writer — stores `stateful_inbound: false`, `sticky_hit: false`, `cache_control_breaks: 0` for every
+  request. `store` and `previous_response_id` are never read: they are ordinary client bytes, so at most
+  §12.3.1's two mutations touch them, and the sticky-binding read of §12.10.5 row 4 decides only whether a
+  `session.bound` event is written, never a trace field. The mapping row above stays the contract to land;
+  Q8 below is where it lands.
 - On disk: `<config trace.dir>/YYYY-MM-DDTHH.jsonl` (spec §4.1; `trace.dir` defaults to
   `./state/traces`), **append-only, rolled hourly** (DESIGN §8); a write failure does not block the
   request and records `errors[].kind = trace_write_failed`.
@@ -674,7 +680,8 @@ spec §6 field groups → Rust paths (auditable line by line):
 - Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
   the trace, with no extra state needed:
   `cache_hit_rate = Σusage.input_cached / Σusage.input_total`;
-  `stateful_inbound_rate`, `prefix_continuity_p50` (group by session, take adjacent requests),
+  `stateful_inbound_rate` (**always 0 in v0.1**: the group is constant, so no request counts as
+  stateful — gap G-F), `prefix_continuity_p50` (group by session, take adjacent requests),
   `verified_savings_tokens` (**accumulates only `verdict=Verified`**), the p99 of
   `overhead_ms_p99 = result.overhead_ms`.
 - Reporting discipline: any statement of "how much was saved" must carry the convention
@@ -703,7 +710,7 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` |
 | `cost_cap_exceeded` | 403 | guard cost cap hit |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted |
-| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004) |
+| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
 | `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
 | `upstream_timeout` | 504 | an upstream attempt timed out and the chain is exhausted |
 | `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (R1-2) |
@@ -841,7 +848,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q5 | the block granularity of `prefix_blocks[]` is undefined | a structural unit (message / tool definition / input item) | cache-metric comparability |
 | Q6 | the time zone and "holiday" semantics of the peak windows (`peak.windows`) | windows carry an explicit `tz`; holidays are not modeled | cost accuracy (D9) |
 | Q7 | which tier breakeven's `p_stay` uses (hit price vs miss price) | `p_stay = input_hit`; `switch_cost` uses `p_new_miss` | failover/spill decisions (D5) |
-| Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 |
+| Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 — **not landed in v0.1**: `state` is a constant group, so no request is ever judged stateful and the 400 cannot fire (gap G-F; §12.6's state note) |
 | Q9 | the behavior when `context` is exceeded (400, or hand it to the upstream) | hand it to the upstream (do not judge on the upstream's behalf) | guard behavior |
 | Q10 | the error-body schema and `errors[]` are not listed in spec §6 | pinned down by §12.6/§12.7, recommended to be written back into the spec | autowork parsing the trace |
 | Q11 | the plugin `inject` is not in spec §4's schema (DESIGN §4 requires it) | already landed in `config.example.yaml` and marked GAP | out-of-order loading safety |

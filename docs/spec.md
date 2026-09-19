@@ -14,7 +14,7 @@ replayable trace.
 
 | Not doing | Reason / later path |
 |---|---|
-| Server-side session state (`store:true`, `previous_response_id`) | Measured: clients do not use it (§7); stickiness keeps fidelity when it is absent |
+| Server-side session state (`store:true`, `previous_response_id`) | Measured: clients do not use it (the capture in ADR-004); stickiness keeps fidelity when it is absent. **Not implemented in v0.1**: the two fields are never inspected — they are forwarded as the client's own bytes (§2) — so the trace's `state.stateful_inbound` is `false` for every request (gap G-F, §6) |
 | Automatic model selection / effect optimization | Explicit specification is primary; `auto` is left as a plugin slot (ADR-004) |
 | Semantic response cache, context summarization | Large conflict surface with prefix caching; a measured ledger is needed first (P4) |
 | Multi-user, multi-tenant, multi-node deployment | Single-operator local process; local state is one SQLite/WAL file behind `trait Store` (§4.5, ADR-009) — the hosted form is a second implementation of the same trait, not a v0.1 goal |
@@ -366,6 +366,15 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal}` (§8) |
 
+**`state` is written as a constant in v0.1** (known gap G-F): a record has one writer
+(`Accountant::commit`) and it writes `stateful_inbound: false`, `sticky_hit: false`,
+`cache_control_breaks: 0` on every request — no serving path writes any other value. The definitions above
+stay the contract to land: `store` and `previous_response_id` are never read (they are forwarded as the
+client's own bytes, §2), and the sticky-binding read that would give `sticky_hit` its value decides only
+whether a `session.bound` event is written (§4.5). A reader must therefore not take `false` as "the client
+sent no server-side state" or "no binding was found", and the `stateful_unsupported` row of §8 cannot fire.
+ADR-004 item 3 is the ruling this group lands.
+
 **`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
 `model` is the id the request was actually billed under at the upstream — the resolved roster entry's own
 id, which is also the string the outbound body carries (§2); `requested_model` is what the client wrote,
@@ -413,7 +422,8 @@ each improvise):
 
 - `cache_hit_rate` = Σ`input_cached` / Σ`input_total`
 - `stateful_inbound_rate` = stateful requests / total requests (used to keep confirming "whether it
-  depends on stateful")
+  depends on stateful"). **Always 0 in v0.1**: inbound state is not detected, so no request counts as
+  stateful (gap G-F)
 - `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
 - `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
@@ -444,7 +454,7 @@ rely on each upstream's own error shape):
 | `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type |
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
-| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004) |
+| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
