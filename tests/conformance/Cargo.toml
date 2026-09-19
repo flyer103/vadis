@@ -2,6 +2,9 @@
 name = "router-conformance"
 version.workspace = true
 edition.workspace = true
+description = "The protocol conformance suite: the 3×3 matrix, the byte/prefix invariants, the accounting convention and the store/observation contracts."
+license.workspace = true
+repository.workspace = true
 
 # The CONF case table = DESIGN §12.8. Unimplemented paths always carry #[ignore = "CONF-NN: depends on <item>"] (explicitly visible, not simply absent).
 
