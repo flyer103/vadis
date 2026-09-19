@@ -4,7 +4,8 @@ Status: outline only. Behaviour under failure is normative in `docs/spec.md` §8
 chapter is the day-2 view for whoever runs the gateway.
 
 router is a single local process for a single operator. Operating it is mostly about
-knowing what it deliberately does not persist, and what it does when an upstream misbehaves.
+knowing what it persists, what it deliberately does not, and what it does when an upstream
+misbehaves.
 
 ## Outline
 
@@ -13,6 +14,10 @@ knowing what it deliberately does not persist, and what it does when an upstream
 - **Trace lifecycle**: files append and roll over; v0.1 has no automatic retention or
   cleanup, so archiving is a manual operations job and the path is configurable so state can
   live outside the repository.
+- **Local state store**: session stickiness, the cache ledger and the quota counters live in
+  a local store beside the traces ([`docs/spec.md` §4.5](../docs/spec.md), ADR-009). It is a
+  startup prerequisite, a lost projection is rebuilt from its own event log, and it must be
+  backed up with the traces — it is not reconstructible from a trace alone.
 - **No server-side session state**: the gateway does not store conversations. Requests
   arriving with server-side state are routed stickily and tagged in the trace so the
   assumption is continuously auditable rather than assumed.
@@ -37,6 +42,7 @@ knowing what it deliberately does not persist, and what it does when an upstream
 - [`docs/spec.md` §8](../docs/spec.md) — unified error body, error-type-to-HTTP table,
   response headers and degradation behaviour.
 - [`docs/spec.md` §4.2](../docs/spec.md) — the failover chain as configured.
+- [`docs/spec.md` §4.5](../docs/spec.md) — the local state store and the event-log / trace split.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
 - [`AGENTS.md`](../AGENTS.md) — build/test commands, version-control rules, environment

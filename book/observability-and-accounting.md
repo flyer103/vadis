@@ -6,7 +6,9 @@ numbers mean.
 
 Every request produces exactly one decision record, appended to a trace file. The trace is
 the only channel between the serving path and everything that analyses it — there is no
-hidden second source of truth.
+hidden second source of truth. The gateway also keeps its own operational state (session
+stickiness, cache ledger, quota counters) in a local store, but that store is never read by
+the analysis side: the split is defined in [`docs/spec.md` §4.5](../docs/spec.md) and ADR-010.
 
 ## Outline
 
@@ -38,6 +40,8 @@ hidden second source of truth.
   definition of prefix blocks and their hashes, and the metric definitions.
 - [`docs/spec.md` §7](../docs/spec.md) — accounting: `verified` versus `inferred`.
 - [`docs/spec.md` §4.1](../docs/spec.md) — trace output parameters (directory, rollover).
+- [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: event log (state truth)
+  versus trace (analysis truth), and their join key.
 - [`design/DESIGN.md` §9](../design/DESIGN.md) — replay with the same code path.
 - [`design/decisions/ADR-005-trace-as-interface.md`](../design/decisions/ADR-005-trace-as-interface.md)
   — why the trace is the sole interface to the iteration loop.

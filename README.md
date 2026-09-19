@@ -82,6 +82,7 @@ crates/router-plugins     built-in tier-A plugins
 crates/router-proxy       data plane (axum), byte-faithful forwarding
 crates/router-cli         serve / stats / replay / trace
 crates/router-plugin-sdk  out-of-process tier-B plugin protocol
+crates/router-store       SQLite/WAL store: event log + projections (ADR-009)
 tests/conformance         protocol fidelity, prefix stability, the accounting convention
 autowork/                 the iteration loop side (Python orchestration + router replay for policy simulation)
 ```
@@ -91,11 +92,12 @@ autowork/                 the iteration loop side (Python orchestration + router
 - [User book (start here)](book/SUMMARY.md) — user-facing guide: what router is, how to connect a client, the cost levers, how to read the reports.
 - [Spec (WHAT)](docs/spec.md) — protocol contracts, config schema, observation and accounting conventions
 - [Design (HOW)](design/DESIGN.md) — crate layout, plugin runtime, cost engine, cache policy
-- [Decisions (WHY)](design/decisions/) — ADR-001…008
+- [Decisions (WHY)](design/decisions/) — ADR-001…010
 - [Autowork](autowork/program.md) — iteration charter, gates, direction pool
 
 ## Ops
 
 - No server-side session state: an inbound `store:true` / a non-empty `previous_response_id` → sticky routing + a trace marker.
+- Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005) and no request or response body is stored.
 - Cache is the first-order cost lever: every rewrite must be **content-deterministic** (same content → same upstream bytes).
 - Metrics are described by the observation contract in `docs/spec.md`; offline replay is the only authoritative way to compute money.

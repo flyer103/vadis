@@ -17,7 +17,8 @@ flowchart LR
   SEL --> PR
   GD --> PR
   PR --> UP["upstream"]
-  RT --> ST["state service<br/>cache ledger · sticky table · trace buffer"]
+  RT --> ST["state service<br/>cache ledger · sticky table · quota counters"]
+  ST --> DB[("SQLite/WAL store<br/>events + projections<br/>ADR-009 / ADR-010")]
   ST --> TRC["trace JSONL"]
   TRC --> AW["autowork loop side"]
   AW --> ART["policy artifacts<br/>config / rule TOML / tier-B plugin"]
@@ -33,6 +34,7 @@ the observation boundary.
 router-cli → router-proxy → router-protocol → router-core ← router-plugins
                     ↘ router-runtime ↗                 ↑
                           router-providers        router-plugin-sdk (tier-B protocol types)
+                    router-store ──→ router-core  (trait Store implementation, ADR-009)
 ```
 
 - `router-core`: the domain model of request/decision, the cost engine, the cache ledger, the plugin
@@ -44,6 +46,9 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 - `router-proxy`: the axum data plane, byte-faithful forwarding and SSE passthrough.
 - `router-plugins`: the built-in tier-A plugins (cache-guard, transform_rules, cost_ledger, quota_guard,
   sticky).
+- `router-store`: the SQLite/WAL implementation of `trait Store` (event log + projections + migrations).
+  It is the persistence seam **under** the state service's traits of §12.2, not a second domain model
+  (ADR-009).
 
 ## 3. Decision pipeline (the order of one request)
 
@@ -73,8 +78,9 @@ The mapping from the paper's primitives to this project's implementation (fixed 
 This project's tier-A plugins are linked at compile time, so there is **no module-level HMR** — a code
 change = rebuild + restart; only **config-level coordination** (config/weights/rule TOML take effect
 immediately) and module-level reload of tier-B (out-of-process) plugins exist. To keep the restart cost
-low, the `cache ledger / sticky table / trace buffer` all persist in the state service and are handed
-over after a restart, so a restart loses no session context.
+low, the `cache ledger / sticky table / quota counters` are all projections of the local store (§8,
+ADR-009) and survive a restart (rebuilt from the event log if a projection was lost), so a restart loses no
+session context.
 
 Lifecycle state machine (simplified): `LOADING → ACTIVE → UNLOADING → (removed)`; while `inject` is
 unsatisfied it stays at LOADING; when unloading a fiber its dependents leave first, then its inverse is
@@ -120,8 +126,9 @@ and `safety_factor` defaults to 1.2. (In v0.1 the model is specified explicitly,
 4. **Breakpoint injection**: when translating to an anthropic upstream, inject `cache_control` at "stable
    content boundaries" (same content → same position); the number of breakpoints is written to the trace
    (`cache_control_breaks`).
-5. **State-service handover**: the ledger and the sticky table snapshot periodically; they are loaded
-   after a restart so the `prefix_continuity` metric does not break across restarts.
+5. **State-service handover**: the ledger and the sticky table are projections of the local store
+   (§8, ADR-009/ADR-010); a restart loads them — and rebuilds them from the event log if they were
+   lost — so the `prefix_continuity` metric does not break across restarts.
 
 ## 7. Protocol translation layer
 
@@ -136,13 +143,32 @@ The capability matrix is declared in config (`supports`); the 3×3 table is cons
 
 ## 8. State and persistence
 
-Single process, no DB. State falls into three classes:
+One local process, one writer, one store. State is an **event log plus rebuildable projections**, not
+memory plus snapshots: ADR-009 fixes the storage boundary, ADR-010 the truth and the write ordering.
 
-| State | Medium | Notes |
-|---|---|---|
-| cache ledger / sticky table | memory + periodic snapshot (JSON) | handover across a restart; losing it only regresses statistics, it does not affect correctness |
-| trace | append-only JSONL (rolled hourly) | the only interface from the product → autowork; consumable by `router replay` |
-| quota remaining | memory + snapshot | accumulates from the upstream `usage`, never guessed |
+The plugin-facing surface stays the service traits of §12.2 (`CacheLedger`, `SessionTable`, `QuotaStore`);
+`trait Store` is the persistence seam **under** them, implemented by `router-store` (§12.1).
+
+| State | Medium | Durability | Notes |
+|---|---|---|---|
+| event log (`events`) | SQLite/WAL behind `trait Store` | intent / accounting events `synchronous=FULL`, committed **before** the effect they authorize (ADR-010) | the truth: every state transition is a row |
+| sticky table / cache ledger / quota counters | projections in the same store | `NORMAL` + group commit | rebuildable from `events`; losing one regresses statistics, never correctness |
+| trace | append-only JSONL, rolled hourly (spec §4.1; record shape in §12.6) | OS defaults | the analysis truth and the only product → autowork channel (ADR-005), unchanged |
+| request / response bodies | **never persisted by the product** | — | the log keeps `body_hash` + a pointer; raw bytes exist only in captures taken outside the product |
+
+- **Store path**: `<directory containing the config file>/state/router.db` (`state/` is gitignored). v0.1
+  fixes it — there is no `state:` config key (§12.5); a section that moves the file is an additive future
+  key (spec §4.1's precedent).
+- **Startup prerequisite**: if the store cannot be opened or migrated, `serve` exits non-zero with the
+  reason. There is no in-memory degraded mode: a gateway that enforced quota from numbers it cannot
+  recover would report figures it cannot stand behind.
+- **Ordered write path**: `upstream.submitted` commits before the upstream attempt begins; if that intent
+  write fails, the request is rejected before anything is sent (nothing billed, the client's retry is
+  safe) (ADR-009 item 8).
+- **Crash window**: an intent with no response is `unknown_outcome`; the quota is not charged again and no
+  cost is invented for it (ADR-010).
+- **Migrations**: forward-only, with three deliberately distinct version axes (store DDL / event payload /
+  trace record — ADR-009 item 7).
 
 ## 9. Replay (computing money with the same code)
 
@@ -198,6 +224,7 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | R2 |
 | `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | from R1-2 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | R3 |
+| `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | R2 (ADR-009) |
 | `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | from R1-2, as an empty shell |
 
 - **`router-core` depends on no HTTP / protocol crate** (§2 hard constraint); how it is spot-checked: the
@@ -457,6 +484,7 @@ pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 | base_url | must already contain the version segment; router only appends `chat → /chat/completions`, `responses → /responses`, `anthropic → /v1/messages` |
 | `rules_file` | resolved relative to **the directory containing this config file** (not the CWD); `trace.dir` follows the same rule (spec §4.1) |
 | `trace.rollover` | only `hourly` is accepted (any other value = a load error); retention is **not** a config key (v0.1 does no automatic cleanup) |
+| `state` | **not** a config key in v0.1: the store path is fixed at `<config dir>/state/router.db` (spec §4.5, ADR-009); a `state:` section that moves the file (as `trace.dir` does) is an additive future key |
 | unknown fields | `deny_unknown_fields` → **errors out and exits** (no silent ignore: config is written by hand, and "I changed it but it did not take effect" is the most expensive silent failure) |
 | secrets | only `api_key_env`; when the env var is missing at startup → that provider is marked unavailable and reported on `/health` (it does not block other providers) |
 | `disabled: true` | that fiber is not loaded (no error); `/health` lists it under `plugins_disabled` |
@@ -480,7 +508,9 @@ pub struct DecisionRecord {
     pub errors: Vec<TraceError>,        // failure details (spec §6 "failure details"; written back in R1-4)
 }
 
-pub struct IdentityRec { pub request_id: String, pub client: ClientKind, pub client_ua_raw: Option<String>,
+pub struct IdentityRec { pub request_id: String,
+    pub event_id: i64,          // the request.received event in the state store (spec §4.5, ADR-010)
+    pub client: ClientKind, pub client_ua_raw: Option<String>,
     pub session: Option<String>, pub thread_id: Option<String>, pub turn_index: u32 }
 pub struct ProtocolRec { pub r#in: Protocol, pub out: Protocol, pub translated: bool, pub lossy: Vec<LossyNote> }
 pub struct LossyNote { pub field: &'static str, pub reason: &'static str, pub action: LossyAction }
@@ -511,7 +541,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 
 | spec §6 field group | Fields | Rust path |
 |---|---|---|
-| identity | `request_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails) |
+| identity | `request_id` `event_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails; `event_id` is the join anchor into the event log, spec §4.5) |
 | protocol | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
 | decision | `provider` `model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` |
 | state | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
@@ -527,6 +557,8 @@ spec §6 field groups → Rust paths (auditable line by line):
   request and records `errors[].kind = trace_write_failed`.
 - `schema_version` only increments on a **breaking** change; adding an optional field does not change the
   version (the autowork side tolerates unknown fields).
+- `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
+  and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
   the trace, with no extra state needed:
   `cache_hit_rate = Σusage.input_cached / Σusage.input_total`;

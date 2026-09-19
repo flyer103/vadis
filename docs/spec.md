@@ -17,7 +17,7 @@ replayable trace.
 | Server-side session state (`store:true`, `previous_response_id`) | Measured: clients do not use it (§7); stickiness keeps fidelity when it is absent |
 | Automatic model selection / effect optimization | Explicit specification is primary; `auto` is left as a plugin slot (ADR-004) |
 | Semantic response cache, context summarization | Large conflict surface with prefix caching; a measured ledger is needed first (P4) |
-| Multi-user, multi-tenant, multi-node, DB | Single-operator local process; state only lands on disk as a snapshot |
+| Multi-user, multi-tenant, multi-node deployment | Single-operator local process; local state is one SQLite/WAL file behind `trait Store` (§4.5, ADR-009) — the hosted form is a second implementation of the same trait, not a v0.1 goal |
 | Historical algorithms such as bandit / MF / BT | Kept as experiment assets; later returned as tier-A plugins |
 | A retrieval channel for `tee` original text (retrieve endpoint) | A rule may declare `tee`, but the storage location and retrieval channel are **not implemented in this version** (§4) |
 
@@ -176,6 +176,43 @@ pipeline of ADR-003: filter stage, `match_output`, line keep/drop, truncation, `
   following the P1 compression direction (D3); before it lands, do not use `tee` as a "retrievable
   original text" capability.
 
+### 4.5 `state` (local persistence) — contract
+
+The gateway keeps **one local store**: a SQLite database in WAL mode, by default
+`<directory containing this config file>/state/router.db` (`state/` is gitignored). v0.1 has **no `state:`
+config key** — the path is fixed; a section that moves it (the way `trace.dir` does) is an additive future
+key (§4.1's precedent, ADR-009).
+
+One request leaves two records, and they have different jobs:
+
+| Record | Job | Shape | Who reads it |
+|---|---|---|---|
+| **event log** (`events`) | the **state truth**: every state transition (session binding, upstream intent, quota charge, config applied, …) | one row per event, ordered by `event_id` | the serving path and its projections; **internal** — autowork never reads it (ADR-005) |
+| **trace** (`trace.dir` JSONL) | the **analysis truth**: one `DecisionRecord` per request (§6) | one JSON line per request | `router replay` / `router stats` / autowork: the only product → autowork channel |
+
+- **Join key: `request_id` + `event_id`.** The trace's `event_id` (§6 "identity") is that request's
+  `request.received` event, and the rest of that request's events share its `request_id`; the two records
+  are paired exactly, never by timestamp.
+- **Bodies are never persisted** — neither in the log nor in the trace. The log keeps `body_hash` (the
+  first 16 hex chars of `sha256(router-visible body bytes)`, the same convention as the §6 block hash) plus
+  a pointer to the trace line; a payload exists only if the operator captured it out of band.
+- **Derived state is not state**: the sticky table, the cache ledger and the quota counters are
+  **projections** of `events`; a lost projection is rebuilt from the log, and losing one regresses
+  statistics, never correctness.
+- **Durability**: intent / accounting events commit (`synchronous=FULL`) **before** the effect they
+  authorize; projections are `NORMAL` and batched (ADR-009).
+- **Crash window**: an upstream intent with no response is an `unknown_outcome` — the quota is **not**
+  charged again and no cost is invented for it; reconciliation is left to the operator against the
+  provider's own bill (§8; ADR-010 is normative, including its honest boundary: whether the upstream is
+  idempotent is unverified, so "was it billed?" can be undecidable at the protocol layer).
+- **Migrations**: forward-only, tracked in the store (`schema_version`); the **event payload is versioned
+  from day one** (`events.schema_version`) because it is the truth — old rows are never rewritten and
+  readers upcast.
+- **Failure behaviour**: the store is a startup prerequisite (`serve` exits if it cannot open or migrate
+  it); a failed **intent** write rejects the request before anything reaches the upstream; a failed
+  **projection** write does not affect the request (it is rebuilt); a failed **trace** write keeps the §8
+  rule (it never blocks the request).
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -191,9 +228,13 @@ into the proxy all the same and the client finally reports `503 Service Unavaila
 
 ## 6. Observation contract (one DecisionRecord per request)
 
+The trace is the **analysis truth**: one JSON line per request, and the only product → autowork channel
+(ADR-005). State has its own truth — the event log of §4.5 — and the two records are paired by
+`request_id` + `event_id`.
+
 | Field group | Contents |
 |---|---|
-| identity | `request_id`, `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
+| identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
 | protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
 | decision | `provider`, `model`, `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
@@ -275,5 +316,8 @@ Behavior clauses:
   continue; strict mode rejects that transform.
 - trace write failure → **does not affect the request**, records `errors[].kind = trace_write_failed`
   (a missing observation must be explicit, never silent).
+- crash window (an upstream intent was recorded and no response arrived) → the request is reported as
+  `unknown_outcome`, the quota is **not** charged again and no cost is invented for it; reconciliation is
+  left to the operator against the provider's bill (§4.5; ADR-010 is normative).
 - unknown fields: **must be passed through verbatim** (friendly to protocol evolution), and must not be
   silently dropped.

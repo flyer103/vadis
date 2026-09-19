@@ -21,7 +21,10 @@ put provider keys in the environment, start the gateway.
   `router_meta` block in the response (plugin chain, per-transform accounting, session and
   cache state).
 - **Know where state lands**: traces are appended under the `trace.dir` configured for
-  the run; nothing else is persisted in v0.1.
+  the run, and the gateway's own state (session stickiness, cache ledger, quota counters) is
+  a local store beside the config file, so the two can be backed up together
+  ([`docs/spec.md` §4.5](../docs/spec.md)). Request and response bodies are written to
+  neither.
 
 ## Authoritative sources
 
