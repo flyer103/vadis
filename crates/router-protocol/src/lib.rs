@@ -1,10 +1,11 @@
 //! 3-protocol codec + translation matrix + `Usage` normalization + `raw_json`
 //! (span-faithful editing). DESIGN §7 / §12.3.1.
 //!
-//! R2-2d scope: `Usage` normalization for the **native buffered** path (the
-//! three wire shapes → the internal `Usage`). Translation lands in R2-3;
-//! SSE-carried usage lands with the streaming path (R2-2e, R8's carrier
-//! rule). `raw_json` span-faithful editing lives in `router-core::body`
+//! `Usage` normalization for all three wire shapes → the internal `Usage`,
+//! on both the buffered path and the streaming one (`sse::SseUsageExtractor`
+//! applies the protocols' own carrier rules). Translation between wire
+//! shapes is not implemented in v0.1; only native routes are served.
+//! `raw_json` span-faithful editing lives in `router-core::body`
 //! (ADR-007's single scanner).
 
 #![forbid(unsafe_code)]

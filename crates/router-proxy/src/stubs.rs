@@ -1,6 +1,6 @@
-//! Unified stub for the three protocol endpoints: a stable 501 + a clear JSON
-//! body, never a panic (R1-2 contract). Real forwarding (byte fidelity + SSE
-//! passthrough) lands in R2 (DESIGN §2/§7).
+//! Unified stub for a protocol endpoint that is not served: a stable 501 + a
+//! clear JSON body, never a panic. Real forwarding (byte fidelity + SSE
+//! passthrough) is the buffered / streaming engine's job (DESIGN §2/§7).
 
 use router_core::error::ErrorCode;
 
