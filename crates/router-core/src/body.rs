@@ -51,26 +51,34 @@ impl RawBody {
         let b = &self.0;
         let members = scan_top_level_members(b)?;
 
-        // 待删成员的扩展区间：除了成员自身 span，还要吞掉一个相邻分隔逗号，
-        // 使剩余字节仍是合法 JSON。区间合并保证共享同一逗号的连续删除不重叠。
+        // 待删成员按"连续段"（run）整体剔除：段吞掉段尾与其后继成员之间的那个
+        // 分隔逗号。段内逗号随段字节一并消失，段首与前一保留成员之间的逗号留给
+        // 前者——这正是相邻删除曾残留悬空逗号的位置（R1-2c）。仅包含单个首成员
+        // 的段没有前导逗号可依赖，改吞段尾逗号。
         let mut dels: Vec<(usize, usize)> = Vec::new();
-        for (idx, m) in members.iter().enumerate() {
+        let mut idx = 0;
+        while idx < members.len() {
+            let m = &members[idx];
             let decoded_key = decode_json_string(b, m.key_start, m.key_end)?;
             if !keys.iter().any(|k| *k == decoded_key) {
+                idx += 1;
                 continue;
             }
-            let (mut s, mut e) = (m.key_start, m.val_end);
-            if idx > 0 {
-                // 吞掉前导逗号（含成员与逗号之间的空白）。
-                let mut j = s;
-                while j > 0 && is_ws(b[j - 1]) {
-                    j -= 1;
+            // 段首成员：定位段尾（最后一个键命中的连续成员）。
+            let mut run_last = idx;
+            while run_last + 1 < members.len() {
+                let next = &members[run_last + 1];
+                let next_key = decode_json_string(b, next.key_start, next.key_end)?;
+                if keys.iter().any(|k| *k == next_key) {
+                    run_last += 1;
+                } else {
+                    break;
                 }
-                if j > 0 && b[j - 1] == b',' {
-                    s = j - 1;
-                }
-            } else if idx + 1 < members.len() {
-                // 首成员被删且还有后继：吞掉尾随逗号（含值与逗号之间的空白）。
+            }
+            let mut s = members[idx].key_start;
+            let mut e = members[run_last].val_end;
+            if idx == 0 && run_last + 1 < members.len() {
+                // 首段且还有保留后继：吞段尾逗号（含值与逗号之间的空白）。
                 let mut j = e;
                 while j < b.len() && is_ws(b[j]) {
                     j += 1;
@@ -78,8 +86,19 @@ impl RawBody {
                 if j < b.len() && b[j] == b',' {
                     e = j + 1;
                 }
+            } else if idx > 0 {
+                // 吞段首逗号（含段首键与逗号之间的空白）。段尾逗号留给后继
+                // 保留成员，段内逗号随段字节一并删除。
+                let mut j = s;
+                while j > 0 && is_ws(b[j - 1]) {
+                    j -= 1;
+                }
+                if j > 0 && b[j - 1] == b',' {
+                    s = j - 1;
+                }
             }
             dels.push((s, e));
+            idx = run_last + 1;
         }
 
         if dels.is_empty() {
@@ -572,6 +591,159 @@ mod tests {
             ROUTER_OWNED_TOP_LEVEL_KEYS,
             "  {\"a\":1}",
         );
+    }
+
+    // 19. 删除位置矩阵：相邻删除不得残留悬空逗号（R1-2c 回归；探针表 5 例 + 补充）。
+    //    keys 直接传参（两键形态模拟 spec §2 未来白名单），不改 ROUTER_OWNED 常量。
+    fn deletion_matrix() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
+        let two = vec!["router_meta", "routing_preference"];
+        vec![
+            // 编排者探针表 5 例。
+            (
+                r#"{"routing_preference":{},"router_meta":{},"messages":[]}"#,
+                two.clone(),
+                r#"{"messages":[]}"#,
+            ),
+            (
+                r#"{"router_meta":1,"router_meta":2,"x":3}"#,
+                two.clone(),
+                r#"{"x":3}"#,
+            ),
+            (
+                r#"{"messages":[],"routing_preference":1,"router_meta":2}"#,
+                two.clone(),
+                r#"{"messages":[]}"#,
+            ),
+            (
+                r#"{"router_meta":1,"messages":[],"routing_preference":2}"#,
+                two.clone(),
+                r#"{"messages":[]}"#,
+            ),
+            (
+                r#"{"router_meta":1,"routing_preference":2}"#,
+                two.clone(),
+                "{}",
+            ),
+            // 首成员被删且下一成员保留。
+            (r#"{"router_meta":1,"a":2}"#, two.clone(), r#"{"a":2}"#),
+            // 三个连续自有键。
+            (
+                r#"{"router_meta":1,"routing_preference":2,"router_meta":3,"a":4}"#,
+                two.clone(),
+                r#"{"a":4}"#,
+            ),
+            // 自有键在头 / 中 / 尾的排列组合。
+            (
+                r#"{"router_meta":1,"a":1,"b":2}"#,
+                two.clone(),
+                r#"{"a":1,"b":2}"#,
+            ),
+            (
+                r#"{"a":1,"router_meta":2,"b":3}"#,
+                two.clone(),
+                r#"{"a":1,"b":3}"#,
+            ),
+            (
+                r#"{"a":1,"b":2,"router_meta":3}"#,
+                two.clone(),
+                r#"{"a":1,"b":2}"#,
+            ),
+            // 带空白的相邻删除：逗号吞并含成员与逗号之间的空白。
+            (
+                r#"{ "routing_preference" : 1 , "router_meta" : 2 , "messages" : [] }"#,
+                two.clone(),
+                r#"{  "messages" : [] }"#,
+            ),
+        ]
+    }
+
+    #[test]
+    fn deletion_position_matrix() {
+        for (input, keys, expected) in deletion_matrix() {
+            assert_remove(input, &keys, expected);
+        }
+    }
+
+    // 19b. 不变式防线：矩阵中每个 `Ok` 的输出必须是合法 JSON——悬空逗号类 bug
+    //      的通用检测（`output_is_valid_json` 只覆盖单个 body，这里覆盖全矩阵）。
+    #[test]
+    fn deletion_matrix_outputs_are_valid_json() {
+        for (input, keys, _) in deletion_matrix() {
+            let raw = RawBody::new(input.as_bytes().to_vec());
+            let out = raw
+                .remove_top_level_keys(&keys)
+                .unwrap_or_else(|e| panic!("matrix case must be Ok: {input}, err {e:?}"));
+            assert!(
+                serde_json::from_slice::<serde_json::Value>(out.as_bytes()).is_ok(),
+                "output is not valid JSON for input: {input}"
+            );
+        }
+    }
+
+    // 19c. 白名单 1/2/3 键 × 3/5/8 成员三种规模的删除。
+    #[test]
+    fn deletion_matrix_scales() {
+        let k1 = vec!["router_meta"];
+        let k2 = vec!["router_meta", "routing_preference"];
+        let k3 = vec!["router_meta", "routing_preference", "router_hint"];
+        // 3 成员。
+        assert_remove(r#"{"router_meta":1,"a":1,"b":2}"#, &k1, r#"{"a":1,"b":2}"#);
+        assert_remove(
+            r#"{"router_meta":1,"routing_preference":2,"a":1}"#,
+            &k2,
+            r#"{"a":1}"#,
+        );
+        // 5 成员。
+        assert_remove(
+            r#"{"a":0,"router_meta":1,"routing_preference":2,"router_hint":3,"b":4}"#,
+            &k3,
+            r#"{"a":0,"b":4}"#,
+        );
+        assert_remove(
+            r#"{"router_meta":1,"routing_preference":2,"a":0,"router_hint":3,"b":4}"#,
+            &k3,
+            r#"{"a":0,"b":4}"#,
+        );
+        // 8 成员。
+        assert_remove(
+            r#"{"a":0,"router_meta":1,"b":2,"routing_preference":3,"c":4,"router_hint":5,"d":6,"e":7}"#,
+            &k3,
+            r#"{"a":0,"b":2,"c":4,"d":6,"e":7}"#,
+        );
+    }
+
+    // 19d. 边界行为钉死（DESIGN §12.3.1）：BOM → 拒绝。剥离 BOM 属于白名单之外的
+    //      改写（AGENTS 硬约束 1），故按"顶层不是对象"拒绝，交调用方 400。
+    #[test]
+    fn bom_rejected_as_not_top_level_object() {
+        let mut b = vec![0xEF, 0xBB, 0xBF];
+        b.extend_from_slice(br#"{"a":1}"#);
+        assert_eq!(
+            RawBody::new(b).remove_top_level_keys(&["router_meta"]),
+            Err(RawEditError::NotTopLevelObject { first_byte: 0xEF })
+        );
+    }
+
+    // 19e. 边界行为钉死：前导零数字 `01` 非 RFC 8259 数值文法 → Malformed
+    //      （原始值片段由 serde_json 校验器把关，不接受模棱两可的数值形态）。
+    #[test]
+    fn leading_zero_number_rejected_as_malformed() {
+        let raw = RawBody::new(br#"{"a":01}"#.to_vec());
+        assert!(matches!(
+            raw.remove_top_level_keys(&[]),
+            Err(RawEditError::Malformed { .. })
+        ));
+    }
+
+    // 19f. 边界行为钉死：字符串**值**内的非法 UTF-8 → `Ok` 且逐字节透传。
+    //      router 不解释值内容（字节边界优先，上游自裁）；键则必须可解码才能
+    //      与白名单做语义比对，故键内非法 UTF-8 仍是 Malformed——不对称是有意的。
+    #[test]
+    fn invalid_utf8_in_string_value_passthrough() {
+        let input: Vec<u8> = b"{\"s\":\"\xFF\xFE\",\"router_meta\":1}".to_vec();
+        let raw = RawBody::new(input);
+        let out = raw.remove_top_level_keys(&["router_meta"]).unwrap();
+        assert_eq!(out.as_bytes(), b"{\"s\":\"\xFF\xFE\"}");
     }
 
     // 18. 删除输出本身是合法 JSON（对删改后的字节做一次解析断言）。
