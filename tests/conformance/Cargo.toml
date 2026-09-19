@@ -3,12 +3,13 @@ name = "router-conformance"
 version.workspace = true
 edition.workspace = true
 
-# CONF 用例表 = DESIGN §12.8。未实现路径一律 #[ignore = "CONF-NN: 依赖 <实现项>"]（显式可见，而不是不写）。
+# The CONF case table = DESIGN §12.8. Unimplemented paths always carry #[ignore = "CONF-NN: depends on <item>"] (explicitly visible, not simply absent).
 
 [dependencies]
 router-core = { path = "../../crates/router-core" }
 
 [dev-dependencies]
 tokio = { workspace = true }
-# 仅供 CONF 用例做输出语义的交叉校验（断言解析）；不出现在任何被测代码路径。
+# Only for cross-checking output semantics in CONF cases (assertion parsing);
+# never present on any code path under test.
 serde_json = { workspace = true }

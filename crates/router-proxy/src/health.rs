@@ -1,8 +1,9 @@
 use router_core::error::{ErrorBody, ErrorCode};
 use serde_json::{json, Value};
 
-/// `/health` 响应体（spec：存活 + 已装载插件/服务）。
-/// R1-2 占位：config 解析与插件装载在后续轮次接入，这里只稳定输出形状。
+/// `/health` response body (spec: liveness + loaded plugins/services).
+/// R1-2 placeholder: config parsing and plugin loading land in later rounds;
+/// this only pins a stable output shape.
 #[derive(Clone, Default)]
 pub struct AppState {
     pub addr: String,

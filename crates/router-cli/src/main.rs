@@ -1,4 +1,5 @@
-//! `router serve` / `stats` / `replay` / `trace`（DESIGN §12.1）。R1-2：仅 serve 桩。
+//! `router serve` / `stats` / `replay` / `trace` (DESIGN §12.1). R1-2: serve
+//! stub only.
 
 #![forbid(unsafe_code)]
 
@@ -42,8 +43,9 @@ async fn serve(_config_path: &str) -> i32 {
     use router_core::error::ErrorBody;
     use router_proxy::protocol_stub;
 
-    // 配置解析在 R2 接入（DESIGN §12.5）：装载失败按 §12.5 报错退出，
-    // 无/坏 config 时 /health 也必须能起（编排者裁定：配置错误另行报错）。
+    // Config parsing lands in R2 (DESIGN §12.5): a load failure exits with a
+    // §12.5 error; with a missing/bad config, /health must still come up
+    // (orchestrator ruling: config errors are reported separately).
     let addr: SocketAddr = "127.0.0.1:8790".parse().expect("static listen addr parses");
     let state = std::sync::Arc::new(AppState {
         addr: addr.to_string(),
@@ -103,7 +105,8 @@ async fn serve(_config_path: &str) -> i32 {
 }
 
 fn request_id() -> String {
-    // R2 换为 uuid；桩阶段进程内自增即可，不引入新依赖。
+    // R2 switches to uuid; a process-local increment is enough for the stub
+    // phase — no new dependency.
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     format!("req-{}", NEXT.fetch_add(1, Ordering::Relaxed))

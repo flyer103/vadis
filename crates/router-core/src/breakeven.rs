@@ -1,5 +1,6 @@
-//! cache-aware breakeven（DESIGN §5）。整数交叉相乘，无除法精度损失；
-//! v0.1 用于 failover 与 quota spill 的切换判定，不用于自动选模。
+//! Cache-aware breakeven (DESIGN §5). Integer cross-multiplication, no
+//! division precision loss; in v0.1 it drives the switch decision for
+//! failover and quota spill, not automatic model selection.
 
 use serde::Serialize;
 
@@ -9,21 +10,25 @@ use crate::cost::{NanoUsd, Price};
 pub struct BreakevenParams {
     pub enabled: bool,
     pub min_remaining_turns: u32,
-    /// safety_factor × 100（1.2 → 120）。config 解析时整数化（§12.5）。
+    /// safety_factor × 100 (1.2 → 120). Integerized at config parse time
+    /// (§12.5).
     pub safety_factor_pct: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SwitchCandidate {
-    /// 换模型要按 miss 价重算的前缀量。
+    /// The prefix volume that must be recomputed at the miss price after a
+    /// model switch.
     pub prefix_tokens: u64,
-    /// 预估后续每轮输入 token。
+    /// Estimated input tokens per subsequent turn.
     pub tokens_per_turn: u64,
-    /// 预估剩余轮次（无历史 → 0）。
+    /// Estimated remaining turns (no history → 0).
     pub remaining_turns: u32,
-    /// 保持现状的下一轮单价 = 现模型 input_hit（GAP-Q7 默认）。
+    /// Next-turn unit price for staying = the current model's input_hit
+    /// (GAP-Q7 default).
     pub p_stay_hit: Price,
-    /// 新模型 input_miss（换过去必然 miss 整段前缀）。
+    /// The new model's input_miss (switching necessarily misses the whole
+    /// prefix).
     pub p_new_miss: Price,
 }
 
@@ -57,9 +62,11 @@ const fn tokens_nano(tokens: u128, price: Price) -> u64 {
     }
 }
 
-/// `gain = remaining_turns × tokens_per_turn × (p_stay − p_new)/1000`（i128 中间量，负值截 0）；
-/// `cost = prefix × p_new/1000`；
-/// `Switch ⟺ gain × 100 > safety_factor_pct × cost`（严格大于，交叉相乘）。
+/// `gain = remaining_turns × tokens_per_turn × (p_stay − p_new)/1000` (i128
+/// intermediates, negative values clamped to 0);
+/// `cost = prefix × p_new/1000`;
+/// `Switch ⟺ gain × 100 > safety_factor_pct × cost` (strictly greater, by
+/// cross-multiplication).
 pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict {
     if !p.enabled {
         return SwitchVerdict::Stay {
@@ -188,7 +195,7 @@ mod tests {
     #[test]
     fn exact_equality_stays_strictly_greater_required() {
         // gain = 10×1000×(220_000−100_000)/1000 = 1_200_000
-        // cost = 10_000×100_000/1000 = 1_000_000；gain×100 == 120×cost == 120_000_000
+        // cost = 10_000×100_000/1000 = 1_000_000; gain×100 == 120×cost == 120_000_000
         assert_eq!(
             decide_switch(&params(), &candidate()),
             SwitchVerdict::Stay {
@@ -215,7 +222,7 @@ mod tests {
     #[test]
     fn stay_price_not_above_new_price_stays() {
         let mut c = candidate();
-        c.p_stay_hit = c.p_new_miss; // 不赚
+        c.p_stay_hit = c.p_new_miss; // no gain
         assert_eq!(
             decide_switch(&params(), &c),
             SwitchVerdict::Stay {
@@ -238,13 +245,13 @@ mod tests {
     #[test]
     fn at_min_remaining_turns_is_eligible() {
         let mut c = candidate();
-        c.remaining_turns = 3; // == min：可参与判定
+        c.remaining_turns = 3; // == min: eligible for the formula check
         match decide_switch(&params(), &c) {
             SwitchVerdict::Stay {
                 reason: StayReason::BelowMinRemainingTurns,
                 ..
             } => {
-                panic!("remaining_turns == min 应参与算式判定")
+                panic!("remaining_turns == min should go through the formula check")
             }
             _ => {}
         }

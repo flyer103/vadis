@@ -1,4 +1,5 @@
-//! 配额模型（DESIGN §5/§12.4）。纯函数 + 显式状态；口径 = `input_total + output`（GAP-Q1 默认）。
+//! Quota model (DESIGN §5/§12.4). Pure functions + explicit state; the
+//! accounting basis = `input_total + output` (GAP-Q1 default).
 
 use serde::Serialize;
 
@@ -25,7 +26,8 @@ pub struct QuotaPlan {
     pub source: String,
 }
 
-/// 每套餐一份的可变状态。`window_start_epoch_s` 是当前计量窗起点（UTC 零点对齐）。
+/// Mutable state, one per plan. `window_start_epoch_s` is the start of the
+/// current metering window (aligned to UTC midnight).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaState {
     pub plan_idx: usize,
@@ -38,11 +40,12 @@ pub enum QuotaVerdict {
     Inside {
         remaining_before: u64,
     },
-    /// 溢出部分按 input_miss 计（DESIGN §5）；`billable_tokens` = 超出额度的 token 数。
+    /// The overflow portion is billed at input_miss (DESIGN §5);
+    /// `billable_tokens` = the number of tokens beyond the allowance.
     Spill {
         billable_tokens: u64,
     },
-    /// `over_quota=block` → Guard Reject(quota_exceeded)。
+    /// `over_quota=block` → Guard Reject(quota_exceeded).
     Blocked {
         remaining: u64,
     },
@@ -78,8 +81,10 @@ fn next_month(y: i64, m: u32) -> (i64, u32) {
     }
 }
 
-/// 该时刻所属计量窗的起点（UTC 零点）。`reset_day` 大于当月天数时取当月最后一天
-/// （31 号重置在 30 天/28 天的月份提前到月末，量纲一致）。
+/// Start (UTC midnight) of the metering window containing the given instant.
+/// When `reset_day` exceeds the current month's day count, the last day of
+/// the month is used (a day-31 reset lands on month-end in 30-/28-day months,
+/// keeping the unit consistent).
 fn window_start_for(now_epoch_s: u64, reset_day: u8) -> u64 {
     let (y, m, d, _, _) = crate::peak::timestamp_parts(now_epoch_s, crate::peak::Tz::Utc);
     let rd = reset_day as u32;
@@ -87,7 +92,7 @@ fn window_start_for(now_epoch_s: u64, reset_day: u8) -> u64 {
     utc_midnight_epoch(wy, wm, rd.min(days_in_month(wy, wm)))
 }
 
-/// `window_start` 之后的下一个重置点。
+/// The next reset point after `window_start`.
 fn next_reset(window_start: u64, reset_day: u8) -> u64 {
     let (y, m, d, _, _) = crate::peak::timestamp_parts(window_start, crate::peak::Tz::Utc);
     let rd = reset_day as u32;
@@ -96,12 +101,14 @@ fn next_reset(window_start: u64, reset_day: u8) -> u64 {
     utc_midnight_epoch(ny, nm, rd.min(days_in_month(ny, nm)))
 }
 
-/// 计量口径：`usage.input_total + usage.output`（GAP-Q1 蓝图默认；spec 回写后如有变化以此单点改）。
+/// Metering basis: `usage.input_total + usage.output` (GAP-Q1 blueprint
+/// default; if the spec changes after write-back, this single point changes).
 fn chargeable(usage: &Usage) -> u64 {
     usage.input_total.saturating_add(usage.output)
 }
 
-/// 唯一状态写入点：先对窗（跨窗 → 清零重开），再判定，最后落账。
+/// The single state-write point: align the window first (crossed window →
+/// reset to zero), then classify, then book.
 pub fn charge(
     plan: &QuotaPlan,
     st: &mut QuotaState,
@@ -114,7 +121,7 @@ pub fn charge(
         st.window_start_epoch_s = start;
         st.tokens_used = 0;
     }
-    let _ = next_reset(start, reset_day); // 重置点推导已由 window_start_for 覆盖；保留给 R2 的提前告警
+    let _ = next_reset(start, reset_day); // reset-point derivation is already covered by window_start_for; kept for R2's early warning
 
     let charged = chargeable(usage);
     let remaining = plan.tokens.saturating_sub(st.tokens_used);
@@ -140,7 +147,8 @@ pub fn charge(
 
     st.tokens_used = match verdict {
         QuotaVerdict::Inside { .. } => st.tokens_used.saturating_add(charged),
-        // spill 后额度已耗尽；溢出部分不占套餐额度（按 input_miss 另计，DESIGN §5）。
+        // After a spill the allowance is exhausted; the overflow does not
+        // consume plan allowance (billed separately at input_miss, DESIGN §5).
         QuotaVerdict::Spill { .. } => plan.tokens,
         QuotaVerdict::Blocked { .. } => st.tokens_used,
     };
@@ -151,7 +159,8 @@ pub fn charge(
 mod tests {
     use super::*;
 
-    // 工具算得的锚点（UTC 零点，python datetime 校验）：
+    // Anchors computed with a tool (UTC midnight, verified with python
+    // datetime):
     const SEP_1_2026: u64 = 1_788_220_800; // 2026-09-01
     const AUG_1_2026: u64 = 1_785_542_400; // 2026-08-01
     const SEP_15_2026: u64 = 1_789_430_400; // 2026-09-15
@@ -205,8 +214,8 @@ mod tests {
             tokens_used: 900,
         };
         let v = charge(&p, &mut st, &usage(100, 0), SEP_15_2026);
-        assert_eq!(st.window_start_epoch_s, SEP_1_2026); // 9 月 → 新窗从 9/1 起
-        assert_eq!(st.tokens_used, 100); // 旧窗 900 清零后重新计
+        assert_eq!(st.window_start_epoch_s, SEP_1_2026); // September → the new window starts 9/1
+        assert_eq!(st.tokens_used, 100); // the old window's 900 is zeroed, then re-counted
         assert_eq!(
             v,
             QuotaVerdict::Inside {
@@ -230,7 +239,7 @@ mod tests {
                 billable_tokens: 200
             }
         );
-        assert_eq!(st.tokens_used, 1_000); // 套餐额度耗尽；溢出不占额度
+        assert_eq!(st.tokens_used, 1_000); // plan allowance exhausted; the overflow does not consume allowance
     }
 
     #[test]
@@ -243,7 +252,7 @@ mod tests {
         };
         let v = charge(&p, &mut st, &usage(300, 0), SEP_15_2026);
         assert_eq!(v, QuotaVerdict::Blocked { remaining: 100 });
-        assert_eq!(st.tokens_used, 900); // 拒绝 → 不落账
+        assert_eq!(st.tokens_used, 900); // rejected → nothing booked
     }
 
     #[test]
@@ -262,11 +271,12 @@ mod tests {
 
     #[test]
     fn reset_day_clamps_in_short_months() {
-        // reset_day=31：2 月 15 日属于 1/31 开的窗
+        // reset_day=31: February 15 belongs to the window opened 1/31
         let (y, m, d, _, _) = crate::peak::timestamp_parts(FEB_15_2026, crate::peak::Tz::Utc);
         assert_eq!((y, m, d), (2026, 2, 15));
         assert_eq!(window_start_for(FEB_15_2026, 31), JAN_31_2026);
-        // 反向：1 月 15 日属于上一年 12/31 开的窗
+        // The other direction: January 15 belongs to the window opened 12/31
+        // of the previous year
         let dec31_prev = JAN_31_2026 - 31 * 86_400; // 2025-12-31
         assert_eq!(window_start_for(JAN_31_2026 - 16 * 86_400, 31), dec31_prev);
     }

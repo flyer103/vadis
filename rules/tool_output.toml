@@ -1,70 +1,114 @@
-# router 输入侧压缩规则 / rules/tool_output.toml
+# router input-side compression rules / rules/tool_output.toml
 #
-# 契约：形态对齐 ADR-003（rtk 风格声明式管线：管线阶段 / match_output / keep·strip lines /
-#       truncate / head·tail / max_lines / on_empty）+ spec §4 的 transform_rules 插件。
-#       本文件是**规则文件的落地格式**：实现方按此写 `builtin/transform_rules` 的解析器。
+# Contract: shape aligned with ADR-003 (rtk-style declarative pipeline:
+#            pipeline stages / match_output / keep·strip lines / truncate /
+#            head·tail / max_lines / on_empty) + the transform_rules plugin of
+#            spec §4. This file is **the landed rule-file format**: implementers
+#            write the `builtin/transform_rules` parser against it.
 #
-# ── 硬约束（违反即为 bug，不是"风格问题"）──────────────────────────────────────────────
-# 1. 内容确定性：规则是 `(content, stable config)` 的纯函数。禁读轮次/时钟/随机数/环境；
-#    规范化掉"易变时间戳"是允许且鼓励的（同内容 → 同上游字节 → 前缀缓存可复用）。
-# 2. 只作用于工具/环境载荷，**绝不改写用户意图**（ADR-003；第三方实测显示压缩人类 prompt 会让
-#    模型答得更长更差）。规则选择靠 `match_tool` / `match_kind`，不靠"猜内容"。
-# 3. fail-safe：规则装载失败、正则编译失败、`json_compact` 解析失败、内联测试失败
-#    → 该条规则**不生效**，载荷原样通过，trace 记 `transform_error`（spec §8）。
-# 4. 不得包含真实密钥、私有代码片段、真实客户数据。示例载荷一律是构造数据。
-# 5. 计账：本文件只描述"怎么改"；省了多少 token 由引擎按 spec §6 逐条记账，`verified` 与
-#    `inferred` 不得混用（ADR-003）。
+# ── Hard constraints (violating any of these is a bug, not a "style issue") ───────────
+# 1. Content determinism: a rule is a pure function of (content, stable
+#    config). Reading turn number/clock/RNG/environment is forbidden;
+#    normalizing away "volatile timestamps" is allowed and encouraged (same
+#    content → same upstream bytes → prefix cache reusable).
+# 2. Only tool/environment payloads are touched — **never rewrite user intent**
+#    (ADR-003; third-party measurements show compressing human prompts makes
+#    models answer longer and worse). Rule selection relies on `match_tool` /
+#    `match_kind`, never on "guessing content".
+# 3. fail-safe: rule load failure, regex compile failure, `json_compact` parse
+#    failure, inline-test failure → that rule **does not apply**; the payload
+#    passes through verbatim and the trace records `transform_error` (spec §8).
+# 4. No real secrets, private code snippets or real customer data. Example
+#    payloads are constructed data throughout.
+# 5. Accounting: this file only describes "how to change"; how many tokens were
+#    saved is accounted per spec §6 by the engine; `verified` and `inferred`
+#    must not be mixed (ADR-003).
 #
-# ── 语义规范（实现必须逐条对齐，否则内联测试会失败）────────────────────────────────────
-# 选规则：文件名/节名 = 规则 id；`match_tool`（正则，匹配工具名）与 `match_kind`（载荷类别声明）
-#         均为选填，同时给出时**必须都满足**；都不给 = 通配（默认不推荐）。
-# 前置条件：`min_input_bytes` 不满足 → 整条规则不生效，载荷逐字节原样通过（含其原有换行）。
-# 阶段顺序（固定，不可配置）：strip_ansi → json_compact → replace → match_output
-#         → strip_lines_matching | keep_lines_matching → truncate_lines_at → tail_lines
-#         → max_lines → tee 标记 → on_empty。
-# 行语义：载荷去掉**末尾一个**换行后按 `\n` 切分（`a\nb\n` → 2 行，`a\n\n` → ["a", ""]）；
-#         非空输出 = 各行 join("\n") + **恰好一个**末尾 "\n"；结果 0 行 → 输出 `on_empty`
-#         字面量（不加换行），且**不**追加 tee 标记。
-# 各阶段：
-#   strip_ansi          ：去掉 ANSI 转义序列（ESC[ ... m 等）。
-#   json_compact        ：序保留解析后压成单行（`,`/`:` 之间无空白），**数字字面量原样保留**，
-#                         输出为单行 + 末尾换行；解析失败 → 整条规则不生效（fail-safe）。
-#   replace             ：逐行 replace_all（数组顺序即应用顺序）。
-#   match_output        ：对**全量文本**匹配；首个命中即短路返回 `message`（不加换行）；
-#                         `unless` 命中则跳过该条。
-#   strip/keep_lines    ：逐行正则；两者互斥（同时出现 = 装载失败）。
-#   truncate_lines_at   ：行内容超过 N 个字符 → 保留前 N 个字符并追加 `...`（`...` 不计入 N）。
-#   tail_lines          ：保留末 N 行。max_lines：保留前 N 行。均在截断之后应用。
-#   tee 标记            ：`lines_dropped > 0` 且 `tee = true` 时，在输出末尾追加一行
-#                         `[router:tee sha256=<原始载荷 sha256 前 16 位 hex> lines_dropped=<n> bytes_original=<n>]`
-#                         （原始载荷 = 进入本规则的原始字节，UTF-8，含其换行；
-#                           lines_dropped = 原始行数 − 输出行数，被 strip 掉的行也计入）。
-#                         tee 是规则级声明（spec §4.4）；原文存储与 retrieve 通道 v0.1 不实现
-#                         （spec §4.4 已标注为未实现，本文件不得虚构落盘目录或端点）。
-# 查找与准入：`.router/rules.toml`（项目）→ `~/.config/router/rules.toml`（用户）→ 内置（编译期内嵌）；
-#         首个命中生效（ADR-003「三级覆盖」）。`router rules verify` 跑全部内联测试：任一规则测试失败
-#         → 该规则不装载并在启动日志与 `/health` 报出，其余规则照常（trust 门：ADR-008 裁定 v0.1 不启用，
-#         触发重新评估的条件写在该 ADR 里）。
-# 内联测试：`[[tests.<规则 id>]]`，`name` / `input` / `expected` 三者必填；字符串用**字面字符串**
-#         （`'...'` / `'''...'''`，不处理转义），需要 ANSI/`\n` 等转义时用基本字符串（`"..."`）。
-#         多行字面字符串：紧接 `'''` 的首个换行被裁剪，其余字节（含末尾换行）原样保留。
-#         本文件的 13 条内联测试已用等价语义的模拟器（一次性脚本，不入库）逐条验过：13/13 通过。
-#         Rust 实现必须得到同样结果 —— 不一致时先怀疑实现，再怀疑规范文字。
+# ── Semantics spec (the implementation must match item by item, otherwise the inline tests fail) ──────
+# Rule selection: file/section name = rule id; `match_tool` (regex over the
+#         tool name) and `match_kind` (payload category declaration) are both
+#         optional; when both are given, **both must match**; neither given =
+#         wildcard (not recommended by default).
+# Precondition: `min_input_bytes` unmet → the whole rule does not apply; the
+#         payload passes through byte-for-byte (including its original
+#         newlines).
+# Stage order (fixed, not configurable): strip_ansi → json_compact → replace
+#         → match_output → strip_lines_matching | keep_lines_matching
+#         → truncate_lines_at → tail_lines → max_lines → tee marker
+#         → on_empty.
+# Line semantics: the payload minus its **final** newline is split on `\n`
+#         (`a\nb\n` → 2 lines, `a\n\n` → ["a", ""]); a non-empty output = the
+#         lines joined with "\n" + **exactly one** trailing "\n"; zero lines →
+#         output the `on_empty` literal (no newline added) and do **not**
+#         append the tee marker.
+# Stages:
+#   strip_ansi          : remove ANSI escape sequences (ESC[ ... m etc.).
+#   json_compact        : order-preserving parse then compact to one line (no
+#                         whitespace between `,`/`:`), **number literals kept
+#                         verbatim**; output is a single line + trailing
+#                         newline; parse failure → the whole rule does not
+#                         apply (fail-safe).
+#   replace             : per-line replace_all (array order = application
+#                         order).
+#   match_output        : matched against the **full text**; the first hit
+#                         short-circuits to return `message` (no newline
+#                         added); a hit on `unless` skips the rule.
+#   strip/keep_lines    : per-line regex; mutually exclusive (both present =
+#                         load failure).
+#   truncate_lines_at   : lines longer than N characters → keep the first N
+#                         characters and append `...` (`...` does not count
+#                         toward N).
+#   tail_lines          : keep the last N lines. max_lines: keep the first N
+#                         lines. Both applied after truncation.
+#   tee marker          : when `lines_dropped > 0` and `tee = true`, append
+#                         one line at the end of the output:
+#                         `[router:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`
+#                         (original payload = the original bytes entering this
+#                         rule, UTF-8, newlines included;
+#                         lines_dropped = original line count − output line
+#                         count, lines removed by strip included).
+#                         tee is a rule-level declaration (spec §4.4); original
+#                         storage and the retrieve channel are not implemented
+#                         in v0.1 (spec §4.4 already marks them unimplemented;
+#                         this file must not invent a storage directory or
+#                         endpoint).
+# Lookup and admission: `.router/rules.toml` (project) →
+#         `~/.config/router/rules.toml` (user) → built-in (compiled in);
+#         first hit wins (ADR-003 "three-level override"). `router rules
+#         verify` runs all inline tests: any rule whose tests fail → that rule
+#         is not loaded and it is reported in the startup log and `/health`;
+#         the other rules load as usual (trust gate: ADR-008 rules v0.1 does
+#         not enable it; the conditions that trigger re-evaluation are written
+#         in that ADR).
+# Inline tests: `[[tests.<rule id>]]`; `name` / `input` / `expected` are all
+#         required; strings use **literal strings** (`'...'` / `'''...'''`,
+#         no escape processing); use basic strings (`"..."`) when ANSI/`\n`
+#         escapes are needed. Multi-line literal strings: the first newline
+#         immediately after `'''` is trimmed; all remaining bytes (including
+#         the trailing newline) are kept verbatim.
+#         The 13 inline tests in this file were each verified with a
+#         semantically equivalent simulator (a one-off script, not committed):
+#         13/13 pass. The Rust implementation must produce the same results —
+#         on mismatch, suspect the implementation first and the spec text
+#         second.
 
 schema_version = 1
 
-# ── 规则 1：JSON 工具载荷 ──────────────────────────────────────────────────────────────
-# 场景：MCP / Bash 返回的 JSON 带缩进（每行 2-4 空格），压缩成单行可省下大量空白 token，
-#       且语义完全不变。短载荷不处理：加上 tee 标记反而净亏，故设 min_input_bytes。
+# ── Rule 1: JSON tool payloads ────────────────────────────────────────────────────────
+# Scenario: JSON returned by MCP / Bash carries indentation (2-4 spaces per
+#       line); compacting it to one line saves a large number of whitespace
+#       tokens with semantics completely unchanged. Short payloads are not
+#       processed: adding the tee marker would be a net loss, hence
+#       min_input_bytes.
 
 [filters.tool-result-json]
-description = "JSON 工具载荷：序保留压成单行；短载荷与非法 JSON 原样通过"
+description = "JSON tool payloads: order-preserving compaction to one line; short payloads and invalid JSON pass through verbatim"
 match_kind = ["json"]
 min_input_bytes = 32
 json_compact = true
 
 [[tests.tool-result-json]]
-name = "pretty JSON 压成单行，键序与数字字面量不变"
+name = "pretty JSON compacted to one line, key order and number literals unchanged"
 input = '''
 {
   "total": 3,
@@ -78,22 +122,24 @@ expected = '''{"total":3,"hits":[{"path":"a.rs","line":12},{"path":"b.rs","line"
 '''
 
 [[tests.tool-result-json]]
-name = "短于 min_input_bytes：整条规则不生效，逐字节原样"
+name = "shorter than min_input_bytes: the whole rule does not apply, byte-for-byte verbatim"
 input = '{"a":1}'
 expected = '{"a":1}'
 
 [[tests.tool-result-json]]
-name = "非法 JSON：按 spec §8 回退原文（fail-safe，不抛错、不半改）"
+name = "invalid JSON: fall back to the original text per spec §8 (fail-safe, no throw, no partial edit)"
 input = '{"a": 1,, "b": 2, "note": "padding for the byte budget guard"}'
 expected = '{"a": 1,, "b": 2, "note": "padding for the byte budget guard"}'
 
-# ── 规则 2：构建 / 测试日志 ────────────────────────────────────────────────────────────
-# 场景：Bash 工具跑构建或测试，输出里 80% 是进度行与空行。保留诊断与摘要。
-#       `replace` 把易变耗时（`in 2.31s`）规范化掉 —— 这一条同时是"前缀稳定"手段：
-#       同一命令两次运行的上游可见字节因此完全一致。
+# ── Rule 2: build / test logs ─────────────────────────────────────────────────────────
+# Scenario: the Bash tool runs a build or tests; 80% of the output is progress
+#       lines and blank lines. Keep diagnostics and summaries.
+#       `replace` normalizes away volatile durations (`in 2.31s`) — this is
+#       also a "prefix stability" lever: two runs of the same command produce
+#       byte-identical upstream-visible output because of it.
 
 [filters.bash-log-noise]
-description = "构建/测试日志：去进度行与空行、剥离 ANSI、规范化耗时；无输出给占位串"
+description = "build/test logs: drop progress lines and blank lines, strip ANSI, normalize durations; placeholder when empty"
 match_kind = ["log", "text"]
 match_tool = '^(Bash|bash|shell|run_terminal_cmd)$'
 strip_ansi = true
@@ -110,7 +156,7 @@ max_lines = 200
 on_empty = "<bash: no output>"
 
 [[tests.bash-log-noise]]
-name = "去进度行与空行，保留诊断与摘要"
+name = "drop progress lines and blank lines, keep diagnostics and summaries"
 input = '''
    Compiling serde v1.0.210
 [ 62%] Building object
@@ -131,7 +177,7 @@ error: could not compile `router` due to 1 previous error
 '''
 
 [[tests.bash-log-noise]]
-name = "全是噪声 → on_empty"
+name = "all noise → on_empty"
 input = '''
    Compiling serde v1.0.210
 
@@ -140,21 +186,23 @@ input = '''
 expected = '<bash: no output>'
 
 [[tests.bash-log-noise]]
-name = "ANSI 颜色码先剥离"
+name = "ANSI color codes stripped first"
 input = "\u001B[31merror\u001B[0m: cannot find value `y` in this scope\n"
 expected = "error: cannot find value `y` in this scope\n"
 
 [[tests.bash-log-noise]]
-name = "replace：规范化易变耗时（同命令两次运行字节一致）"
+name = "replace: normalize volatile durations (two runs of the same command produce identical bytes)"
 input = "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.31s\n"
 expected = "    Finished `dev` profile [unoptimized + debuginfo] target(s)\n"
 
-# ── 规则 3：搜索结果 ──────────────────────────────────────────────────────────────────
-# 场景：`grep -C 3` 的输出里命中行只占少数。只留命中行（`path:line:`）与分组分隔（`--`）。
-#       超出预算时截断，并 tee 原文，使模型仍可取回被丢掉的部分。
+# ── Rule 3: search results ────────────────────────────────────────────────────────────
+# Scenario: in `grep -C 3` output the hit lines are the minority. Keep only hit
+#       lines (`path:line:`) and group separators (`--`). When over budget,
+#       truncate and tee the original so the model can still retrieve the
+#       dropped parts.
 
 [filters.grep-hits-budget]
-description = "搜索结果：只留命中行与分组分隔，超预算截断并 tee 原文"
+description = "search results: keep only hit lines and group separators, truncate over budget and tee the original"
 match_kind = ["text"]
 match_tool = '^(Grep|grep|rg|ripgrep|search)$'
 keep_lines_matching = ['^\S+:\d+:', '^--$']
@@ -163,7 +211,7 @@ tee = true
 on_empty = "<grep: no hits kept>"
 
 [[tests.grep-hits-budget]]
-name = "丢掉上下文行（`-` 分隔），保留命中行与 `--`"
+name = "drop context lines (`-` separated), keep hit lines and `--`"
 input = '''
 src/a.rs-10-  fn unrelated() {
 src/a.rs-11-  }
@@ -179,7 +227,7 @@ src/b.rs:7:foo();
 '''
 
 [[tests.grep-hits-budget]]
-name = "超出 max_lines：截断到前 8 行并 tee 原文"
+name = "over max_lines: truncated to the first 8 lines and the original tee'd"
 input = '''
 src/a.rs:1:let r = foo(1);
 src/a.rs:2:let r = foo(2);
@@ -206,19 +254,22 @@ src/a.rs:8:let r = foo(8);
 '''
 
 [[tests.grep-hits-budget]]
-name = "无命中行保留 → on_empty（且不追加 tee 标记）"
+name = "no hit lines kept → on_empty (and no tee marker appended)"
 input = '''
 src/a.rs-10-  fn unrelated() {
 src/a.rs-11-  }
 '''
 expected = '<grep: no hits kept>'
 
-# ── 规则 4：diff 载荷 ─────────────────────────────────────────────────────────────────
-# 场景：agent 常把整段 patch 贴回上下文。删掉 `index ...` 这类对模型无用的行，超长行截断，
-#       总量封顶后 tee 原文。truncate_lines_at 示例值偏小（60）以便内联测试可读；生产可为 160–400。
+# ── Rule 4: diff payloads ─────────────────────────────────────────────────────────────
+# Scenario: agents often paste whole patches back into context. Drop lines
+#       useless to the model like `index ...`, truncate over-long lines, cap
+#       the total then tee the original. The truncate_lines_at example value is
+#       small (60) to keep the inline tests readable; production may use
+#       160–400.
 
 [filters.diff-budget]
-description = "diff 载荷：删 index 噪声行、超长行截断、总量封顶并 tee 原文"
+description = "diff payloads: drop index noise lines, truncate over-long lines, cap the total and tee the original"
 match_kind = ["diff"]
 truncate_lines_at = 60
 max_lines = 6
@@ -227,7 +278,7 @@ strip_lines_matching = ['^index [0-9a-f]{7,}\.\.[0-9a-f]{7,}']
 on_empty = "<diff: no hunk kept>"
 
 [[tests.diff-budget]]
-name = "超长行截断：保留前 60 个字符并追加 ...（不掉行，故无 tee 标记）"
+name = "over-long line truncated: first 60 characters kept plus appended ... (no lines dropped, hence no tee marker)"
 input = '''
 + src/aaaaaaaa/bbbbbbbbbbbbbbbb/cccccccccc/mmmmmmmmmmmm/nnnnnnnnnn.rs
 '''
@@ -235,7 +286,7 @@ expected = '''+ src/aaaaaaaa/bbbbbbbbbbbbbbbb/cccccccccc/mmmmmmmmmmmm/nnnn...
 '''
 
 [[tests.diff-budget]]
-name = "先删 index 行再按 max_lines 封顶，并 tee 原文"
+name = "drop index lines first, then cap by max_lines, and tee the original"
 input = '''
 diff --git a/src/lib.rs b/src/lib.rs
 index 1a2b3c4..5d6e7f8 100644
@@ -257,7 +308,7 @@ expected = '''diff --git a/src/lib.rs b/src/lib.rs
 '''
 
 [[tests.diff-budget]]
-name = "只有 index 噪声行 → on_empty"
+name = "only index noise lines → on_empty"
 input = '''
 index 1a2b3c4..5d6e7f8 100644
 index 9f8e7d6..5c4b3a2 100644

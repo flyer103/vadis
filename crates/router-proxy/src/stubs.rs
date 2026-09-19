@@ -1,5 +1,6 @@
-//! 三个协议端点的统一桩：稳定 501 + 明确 JSON body，绝不 panic（R1-2 契约）。
-//! 实际转发（字节保真 + SSE 透传）在 R2 落地（DESIGN §2/§7）。
+//! Unified stub for the three protocol endpoints: a stable 501 + a clear JSON
+//! body, never a panic (R1-2 contract). Real forwarding (byte fidelity + SSE
+//! passthrough) lands in R2 (DESIGN §2/§7).
 
 use router_core::error::ErrorCode;
 

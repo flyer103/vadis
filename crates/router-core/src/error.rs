@@ -1,5 +1,6 @@
-//! 统一错误信封（DESIGN §12.7，spec §8 的落地）。
-//! 所有非 2xx 响应与桩端点共用同一形状：`{"error":{"type","message","request_id","details"?}}`。
+//! Unified error envelope (DESIGN §12.7, implementing spec §8).
+//! All non-2xx responses and stub endpoints share one shape:
+//! `{"error":{"type","message","request_id","details"?}}`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -38,7 +39,7 @@ impl ErrorCode {
         }
     }
 
-    /// `error.type` → HTTP 状态码（DESIGN §12.7 表，一一对应）。
+    /// `error.type` → HTTP status code (the DESIGN §12.7 table, one-to-one).
     pub const fn http_status(self) -> u16 {
         match self {
             Self::InvalidRequest

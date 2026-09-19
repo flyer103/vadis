@@ -1,11 +1,12 @@
-//! 五档成本引擎（DESIGN §5/§12.4）。全程整数 NanoUsd；浮点只允许出现在
-//! 最终格式化输出层（本模块不含）。
+//! Five-tier cost engine (DESIGN §5/§12.4). Integer NanoUsd throughout;
+//! floats are allowed only in the final formatting output layer (not in this
+//! module).
 
 use serde::Serialize;
 
 use crate::peak::{PeakTable, Timestamp};
 
-/// 金额定点：1 NanoUsd = 1e-9 USD（ADR-006 裁定口径）。
+/// Fixed-point amount: 1 NanoUsd = 1e-9 USD (per the ADR-006 ruling).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct NanoUsd(pub u64);
 
@@ -17,17 +18,19 @@ impl NanoUsd {
     }
 }
 
-/// 单价：nano-USD / 1K token。config 的 USD/1K 在装载时一次性整数化（§12.5），
-/// 运行期不再出现小数。
+/// Unit price: nano-USD / 1K tokens. USD/1K values from config are
+/// integerized once at load time (§12.5); no decimals appear at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Price(pub u64);
 
-/// tokens × price(每 1K) → NanoUsd；向下取整（§12.4：最后一次除法向下取整）。
+/// tokens × price (per 1K) → NanoUsd; floored (§12.4: the final division
+/// floors).
 fn tier_nano(tokens: u64, price: Price) -> NanoUsd {
     NanoUsd(saturating_div_1k(tokens as u128 * price.0 as u128))
 }
 
-/// u128 → u64 饱和 + 千分位向下取整（成本路径唯一取整点，单测锁定）。
+/// u128 → u64 saturating + floor at the thousandths step (the single rounding
+/// point on the cost path, pinned by unit tests).
 fn saturating_div_1k(nano: u128) -> u64 {
     let q = nano / 1000;
     if q > u64::MAX as u128 {
@@ -46,7 +49,8 @@ pub struct PriceTable {
     pub peak: PeakTable,
 }
 
-/// 归一化 usage（spec §6）。协议解析（R2）把它从三种线格式构造出来；本模块只认这个形状。
+/// Normalized usage (spec §6). Protocol parsing (R2) constructs it from the
+/// three wire formats; this module only knows this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Usage {
     pub input_total: u64,
@@ -57,12 +61,12 @@ pub struct Usage {
 }
 
 impl Usage {
-    /// input_miss 档的 token 数。
+    /// Token count of the input_miss tier.
     pub const fn uncached(&self) -> u64 {
         self.input_total.saturating_sub(self.input_cached)
     }
 
-    /// 缓存命中率（派生指标，非金额路径；允许浮点）。
+    /// Cache hit rate (a derived metric, not a money path; floats allowed).
     #[allow(clippy::float_arithmetic)]
     pub fn cache_hit_rate(&self) -> f32 {
         if self.input_total == 0 {
@@ -73,7 +77,8 @@ impl Usage {
     }
 }
 
-/// u128 → u64 饱和 + 百分比乘（峰段倍率路径，同样向下取整）。
+/// u128 → u64 saturating + percentage multiply (the peak multiplier path,
+/// also floored).
 fn saturating_mul_pct(base: u64, pct: u32) -> u64 {
     let v = base as u128 * pct as u128 / 100;
     if v > u64::MAX as u128 {
@@ -85,7 +90,8 @@ fn saturating_mul_pct(base: u64, pct: u32) -> u64 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CostBreakdown {
-    /// 各档金额为峰前值；`peak_applied_pct` 只作用于 `total`（§12.4 公式）。
+    /// Tier amounts are pre-peak values; `peak_applied_pct` applies only to
+    /// `total` (§12.4 formula).
     pub input_miss: NanoUsd,
     pub input_hit: NanoUsd,
     pub cache_write: NanoUsd,
@@ -94,9 +100,10 @@ pub struct CostBreakdown {
     pub total: NanoUsd,
 }
 
-/// 单请求成本（纯函数）：
-/// `cost_nano = Σ_tier(tokens_tier × price_tier)/1000`，峰段命中再整体 `× multiplier_pct/100`。
-/// output 档含 reasoning（上游普遍把 reasoning 计入 output 计费）。
+/// Per-request cost (pure function):
+/// `cost_nano = Σ_tier(tokens_tier × price_tier)/1000`, then the whole thing
+/// `× multiplier_pct/100` on a peak-window hit. The output tier includes
+/// reasoning (upstreams generally bill reasoning as output).
 pub fn cost(usage: &Usage, price: &PriceTable, at: Timestamp) -> CostBreakdown {
     let miss = tier_nano(usage.uncached(), price.input_miss);
     let hit = tier_nano(usage.input_cached, price.input_hit);
@@ -126,7 +133,8 @@ mod tests {
     use super::*;
     use crate::peak::{PeakTable, PeakWindow, Tz, Weekdays};
 
-    // 周一 12:00 UTC（python datetime 校验）；flat 峰谷表与时间无关，用同一时刻对照。
+    // Monday 12:00 UTC (verified with python datetime); the flat peak table is
+    // time-independent, so the same instant is used as the control.
     const MON_NOON: u64 = 1_789_992_000;
     const AT: u64 = MON_NOON;
 
@@ -209,7 +217,7 @@ mod tests {
         let c = cost(&u, &p, MON_NOON);
         assert_eq!(c.peak_applied_pct, 200);
         assert_eq!(c.total, NanoUsd(4_120_000)); // 2_060_000 × 200/100
-        assert_eq!(c.input_miss, NanoUsd(1_500_000)); // 档位保持峰前值
+        assert_eq!(c.input_miss, NanoUsd(1_500_000)); // tiers keep pre-peak values
     }
 
     #[test]

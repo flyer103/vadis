@@ -1,213 +1,251 @@
-# router v0.1 配置示例 / config.example.yaml
+# router v0.1 config example / config.example.yaml
 #
-# 契约：本文件的字段集 = docs/spec.md §4「配置 schema」。字段名、层级、语义以 spec 为准；
-#       本文件是**可直接被实现读取的完整示例**（实现方按此写解析器，不要自行增删字段）。
-# 用法：cp config.example.yaml config.yaml 后填写 roster；config.yaml 已被 .gitignore 忽略。
+# Contract: the field set of this file = docs/spec.md §4 "config schema". Field
+#            names, hierarchy and semantics are governed by the spec; this file
+#            is a **complete example that an implementation can read directly**
+#            (implementations write their parser against this — do not add or
+#            remove fields on your own).
+# Usage: cp config.example.yaml config.yaml then fill in the roster; config.yaml
+#            is already ignored by .gitignore.
 #
-# 三条硬纪律（AGENTS.md / spec「计账口径」）：
-#   1. secrets 只从 env 读：本文件只写 `api_key_env`，**绝不写密钥值**。
-#   2. 价格与 quota 不得凭空写：每个模型/套餐都带 `source:`（官方页 URL + 读取日期），
-#      且一律保留 `# TODO 官方源核验` 标注 —— 本文件的职责是"schema 完整可读"，不是"价格权威"。
-#   3. 峰谷/单位/缺省值凡是 spec 没写死的，本文件用注释标明出处与已知偏差。
+# Three hard disciplines (AGENTS.md / spec "accounting basis"):
+#   1. Secrets are read only from env: this file only names `api_key_env`,
+#      **never a key value**.
+#   2. Prices and quotas must never be invented: every model/plan carries a
+#      `source:` (official page URL + read date), and the `# TODO verify against
+#      official source` marker is always kept — this file's job is "schema
+#      complete and readable", not "price authority".
+#   3. Wherever the spec does not pin down peak/off-peak, units or defaults,
+#      this file notes the provenance and known deviations in comments.
 #
-# 语法约定（DESIGN §12.5）：
-#   - duration：`<整数><ms|s|m|h>`，可叠加（例：`1h30m`）；不支持下划线的裸秒数。
-#   - context：`<整数>` 或 `<整数>k|m`（k=1024、m=1024×1024）；`1m` = 1,048,576。
-#   - price：USD / 1K token（spec §4 口径）。官方页多以 USD / 1M 公布，本文件按 /1M 原值 ÷1000 转写，
-#     并在行尾注明官方 /1M 原值，便于人工核对。
-#   - provider 路径：base_url 必须已含版本段（`/v1`、`/v4`、`/anthropic`），router 只追加
-#     `chat → /chat/completions`、`responses → /responses`、`anthropic → /v1/messages`。
+# Syntax conventions (DESIGN §12.5):
+#   - duration: `<integer><ms|s|m|h>`, stackable (e.g. `1h30m`); bare seconds
+#     with underscores are not supported.
+#   - context: `<integer>` or `<integer>k|m` (k=1024, m=1024×1024); `1m` =
+#     1,048,576.
+#   - price: USD / 1K tokens (spec §4 basis). Official pages mostly publish
+#     USD / 1M; this file transcribes the /1M value ÷1000 and notes the
+#     official /1M value at end of line for manual cross-checking.
+#   - provider paths: base_url must already contain the version segment
+#     (`/v1`, `/v4`, `/anthropic`); the router only appends
+#     `chat → /chat/completions`, `responses → /responses`,
+#     `anthropic → /v1/messages`.
 #
-# 缺口索引：本文件标注的 GAP-Qn 与 open question 见 `design/DESIGN.md` §12.9。
-#          R1-4 已把 Q2/Q3/Q5/Q10/Q11/Q12 回写进 `docs/spec.md`（§4.1/§4.2/§4.3/§4.4/§6/§8）：
-#          本文件仍标注 GAP 的注释即**未定**项；已定的项只引 spec 条款，不再标 GAP。
+# Gap index: GAP-Qn markers and open questions in this file are indexed in
+#            `design/DESIGN.md` §12.9.
+#            R1-4 has written Q2/Q3/Q5/Q10/Q11/Q12 back into `docs/spec.md`
+#            (§4.1/§4.2/§4.3/§4.4/§6/§8): comments in this file that still
+#            carry a GAP marker are **undecided** items; decided items cite
+#            only the spec clause and no longer carry a GAP.
 
 server:
-  addr: "127.0.0.1:8790"        # 本地优先；绑定非 loopback 前请先想清楚鉴权（v0.1 无鉴权）
-  upstream_attempt_timeout: 60s # 单次上游尝试的预算（超时 → 按 fallback 链切换，spec §8）
-  request_timeout: 10m          # 整个入站请求（含 SSE 全程）的预算
+  addr: "127.0.0.1:8790"        # local-first; think through auth before binding non-loopback (v0.1 has no auth)
+  upstream_attempt_timeout: 60s # budget for a single upstream attempt (timeout → switch per the fallback chain, spec §8)
+  request_timeout: 10m          # budget for the whole inbound request (including the full SSE duration)
 
 session:
-  # 会话身份的候选来源，按序取值，首个命中即为 session（spec §6「身份」/ DESIGN §6.3）。
-  # `prompt_cache_key` 是 responses 协议的 body 字段（实测客户端会带、上游会回显，ADR-004）；
-  # chat 协议没有该字段 → 自然落到 header 源。全部未命中 → session = null（trace 记 null，
-  # sticky_hit = false，按"无会话"处理，不报错）。
+  # Candidate sources of session identity, taken in order; the first hit is the
+  # session (spec §6 "identity" / DESIGN §6 item 3).
+  # `prompt_cache_key` is a responses-protocol body field (measured: clients
+  # send it and upstreams echo it, ADR-004); the chat protocol has no such
+  # field → naturally falls through to the header sources. All missed →
+  # session = null (trace records null, sticky_hit = false, handled as "no
+  # session", no error).
   key_sources: ["prompt_cache_key", "header:session-id", "header:thread-id"]
-  ttl: 12h                      # 粘性表与 cache 账本的会话保留时长；过期即视为新会话
+  ttl: 12h                      # session retention for the sticky table and cache ledger; expired = treated as a new session
 
 cache:
-  sticky: true                  # 同 session → 同 (provider, model)；stateful 入站靠它保真（ADR-004）
+  sticky: true                  # same session → same (provider, model); stateful inbound relies on it for fidelity (ADR-004)
   breakeven:
-    enabled: true               # 关闭后不参与 failover / quota spill 的切换判定（DESIGN §5）
-    min_remaining_turns: 3      # 预估剩余轮次 < 该值时直接不切换（未知预估时取 0 → 不切换）
-    safety_factor: 1.2          # 切换当且仅当 switch_gain > safety_factor × switch_cost
+    enabled: true               # when off, it takes no part in failover / quota spill switch decisions (DESIGN §5)
+    min_remaining_turns: 3      # estimated remaining turns below this → do not switch at all (unknown estimate → 0 → no switch)
+    safety_factor: 1.2          # switch if and only if switch_gain > safety_factor × switch_cost
 
 trace:
-  # trace 是产品 → autowork 的唯一接口（ADR-005）；落盘参数见 spec §4.1。
-  dir: ./state/traces           # 相对**本 config 文件所在目录**解析（不是 CWD）；state/ 已 gitignore
-  rollover: hourly              # v0.1 只定义 hourly → 文件名 YYYY-MM-DDTHH.jsonl（UTC）
-  # 保留期**不在** config：v0.1 不自动清理，文件只追加、由运维手工归档（spec §4.1）
+  # trace is the only product → autowork interface (ADR-005); on-disk
+  # parameters in spec §4.1.
+  dir: ./state/traces           # resolved relative to **this config file's directory** (not the CWD); state/ is gitignored
+  rollover: hourly              # v0.1 defines only hourly → file name YYYY-MM-DDTHH.jsonl (UTC)
+  # retention is deliberately **not** in config: v0.1 does not auto-clean; files
+  # are append-only and archived manually by ops (spec §4.1)
 
 providers:
-  # 每个 provider 一条 roster；`wire_api` = 该 provider 的**原生**线格式（native passthrough 的条件）。
-  # `supports` = 可由 router 翻译过去的入站协议集合（包含 wire_api 自身），是 3×3 矩阵的合法格声明；
-  # 未声明的格 = 400（不给"尽力而为"的翻译）。翻译格必须逐条处理 spec §2 有损清单。
+  # One roster entry per provider; `wire_api` = that provider's **native** wire
+  # format (the condition for native passthrough).
+  # `supports` = the set of inbound protocols the router can translate to it
+  # (including wire_api itself) — the declared legal cells of the 3×3 matrix;
+  # an undeclared cell = 400 (no "best-effort" translation). Translated cells
+  # must handle the spec §2 lossy list item by item.
 
   - name: deepseek
-    base_url: https://api.deepseek.com            # 官方 OpenAI-Format BASE URL
-                                                  #   实际端点：/chat/completions、/responses
-                                                  #   官方 Anthropic-Format BASE：https://api.deepseek.com/anthropic
-    api_key_env: DEEPSEEK_API_KEY                 # 密钥只从该 env 读；本文件不写值
-    wire_api: responses                           # 官方文档明确支持 Responses API（为 Codex 场景提供）
-    supports: [chat, responses, anthropic]        # 三种线格式官方均有文档（Responses API / Anthropic API）
+    base_url: https://api.deepseek.com            # official OpenAI-Format BASE URL
+                                                  #   actual endpoints: /chat/completions, /responses
+                                                  #   official Anthropic-Format BASE: https://api.deepseek.com/anthropic
+    api_key_env: DEEPSEEK_API_KEY                 # the key is read only from this env; no value in this file
+    wire_api: responses                           # official docs explicitly support the Responses API (for the Codex scenario)
+    supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API)
     models:
       - id: deepseek-v4-pro
-        context: 1m                               # 官方页 CONTEXT LENGTH = 1M（MAX OUTPUT 384K）
-        price:                                    # 五档价，USD / 1K token（= 官方 /1M ÷1000）
-          input_miss: 0.00066                     # 官方 $0.66 /1M（off-peak）
-          input_hit: 0.000022                     # 官方 $0.022 /1M（off-peak）
-          cache_write: 0.0                        # 官方页未列 cache write 计费项 → 记 0，并保留 TODO
-          output: 0.00198                         # 官方 $1.98 /1M（off-peak）
+        context: 1m                               # official page: CONTEXT LENGTH = 1M (MAX OUTPUT 384K)
+        price:                                    # five-tier price, USD / 1K tokens (= official /1M ÷1000)
+          input_miss: 0.00066                     # official $0.66 /1M (off-peak)
+          input_hit: 0.000022                     # official $0.022 /1M (off-peak)
+          cache_write: 0.0                        # official page lists no cache-write billing item → record 0 and keep the TODO
+          output: 0.00198                         # official $1.98 /1M (off-peak)
           peak:
-            multiplier: 2.0                       # 官方：off-peak = peak 的一半，故 multiplier = 2.0
-            windows:                              # 官方：高峰 = 周一至周五 01:00-04:00、06:00-10:00 UTC
+            multiplier: 2.0                       # official: off-peak = half of peak, hence multiplier = 2.0
+            windows:                              # official: peak = Monday–Friday 01:00-04:00 and 06:00-10:00 UTC
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "06:00", to: "10:00", tz: UTC }
-              # 已知偏差：中国法定节假日按官方口径算 off-peak，v0.1 未建模节假日日历（DESIGN §12.9 Q6）
+              # known deviation: Chinese public holidays count as off-peak per the official policy; v0.1 does not model a holiday calendar (DESIGN §12.9 Q6)
         source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
-        # TODO 官方源核验：以上五档价、峰谷窗口为本次会话读取官方页后的转写值，合入前需人工复核一次。
+        # TODO verify against official source: the five-tier prices and peak windows above were transcribed from the official page during this session and need one manual review before merging.
       - id: deepseek-flash
         context: 1m
         price:
-          input_miss: 0.00015                     # 官方 $0.15 /1M（off-peak）
-          input_hit: 0.000003                     # 官方 $0.003 /1M（off-peak）
+          input_miss: 0.00015                     # official $0.15 /1M (off-peak)
+          input_hit: 0.000003                     # official $0.003 /1M (off-peak)
           cache_write: 0.0
-          output: 0.0006                          # 官方 $0.6 /1M（off-peak）
+          output: 0.0006                          # official $0.6 /1M (off-peak)
           peak:
             multiplier: 2.0
             windows:
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "06:00", to: "10:00", tz: UTC }
         source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
-        # TODO 官方源核验
+        # TODO verify against official source
 
   - name: zai
-    base_url: https://api.z.ai/api/paas/v4        # 官方 curl 示例端点：/chat/completions
-                                                  #   官方 Anthropic-Format BASE：https://api.z.ai/api/anthropic
+    base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
+                                                  #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
     api_key_env: ZAI_API_KEY
     wire_api: chat
-    supports: [chat, anthropic]                   # 官方只文档化了 OpenAI / Anthropic 两种格式；
-                                                  #   未文档化的格式不声明（宁缺勿猜：未声明 = 400）
+    supports: [chat, anthropic]                   # only the OpenAI and Anthropic formats are officially documented;
+                                                  #   undocumented formats are not declared (better missing than guessed: undeclared = 400)
     models:
       - id: glm-5.3
-        context: 200k                             # TODO 官方源核验：pricing 页未列 context，待模型页核对
+        context: 200k                             # TODO verify against official source: the pricing page lists no context; check the model page
         price:
-          input_miss: 0.0014                      # 官方 $1.4 /1M
-          input_hit: 0.00026                      # 官方 $0.26 /1M
-          cache_write: 0.0                        # 官方 "Cached Input Storage: Limited-time Free"（限免期）
-          output: 0.0044                          # 官方 $4.4 /1M
-          peak: { multiplier: 1.0, windows: [] }  # 官方未公布峰谷 → 全时段同价
+          input_miss: 0.0014                      # official $1.4 /1M
+          input_hit: 0.00026                      # official $0.26 /1M
+          cache_write: 0.0                        # official "Cached Input Storage: Limited-time Free" (free for a limited period)
+          output: 0.0044                          # official $4.4 /1M
+          peak: { multiplier: 1.0, windows: [] }  # no peak/off-peak published officially → same price at all times
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO 官方源核验（含 cache_write 的"限免"到期后规则）
+        # TODO verify against official source (including the rules after the cache_write "limited-time free" period ends)
       - id: glm-5.3-flash
-        context: 200k                             # TODO 官方源核验
+        context: 200k                             # TODO verify against official source
         price:
-          input_miss: 0.00015                     # 官方 $0.15 /1M
-          input_hit: 0.00003                      # 官方 $0.03 /1M
+          input_miss: 0.00015                     # official $0.15 /1M
+          input_hit: 0.00003                      # official $0.03 /1M
           cache_write: 0.0
-          output: 0.0005                          # 官方 $0.50 /1M
+          output: 0.0005                          # official $0.50 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO 官方源核验
+        # TODO verify against official source
       - id: glm-4.7
-        context: 200k                             # TODO 官方源核验
+        context: 200k                             # TODO verify against official source
         price:
-          input_miss: 0.0006                      # 官方 $0.6 /1M
-          input_hit: 0.00011                      # 官方 $0.11 /1M
+          input_miss: 0.0006                      # official $0.6 /1M
+          input_hit: 0.00011                      # official $0.11 /1M
           cache_write: 0.0
-          output: 0.0022                          # 官方 $2.2 /1M
+          output: 0.0022                          # official $2.2 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO 官方源核验
-    quota:                                        # 订阅制套餐（GLM Coding Plan）：套餐内边际成本记 0
-      - models: [glm-5.3, glm-5.3-flash, glm-4.7]  # 套餐覆盖的模型（本地 roster 的 id）
+        # TODO verify against official source
+    quota:                                        # subscription plan (GLM Coding Plan): marginal cost inside the plan recorded as 0
+      - models: [glm-5.3, glm-5.3-flash, glm-4.7]  # models covered by the plan (ids in the local roster)
         window: monthly
-        tokens: 100_000_000                       # 占位值（官方页只公布 $18/月，未公布 token 额度）
+        tokens: 100_000_000                       # placeholder (the official page only publishes $18/month, no token allowance)
         reset_day: 1
-        over_quota: block                         # block: 拒绝并说明原因；spill: 溢出部分按 input_miss 计
+        over_quota: block                         # block: reject with a stated reason; spill: the overflow is billed at input_miss
         source: "https://docs.z.ai/guides/overview/quick-start @2026-09-19"
-        # 官方页只公布了 GLM Coding Plan 的订阅价 $18/月，未公布 token 额度 → 上列 tokens 是占位值。
-        # TODO 官方源核验：额度数值、计量口径（input+output？是否含 cache_read）与重置时区均待确认
-        #              —— GAP-Q1（DESIGN §12.9）
+        # The official page only publishes the GLM Coding Plan subscription
+        # price of $18/month, not a token allowance → the tokens value above is
+        # a placeholder.
+        # TODO verify against official source: the allowance value, metering
+        #      basis (input+output? does it include cache_read?) and the reset
+        #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
 
   - name: moonshot
-    base_url: https://api.moonshot.ai/v1          # 官方 quickstart：base_url = https://api.moonshot.ai/v1
+    base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
     api_key_env: MOONSHOT_API_KEY
     wire_api: chat
-    supports: [chat, anthropic]                   # 官方：兼容 OpenAI 与 Anthropic 两种 API 格式
+    supports: [chat, anthropic]                   # official: compatible with both the OpenAI and Anthropic API formats
     models:
       - id: kimi-k3
-        context: 1m                               # 官方：1,048,576 tokens
+        context: 1m                               # official: 1,048,576 tokens
         price:
-          input_miss: 0.003                       # 官方 $3.00 /1M（Input Price, Cache Miss）
-          input_hit: 0.0003                       # 官方 $0.30 /1M（Input Price, Cache Hit）
-          cache_write: 0.0                        # 官方页未列 cache write 计费项 → 记 0，保留 TODO
-          output: 0.015                           # 官方 $15.00 /1M
+          input_miss: 0.003                       # official $3.00 /1M (Input Price, Cache Miss)
+          input_hit: 0.0003                       # official $0.30 /1M (Input Price, Cache Hit)
+          cache_write: 0.0                        # official page lists no cache-write billing item → record 0, keep the TODO
+          output: 0.015                           # official $15.00 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO 官方源核验
+        # TODO verify against official source
       - id: kimi-k2.7-code
-        context: 256k                             # 官方：262,144 tokens
+        context: 256k                             # official: 262,144 tokens
         price:
-          input_miss: 0.00095                     # 官方 $0.95 /1M
-          input_hit: 0.00019                      # 官方 $0.19 /1M
+          input_miss: 0.00095                     # official $0.95 /1M
+          input_hit: 0.00019                      # official $0.19 /1M
           cache_write: 0.0
-          output: 0.004                           # 官方 $4.00 /1M
+          output: 0.004                           # official $4.00 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO 官方源核验
+        # TODO verify against official source
 
 aliases:
-  # 别名 → roster 中的一条 route（`provider/model`）。别名只做名字解析，不改写请求内容，
-  # 因此 alias 与直接写 `provider/model` 在上游看到的字节完全一致。
+  # alias → one route in the roster (`provider/model`). Aliases only resolve
+  # names and never rewrite request content, so an alias and the direct
+  # `provider/model` produce byte-identical bytes upstream.
   coding-fast: deepseek/deepseek-v4-pro
   coding-bulk: moonshot/kimi-k2.7-code
   chat-fast: zai/glm-5.3-flash
-  # 别名指向 `auto` 或携带参数覆盖（max_tokens 等）在 v0.1 未定义 → GAP-Q13（DESIGN §12.9）
+  # Aliases pointing to `auto` or carrying parameter overrides (max_tokens
+  # etc.) are undefined in v0.1 → GAP-Q13 (DESIGN §12.9)
 
 plugins:
-  # 声明式列表 + keyed diff（ADR-002）：config 变更 → 插件自行 diff 后 reload（不重建进程）；
-  # `disabled: true` → 卸载该 fiber 并回滚其全部 effect；`id`/`kind` 变更 → 重建该 entry。
-  # 另有三个默认常驻、无需配置项的内置插件：builtin/cost_ledger、builtin/quota_guard、builtin/sticky
-  # （DESIGN §2，router-plugins）。
+  # Declarative list + keyed diff (ADR-002): config change → each plugin diffs
+  # and reloads on its own (no process rebuild);
+  # `disabled: true` → unload that fiber and roll back all its effects;
+  # `id`/`kind` change → rebuild that entry.
+  # Three more built-in plugins are always resident with no config entries of
+  # their own: builtin/cost_ledger, builtin/quota_guard, builtin/sticky
+  # (DESIGN §2, router-plugins).
 
   - id: cache-guard
-    kind: builtin/cache_guard                     # tier-A：编译进产品，无模块级 HMR（ADR-002）
-    config: { strict_prefix: true }               # 前缀不连续：false = 告警并继续；true = 拒绝该 transform
+    kind: builtin/cache_guard                     # tier-A: compiled into the product, no module-level HMR (ADR-002)
+    config: { strict_prefix: true }               # prefix discontinuity: false = warn and continue; true = reject that transform
 
   - id: tool-output-rules
-    kind: builtin/transform_rules                 # 规则即数据（TOML + 内联测试，ADR-003）
+    kind: builtin/transform_rules                 # rules as data (TOML + inline tests, ADR-003)
     config:
-      rules_file: ./rules/tool_output.toml        # 相对**本 config 文件所在目录**解析（不是 CWD）
-      on_failure: passthrough                     # 规则装载/执行失败 → 回退原文（spec §8 fail-safe）
-      # 规则可声明 `tee`（spec §4.4）；但 v0.1 **不提供**原文落盘目录与取回通道 ——
-      #   spec §4.4 已把这两项标注为未实现（后置到 D3 之后），故本文件**不出现** tee_dir 之类的键。
+      rules_file: ./rules/tool_output.toml        # resolved relative to **this config file's directory** (not the CWD)
+      on_failure: passthrough                     # rule load/execution failure → fall back to the original text (spec §8 fail-safe)
+      # Rules may declare `tee` (spec §4.4); but v0.1 provides **no** on-disk
+      # directory for originals and no retrieval channel — spec §4.4 already
+      # marks both as unimplemented (deferred until after D3), so keys like
+      # tee_dir deliberately **do not appear** in this file.
 
   - id: judge-experiment
-    kind: process                                 # tier-B：进程外插件（具备模块级 HMR）
+    kind: process                                 # tier-B: out-of-process plugin (with module-level HMR)
     url: unix:///tmp/router-plugins/judge.sock
-    inject: [cache_ledger, session_table]         # 依赖声明（coeffect，spec §4.3）：未满足时停在加载等待
-                                                  #   服务名是产品定义的类型化槽名，不是任意字符串
-    isolate: false                                # true = 独立 realm：同一服务的另一套绑定，
-                                                  #   用于同策略两版本并存做 shadow 对比（ADR-002）
-    intercept: { sample: 0.05, shadow: true }     # 不改绑定、只改"怎么用"：采样率 5%，shadow 不产出
-    disabled: true                                # 默认关闭；实验启用它不改任何产品代码
+    inject: [cache_ledger, session_table]         # dependency declaration (coeffect, spec §4.3): unmet → stays in a loading wait
+                                                  #   service names are product-defined typed slot names, not arbitrary strings
+    isolate: false                                # true = separate realm: another set of bindings for the same services,
+                                                  #   used to run two versions of one policy side by side for shadow comparison (ADR-002)
+    intercept: { sample: 0.05, shadow: true }     # changes no bindings, only "how they are used": 5% sampling, shadow produces no output
+    disabled: true                                # off by default; enabling it for experiments changes no product code
 
 fallback:
-  # 全局粒度的有序 route 列表（schema 见 spec §4.2；v0.1 无按模型/按别名的链）。
-  # 语义：上游 5xx / 429 / 配额耗尽时，按序切到"下一个尚未尝试的 route"；切换会失去前缀缓存，
-  #       trace 必须记 `failover_from` 与由此产生的 re-prefill 成本（spec §6「结果」/ DESIGN §5）。
-  # 链尾用尽 → 502 upstream_error（上游尝试超时 → 504 upstream_timeout），错误体见 spec §8。
+  # Ordered route list at global granularity (schema in spec §4.2; v0.1 has no
+  # per-model/per-alias chains).
+  # Semantics: on upstream 5xx / 429 / quota exhaustion, switch in order to
+  # "the next route not yet tried"; switching loses the prefix cache, so the
+  # trace must record `failover_from` and the resulting re-prefill cost
+  # (spec §6 "outcome" / DESIGN §5).
+  # Chain exhausted → 502 upstream_error (upstream attempt timeout → 504
+  # upstream_timeout); error body per spec §8.
   - deepseek/deepseek-v4-pro
   - moonshot/kimi-k3
   - zai/glm-5.3

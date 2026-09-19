@@ -1,13 +1,16 @@
-//! 峰谷窗口匹配（DESIGN §12.4 `PeakWindow`）。无时钟依赖：`at` 由调用方注入。
+//! Peak/off-peak window matching (DESIGN §12.4 `PeakWindow`). No clock
+//! dependency: `at` is injected by the caller.
 
-/// UTC 时刻（epoch 秒）。管线的其余部分不得自行取当前时间（内容确定性）。
+/// A UTC instant (epoch seconds). The rest of the pipeline must never read the
+/// current time on its own (content determinism).
 pub type Timestamp = u64;
 
-/// 固定时区。v0.1 只需窗口声明的 UTC 偏移；IANA 数据库不引入（依赖精简）。
+/// Fixed time zone. v0.1 only needs UTC offsets declared by windows; the IANA
+/// database is deliberately not pulled in (dependency discipline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tz {
     Utc,
-    /// 相对 UTC 的偏移分钟数（例：+08:00 = 480；夏威夷 = -600）。
+    /// Offset in minutes relative to UTC (e.g. +08:00 = 480; Hawaii = -600).
     OffsetMin(i32),
 }
 
@@ -20,15 +23,15 @@ impl Tz {
     }
 }
 
-/// 一周内的天，位掩码（bit 0 = Sunday … bit 6 = Saturday）。
+/// Days of the week as a bitmask (bit 0 = Sunday … bit 6 = Saturday).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Weekdays(pub u8);
 
 impl Weekdays {
-    /// 周一至周五 = bit1..bit5（bit0 = Sunday，bit6 = Saturday）。
+    /// Monday through Friday = bit1..bit5 (bit0 = Sunday, bit6 = Saturday).
     pub const MON_FRI: Self = Self(0b0011_1110);
 
-    /// `weekday`：0 = Sunday … 6 = Saturday。
+    /// `weekday`: 0 = Sunday … 6 = Saturday.
     pub const fn contains(self, weekday: u32) -> bool {
         self.0 & (1 << weekday) != 0
     }
@@ -42,7 +45,7 @@ pub struct PeakWindow {
     pub tz: Tz,
 }
 
-/// 公历日（Howard Hinnant 算法，无 chrono 依赖）。
+/// Gregorian calendar date (Howard Hinnant's algorithm, no chrono dependency).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -66,25 +69,26 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe as i64 - 719_468
 }
 
-/// 拆分 epoch 秒为（公历年, 月, 日, 当日分钟, weekday(0=Sun)）。
+/// Split epoch seconds into (Gregorian year, month, day, minute of day,
+/// weekday (0=Sun)).
 pub fn timestamp_parts(epoch_s: u64, tz: Tz) -> (i64, u32, u32, u16, u32) {
     let local = epoch_s as i64 + tz.offset_s();
     let days = local.div_euclid(86_400);
     let secs_of_day = local.rem_euclid(86_400);
     let (y, m, d) = civil_from_days(days);
-    // 1970-01-01 是 Thursday(4)。
+    // 1970-01-01 was a Thursday(4).
     let weekday = (days.rem_euclid(7) + 4) as u32 % 7;
     (y, m, d, (secs_of_day / 60) as u16, weekday)
 }
 
-/// epoch 当天 00:00 UTC 的 epoch 秒。
+/// Epoch seconds of 00:00 UTC on the given day.
 pub fn utc_midnight_epoch(y: i64, m: u32, d: u32) -> u64 {
     (days_from_civil(y, m, d) * 86_400) as u64
 }
 
 impl PeakWindow {
-    /// 区间语义：`from` 含、`to` 不含；`from > to` 表示跨午夜。
-    /// `to == 0` 视为 24:00（当日收尾）。
+    /// Interval semantics: `from` inclusive, `to` exclusive; `from > to` means
+    /// the window spans midnight. `to == 0` is treated as 24:00 (end of day).
     pub fn matches(&self, epoch_s: u64) -> bool {
         let (_, _, _, minute, weekday) = timestamp_parts(epoch_s, self.tz);
         if !self.days.contains(weekday) {
@@ -105,13 +109,14 @@ impl PeakWindow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeakTable {
-    /// 峰段倍率（2.0 → 200）。100 = 无峰谷差异。
+    /// Peak multiplier (2.0 → 200). 100 = no peak/off-peak difference.
     pub multiplier_pct: u32,
     pub windows: Vec<PeakWindow>,
 }
 
 impl PeakTable {
-    /// 首个命中窗口决定峰段；无窗口或全不命中 → None（平价）。
+    /// The first matching window decides the peak; no windows or none
+    /// matching → None (flat price).
     pub fn multiplier_at(&self, epoch_s: u64) -> Option<u32> {
         self.windows
             .iter()
@@ -124,7 +129,8 @@ impl PeakTable {
 mod tests {
     use super::*;
 
-    // 2026-09-21 周一 UTC 零点 = 1_789_948_800；2026-09-20 周日零点 = MON − 86400（python datetime 校验）。
+    // 2026-09-21 Monday 00:00 UTC = 1_789_948_800; 2026-09-20 Sunday midnight
+    // = MON − 86400 (verified with python datetime).
     const MON: u64 = 1_789_948_800;
     const SUN: u64 = MON - 86_400;
     const NOON_UTC: u16 = 12 * 60;
@@ -149,7 +155,7 @@ mod tests {
             tz: Tz::Utc,
         };
         assert!(w.matches(mon_min(1)));
-        // 同一时刻在周日：不命中
+        // The same instant on Sunday: no match
         assert!(!w.matches(SUN + 60));
     }
 
@@ -158,13 +164,13 @@ mod tests {
         let w = PeakWindow {
             days: Weekdays(0xFF),
             from_min: 60, // 01:00
-            to_min: 240,  // 04:00（不含）
+            to_min: 240,  // 04:00 (exclusive)
             tz: Tz::Utc,
         };
         assert!(!w.matches(mon_min(59))); // 00:59
-        assert!(w.matches(mon_min(60))); // 01:00 含
+        assert!(w.matches(mon_min(60))); // 01:00 inclusive
         assert!(w.matches(mon_min(239))); // 03:59
-        assert!(!w.matches(mon_min(240))); // 04:00 不含
+        assert!(!w.matches(mon_min(240))); // 04:00 exclusive
     }
 
     #[test]
@@ -175,23 +181,23 @@ mod tests {
             to_min: 2 * 60,
             tz: Tz::Utc,
         };
-        assert!(w.matches(mon_min(23 * 60))); // 23:00 ∈ 窗口
+        assert!(w.matches(mon_min(23 * 60))); // 23:00 ∈ window
         assert!(!w.matches(mon_min(3 * 60))); // 03:00 ∉
-        assert!(w.matches(mon_min(1 * 60))); // 01:00 ∈（跨午夜段）
+        assert!(w.matches(mon_min(1 * 60))); // 01:00 ∈ (post-midnight leg)
     }
 
     #[test]
     fn window_respects_tz_offset() {
-        // 窗口按 +08:00 的 09:00-10:00 声明 = UTC 01:00-02:00
+        // A window declared as 09:00-10:00 at +08:00 = 01:00-02:00 UTC
         let w = PeakWindow {
             days: Weekdays(0xFF),
             from_min: 9 * 60,
             to_min: 10 * 60,
             tz: Tz::OffsetMin(480),
         };
-        assert!(!w.matches(mon_min(0))); // UTC 00:00 = 本地 08:00
-        assert!(w.matches(mon_min(90))); // UTC 01:30 = 本地 09:30
-        assert!(!w.matches(mon_min(2 * 60))); // UTC 02:00 = 本地 10:00（不含）
+        assert!(!w.matches(mon_min(0))); // UTC 00:00 = local 08:00
+        assert!(w.matches(mon_min(90))); // UTC 01:30 = local 09:30
+        assert!(!w.matches(mon_min(2 * 60))); // UTC 02:00 = local 10:00 (exclusive)
     }
 
     #[test]
