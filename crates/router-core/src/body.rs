@@ -1,20 +1,24 @@
 //! Byte-faithful primitive `RawBody` (DESIGN §12.3.1, ADR-007 "span-faithful
 //! forwarding", AGENTS hard constraints 1/2).
 //!
-//! The only permitted rewrite is removing router-owned top-level fields; every
-//! other byte is preserved verbatim. The implementation is a **single-pass span
-//! scanner** (tracking strings/escapes/bracket depth) that locates the byte
-//! ranges of members to delete and excises those ranges — a **parse →
-//! reserialize round trip is forbidden** (that is the most common way to break
-//! the byte boundary). `serde_json` is used only as a **validator** for raw
-//! value fragments (true/false/null/number), never to produce any outbound
-//! bytes.
+//! Two byte-level mutations are permitted, both span-scoped (spec §2, DESIGN
+//! §12.3.1): **(a)** removing router-owned top-level fields, and **(b)**
+//! replacing the value of a top-level string member (the outbound `model`,
+//! §12.10.7). Every other byte is preserved verbatim. The implementation is a
+//! **single-pass span scanner** (tracking strings/escapes/bracket depth) that
+//! locates the byte ranges to edit and splices/excises those ranges — a
+//! **parse → reserialize round trip is forbidden** (that is the most common
+//! way to break the byte boundary). `serde_json` is used only as a
+//! **validator** for raw value fragments (true/false/null/number), never to
+//! produce any outbound bytes.
 //!
 //! Container deviation: the DESIGN sketch draws `RawBody(Bytes)`, but the
 //! `bytes` crate is not in `router-core`'s dependency whitelist (§12.1: only
 //! serde/serde_json), so `Vec<u8>` is used instead. The zero-copy outbound
 //! conversion (`Bytes::from(vec)`) happens in the proxy layer in R2; semantics
 //! are unaffected.
+
+use std::borrow::Cow;
 
 /// Whitelist of router-owned top-level keys (spec §2 / DESIGN §12.3.1).
 ///
@@ -36,6 +40,13 @@ pub enum RawEditError {
     /// Invalid JSON structure: unclosed string/bracket, invalid escape,
     /// trailing content, empty value, etc.
     Malformed { offset: usize },
+    /// `set_top_level_string`: no top-level member bears the key. Mutation
+    /// (b) is a **replacement**, never an insertion — the passthrough path
+    /// must not invent a member the client did not send (DESIGN §12.3.1).
+    TopLevelKeyAbsent,
+    /// `set_top_level_string`: the member's value is not a JSON string
+    /// (number/bool/null/array/object are all rejected).
+    TopLevelValueNotString { first_byte: u8 },
 }
 
 /// Raw client bytes: the sole authority. Does not implement
@@ -69,8 +80,8 @@ impl RawBody {
             .collect()
     }
 
-    /// The only permitted rewrite: delete whitelisted top-level keys, preserve
-    /// every other byte verbatim.
+    /// Mutation (a) of the byte boundary: delete whitelisted top-level keys,
+    /// preserve every other byte verbatim.
     ///
     /// - `keys` empty or all missed → identity (returns a byte-identical copy);
     /// - idempotent: two consecutive calls == one call;
@@ -162,6 +173,98 @@ impl RawBody {
         out.extend_from_slice(&b[pos..]);
         Ok(RawBody(out))
     }
+
+    /// Mutation (b) of the byte boundary (DESIGN §12.3.1 / §12.10.7): replace
+    /// the **value** of a top-level string member with `value`, byte-level,
+    /// single pass, no parse→reserialize.
+    ///
+    /// Only the member's value span moves: its key bytes, its position, the
+    /// separators, the whitespace around it and every byte outside the member
+    /// are byte-for-byte the input; the new value is emitted as a JSON string
+    /// (`"` + RFC 8259 escaping + `"`).
+    ///
+    /// - value equal to the member's current value → `Cow::Borrowed` (the
+    ///   input bytes, unchanged);
+    /// - otherwise `Cow::Owned`;
+    /// - absent member → `Err(TopLevelKeyAbsent)` — never an insertion;
+    /// - present member whose value is not a JSON string →
+    ///   `Err(TopLevelValueNotString)`;
+    /// - duplicate top-level keys → only the **last** occurrence is replaced
+    ///   (RFC 8259 §4: "last wins" is the decodable semantics; the earlier
+    ///   duplicates are left verbatim, like every other client byte);
+    /// - pure function of (content, key, value) — no clock, no RNG, no turn
+    ///   number (AGENTS hard constraint 2).
+    pub fn set_top_level_string(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Result<Cow<'_, [u8]>, RawEditError> {
+        let b = self.as_bytes();
+        // The same shared scanner as remove_top_level_keys (DESIGN §12.3.1:
+        // one scanner, two policies — never a second parser).
+        let members = scan_top_level_members(b)?;
+
+        // Duplicates: replace the LAST occurrence — the decodable value of
+        // the member (RFC 8259 §4 "last wins", the same rule serde_json's
+        // map applies). Earlier duplicates are client bytes and stay
+        // verbatim.
+        let mut target: Option<&MemberSpan> = None;
+        for m in &members {
+            if decode_json_string(b, m.key_start, m.key_end)? == key {
+                target = Some(m);
+            }
+        }
+        let m = target.ok_or(RawEditError::TopLevelKeyAbsent)?;
+
+        if b[m.val_start] != b'"' {
+            return Err(RawEditError::TopLevelValueNotString {
+                first_byte: b[m.val_start],
+            });
+        }
+
+        // Decoded equality → Cow::Borrowed: the input bytes are already the
+        // answer, escapes and all (DESIGN §12.3.1).
+        if decode_json_string(b, m.val_start, m.val_end)? == value {
+            return Ok(Cow::Borrowed(b));
+        }
+
+        // Splice: everything before the value span, the new encoded string,
+        // everything after. No other byte is visited.
+        let mut out = Vec::with_capacity(b.len() + value.len());
+        out.extend_from_slice(&b[..m.val_start]);
+        append_json_string(&mut out, value);
+        out.extend_from_slice(&b[m.val_end..]);
+        Ok(Cow::Owned(out))
+    }
+}
+
+/// Append `value` as a JSON string literal (`"` + RFC 8259 escaping + `"`).
+/// This is the only place mutation (b) produces bytes.
+fn append_json_string(out: &mut Vec<u8>, s: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push(b'"');
+    for c in s.chars() {
+        match c {
+            '"' => out.extend_from_slice(b"\\\""),
+            '\\' => out.extend_from_slice(b"\\\\"),
+            '\n' => out.extend_from_slice(b"\\n"),
+            '\r' => out.extend_from_slice(b"\\r"),
+            '\t' => out.extend_from_slice(b"\\t"),
+            '\u{0008}' => out.extend_from_slice(b"\\b"),
+            '\u{000C}' => out.extend_from_slice(b"\\f"),
+            c if (c as u32) < 0x20 => {
+                let cp = c as u32;
+                out.extend_from_slice(b"\\u00");
+                out.push(HEX[((cp >> 4) & 0xF) as usize]);
+                out.push(HEX[(cp & 0xF) as usize]);
+            }
+            c => {
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
+    out.push(b'"');
 }
 
 /// Byte span of a top-level object member (separator comma excluded;
@@ -842,5 +945,420 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(out.as_bytes()).unwrap();
         assert_eq!(v["model"], "m");
         assert!(v.get("router_meta").is_none());
+    }
+
+    // === set_top_level_string (R2G2, DESIGN §12.3.1 mutation (b)) ===
+
+    /// Shortcut: replace and assert byte-equality against the expected
+    /// output, then run the generic invariants (valid JSON, diff-set empty
+    /// outside the value span, idempotence).
+    fn assert_set(input: &str, key: &str, value: &str, expected: &str) {
+        let raw = RawBody::new(input.as_bytes().to_vec());
+        let out = raw
+            .set_top_level_string(key, value)
+            .unwrap_or_else(|e| panic!("unexpected err: {e:?}"));
+        assert_eq!(
+            out.as_ref(),
+            expected.as_bytes(),
+            "input: {input}, key: {key}, value: {value}"
+        );
+        assert_set_invariants(input, key, value);
+    }
+
+    /// Independent oracle: locate the member's value span via the public
+    /// spans API, splice in a locally-encoded JSON string, and require the
+    /// implementation's bytes to equal that splice. This checks the diff-set
+    /// is empty outside the value span without trusting the implementation's
+    /// own notion of its output.
+    fn assert_set_invariants(input: &str, key: &str, value: &str) {
+        let raw = RawBody::new(input.as_bytes().to_vec());
+        let out = raw.set_top_level_string(key, value).unwrap();
+
+        // 1. Any Ok output must be valid JSON (the generic detector).
+        let parsed: serde_json::Value = serde_json::from_slice(&out)
+            .unwrap_or_else(|e| panic!("output is not valid JSON: {e}, input: {input}"));
+
+        // 2. The decodable value of the member equals the target string
+        //    (serde_json's map keeps the last duplicate, same rule as ours).
+        assert_eq!(
+            parsed.get(key).and_then(|v| v.as_str()),
+            Some(value),
+            "decoded member value mismatch, input: {input}"
+        );
+
+        // 3. Diff-set empty outside the value span: rebuild the expected
+        //    bytes from the input by replacing only the (last) member's value
+        //    span with a locally encoded string.
+        let spans = raw.top_level_member_spans().unwrap();
+        let (vs, ve) = spans
+            .iter()
+            .rev()
+            .find(|(k, _, _)| k == key)
+            .map(|(_, s, e)| (*s, *e))
+            .expect("oracle requires the key to be present");
+        let mut oracle = Vec::with_capacity(input.len());
+        oracle.extend_from_slice(&input.as_bytes()[..vs]);
+        oracle.extend_from_slice(oracle_encode_json_string(value).as_bytes());
+        oracle.extend_from_slice(&input.as_bytes()[ve..]);
+        assert_eq!(
+            out.as_ref(),
+            oracle.as_slice(),
+            "bytes outside the value span changed, input: {input}"
+        );
+
+        // 4. Idempotence: applying the same set to the output is a byte-level
+        //    no-op.
+        let raw2 = RawBody::new(out.to_vec());
+        let out2 = raw2.set_top_level_string(key, value).unwrap();
+        assert!(
+            matches!(out2, Cow::Borrowed(_)),
+            "second application must be Borrowed"
+        );
+        assert_eq!(out2.as_ref(), out.as_ref());
+    }
+
+    /// RFC 8259 string encoding, written independently of the implementation
+    /// so an escaping bug cannot hide in both sides of the assertion.
+    fn oracle_encode_json_string(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{0008}' => out.push_str("\\b"),
+                '\u{000C}' => out.push_str("\\f"),
+                c if (c as u32) < 0x20 => {
+                    out.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    // 20. Happy path: only the value span moves; everything else — position,
+    //     separators, whitespace, trailing newline — is the input's.
+    #[test]
+    fn set_replaces_only_the_value_span() {
+        assert_set(
+            r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}"#,
+            "model",
+            "deepseek-chat",
+            r#"{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}"#,
+        );
+        // Middle position, pretty-printed whitespace and a trailing newline.
+        assert_set(
+            "{\n  \"a\": 1,\n  \"model\": \"old\",\n  \"b\": [2, 3]\n}\n",
+            "model",
+            "new",
+            "{\n  \"a\": 1,\n  \"model\": \"new\",\n  \"b\": [2, 3]\n}\n",
+        );
+        // Sole member, CRLF line endings preserved around it.
+        assert_set(
+            "{\r\n  \"model\" : \"x\"\r\n}",
+            "model",
+            "y",
+            "{\r\n  \"model\" : \"y\"\r\n}",
+        );
+        // Leading whitespace before the brace survives.
+        assert_set("  {\"model\":\"a\"}", "model", "b", "  {\"model\":\"b\"}");
+    }
+
+    // 21. Escape parity: a value containing quote/backslash/newline is
+    //     encoded per RFC 8259 (hand-written expectations, not the oracle's).
+    #[test]
+    fn set_escapes_the_new_value() {
+        assert_set(
+            r#"{"model":"a"}"#,
+            "model",
+            "say \"hi\"",
+            r#"{"model":"say \"hi\""}"#,
+        );
+        assert_set(
+            r#"{"model":"a"}"#,
+            "model",
+            "back\\slash",
+            r#"{"model":"back\\slash"}"#,
+        );
+        assert_set(
+            "{\"model\":\"a\"}",
+            "model",
+            "line1\nline2\ttab\rret",
+            "{\"model\":\"line1\\nline2\\ttab\\rret\"}",
+        );
+        // Control characters fall back to \u00XX.
+        assert_set(
+            "{\"model\":\"a\"}",
+            "model",
+            "\u{0001}\u{001F}",
+            "{\"model\":\"\\u0001\\u001f\"}",
+        );
+        // Escape oddity: a value that is itself a backslash-escape-looking
+        // string must not be double-processed.
+        assert_set(
+            r#"{"model":"a"}"#,
+            "model",
+            "\\u0041",
+            r#"{"model":"\\u0041"}"#,
+        );
+        // Old value's escapes are irrelevant to the new span.
+        assert_set(
+            r#"{"model":"old \"quoted\" \\ value"}"#,
+            "model",
+            "plain",
+            r#"{"model":"plain"}"#,
+        );
+    }
+
+    // 22. Multi-byte UTF-8 in the new value goes through unescaped.
+    #[test]
+    fn set_multi_byte_utf8_value() {
+        assert_set(
+            r#"{"model":"a"}"#,
+            "model",
+            "deepseek-中文🚀-v2",
+            "{\"model\":\"deepseek-中文🚀-v2\"}",
+        );
+        // Multi-byte UTF-8 elsewhere in the body is untouched.
+        assert_set(
+            "{\"model\":\"a\",\"s\":\"中文🚀\"}",
+            "model",
+            "b",
+            "{\"model\":\"b\",\"s\":\"中文🚀\"}",
+        );
+    }
+
+    // 23. Nested same-named keys are NOT replaced — only the top level.
+    #[test]
+    fn set_touches_only_top_level_not_nested_same_key() {
+        assert_set(
+            r#"{"model":"top","inner":{"model":"nested"},"arr":[{"model":"in-array"}]}"#,
+            "model",
+            "new",
+            r#"{"model":"new","inner":{"model":"nested"},"arr":[{"model":"in-array"}]}"#,
+        );
+        // The target string appearing inside another member's value.
+        assert_set(
+            r#"{"model":"a","x":"model"}"#,
+            "model",
+            "b",
+            r#"{"model":"b","x":"model"}"#,
+        );
+    }
+
+    // 24. Duplicate top-level keys: the LAST occurrence is replaced (the
+    //     decodable value), the earlier duplicate stays verbatim.
+    #[test]
+    fn set_duplicate_top_level_keys_replaces_last_occurrence() {
+        assert_set(
+            r#"{"model":"a","x":1,"model":"b"}"#,
+            "model",
+            "new",
+            r#"{"model":"a","x":1,"model":"new"}"#,
+        );
+        // Three duplicates; the last one wins.
+        assert_set(
+            r#"{"model":"a","model":"b","model":"c"}"#,
+            "model",
+            "new",
+            r#"{"model":"a","model":"b","model":"new"}"#,
+        );
+        // Only one occurrence, at the tail.
+        assert_set(
+            r#"{"x":1,"model":"old"}"#,
+            "model",
+            "new",
+            r#"{"x":1,"model":"new"}"#,
+        );
+    }
+
+    // 25. Absent key → Err(TopLevelKeyAbsent), never a silent insertion.
+    #[test]
+    fn set_absent_key_is_error_never_insertion() {
+        let raw = RawBody::new(br#"{"messages":[]}"#.to_vec());
+        assert_eq!(
+            raw.set_top_level_string("model", "x"),
+            Err(RawEditError::TopLevelKeyAbsent)
+        );
+        // Different key spelling is still absent.
+        let raw = RawBody::new(br#"{"model":"a"}"#.to_vec());
+        assert_eq!(
+            raw.set_top_level_string("Model", "x"),
+            Err(RawEditError::TopLevelKeyAbsent)
+        );
+        // Empty object.
+        let raw = RawBody::new(br#"{}"#.to_vec());
+        assert_eq!(
+            raw.set_top_level_string("model", "x"),
+            Err(RawEditError::TopLevelKeyAbsent)
+        );
+    }
+
+    // 26. Present member whose value is not a JSON string → error, with the
+    //     value's first byte for the caller's 400.
+    #[test]
+    fn set_non_string_value_is_error() {
+        for (input, first) in [
+            (r#"{"model":42}"#, b'4'),
+            (r#"{"model":true}"#, b't'),
+            (r#"{"model":null}"#, b'n'),
+            (r#"{"model":[]}"#, b'['),
+            (r#"{"model":{}}"#, b'{'),
+            (r#"{"model":-1.5e3}"#, b'-'),
+        ] {
+            let raw = RawBody::new(input.as_bytes().to_vec());
+            assert_eq!(
+                raw.set_top_level_string("model", "x"),
+                Err(RawEditError::TopLevelValueNotString { first_byte: first }),
+                "input: {input}"
+            );
+        }
+    }
+
+    // 27. Value equal to the current value → Cow::Borrowed, byte-identical.
+    #[test]
+    fn set_equal_value_is_borrowed_noop() {
+        let input = r#"{"model":"same","x":1}"#;
+        let raw = RawBody::new(input.as_bytes().to_vec());
+        let out = raw.set_top_level_string("model", "same").unwrap();
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out.as_ref(), input.as_bytes());
+        // Equal even when the old value uses \uXXXX escapes the new value
+        // does not: decoded equality, bytes untouched.
+        let raw = RawBody::new(br#"{"model":"sam\u0065"}"#.to_vec());
+        let out = raw.set_top_level_string("model", "same").unwrap();
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out.as_ref(), br#"{"model":"sam\u0065"}"#.as_ref());
+    }
+
+    // 28. Empty value and a very long value.
+    #[test]
+    fn set_empty_and_long_values() {
+        assert_set(r#"{"model":"a"}"#, "model", "", r#"{"model":""}"#);
+        let long = "m".repeat(100_000);
+        let expected = format!(r#"{{"model":"{long}"}}"#);
+        assert_set(r#"{"model":"a"}"#, "model", &long, &expected);
+    }
+
+    // 29. Structural chars in the old value and its neighbors: braces,
+    //     colons and commas inside strings must not confuse the scanner.
+    #[test]
+    fn set_with_structural_chars_in_strings() {
+        assert_set(
+            r#"{"s":"a{b}c:d,e","model":"old"}"#,
+            "model",
+            "new",
+            r#"{"s":"a{b}c:d,e","model":"new"}"#,
+        );
+        // Old value contains an escaped structural char sequence.
+        assert_set(
+            r#"{"model":"}\"","x":"[{\"k\":1}]"}"#,
+            "model",
+            "n",
+            r#"{"model":"n","x":"[{\"k\":1}]"}"#,
+        );
+    }
+
+    // 30. Key matched semantically: an escaped key form is the same key.
+    #[test]
+    fn set_escaped_key_form_still_matches() {
+        assert_set(
+            r#"{"a":1,"mod\u0065l":"old"}"#,
+            "model",
+            "new",
+            r#"{"a":1,"mod\u0065l":"new"}"#,
+        );
+    }
+
+    // 31. Structural failures reuse the deletion scanner's errors.
+    #[test]
+    fn set_malformed_and_non_object_bodies_rejected() {
+        for input in ["", "   ", "[1,2]", "\"str\"", "42", "true", "null"] {
+            let raw = RawBody::new(input.as_bytes().to_vec());
+            assert!(
+                raw.set_top_level_string("model", "x").is_err(),
+                "expected err for {input:?}"
+            );
+        }
+        let raw = RawBody::new(br#"{"model":"a"#.to_vec());
+        assert!(matches!(
+            raw.set_top_level_string("model", "x"),
+            Err(RawEditError::Malformed { .. })
+        ));
+        // BOM → NotTopLevelObject (same pinned boundary as deletion).
+        let mut b = vec![0xEF, 0xBB, 0xBF];
+        b.extend_from_slice(br#"{"model":"a"}"#);
+        assert_eq!(
+            RawBody::new(b).set_top_level_string("model", "x"),
+            Err(RawEditError::NotTopLevelObject { first_byte: 0xEF })
+        );
+    }
+
+    // 32. Round-trip composition with mutation (a): remove → set leaves
+    //     every other byte alone (the §12.10.7 pipeline shape).
+    #[test]
+    fn set_after_remove_composes() {
+        let input = r#"{"router_meta":1,"model":"alias/name","x":{"k":"v"}}"#;
+        let raw = RawBody::new(input.as_bytes().to_vec());
+        let cleaned = raw
+            .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+            .unwrap();
+        let out = cleaned.set_top_level_string("model", "native-id").unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            r#"{"model":"native-id","x":{"k":"v"}}"#
+        );
+    }
+
+    // 33. Cross-check against the family oracle: set(model, m2) then remove
+    //     == remove-then-set; order of the two mutations does not matter for
+    //     disjoint keys.
+    #[test]
+    fn set_and_remove_commute_for_disjoint_keys() {
+        let input = r#"{"model":"alias","a":1,"router_meta":2,"b":3}"#;
+        let raw = RawBody::new(input.as_bytes().to_vec());
+        let sr = raw
+            .set_top_level_string("model", "native")
+            .unwrap()
+            .to_vec();
+        let sr = RawBody::new(sr)
+            .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+            .unwrap();
+        let rs = raw
+            .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+            .unwrap();
+        let rs_clean = RawBody::new(rs.as_bytes().to_vec());
+        let rs = rs_clean.set_top_level_string("model", "native").unwrap();
+        assert_eq!(sr.as_bytes(), rs.as_ref());
+    }
+
+    // 34. Mutation self-check (card requirement): these assertions must fail
+    //     for plausible wrong implementations. Verified by temporarily
+    //     mutating the implementation (first-duplicate-wins, unescaped
+    //     output) and observing red — see the card's completion notes.
+    #[test]
+    fn set_mutation_matrix_outputs_are_valid_json_and_minimal() {
+        let cases: Vec<(&str, &str, &str)> = vec![
+            (r#"{"model":"a","b":1}"#, "zzz", r#"{"model":"zzz","b":1}"#),
+            (r#"{"b":1,"model":"a"}"#, "zzz", r#"{"b":1,"model":"zzz"}"#),
+            (
+                r#"{"model":"a","model":"b"}"#,
+                "zzz",
+                r#"{"model":"a","model":"zzz"}"#,
+            ),
+            (
+                r#"{"x":{"model":"keep"},"model":"a"}"#,
+                "zzz",
+                r#"{"x":{"model":"keep"},"model":"zzz"}"#,
+            ),
+        ];
+        for (input, value, expected) in cases {
+            assert_set(input, "model", value, expected);
+        }
     }
 }
