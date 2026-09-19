@@ -1,0 +1,10 @@
+[package]
+name = "router-proxy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+router-core = { path = "../router-core" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }

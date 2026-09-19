@@ -1,0 +1,8 @@
+[package]
+name = "router-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+router-core = { path = "../router-core" }
+serde_json = { workspace = true }

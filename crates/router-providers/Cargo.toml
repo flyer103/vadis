@@ -1,0 +1,7 @@
+[package]
+name = "router-providers"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+router-core = { path = "../router-core" }
