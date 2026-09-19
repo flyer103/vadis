@@ -3,8 +3,13 @@
 
 #![forbid(unsafe_code)]
 
+mod forward;
 mod health;
 mod stubs;
 
+pub use forward::{
+    BoxedAttempt, ForwardFailure, ForwardOutcome, ForwardSuccess, ProviderSend, ProviderTransport,
+    Forwarder,
+};
 pub use health::{health_json, AppState};
 pub use stubs::protocol_stub;

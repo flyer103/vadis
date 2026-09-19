@@ -12,7 +12,9 @@ pub mod breakeven;
 pub mod config;
 pub mod cost;
 pub mod error;
+pub mod error_class;
 pub mod peak;
+pub mod prefix;
 pub mod quota;
 pub mod store;
 
@@ -23,7 +25,14 @@ pub use config::{
     KNOWN_BUILTIN_KINDS, KNOWN_SERVICE_SLOTS,
 };
 pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
+pub use error::ErrorCode;
+pub use error_class::{
+    classify_upstream_error, Classification, Demotion, ErrorClass, ErrorEvidence, DEFAULT_COOLDOWN,
+};
 pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
+pub use prefix::{
+    attribute_tokens, body_sha16, extract_prefix_blocks, prefix_continuity, BlockKind, PrefixBlock,
+};
 pub use quota::{charge, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWindow};
 pub use store::{
     write_intent_then, EventId, EventKind, NewEvent, Projection, ProjectionWrite, Query, QueryRow,

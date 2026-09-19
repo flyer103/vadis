@@ -5,3 +5,7 @@ edition.workspace = true
 
 [dependencies]
 router-core = { path = "../router-core" }
+reqwest = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }

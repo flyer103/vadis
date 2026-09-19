@@ -689,6 +689,15 @@ Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section a
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
 
+**R2-2d note — the failover chain walks routes, but never re-attempts a provider (spec §4.2).** The
+chain walks "the next route **not yet attempted**" in list order, skipping routes of a provider
+already attempted in this request (the in-request form of ADR-011 item 4's provider-level demotion:
+a second attempt on a dead provider is the failure mode it designs out). Routes already attempted
+are never retried within one request — the "not yet attempted" rule subsumes per-route retries on
+the buffered path. The five CONF cases of this card (01/02/03/10-chain/14) are un-ignored by the
+round that lands the provider adapters and the buffered forwarding path; their existing assertions
+stand as written.
+
 ### 12.9 Gaps and pending rulings (GAP-Q1…Q13)
 
 **This round changes no existing clause, it only registers.** Each entry gives the default this blueprint

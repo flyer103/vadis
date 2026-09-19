@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# sha2: the §12.1 allowlist row for router-core (the one hash convention,
+# DESIGN §12.10.6's `body_sha16`).
+sha2 = { workspace = true }

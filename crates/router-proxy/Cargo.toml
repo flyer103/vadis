@@ -5,6 +5,10 @@ edition.workspace = true
 
 [dependencies]
 router-core = { path = "../router-core" }
+router-protocol = { path = "../router-protocol" }
+router-providers = { path = "../router-providers" }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }

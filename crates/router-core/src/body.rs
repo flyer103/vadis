@@ -53,6 +53,22 @@ impl RawBody {
         &self.0
     }
 
+    /// The top-level members as (decoded key, value start, value end) in
+    /// document order. Read-only span access for the prefix-block extractor
+    /// (DESIGN §12.10.6: extraction is a span scan, never a
+    /// parse→reserialize; the extractor and the deleter share the scanner).
+    pub fn top_level_member_spans(&self) -> Result<Vec<(String, usize, usize)>, RawEditError> {
+        let b = &self.0;
+        let members = scan_top_level_members(b)?;
+        members
+            .into_iter()
+            .map(|m| {
+                let key = decode_json_string(b, m.key_start, m.key_end)?;
+                Ok((key, m.val_start, m.val_end))
+            })
+            .collect()
+    }
+
     /// The only permitted rewrite: delete whitelisted top-level keys, preserve
     /// every other byte verbatim.
     ///
@@ -153,6 +169,7 @@ impl RawBody {
 struct MemberSpan {
     key_start: usize,
     key_end: usize,
+    val_start: usize,
     val_end: usize,
 }
 
@@ -372,11 +389,13 @@ fn scan_top_level_members(b: &[u8]) -> Result<Vec<MemberSpan>, RawEditError> {
         if i >= n {
             return Err(RawEditError::Malformed { offset: n });
         }
+        let val_start = i;
         let val_end = scan_value(b, i)?;
         i = skip_ws(b, val_end);
         members.push(MemberSpan {
             key_start,
             key_end,
+            val_start,
             val_end,
         });
         if i < n && b[i] == b',' {

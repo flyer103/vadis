@@ -8,12 +8,13 @@ record; a round that fails its gates leaves documentation and no broken code.
 
 ## Outline
 
-- **Where the project stands right now**: skeleton complete and runnable, with the
-  data plane (forwarding, streaming, provider adapters) still to come — see the state
-  document rather than this page.
-- **The next step**: the data plane plus trace output, which is what turns the cache, cost
-  and latency gates from "cannot be judged" into judgeable. Until then, a passing round
-  means only the parts that were measurable passed.
+- **Where the project stands right now**: the non-streaming data plane is real — requests
+  are forwarded to upstreams with byte-faithful native passthrough, usage is normalized,
+  upstream failures are classified and can fail over — with streaming (SSE) and cross-protocol
+  translation still to come. See the state document rather than this page.
+- **The next step**: streaming and the trace/observation wiring, which is what turns the
+  cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a passing
+  round means only the parts that were measurable passed.
 - **The iteration loop**: the direction pool lists the candidate rounds (real-client
   smoke tests, trace capture and replay corpora, input-side compression, output-side
   discipline, quota-aware routing, cache robustness, cost reporting, price verification,
