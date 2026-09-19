@@ -20,7 +20,7 @@ use http::Request as HttpRequest;
 use router_core::config::{ProviderCfg, RouteSpec, RouterConfig, WireApi};
 use router_core::error::ErrorCode;
 use router_core::error_class::{
-    classify_upstream_error, Classification, ErrorClass, ErrorEvidence,
+    classify_upstream_error, Classification, ErrorClass, ErrorEvidence, TransportCause,
 };
 use router_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
 use router_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
@@ -692,6 +692,7 @@ impl Forwarder {
                         retry_after: resp.retry_after.as_deref(),
                         body: &resp.body,
                         wrote_full_request: true,
+                        transport_cause: None,
                     };
                     let cls = classify_upstream_error(&evidence);
                     last_class = Some(cls.class);
@@ -732,12 +733,22 @@ impl Forwarder {
                 AttemptOutcome::NotSent(err) => {
                     // No request bytes went out: nothing billed, failover
                     // allowed (ADR-011 item 6 row 1). No upstream.responded
-                    // row — the attempt never reached the upstream.
+                    // row — the attempt never reached the upstream. The
+                    // transport kind the provider layer derived from the
+                    // reqwest error (`is_connect()` / `is_timeout()`) is
+                    // the classification evidence: a connect failure is
+                    // `connect_failure` and walks the chain, a connect
+                    // timeout keeps the `timeout` verdict (R2G5).
                     let evidence = ErrorEvidence {
                         status: None,
                         retry_after: None,
                         body: b"",
                         wrote_full_request: false,
+                        transport_cause: Some(match err.kind {
+                            TransportKind::Connect => TransportCause::Connect,
+                            TransportKind::Timeout => TransportCause::Timeout,
+                            TransportKind::Other => TransportCause::Other,
+                        }),
                     };
                     let cls = classify_upstream_error(&evidence);
                     last_class = Some(cls.class);

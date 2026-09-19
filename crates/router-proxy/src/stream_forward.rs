@@ -333,6 +333,7 @@ impl Forwarder {
                 retry_after: resp.retry_after.as_deref(),
                 body: b"",
                 wrote_full_request: true,
+                transport_cause: None,
             };
             let cls = classify_upstream_error(&evidence);
             self.stream_event(

@@ -110,7 +110,9 @@ your conversations" surface at all.
 - **Failover**: a configured ordered chain of routes is tried when an upstream errors,
   rate-limits or exhausts its quota; switching routes loses the prefix cache, and the
   re-prefill cost plus the origin route are recorded. An exhausted chain is a clean gateway
-  error, not a hang.
+  error, not a hang. A connection failure (the upstream unreachable, nothing sent) is its
+  own reason — `connect_failure` — and walks the chain like any retryable failure; a true
+  timeout keeps its own name and is never retried after a full write.
 - **Cooldown**: a failure that is about the *account* (an exhausted plan, a billing refusal)
   marks the whole provider unavailable for a cooldown, so requests stop being spent
   rediscovering a dead route one request at a time. A rate limit cools the route instead.

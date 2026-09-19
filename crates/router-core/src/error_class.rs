@@ -27,8 +27,14 @@ pub enum ErrorClass {
     Overloaded,
     /// Any other 5xx. Fail over.
     ServerError,
-    /// The attempt timed out or the connection failed. Deterministic
-    /// classes may not take this label (see [`ErrorEvidence::wrote_full_request`]).
+    /// A no-status failure whose transport evidence says no connection
+    /// was ever established (ADR-011 item 6 row 1: nothing was billed,
+    /// so the chain is walked). Distinct from [`ErrorClass::Timeout`]:
+    /// conflating them pollutes the "why did we switch" evidence and
+    /// puts the recovery action on the wrong class.
+    ConnectFailure,
+    /// The attempt timed out. Deterministic classes may not take this
+    /// label (see [`ErrorEvidence::wrote_full_request`]).
     Timeout,
     /// 404 on the model (or a `model_not_found` code): a roster defect.
     /// Fail over; the roster entry is surfaced.
@@ -51,6 +57,7 @@ impl ErrorClass {
             Self::QuotaExhausted => "quota_exhausted",
             Self::Overloaded => "overloaded",
             Self::ServerError => "server_error",
+            Self::ConnectFailure => "connect_failure",
             Self::Timeout => "timeout",
             Self::ModelNotFound => "model_not_found",
             Self::FormatError => "format_error",
@@ -89,6 +96,25 @@ pub struct Demotion {
     pub ttl: Duration,
 }
 
+/// The discriminable cause of a no-status (transport) failure, as the
+/// transport layer derived it from the underlying error's kind — the
+/// evidence source for the `connect_failure` vs `timeout` split. The
+/// proxy maps its transport kind onto this; the classifier itself
+/// never inspects error text (ADR-011 item 1: no scattered matching).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportCause {
+    /// No connection was ever established (connect/TLS failure before
+    /// the request bytes went out; reqwest `is_connect()`).
+    Connect,
+    /// The attempt timed out (reqwest `is_timeout()`).
+    Timeout,
+    /// Anything else (body decode, protocol). Without a status and
+    /// without a narrower cause, the honest label is `timeout` only
+    /// by the existing convention; ADR-011 item 2 rule 6's `Unknown`
+    /// lands with the paths that exercise it.
+    Other,
+}
+
 /// The raw material of a classification (DESIGN §12.10.1). Surfaced by the
 /// provider layer, consumed only here.
 pub struct ErrorEvidence<'a> {
@@ -106,6 +132,10 @@ pub struct ErrorEvidence<'a> {
     /// been billed: it is **not retried and not failed over** — the correct
     /// shape is `unknown_outcome`, discovered by reconciliation.
     pub wrote_full_request: bool,
+    /// The transport-layer cause of a **no-status** failure. Read only on
+    /// the no-status arm, where it decides `connect_failure` vs `timeout`;
+    /// ignored whenever an answer arrived.
+    pub transport_cause: Option<TransportCause>,
 }
 
 /// One classification verdict.
@@ -207,13 +237,24 @@ pub fn classify_upstream_error(ev: &ErrorEvidence<'_>) -> Classification {
         };
     }
 
-    // A transport failure (no status): timeout. If the request was fully
-    // written, ADR-011 item 6 forbids both retry and failover; the caller
-    // must treat the attempt as `unknown_outcome`, which it detects from
-    // this same `wrote_full_request` flag — the class stays `timeout`.
+    // A transport failure (no status): the transport cause decides
+    // `connect_failure` (nothing was billed — ADR-011 item 6 row 1 —
+    // so the class fails over and never re-attempts the same provider
+    // in this request) vs `timeout` (the existing semantics: a
+    // deterministic-class treatment, and when `wrote_full_request`
+    // is set the caller must treat the attempt as `unknown_outcome`,
+    // which it detects from that same flag — the class stays
+    // `timeout`). A `None` cause keeps the pre-split `timeout`
+    // verdict: the caller had no transport evidence to give.
     let Some(status) = ev.status else {
+        let class = match ev.transport_cause {
+            Some(TransportCause::Connect) => ErrorClass::ConnectFailure,
+            Some(TransportCause::Timeout) | Some(TransportCause::Other) | None => {
+                ErrorClass::Timeout
+            }
+        };
         return Classification {
-            class: ErrorClass::Timeout,
+            class,
             matched: "no-status",
             retry_after: None,
             demotion: None,
@@ -367,6 +408,7 @@ mod tests {
             retry_after: None,
             body: body.as_bytes(),
             wrote_full_request: false,
+            transport_cause: None,
         }
     }
 
@@ -420,6 +462,7 @@ mod tests {
             retry_after: Some("30"),
             body: b"rate limit exceeded",
             wrote_full_request: false,
+            transport_cause: None,
         };
         let c = classify_upstream_error(&e);
         assert_eq!(c.class, ErrorClass::RateLimit);
@@ -461,6 +504,7 @@ mod tests {
             retry_after: None,
             body: &[0xff, 0xfe, 0x00],
             wrote_full_request: false,
+            transport_cause: None,
         });
         assert_eq!(c.class, ErrorClass::RateLimit);
     }
@@ -482,6 +526,48 @@ mod tests {
         assert_eq!(parse_retry_after("garbage"), None);
     }
 
+    /// The no-status split (R2G5): a transport cause of `Connect` is
+    /// `connect_failure` and fails over; `Timeout` (and a caller with no
+    /// transport evidence) keep the `timeout` verdict and its abort
+    /// semantics — a connection failure must never wear the timeout's
+    /// clothes.
+    #[test]
+    fn no_status_split_connect_vs_timeout() {
+        let connect = ErrorEvidence {
+            status: None,
+            retry_after: None,
+            body: b"",
+            wrote_full_request: false,
+            transport_cause: Some(TransportCause::Connect),
+        };
+        let c = classify_upstream_error(&connect);
+        assert_eq!(c.class, ErrorClass::ConnectFailure);
+        assert_eq!(c.matched, "no-status");
+        assert!(c.class.fails_over(), "nothing was billed: fail over");
+        assert!(!c.class.demotes_provider());
+
+        for cause in [TransportCause::Timeout, TransportCause::Other] {
+            let e = ErrorEvidence {
+                status: None,
+                retry_after: None,
+                body: b"",
+                wrote_full_request: false,
+                transport_cause: Some(cause),
+            };
+            assert_eq!(
+                classify_upstream_error(&e).class,
+                ErrorClass::Timeout,
+                "{cause:?} keeps the timeout verdict"
+            );
+        }
+
+        // No transport evidence at all: the pre-split verdict stands.
+        assert_eq!(
+            classify_upstream_error(&ev(None, "")).class,
+            ErrorClass::Timeout
+        );
+    }
+
     /// A class that fails over vs the deterministic three.
     #[test]
     fn fails_over_matrix() {
@@ -491,6 +577,7 @@ mod tests {
             ErrorClass::QuotaExhausted,
             ErrorClass::Overloaded,
             ErrorClass::ServerError,
+            ErrorClass::ConnectFailure,
             ErrorClass::ModelNotFound,
         ] {
             assert!(c.fails_over(), "{} must fail over", c.as_str());

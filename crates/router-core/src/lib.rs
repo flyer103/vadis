@@ -28,7 +28,8 @@ pub use config::{
 pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
 pub use error::ErrorCode;
 pub use error_class::{
-    classify_upstream_error, Classification, Demotion, ErrorClass, ErrorEvidence, DEFAULT_COOLDOWN,
+    classify_upstream_error, Classification, Demotion, ErrorClass, ErrorEvidence, TransportCause,
+    DEFAULT_COOLDOWN,
 };
 pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
 pub use prefix::{

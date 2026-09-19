@@ -188,6 +188,14 @@ existing `errors[]` element (`kind = upstream_error`, `details.*`), so no spec �
   may be retried inside the declared attempt budget; a request fully written whose response never arrived
   may **not**, because the upstream may already have billed it — that attempt is ADR-010's
   `unknown_outcome`, and the client decides whether to retry.
+- **`connect_failure` is a reason of its own** (ADR-011 item 6's rows, named here because the ADR's v0.1
+  enum sketch lists no transport class): a no-status failure whose transport evidence says no connection
+  was ever established (`reqwest`'s `is_connect()`, surfaced as `TransportKind::Connect` by
+  `router-providers`) classifies as `connect_failure` — nothing was billed, so the class **fails over**
+  (`action = fallback_provider`) and never re-attempts the same provider in this request. A no-status
+  failure whose evidence is `is_timeout()` (a connect or read timeout) keeps the `timeout` reason and its
+  existing abort semantics. The two share one evidence source — the transport kind on the attempt's
+  `TransportError` — so the split is a pure function of the failure, not a heuristic over error text.
 - **`context_overflow` / `payload_too_large` compress instead of failing over** (failing over bills another
   provider for the same oversized prompt), and `content_policy_blocked` is aborted locally, never re-probed
   unchanged.
@@ -667,7 +675,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-27`)
+### 12.8 conformance case table (`CONF-01…CONF-29`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
@@ -704,6 +712,7 @@ written).
 | CONF-26 | §10·invariant | **the client can speak TLS**: the workspace manifest declares `reqwest` with a TLS feature and does not re-enable its default features (an http-only client fails every real provider while every mock upstream stays plain http) | the workspace `Cargo.toml` (§12.10.1) |
 | CONF-27 | §10·fidelity + §12.10.7 | **the upstream receives the provider-native model id**: (a) client sends `provider/model` → the mock receives that provider's native id; (b) client sends an alias → the upstream request is **byte-identical** to (a)'s, and the trace's `decision.model` / `decision.requested_model` / `selection_source` say native id / client string / `alias`; (c) every other byte (whitespace, escapes, multi-byte UTF-8, trailing newline) is unchanged | the `model` rewrite (§12.10.7) + `decision.requested_model` (§12.6) |
 | CONF-28 | §6 + §8·observation | **a terminal failure still writes its trace line**: an upstream 400 (deterministic `format_error`, never retried) leaves exactly one `DecisionRecord` with `errors[].details.error_class == "format_error"`, `result.status == 502`, `usage_missing: true` and nothing charged; companion cases pin the same one-line invariant on the connect-failure and pre-route paths | the terminal-failure record path (`Accountant::finish_failure`, §12.6) |
+| CONF-29 | §8·error behaviour | **a connection failure is not a timeout**: with the upstream pointed at a closed local port (connect refused, nothing written), `error.classified` carries `reason = "connect_failure"` and `action = "fallback_provider"` — never the `timeout` + `abort` pair the flattened no-status arm produced — and the client's terminal failure names the same class | `classify_upstream_error`'s no-status arm (§12.10.1's `transport_cause`, ADR-011 item 6 row 1) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -722,6 +731,12 @@ write their trace line; the ID was named on the R2G4 card). The shared terminal-
 (`Accountant::finish_failure`, called once from the buffered path's `forward` wrapper) is
 deliberately a reusable seam: R2G8 routes the streaming path's terminal outcomes through the same
 function instead of a second inlined copy.
+
+**Allocation of CONF-29.** Allocated by the operator's R2G5 ruling (a connection failure must not be
+classified `timeout`): the reason name `connect_failure` is defined in §8's failure-path clause above
+because ADR-011's v0.1 enum sketch lists no transport class — the ADR's *taxonomy* (item 6's evidence
+rows: "no connection was ever established" is a distinct, failover-eligible row) is what the class
+implements, so this is a wiring-table entry, not a new ADR decision.
 
 **Allocation of CONF-26 and CONF-27.** Two further owner-allocated IDs, recorded the same way (a human
 decision, not a loop outcome — ADR-012):
@@ -827,6 +842,7 @@ pub struct ErrorEvidence<'a> {
     pub headers: &'a HeaderMap,
     pub body: &'a [u8],
     pub wrote_full_request: bool,     // ADR-011 item 6: the retry rule turns on exactly this flag
+    pub transport_cause: Option<TransportCause>, // no-status failures: which transport kind failed (§8's connect_failure split)
 }
 
 pub enum AttemptOutcome {
