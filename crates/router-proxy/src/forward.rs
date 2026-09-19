@@ -8,6 +8,7 @@
 //! by this engine before any attempt runs (SSE lands in R2-2e), so an
 //! attempt never half-relays.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -23,7 +24,7 @@ use router_core::error_class::{
 };
 use router_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
 use router_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
-use router_core::{RawBody, Usage, ROUTER_OWNED_TOP_LEVEL_KEYS};
+use router_core::{RawBody, RawEditError, Usage, ROUTER_OWNED_TOP_LEVEL_KEYS};
 use router_providers::{AttemptOutcome, TransportKind, UpstreamPlan};
 use serde_json::{json, Value};
 
@@ -126,6 +127,21 @@ fn now_us() -> i64 {
         .unwrap_or(0)
 }
 
+/// The one shared outbound-body composition step (DESIGN §12.10.7): both
+/// forwarding paths compose the upstream body through this function's two
+/// mutations only — a hand-copied second composition is where the byte
+/// boundary dies. Mutation (a) runs once per request in the callers; this
+/// is mutation (b), per attempt: the value of the top-level `model`
+/// member becomes `native_id`, every other byte the client's. The rewrite
+/// is a pure function of (bytes, route), which is what makes an alias and
+/// a direct route to the same route byte-identical upstream (CONF-27).
+pub(crate) fn rewrite_outbound_model<'a>(
+    cleaned: &'a RawBody,
+    native_id: &str,
+) -> Result<Cow<'a, [u8]>, RawEditError> {
+    cleaned.set_top_level_string("model", native_id)
+}
+
 impl Forwarder {
     /// Forwards one buffered request. `proto_in` is the inbound endpoint's
     /// protocol; a native route (proto_in == the provider's `wire_api`)
@@ -220,20 +236,24 @@ impl Forwarder {
             ));
         }
 
-        // The outbound body: the client's bytes minus router-owned
-        // top-level keys — the only permitted rewrite (AGENTS constraint 1).
-        let raw = RawBody::new(body.to_vec());
-        let outbound = match raw.remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS) {
-            Ok(b) => b,
-            Err(e) => {
-                return ForwardOutcome::Failure(ForwardFailure::new(
-                    400,
-                    ErrorCode::InvalidRequest,
-                    format!("request body is not a well-formed top-level JSON object: {e:?}"),
-                ))
-            }
-        };
-        let outbound_hash = body_sha16(outbound.as_bytes());
+        // The outbound base (DESIGN §12.10.7): the client's bytes minus
+        // router-owned top-level keys — mutation (a), once per request. The
+        // `model` rewrite (mutation (b)) is per attempt, below, because the
+        // fallback chain walks routes whose native ids differ (§12.10.5
+        // note R4: this base is the router-visible inbound the row-1 hash
+        // names, and it does not depend on the route taken).
+        let cleaned =
+            match RawBody::new(body.to_vec()).remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ForwardOutcome::Failure(ForwardFailure::new(
+                        400,
+                        ErrorCode::InvalidRequest,
+                        format!("request body is not a well-formed top-level JSON object: {e:?}"),
+                    ))
+                }
+            };
+        let outbound_hash = body_sha16(cleaned.as_bytes());
 
         // Session resolution (spec §4 key_sources): the body's
         // `prompt_cache_key` first, then the configured `header:<name>`
@@ -288,6 +308,7 @@ impl Forwarder {
             json!({
                 "provider": primary.provider,
                 "model": primary.model,
+                "requested_model": model,
                 "selection_source": selection_source,
                 "protocol_out": provider.wire_api.as_str(),
                 "decision_ms": decision_ms,
@@ -339,6 +360,7 @@ impl Forwarder {
                     session: session.as_deref(),
                     turn_index,
                     selection_source,
+                    requested_model: Some(model),
                     decision_ms,
                     started,
                     now_epoch_s,
@@ -400,18 +422,38 @@ impl Forwarder {
                 attempt: attempt_index,
             };
 
+            // Mutation (b), per attempt (DESIGN §12.10.7): the value of the
+            // top-level `model` member becomes this route's native id, every
+            // other byte the client's. `set_top_level_string` cannot fail
+            // here — `model` was parsed as a string above, and mutation (a)
+            // never removes it — but a failure is still answered, never
+            // ignored, so no unrewritten bytes can reach a provider.
+            let rewritten = match rewrite_outbound_model(&cleaned, &candidate.model) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ForwardOutcome::Failure(ForwardFailure::new(
+                        500,
+                        ErrorCode::Internal,
+                        format!("cannot rewrite the outbound model to the native id: {e:?}"),
+                    ))
+                }
+            };
+            let attempt_hash = body_sha16(rewritten.as_ref());
+
             // Row 5 — the intent, FULL, committed before the wire. Nothing
             // is written between the commit and the attempt (CONF-20). The
             // payload carries the session's `prefix_blocks` — the encoder
             // computed them from exactly these bytes, which is what the
-            // cache_ledger rebuild reads (§12.10.6, CONF-21).
-            let mut blocks_now = extract_prefix_blocks(&outbound).unwrap_or_default();
+            // cache_ledger rebuild reads (§12.10.6, CONF-21). `body_hash`
+            // is that attempt's byte-final bytes (note R4): the rewrite is
+            // done, so the hash names exactly what goes to the wire.
+            let mut blocks_now = extract_prefix_blocks(&cleaned).unwrap_or_default();
             let intent_id = if let Some(store) = &self.store {
                 let intent = NewEvent {
                     kind: EventKind::UpstreamSubmitted,
                     request_id: Some(request_id),
                     session: session.as_deref(),
-                    body_hash: Some(&outbound_hash),
+                    body_hash: Some(&attempt_hash),
                     trace_ref: None,
                     payload: json!({
                         "route": format!("{}/{}", candidate.provider, candidate.model),
@@ -440,7 +482,7 @@ impl Forwarder {
                 None
             };
 
-            let req = match router_providers::build_request(&plan, outbound.as_bytes()) {
+            let req = match router_providers::build_request(&plan, rewritten.as_ref()) {
                 Ok(r) => r,
                 Err(e) => {
                     return ForwardOutcome::Failure(ForwardFailure::new(
@@ -501,6 +543,7 @@ impl Forwarder {
                             session: session.as_deref(),
                             turn_index,
                             selection_source,
+                            requested_model: Some(model),
                             decision_ms,
                             started,
                             now_epoch_s,

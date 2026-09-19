@@ -86,6 +86,9 @@ pub struct AccountCtx<'a> {
     pub session: Option<&'a str>,
     pub turn_index: u32,
     pub selection_source: &'a str,
+    /// The client's own `model` string, verbatim (§12.10.7 / spec §6);
+    /// `None` only on a failure path where none was ever parsed.
+    pub requested_model: Option<&'a str>,
     pub decision_ms: u32,
     pub started: Instant,
     pub now_epoch_s: u64,
@@ -386,6 +389,7 @@ impl<'a> Accountant<'a> {
             decision: DecisionRec {
                 provider: provider.to_string(),
                 model: model.to_string(),
+                requested_model: ctx.requested_model.map(str::to_string),
                 selection_source: ctx.selection_source.to_string(),
                 plugin_chain: Vec::new(),
                 decision_ms: ctx.decision_ms,

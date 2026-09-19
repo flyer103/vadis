@@ -105,7 +105,7 @@ async fn conf_10_router_meta_echo_never_reaches_upstream() {
 }
 "#;
     const TURN_1_EXPECTED: &str = r#"{
-  "model": "mock/glm",
+  "model": "glm",
   "messages": [{"role": "user", "content": "a{b}, \"quoted\" \\ backslash"}],
   "prompt_cache_key": "conf10-session",
   "stream": false
@@ -120,7 +120,7 @@ async fn conf_10_router_meta_echo_never_reaches_upstream() {
 }
 "#;
     const TURN_2_EXPECTED: &str = r#"{
-  "model": "mock/glm",
+  "model": "glm",
   "messages": [{"role": "user", "content": "a{b}, \"quoted\" \\ backslash"}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "again"}],
   "prompt_cache_key": "conf10-session",
   "stream": false
@@ -192,11 +192,13 @@ fallback: []
             !String::from_utf8_lossy(&req.body).contains("router_meta"),
             "turn {turn}: router_meta must never reach the upstream"
         );
-        // Everything else is byte-identical: not a reserialization.
+        // Everything else is byte-identical: not a reserialization. (The
+        // `model` value is the native id — mutation (b), CONF-27's domain —
+        // so the expected bodies above already carry it.)
         assert_eq!(
             req.body,
             expected.as_bytes(),
-            "turn {turn}: upstream-visible body must be the client body minus router_meta"
+            "turn {turn}: upstream-visible body must be the client body minus router_meta, with the native model id"
         );
         // The session key the sticky table uses passed through unchanged.
         assert!(

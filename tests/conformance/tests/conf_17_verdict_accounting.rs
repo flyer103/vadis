@@ -101,6 +101,7 @@ fn empty_record() -> DecisionRecord {
         decision: DecisionRec {
             provider: "p".into(),
             model: "m".into(),
+            requested_model: Some("p/m".into()),
             selection_source: "explicit".into(),
             plugin_chain: Vec::new(),
             decision_ms: 0,

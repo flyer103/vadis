@@ -179,6 +179,7 @@ mod tests {
             decision: DecisionRec {
                 provider: "zai".into(),
                 model: "glm-5.3".into(),
+                requested_model: Some("zai/glm-5.3".into()),
                 selection_source: "explicit".into(),
                 plugin_chain: Vec::new(),
                 decision_ms: 0,

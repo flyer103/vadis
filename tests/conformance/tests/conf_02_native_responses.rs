@@ -5,9 +5,6 @@
 //! provider-native id — spec §2 permits exactly those two mutations (R2G1).
 //! Proven over real HTTP against a loopback mock upstream (the same form
 //! as CONF-01).
-//!
-//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the expectation
-//! below encodes the new contract, so it cannot pass before the rewrite exists.
 
 #![forbid(unsafe_code)]
 
@@ -52,7 +49,6 @@ fallback: []
     )
 }
 
-#[ignore = "CONF-02: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_02_native_responses_passthrough() {
     let dir = testkit::tempdir("conf02");

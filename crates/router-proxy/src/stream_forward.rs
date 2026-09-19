@@ -35,7 +35,7 @@ use router_core::store::{EventKind, NewEvent, Query, QueryRow, Store};
 use router_protocol::sse::{SseUsageExtractor, SseUsageOutcome};
 use serde_json::{json, Value};
 
-use crate::forward::{ForwardFailure, Forwarder};
+use crate::forward::{rewrite_outbound_model, ForwardFailure, Forwarder};
 
 /// The streaming answer: the head already decided (status + content
 /// type) and a body stream of the upstream's bytes, verbatim.
@@ -173,10 +173,13 @@ impl Forwarder {
             });
         }
 
-        // The outbound body: the client's bytes minus router-owned
-        // top-level keys — the only permitted rewrite (AGENTS constraint 1).
-        let raw = router_core::RawBody::new(body.to_vec());
-        let outbound = match raw.remove_top_level_keys(router_core::ROUTER_OWNED_TOP_LEVEL_KEYS) {
+        // The outbound base (DESIGN §12.10.7): the client's bytes minus
+        // router-owned top-level keys — mutation (a), once per request. The
+        // `model` rewrite (mutation (b)) is per attempt: the primary below,
+        // each failover candidate inside the relay.
+        let cleaned = match router_core::RawBody::new(body.to_vec())
+            .remove_top_level_keys(router_core::ROUTER_OWNED_TOP_LEVEL_KEYS)
+        {
             Ok(b) => b,
             Err(e) => {
                 return StreamOutcome::Failure(ForwardFailure {
@@ -189,8 +192,7 @@ impl Forwarder {
                 })
             }
         };
-        let outbound_hash = router_core::prefix::body_sha16(outbound.as_bytes());
-        let outbound_bytes = Bytes::from(outbound.as_bytes().to_vec());
+        let outbound_hash = router_core::prefix::body_sha16(cleaned.as_bytes());
 
         self.stream_event(
             EventKind::RequestReceived,
@@ -213,6 +215,7 @@ impl Forwarder {
             json!({
                 "provider": primary.provider,
                 "model": primary.model,
+                "requested_model": model,
                 "selection_source": selection_source,
                 "protocol_out": provider.wire_api.as_str(),
                 "stream": true,
@@ -256,12 +259,29 @@ impl Forwarder {
         let idle = Duration::from_millis(self.config.server.upstream_attempt_timeout.0);
         let route_label = format!("{}/{}", first.route.provider, first.route.model);
 
+        // Mutation (b), per attempt (§12.10.7): the primary's native id.
+        // The failover candidates are rewritten inside the relay, each to
+        // its own route's id.
+        let outbound_bytes = match rewrite_outbound_model(&cleaned, &first.route.model) {
+            Ok(b) => Bytes::from(b.into_owned()),
+            Err(e) => {
+                return StreamOutcome::Failure(ForwardFailure {
+                    status: 500,
+                    code: ErrorCode::Internal,
+                    message: format!("cannot rewrite the outbound model to the native id: {e:?}"),
+                    details: Some(json!({"stream": true})),
+                })
+            }
+        };
+        let attempt_hash = router_core::prefix::body_sha16(&outbound_bytes);
+
         // Row 5 — the intent, FULL, committed before the wire (CONF-20).
+        // `body_hash` is this attempt's byte-final bytes (note R4).
         let intent = NewEvent {
             kind: EventKind::UpstreamSubmitted,
             request_id: Some(request_id),
             session: None,
-            body_hash: Some(&outbound_hash),
+            body_hash: Some(&attempt_hash),
             trace_ref: None,
             payload: json!({
                 "route": route_label,
@@ -381,7 +401,7 @@ impl Forwarder {
         // The head answered from the primary route (any pre-relay
         // failover happens inside the relay and is reported there).
         let failover_from: Option<RouteSpec> = None;
-        let relay = relay_stream(ctx, state, outbound_bytes);
+        let relay = relay_stream(ctx, state, Bytes::from(cleaned.as_bytes().to_vec()));
         StreamOutcome::Success(StreamSuccess {
             status: 200,
             content_type,
@@ -497,53 +517,50 @@ async fn open_head(
 /// The byte relay (R1/R2) with the accounting tap and R6's truncation
 /// wired in. One item per upstream chunk, verbatim; the stream ends when
 /// the upstream ends, and ends without any fabricated terminal marker
-/// when it fails after the first relayed byte.
+/// when it fails after the first relayed byte. `cleaned` is the
+/// mutation-(a) base; each attempt's bytes are composed from it with
+/// that route's native id (§12.10.7).
 fn relay_stream(
     ctx: RelayCtx,
     init: RelayState,
-    outbound: Bytes,
+    cleaned: Bytes,
 ) -> impl Stream<Item = Bytes> + Send + 'static {
-    unfold(
-        (ctx, init, outbound),
-        |(ctx, mut st, outbound)| async move {
-            loop {
-                match router_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
-                    router_providers::stream::StreamRead::Chunk(b) => {
-                        if !b.is_empty() {
-                            // R2 write-through: this chunk is the item; the
-                            // tap reads a copy (R7).
-                            st.tap.feed(&b);
-                            st.relayed = true;
-                            return Some((b, (ctx, st, outbound)));
-                        }
-                        // An empty keep-alive chunk: nothing to relay,
-                        // poll again within this same call.
+    unfold((ctx, init, cleaned), |(ctx, mut st, cleaned)| async move {
+        loop {
+            match router_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
+                router_providers::stream::StreamRead::Chunk(b) => {
+                    if !b.is_empty() {
+                        // R2 write-through: this chunk is the item; the
+                        // tap reads a copy (R7).
+                        st.tap.feed(&b);
+                        st.relayed = true;
+                        return Some((b, (ctx, st, cleaned)));
                     }
-                    router_providers::stream::StreamRead::Ended => {
-                        record_terminal(&ctx, &st, None);
-                        return None;
+                    // An empty keep-alive chunk: nothing to relay,
+                    // poll again within this same call.
+                }
+                router_providers::stream::StreamRead::Ended => {
+                    record_terminal(&ctx, &st, None);
+                    return None;
+                }
+                router_providers::stream::StreamRead::Failed { message, timed_out } => {
+                    // R6: after the first relayed byte, failover is
+                    // impossible — truncate, record, never retry.
+                    if !st.relayed && failover_zero_byte(&ctx, &mut st, &cleaned, &message).await {
+                        continue;
                     }
-                    router_providers::stream::StreamRead::Failed { message, timed_out } => {
-                        // R6: after the first relayed byte, failover is
-                        // impossible — truncate, record, never retry.
-                        if !st.relayed
-                            && failover_zero_byte(&ctx, &mut st, &outbound, &message).await
-                        {
-                            continue;
-                        }
-                        let reason = if timed_out {
-                            format!("idle bound exceeded: {message}")
-                        } else {
-                            message
-                        };
-                        record_classified(&ctx, st.attempted.len() as u32 - 1, &reason);
-                        record_terminal(&ctx, &st, Some(reason));
-                        return None;
-                    }
+                    let reason = if timed_out {
+                        format!("idle bound exceeded: {message}")
+                    } else {
+                        message
+                    };
+                    record_classified(&ctx, st.attempted.len() as u32 - 1, &reason);
+                    record_terminal(&ctx, &st, Some(reason));
+                    return None;
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 /// R6's zero-byte branch: with no byte relayed the client's output is not
@@ -553,7 +570,7 @@ fn relay_stream(
 async fn failover_zero_byte(
     ctx: &RelayCtx,
     st: &mut RelayState,
-    outbound: &[u8],
+    cleaned: &[u8],
     reason: &str,
 ) -> bool {
     while let Some(idx) = st.remaining.iter().position(|c| {
@@ -575,6 +592,20 @@ async fn failover_zero_byte(
             }),
         );
         let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
+        // Mutation (b), per attempt: this candidate's own native id. A
+        // rewrite failure falls through to the next candidate — no
+        // unrewritten bytes may reach a provider. Composed before the
+        // intent so the wire still opens only after the commit (CONF-20).
+        let Ok(client) = router_providers::stream::ReqwestStreamClient::new(ctx.idle) else {
+            return false;
+        };
+        let outbound = match crate::forward::rewrite_outbound_model(
+            &router_core::RawBody::new(cleaned.to_vec()),
+            &cand.route.model,
+        ) {
+            Ok(b) => Bytes::from(b.into_owned()),
+            Err(_) => continue,
+        };
         event(
             ctx,
             EventKind::UpstreamSubmitted,
@@ -586,10 +617,7 @@ async fn failover_zero_byte(
             }),
         );
         st.attempted.push(cand.route.provider.clone());
-        let Ok(client) = router_providers::stream::ReqwestStreamClient::new(ctx.idle) else {
-            return false;
-        };
-        match open_head(&client, &cand, outbound).await {
+        match open_head(&client, &cand, &outbound).await {
             OpenHead::Head(h) if (200..300).contains(&h.status) => {
                 if st.failover_from.is_none() {
                     st.failover_from = Some(st_route_spec(&st.route_label));

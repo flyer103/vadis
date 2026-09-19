@@ -6,9 +6,6 @@
 //! Proven over real HTTP against a loopback mock upstream (the same form
 //! as CONF-01). Anthropic auth travels as `x-api-key` + `anthropic-version`,
 //! never a bearer.
-//!
-//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the expectation
-//! below encodes the new contract, so it cannot pass before the rewrite exists.
 
 #![forbid(unsafe_code)]
 
@@ -53,7 +50,6 @@ fallback: []
     )
 }
 
-#[ignore = "CONF-03: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_03_native_anthropic_passthrough() {
     let dir = testkit::tempdir("conf03");

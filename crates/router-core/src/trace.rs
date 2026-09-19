@@ -80,6 +80,10 @@ pub struct LossyNote {
 pub struct DecisionRec {
     pub provider: String,
     pub model: String,
+    /// The client's own `model` string, verbatim; `None` when the request
+    /// carried none — present-and-null, never omitted (the same stance as
+    /// `prefix.continuity`; DESIGN §12.6, spec §6).
+    pub requested_model: Option<String>,
     /// `explicit` / `alias` / `plugin`.
     pub selection_source: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -329,6 +333,7 @@ mod tests {
             decision: DecisionRec {
                 provider: "zai".into(),
                 model: "glm-5.3".into(),
+                requested_model: Some("zai/glm-5.3".into()),
                 selection_source: "explicit".into(),
                 plugin_chain: Vec::new(),
                 decision_ms: 0,

@@ -12,10 +12,6 @@
 //!       records native id / client string / `alias` (vs `explicit`);
 //!   (c) every other byte is the client's — whitespace, escapes, multi-byte
 //!       UTF-8 and the trailing newline after the closing brace included.
-//!
-//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the
-//! expectations below encode the new contract, so they cannot pass before the
-//! implementation exists.
 
 #![forbid(unsafe_code)]
 
@@ -58,8 +54,7 @@ const UPSTREAM_OK: &str = r#"{"id":"r1","choices":[{"index":0,"message":{"role":
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
-        r#"{{
-server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 10s, request_timeout: 30s }}
+        r#"server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 10s, request_timeout: 30s }}
 session:  {{ key_sources: ["prompt_cache_key"], ttl: 11h }}
 cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, safety_factor: 1.1 }} }}
 trace:    {{ dir: "./state/traces", rollover: hourly }}
@@ -88,7 +83,6 @@ fallback: []
     )
 }
 
-#[ignore = "CONF-27: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_27_outbound_model_is_the_provider_native_id() {
     let dir = testkit::tempdir("conf27");
