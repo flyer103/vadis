@@ -13,3 +13,5 @@ tokio = { workspace = true }
 # Only for cross-checking output semantics in CONF cases (assertion parsing);
 # never present on any code path under test.
 serde_json = { workspace = true }
+# CONF-25 drives the real `serve` assembly (lib target) in-process.
+router-cli = { path = "../../crates/router-cli" }

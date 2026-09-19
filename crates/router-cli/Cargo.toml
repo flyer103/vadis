@@ -14,3 +14,8 @@ axum = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
+# serde_yaml: parses the spec §4 config file (config.example.yaml). Outside
+# the §12.1 allowlist by necessity — no allowlisted crate parses YAML; it is
+# added to router-cli only (config file I/O lives here per §12.10.2), never
+# to router-core, so the domain crate's dependency set stays within bounds.
+serde_yaml = "0.9"
