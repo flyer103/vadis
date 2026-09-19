@@ -1,0 +1,25 @@
+target/
+**/*.rs.bk
+
+# local config & secrets
+config.yaml
+.env
+*.env.local
+.bootstrap-key
+
+# autowork data (large, re-derivable)
+autowork/traces/
+autowork/results/
+autowork/corpus/raw/
+autowork/.venv/
+autowork/**/__pycache__/
+autowork/uv.lock.bak
+
+# runtime state
+state/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+logs/
+
+.DS_Store
