@@ -51,7 +51,7 @@ pub struct PriceTable {
 
 /// Normalized usage (spec §6). Protocol parsing (R2) constructs it from the
 /// three wire formats; this module only knows this shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub struct Usage {
     pub input_total: u64,
     pub input_cached: u64,

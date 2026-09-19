@@ -17,6 +17,7 @@ pub mod peak;
 pub mod prefix;
 pub mod quota;
 pub mod store;
+pub mod trace;
 
 pub use body::{RawBody, RawEditError, ROUTER_OWNED_TOP_LEVEL_KEYS};
 pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};
@@ -37,4 +38,8 @@ pub use quota::{charge, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWin
 pub use store::{
     write_intent_then, EventId, EventKind, NewEvent, Projection, ProjectionWrite, Query, QueryRow,
     RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent, EVENT_SCHEMA_VERSION,
+};
+pub use trace::{
+    CostRec, DecisionRecord, IdentityRec, PrefixBlockRec, PrefixRec, ProtocolRec, QuotaAfter,
+    ResultRec, StateRec, TraceError, TransformRecord, TRACE_SCHEMA_VERSION,
 };

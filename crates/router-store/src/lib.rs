@@ -17,6 +17,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod trace_sink;
+
+pub use trace_sink::{TraceRef, TraceSink};
+
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
