@@ -9,6 +9,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod sse;
+
 use router_core::Usage;
 
 /// Normalizes a chat-completions usage object (spec §2 usage row:
