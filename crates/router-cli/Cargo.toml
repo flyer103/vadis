@@ -1,0 +1,16 @@
+[package]
+name = "router-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "router"
+path = "src/main.rs"
+
+[dependencies]
+router-core = { path = "../router-core" }
+router-proxy = { path = "../router-proxy" }
+axum = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
