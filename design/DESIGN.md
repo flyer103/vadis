@@ -399,8 +399,12 @@ pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict;
 ```rust
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
 pub struct RouterConfig { pub server: ServerCfg, pub session: SessionCfg, pub cache: CacheCfg,
+    pub trace: TraceCfg,
     pub providers: Vec<ProviderCfg>, pub aliases: BTreeMap<String, RouteSpec>,
     pub plugins: Vec<PluginCfg>, pub fallback: Vec<RouteSpec> }
+
+/// spec §4.1；`Rollover::Hourly` 是 v0.1 唯一取值 → 文件 `<dir>/YYYY-MM-DDTHH.jsonl`（UTC）。
+pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 ```
 
 | 点 | 规则 |
@@ -410,7 +414,8 @@ pub struct RouterConfig { pub server: ServerCfg, pub session: SessionCfg, pub ca
 | price | 读作 f64（USD/1K），**装载时**转 `Price((v * 1e9).round() as u64)`；`v < 0` 或 `round` 后为 0 → 装载错误 |
 | peak.multiplier | 转 `multiplier_pct = (v*100).round()`；仅支持两位小数，否则装载错误 |
 | base_url | 必须已含版本段；router 只追加 `chat → /chat/completions`、`responses → /responses`、`anthropic → /v1/messages` |
-| `rules_file` / `tee_dir` | 相对**本 config 文件所在目录**解析（不是 CWD） |
+| `rules_file` | 相对**本 config 文件所在目录**解析（不是 CWD）；`trace.dir` 同此规则（spec §4.1） |
+| `trace.rollover` | 只接受 `hourly`（其它值 = 装载错误）；保留期**不是** config 键（v0.1 不自动清理） |
 | 未知字段 | `deny_unknown_fields` → **报错退出**（不静默忽略：配置是给人手写的，"改了没生效"是最贵的沉默失败） |
 | 密钥 | 只有 `api_key_env`；启动时 env 缺失 → 该 provider 标记不可用并在 `/health` 报出（不阻止其它 provider） |
 | `disabled: true` | 不装载该 fiber（不报错）；`/health` 列在 `plugins_disabled` |
@@ -431,7 +436,7 @@ pub struct DecisionRecord {
     pub usage: Usage,                   // usage
     pub cost: CostRec,                  // 成本
     pub result: ResultRec,              // 结果
-    pub errors: Vec<TraceError>,        // 失败明细（spec §8 要求，§6 未单列 → GAP-Q10）
+    pub errors: Vec<TraceError>,        // 失败明细（spec §6「失败明细」，R1-4 已回写）
 }
 
 pub struct IdentityRec { pub request_id: String, pub client: ClientKind, pub client_ua_raw: Option<String>,
@@ -452,6 +457,12 @@ pub struct QuotaAfter { pub provider: String, pub plan_idx: usize, pub tokens_us
     pub over_quota: OverQuota, pub verdict: &'static str }
 pub struct ResultRec { pub status: u16, pub upstream_status: Option<u16>, pub failover_from: Option<RouteSpec>,
     pub overhead_ms: u32, pub upstream_ms: Option<u32>, pub usage_missing: bool }
+
+/// spec §6「失败明细」的落地：**内部**失败明细（可多条），与 §12.7 给客户端的单次错误响应
+/// 不是同一个东西；两者共享 kind 词表。无失败 = 空数组（不省略）。
+pub struct TraceError { pub kind: TraceErrorKind, pub message: String,
+    pub plugin: Option<String>, pub details: Option<serde_json::Value> }
+pub enum TraceErrorKind { TransformError, UpstreamError, TraceWriteFailed, Internal }
 ```
 
 spec §6 字段组 → Rust 路径（逐行可审计）：
@@ -467,8 +478,10 @@ spec §6 字段组 → Rust 路径（逐行可审计）：
 | usage | `input_total` `input_cached` `cache_write` `output` `reasoning` | `usage.*` |
 | 成本 | `cost.input_miss` `input_hit` `cache_write` `output` `total` `quota_after` | `cost.*` |
 | 结果 | `status` `upstream_status` `failover_from` `overhead_ms` `upstream_ms` | `result.*` |
+| 失败明细 | `errors[]`（`kind` `message` `plugin?` `details?`） | `errors[].*`（kind 词表与 §12.7 的错误体共享；内部明细 vs 客户端响应面的区别见上） |
 
-- 落盘：`state/traces/YYYY-MM-DDTHH.jsonl`，**append-only，按小时滚动**（DESIGN §8）；写失败不阻塞请求。
+- 落盘：`<config trace.dir>/YYYY-MM-DDTHH.jsonl`（spec §4.1；`trace.dir` 默认 `./state/traces`），
+  **append-only，按小时滚动**（DESIGN §8）；写失败不阻塞请求，并记 `errors[].kind = trace_write_failed`。
 - `schema_version` 只在**破坏性**变更时 +1；新增可选字段不改版本（autowork 侧容忍未知字段）。
 - 派生指标（`router stats`，spec §6「指标定义」）——全部可由 trace 单遍算出，不需要额外状态：
   `cache_hit_rate = Σusage.input_cached / Σusage.input_total`；
@@ -477,6 +490,9 @@ spec §6 字段组 → Rust 路径（逐行可审计）：
 - 报告纪律：任何"省了多少"必须带口径（verified/inferred）、样本量、时间窗（spec §7）。
 
 ### 12.7 错误语义与响应面（spec §8 的落地）
+
+> R1-4 起，下面的错误体 schema 与 `error.type`→HTTP 表**已在 `docs/spec.md` §8 成文**（spec 是对外
+> 契约的单一真相）；本节保留 `ErrorBody` 的 Rust 形态与实现细节，两者必须一致。
 
 统一错误体（**所有**非 2xx 与桩端点同形；README 的成功响应带 router 自有字段 `router_meta`）：
 
@@ -535,7 +551,8 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 
 ### 12.9 缺口与待裁定（GAP-Q1…Q13）
 
-**本轮不改既有条款，只登记。** 每条给出本蓝图采用的默认值与影响面。
+**本轮不改既有条款，只登记。** 每条给出本蓝图采用的默认值与影响面。（R1-4 起按下表下方的
+「回写记录」处置：已定项写进 spec，未定项保持登记。）
 
 | # | 缺口 | 本蓝图默认 | 影响 |
 |---|---|---|---|
@@ -553,7 +570,17 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 | Q12 | `fallback` 链 schema 与切换粒度（全局 / 按模型）未在 spec §4 给出 | 全局有序 route 列表 | failover（D5） |
 | Q13 | 别名是否可指向 `auto` 或携带参数覆盖 | 仅 `provider/model` | 选择语义（§3） |
 
-建议在下一轮补的 ADR（**本任务不落笔**，需 owner 裁定后写）：
-ADR-006「计账单位为整数 NanoUsd 与定点成本」、ADR-007「span 保真转发：禁止 parse→reserialize 往返」、
-ADR-008「规则文件的三级覆盖与 trust 门」。三条都直接影响已写死的类型与 conformance 断言，越早定越省。
+ADR 处置（R1-4）：原建议的三条 ADR 已按编排者裁定落笔 —— `ADR-006`「整数 NanoUsd 定点计账」、
+`ADR-007`「span 保真转发（禁止 parse→reserialize 往返）」、`ADR-008`「规则三级覆盖与 trust 门」
+（v0.1 不启用 trust 门，并写明重新评估的触发条件）。三条都编码了已写死的类型与 conformance 断言，
+不再需要改 §12 的类型草图。
+
+**R1-4 回写记录（2026-09-19；spec 已改，本节表格保留为历史登记）**
+
+| 处置 | 条目 |
+|---|---|
+| 已写进 `docs/spec.md` | Q2 → §4.1；Q3 → §4.4（取回通道明确标"本版不实现"）；Q5 → §6「`prefix_blocks[]` 的定义」；Q10 → §6「失败明细」+ §8（错误体 + type→HTTP 表）；Q11 → §4.3；Q12 → §4.2 |
+| 已由 ADR-008 裁定 | Q4（覆盖语义 = 首个命中生效；trust 门 v0.1 不启用，重新评估的触发条件写在该 ADR 里） |
+| 采默认值（未进 spec；`config.example.yaml` 注释标注） | Q1（quota = `input_total + output`）、Q7（`p_stay = input_hit`）、Q9（超 context 交上游）、Q13（别名仅 `provider/model`） |
+| 留到 Round 2 / D3 | Q8（`stateful_inbound` 的 400 条件）、Q6（节假日不建模 = 已知偏差） |
 

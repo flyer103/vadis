@@ -18,6 +18,7 @@ router 按配置把请求送到指定的 (provider, model)，在此过程中**�
 | 语义响应缓存、上下文摘要 | 与前缀缓存冲突面大，需先有实测账本（P4） |
 | 多用户、多租户、多节点、DB | 单操作者本地进程；状态仅落盘 snapshot |
 | bandit / MF / BT 等历史算法 | 作为实验资产，后期以 tier-A 插件形式回流 |
+| `tee` 原文的取回通道（retrieve 端点） | 规则可声明 `tee`，但存储位置与取回通道**本版不实现**（§4） |
 
 ## 2. 协议契约
 
@@ -60,6 +61,7 @@ router 按配置把请求送到指定的 (provider, model)，在此过程中**�
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m }
 session:  { key_sources: ["prompt_cache_key", "header:session-id", "header:thread-id"], ttl: 12h }
 cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
+trace:    { dir: "./state/traces", rollover: hourly }
 
 providers:
   - name: deepseek
@@ -93,13 +95,54 @@ plugins:
   - id: judge-experiment
     kind: process                      # tier-B：进程外插件
     url: unix:///tmp/router-plugins/judge.sock
+    inject: [cache_ledger, session_table]   # 依赖声明（coeffect）：未满足时停在加载等待
     isolate: false                     # 独立 realm：可与另一版本并存做 shadow 对比
     intercept: { sample: 0.05, shadow: true }
     disabled: true
+
+fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # 有序 route 列表，全局粒度（§8）
 ```
 
 配置变更语义（对齐 Cordis 的 keyed diff，见 ADR-002）：`config` 变更 → 交给插件自行 diff 后 reload
 （不重建进程）；`disabled: true` → 卸载该 fiber 并完整回滚其 effect；`id`/`kind` 变更 → 重建该 entry。
+
+### 4.1 `trace`（观测介质的落盘参数）
+
+| 键 | 类型 / 取值 | 语义 |
+|---|---|---|
+| `dir` | 路径 | trace JSONL 的落盘目录。相对路径按**本 config 文件所在目录**解析（不是 CWD） |
+| `rollover` | `hourly` | 滚动粒度；`hourly` → 文件名 `YYYY-MM-DDTHH.jsonl`（UTC，小时起始）。v0.1 只定义该值 |
+
+- 路径进 config（便于把 state 放到别处）；**保留期不进 config**：v0.1 不做自动清理，文件只追加、由运维手工归档；
+  将来要加 `retention` 属于新增键（不破坏既有配置）。
+- 写失败**不阻塞请求**（§8）；trace 内容见 §6。
+
+### 4.2 `fallback`（failover 链，§8）
+
+| 键 | 类型 | 语义 |
+|---|---|---|
+| `fallback` | 有序 `provider/model` 列表 | **全局粒度**（v0.1 无按模型/按别名的链）；空列表 = 不 failover |
+
+上游 5xx / 429 / 配额耗尽时，按序切到"下一个**尚未尝试**的 route"；切换会失去前缀缓存，trace 必须记
+`failover_from` 与由此产生的 re-prefill 成本（§6「结果」）。链用尽 → `502 upstream_error`（上游尝试超时
+→ `504 upstream_timeout`）。列表项必须是 roster 中存在的 route（别名不参与 fallback）。
+
+### 4.3 `inject`（插件依赖声明）
+
+`inject: [<service>…]` 声明该插件依赖的服务槽（Cordis 的 coeffect 声明，ADR-002/DESIGN §4）。
+未满足时该 fiber 停在**加载等待**（不报错，也不影响其它插件），服务就绪后继续装载。
+服务名是产品定义的类型化槽名（例：`cache_ledger`、`session_table`），不是任意字符串。
+
+### 4.4 规则文件（`rules/*.toml`）与 `tee`
+
+`builtin/transform_rules` 的规则文件格式见 `rules/tool_output.toml`（ADR-003 的声明式管线：过滤阶段、
+`match_output`、行保留/剔除、截断、`on_empty`、内联测试）。
+
+- 规则可声明 `tee = true`。命中且确有删行时，在输出**末尾追加一行**：
+  `[router:tee sha256=<原始载荷 sha256 前 16 位 hex> lines_dropped=<n> bytes_original=<n>]`。
+- **原文的存储位置与取回通道（retrieve）在 v0.1 未实现**——本版**不提供**取回端点、不定义落盘目录。
+  trace 只记 `tee_id`（§6「transform」，未启用时为 `null`）。实现属于 P1 压缩方向（D3）之后的独立变更；
+  在它落地前，不要把 `tee` 当作"可回取原文"的能力使用。
 
 ## 5. 接入前提（必做）
 
@@ -121,11 +164,20 @@ export NO_PROXY=127.0.0.1,localhost
 | 协议 | `protocol_in`、`protocol_out`、`translated`（bool）、`lossy[]` |
 | 决定 | `provider`、`model`、`selection_source`（explicit/alias/plugin）、`plugin_chain[]`、`decision_ms` |
 | 状态 | `stateful_inbound`（`store != false` 或 `previous_response_id` 非空）、`sticky_hit`、`cache_control_breaks` |
-| 前缀 | `prefix_blocks[]`（每块 token 数 + hash）、`prefix_continuity`（相对同 session 上一请求的最长公共块比例） |
-| transform | 每步：`plugin`、`added_input_tokens`、`saved_input_tokens`、`saved_output_tokens`、`cache_impact`、`verdict`（verified/inferred） |
+| 前缀 | `prefix_blocks[]`（每块 token 数 + hash；**块粒度与 hash 定义见下**）、`prefix_continuity`（相对同 session 上一请求的最长公共块比例） |
+| transform | 每步：`plugin`、`added_input_tokens`、`saved_input_tokens`、`saved_output_tokens`、`cache_impact`、`verdict`（verified/inferred）、`tee_id`（可选；v0.1 未启用 tee 时为 `null`） |
 | usage | 归一化 `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | 成本 | `cost.input_miss`、`cost.input_hit`、`cost.cache_write`、`cost.output`、`cost.total`、`quota_after` |
 | 结果 | `status`、`upstream_status`、`failover_from`、`overhead_ms`、`upstream_ms` |
+| 失败明细 | `errors[]`（数组；**无失败 = 空数组，不省略**），每条 `{ kind, message, plugin?, details? }`；`kind ∈ {transform_error, upstream_error, trace_write_failed, internal}`（§8） |
+
+**`prefix_blocks[]` 的定义**（可比较性的前提，两个实现不得各自发挥）：
+
+- 块 = 上游可见前缀区（`messages` / `input` / 系统指令位）里的**结构单元**：一条 message / 一个 tool 定义 /
+  一个 input item。**不是**定长 token 桶（结构与缓存断点对齐，见 ADR-007）。
+- 每块记 `tokens`（该块 token 数）与 `hash`；`hash = sha256(块原始字节)` 的 hex **前 16 位**。
+- 该定义域**不含** router 自有字段，故"删 router 自有字段"不改变任何块 hash（§2 字节边界）。
+- 落盘路径/滚动由 §4.1 的 `trace` 指定；写失败不阻塞请求（§8），并记 `errors[].kind = trace_write_failed`。
 
 **指标定义**（`router stats` 暴露，autowork gate 引用）：
 
@@ -147,8 +199,35 @@ export NO_PROXY=127.0.0.1,localhost
 
 ## 8. 降级与错误行为
 
-- transform 失败 → **回退原文**（fail-safe），trace 记 `transform_error`，请求照常转发。
-- 上游 5xx / 429 / 配额耗尽 → 按 config 的 `fallback` 链切换（切换会失去缓存，需记 `failover_from`
+**统一错误体**（所有非 2xx，含桩端点；客户端按此解析，不要依赖各家上游的错误形状）：
+
+```json
+{"error": {"type": "quota_exceeded", "message": "monthly quota exhausted for zai/glm-5.3",
+           "request_id": "req-7", "details": {"provider": "zai", "over_quota": "block"}}}
+```
+
+| `error.type` | HTTP | 触发 |
+|---|---|---|
+| `invalid_request` | 400 | 请求体不可解析 / 缺 `model` / 字段类型错 |
+| `auto_not_supported` | 400 | `model: auto`（v0.1，§3） |
+| `capability_unsupported` | 400 | 入站协议 ∉ 该 provider `supports`（未声明的格 = 400，不给"尽力而为"的翻译） |
+| `stateful_unsupported` | 400 | stateful 入站且粘性无法保真（ADR-004） |
+| `cost_cap_exceeded` | 403 | guard 成本上限命中 |
+| `unknown_provider` / `unknown_model` | 404 | `provider/model` 或别名解析不到 |
+| `quota_exceeded` | 429 | `quota.over_quota = block` 且额度耗尽 |
+| `upstream_error` | 502 | 上游错误且 fallback 链用尽（`details.upstream_status`） |
+| `upstream_timeout` | 504 | 上游尝试超时且链用尽 |
+| `not_implemented` | 501 | v0.1 三个协议端点的桩（转发在 Round 2 落地） |
+| `internal` | 500 | 其它 |
+
+响应头：`X-Router-Request-Id`（恒有）、`X-Router-Session`（解析出 session 时）、`X-Router-Lossy`（发生有损
+翻译时）。SSE 路径首个事件前必须已发这三个头。
+
+行为条款：
+
+- transform 失败 → **回退原文**（fail-safe），trace 记 `errors[].kind = transform_error`，请求照常转发。
+- 上游 5xx / 429 / 配额耗尽 → 按 config 的 `fallback` 链切换（§4.2；切换会失去缓存，需记 `failover_from`
   与由此产生的 re-prefill 成本）。
 - 前缀不连续（cache-guard 检测到）→ 按 `strict_prefix` 处理：默认告警 + 继续；严格模式拒绝该 transform。
+- trace 落盘失败 → **不影响请求**，记 `errors[].kind = trace_write_failed`（观测缺失必须显式，不静默）。
 - 未知字段：**必须原样透传**（协议演进友好），不得静默丢弃。

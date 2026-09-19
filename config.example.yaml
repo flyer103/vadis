@@ -18,7 +18,9 @@
 #   - provider 路径：base_url 必须已含版本段（`/v1`、`/v4`、`/anthropic`），router 只追加
 #     `chat → /chat/completions`、`responses → /responses`、`anthropic → /v1/messages`。
 #
-# 缺口索引：本文件标注的 GAP-Qn 与 open question 见 `design/DESIGN.md` §12.7。
+# 缺口索引：本文件标注的 GAP-Qn 与 open question 见 `design/DESIGN.md` §12.9。
+#          R1-4 已把 Q2/Q3/Q5/Q10/Q11/Q12 回写进 `docs/spec.md`（§4.1/§4.2/§4.3/§4.4/§6/§8）：
+#          本文件仍标注 GAP 的注释即**未定**项；已定的项只引 spec 条款，不再标 GAP。
 
 server:
   addr: "127.0.0.1:8790"        # 本地优先；绑定非 loopback 前请先想清楚鉴权（v0.1 无鉴权）
@@ -39,6 +41,12 @@ cache:
     enabled: true               # 关闭后不参与 failover / quota spill 的切换判定（DESIGN §5）
     min_remaining_turns: 3      # 预估剩余轮次 < 该值时直接不切换（未知预估时取 0 → 不切换）
     safety_factor: 1.2          # 切换当且仅当 switch_gain > safety_factor × switch_cost
+
+trace:
+  # trace 是产品 → autowork 的唯一接口（ADR-005）；落盘参数见 spec §4.1。
+  dir: ./state/traces           # 相对**本 config 文件所在目录**解析（不是 CWD）；state/ 已 gitignore
+  rollover: hourly              # v0.1 只定义 hourly → 文件名 YYYY-MM-DDTHH.jsonl（UTC）
+  # 保留期**不在** config：v0.1 不自动清理，文件只追加、由运维手工归档（spec §4.1）
 
 providers:
   # 每个 provider 一条 roster；`wire_api` = 该 provider 的**原生**线格式（native passthrough 的条件）。
@@ -65,7 +73,7 @@ providers:
             windows:                              # 官方：高峰 = 周一至周五 01:00-04:00、06:00-10:00 UTC
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "06:00", to: "10:00", tz: UTC }
-              # 已知偏差：中国法定节假日按官方口径算 off-peak，v0.1 未建模节假日日历（DESIGN §12.7 Q6）
+              # 已知偏差：中国法定节假日按官方口径算 off-peak，v0.1 未建模节假日日历（DESIGN §12.9 Q6）
         source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
         # TODO 官方源核验：以上五档价、峰谷窗口为本次会话读取官方页后的转写值，合入前需人工复核一次。
       - id: deepseek-flash
@@ -130,7 +138,7 @@ providers:
         source: "https://docs.z.ai/guides/overview/quick-start @2026-09-19"
         # 官方页只公布了 GLM Coding Plan 的订阅价 $18/月，未公布 token 额度 → 上列 tokens 是占位值。
         # TODO 官方源核验：额度数值、计量口径（input+output？是否含 cache_read）与重置时区均待确认
-        #              —— GAP-Q1（DESIGN §12.7）
+        #              —— GAP-Q1（DESIGN §12.9）
 
   - name: moonshot
     base_url: https://api.moonshot.ai/v1          # 官方 quickstart：base_url = https://api.moonshot.ai/v1
@@ -165,7 +173,7 @@ aliases:
   coding-fast: deepseek/deepseek-v4-pro
   coding-bulk: moonshot/kimi-k2.7-code
   chat-fast: zai/glm-5.3-flash
-  # 别名指向 `auto` 或携带参数覆盖（max_tokens 等）在 v0.1 未定义 → GAP-Q13（DESIGN §12.7）
+  # 别名指向 `auto` 或携带参数覆盖（max_tokens 等）在 v0.1 未定义 → GAP-Q13（DESIGN §12.9）
 
 plugins:
   # 声明式列表 + keyed diff（ADR-002）：config 变更 → 插件自行 diff 后 reload（不重建进程）；
@@ -182,24 +190,24 @@ plugins:
     config:
       rules_file: ./rules/tool_output.toml        # 相对**本 config 文件所在目录**解析（不是 CWD）
       on_failure: passthrough                     # 规则装载/执行失败 → 回退原文（spec §8 fail-safe）
-      # tee_dir: ./state/tee                      # GAP-Q3：ADR-003 要求"原文 tee + retrieve"，
-      #                                           #   但 spec 未定义 tee 落盘位置与取回通道（DESIGN §12.7）
+      # 规则可声明 `tee`（spec §4.4）；但 v0.1 **不提供**原文落盘目录与取回通道 ——
+      #   spec §4.4 已把这两项标注为未实现（后置到 D3 之后），故本文件**不出现** tee_dir 之类的键。
 
   - id: judge-experiment
     kind: process                                 # tier-B：进程外插件（具备模块级 HMR）
     url: unix:///tmp/router-plugins/judge.sock
-    inject: [cache_ledger, session_table]         # GAP-Q11：spec §4 未列 `inject`，但 DESIGN §4 要求
-                                                  #   依赖写在 manifest 的 inject 里（未满足时停在 LOADING）
+    inject: [cache_ledger, session_table]         # 依赖声明（coeffect，spec §4.3）：未满足时停在加载等待
+                                                  #   服务名是产品定义的类型化槽名，不是任意字符串
     isolate: false                                # true = 独立 realm：同一服务的另一套绑定，
                                                   #   用于同策略两版本并存做 shadow 对比（ADR-002）
     intercept: { sample: 0.05, shadow: true }     # 不改绑定、只改"怎么用"：采样率 5%，shadow 不产出
     disabled: true                                # 默认关闭；实验启用它不改任何产品代码
 
 fallback:
-  # spec §8 引用 failover 链，spec §4 未给 schema → GAP-Q12（本文件按最小形态落地：有序 route 列表）。
+  # 全局粒度的有序 route 列表（schema 见 spec §4.2；v0.1 无按模型/按别名的链）。
   # 语义：上游 5xx / 429 / 配额耗尽时，按序切到"下一个尚未尝试的 route"；切换会失去前缀缓存，
   #       trace 必须记 `failover_from` 与由此产生的 re-prefill 成本（spec §6「结果」/ DESIGN §5）。
-  # 链尾用尽 → 500 + 归一错误体（含最后一次 upstream_status）。
+  # 链尾用尽 → 502 upstream_error（上游尝试超时 → 504 upstream_timeout），错误体见 spec §8。
   - deepseek/deepseek-v4-pro
   - moonshot/kimi-k3
   - zai/glm-5.3

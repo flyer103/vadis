@@ -39,10 +39,12 @@
 #                         `[router:tee sha256=<原始载荷 sha256 前 16 位 hex> lines_dropped=<n> bytes_original=<n>]`
 #                         （原始载荷 = 进入本规则的原始字节，UTF-8，含其换行；
 #                           lines_dropped = 原始行数 − 输出行数，被 strip 掉的行也计入）。
-#                         GAP-Q3：retrieve 通道（tee 落盘位置 + 取回端点）spec 未定义，见 DESIGN §12.7。
+#                         tee 是规则级声明（spec §4.4）；原文存储与 retrieve 通道 v0.1 不实现
+#                         （spec §4.4 已标注为未实现，本文件不得虚构落盘目录或端点）。
 # 查找与准入：`.router/rules.toml`（项目）→ `~/.config/router/rules.toml`（用户）→ 内置（编译期内嵌）；
 #         首个命中生效（ADR-003「三级覆盖」）。`router rules verify` 跑全部内联测试：任一规则测试失败
-#         → 该规则不装载并在启动日志与 `/health` 报出，其余规则照常（GAP-Q4：是否引入 rtk 式 trust 门待裁定）。
+#         → 该规则不装载并在启动日志与 `/health` 报出，其余规则照常（trust 门：ADR-008 裁定 v0.1 不启用，
+#         触发重新评估的条件写在该 ADR 里）。
 # 内联测试：`[[tests.<规则 id>]]`，`name` / `input` / `expected` 三者必填；字符串用**字面字符串**
 #         （`'...'` / `'''...'''`，不处理转义），需要 ANSI/`\n` 等转义时用基本字符串（`"..."`）。
 #         多行字面字符串：紧接 `'''` 的首个换行被裁剪，其余字节（含末尾换行）原样保留。
