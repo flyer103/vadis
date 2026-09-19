@@ -138,6 +138,17 @@ fn civil_hour(hour: i64) -> (i64, u32, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d, h)
 }
 
+impl router_core::trace::TraceWriter for TraceSink {
+    /// The core seam's adapter: the sink's `TraceRef` becomes the
+    /// `"file:line"` pointer string the accounting rows store.
+    fn write(&self, rec: &DecisionRecord) -> Result<Option<String>, String> {
+        match TraceSink::write(self, rec)? {
+            Some(r) => Ok(Some(r.as_pointer())),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

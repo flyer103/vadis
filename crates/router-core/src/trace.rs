@@ -267,6 +267,25 @@ pub fn verified_savings_tokens(rec: &DecisionRecord) -> i64 {
         .sum()
 }
 
+/// The trace-writing seam the data plane accounts through (the I/O-free
+/// core's side of DESIGN §12.6): append one record, get back the durable
+/// `"file:line"` pointer the accounting rows carry as `trace_ref`
+/// (§12.10.5 note R2), or `None` when the write failed — the request is
+/// unaffected and the caller records `errors[].kind = trace_write_failed`
+/// (spec §8).
+pub trait TraceWriter: Send + Sync {
+    fn write(&self, rec: &DecisionRecord) -> Result<Option<String>, String>;
+}
+
+/// The no-op writer for tests and tools that run without a trace dir.
+pub struct NullTraceWriter;
+
+impl TraceWriter for NullTraceWriter {
+    fn write(&self, _: &DecisionRecord) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

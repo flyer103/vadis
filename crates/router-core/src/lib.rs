@@ -43,7 +43,7 @@ pub use store::{
     EVENT_SCHEMA_VERSION,
 };
 pub use trace::{
-    verified_savings_tokens, CostRec, DecisionRecord, IdentityRec, PrefixBlockRec, PrefixRec,
-    ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TransformRecord,
-    TRACE_SCHEMA_VERSION,
+    verified_savings_tokens, CostRec, DecisionRecord, IdentityRec, NullTraceWriter, PrefixBlockRec,
+    PrefixRec, ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TraceWriter,
+    TransformRecord, TRACE_SCHEMA_VERSION,
 };
