@@ -27,6 +27,11 @@ question is about a number, the answer is a link, never a number.
   never the secret values.
 - **"Can I run one router for a team, with accounts?"** No: v0.1 is a single-operator local
   gateway; multi-user, multi-tenant and multi-node are explicit non-goals.
+- **"Why was my request routed somewhere other than the model I asked for?"** A configured
+  fallback chain is used when a route is refused by the guard — including a provider that is
+  inside a cooldown after its plan or account was reported exhausted. The trace records the
+  origin route and what the switch cost the prefix cache, so the decision is auditable rather
+  than unexplained.
 - **"How do I know a saving is real, and what do I look at when cost goes up?"** Look at the
   verdict first: only a measured (`verified`) difference may be reported as a saving, local
   estimates are labelled `inferred`. When cost moves, check prefix continuity between turns
@@ -42,4 +47,6 @@ question is about a number, the answer is a link, never a number.
   the savings convention.
 - [`docs/spec.md` §4.4](../docs/spec.md) — rules, tee, and the missing retrieval channel.
 - [`docs/spec.md` §8](../docs/spec.md) — the error-type registry and its status codes.
+- [`design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md`](../design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md)
+  — why a dead provider is skipped rather than retried.
 - [`AGENTS.md`](../AGENTS.md) — the constraints that produce these answers.

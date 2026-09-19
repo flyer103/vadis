@@ -140,6 +140,11 @@ The capability matrix is declared in config (`supports`); the 3×3 table is cons
 - when lossy: write the trace and optionally the `X-Router-Lossy` response header; never silently.
 - inbound unknown fields are kept verbatim (a bypass side channel exists), so protocol evolution loses
   no information.
+- **an upstream error is normalized in exactly one place** (ADR-011): the provider layer surfaces the raw
+  evidence (status, headers, error body) and makes no decision (§2), the classifier in `router-core`
+  assigns a reason and a recovery action, and this layer only *renders* the client-facing shape
+  (`ErrorBody`, §12.7). No call site branches on an upstream's prose, and an upstream error body is read
+  and never persisted (ADR-009 item 3).
 
 ## 8. State and persistence
 
@@ -153,6 +158,7 @@ The plugin-facing surface stays the service traits of §12.2 (`CacheLedger`, `Se
 |---|---|---|---|
 | event log (`events`) | SQLite/WAL behind `trait Store` | intent / accounting events `synchronous=FULL`, committed **before** the effect they authorize (ADR-010) | the truth: every state transition is a row |
 | sticky table / cache ledger / quota counters | projections in the same store | `NORMAL` + group commit | rebuildable from `events`; losing one regresses statistics, never correctness |
+| provider cooldown (demotion, ADR-011) | projection in the same store | `NORMAL` + group commit | rebuildable from `events`; losing it costs one doomed attempt, never a wrong charge |
 | trace | append-only JSONL, rolled hourly (spec §4.1; record shape in §12.6) | OS defaults | the analysis truth and the only product → autowork channel (ADR-005), unchanged |
 | request / response bodies | **never persisted by the product** | — | the log keeps `body_hash` + a pointer; raw bytes exist only in captures taken outside the product |
 
@@ -170,6 +176,31 @@ The plugin-facing surface stays the service traits of §12.2 (`CacheLedger`, `Se
 - **Migrations**: forward-only, with three deliberately distinct version axes (store DDL / event payload /
   trace record — ADR-009 item 7).
 
+**Upstream failure path (ADR-011).** One classifier, one action, one record: `upstream.responded` →
+`classify_upstream_error` → `error.classified` (a kind of ADR-010's vocabulary; `NORMAL`, payload `reason` +
+`action` + the matched table entry + `retry_after_s?` + `demotion?`) → the action's effect. The action set is
+`retry | rotate credential | fallback provider | compress | abort`, and the trace mirror rides in the
+existing `errors[]` element (`kind = upstream_error`, `details.*`), so no spec §6 field and no
+`schema_version` moves (§12.6).
+
+- **Retry needs not-billed evidence**: an answer (any status) or a failure before the request bytes went out
+  may be retried inside the declared attempt budget; a request fully written whose response never arrived
+  may **not**, because the upstream may already have billed it — that attempt is ADR-010's
+  `unknown_outcome`, and the client decides whether to retry.
+- **`context_overflow` / `payload_too_large` compress instead of failing over** (failing over bills another
+  provider for the same oversized prompt), and `content_policy_blocked` is aborted locally, never re-probed
+  unchanged.
+- **The provider is the demotion unit** (a plan allowance is per provider/account, spec §4.0): a
+  billing-class failure writes a cooldown that the guard sees as an unavailable route, so the next request
+  does not pay to rediscover a dead account. `Retry-After` and the `x-ratelimit-*` headers feed its TTL, and
+  a wait longer than `server.request_timeout` is carried across requests by the cooldown rather than held
+  open inside one.
+- **A failover prices the cache it breaks**: `failover.triggered` carries the prefix tokens and the switch
+  cost in integer NanoUsd (§5, §12.4, ADR-006) as an **inferred** figure at decision time, and the measured
+  figure — the miss-priced tokens actually billed on the first post-switch turn, against the origin route's
+  `input_hit` price — once that attempt's `usage` lands. The `verified/inferred` convention (spec §7) thus
+  applies to failover exactly as it applies to transforms.
+
 ## 9. Replay (computing money with the same code)
 
 `router replay --trace t.jsonl --config c.yaml [--plugins p.yaml]`: feeds real inbound requests into
@@ -184,7 +215,7 @@ This is the foundation of autowork: a policy cannot be re-implemented in Python 
 
 | Layer | Contents |
 |---|---|
-| unit | exhaustive protocol codec (3×3), `Usage` normalization, five-tier cost, breakeven boundaries, realm isolation, effect LIFO rollback |
+| unit | exhaustive protocol codec (3×3), `Usage` normalization, five-tier cost, breakeven boundaries, realm isolation, effect LIFO rollback, the upstream-error taxonomy (one fixture per reason class plus the priority-order cases, ADR-011) |
 | conformance | fidelity (upstream-visible prefix hash == the client's), SSE event-sequence equivalence, tool-call round trip, unknown-field passthrough, error-code mapping |
 | cache | same-session two turns `prefix_continuity == 1.0`; re-measure after enabling each transform (regression guard) |
 | accounting | every transform carries a `verified/inferred` label; gates read verified only |
@@ -199,6 +230,11 @@ This is the foundation of autowork: a policy cannot be re-implemented in Python 
 | no HMR for tier-A slows experiment iteration | parameters/rules go through config-level coordination; experiment-class plugins are forced to tier-B |
 | the accounting convention is polluted by "estimates" | the binary verified/inferred convention + reports must state the sample size |
 | a system proxy makes onboarding fail | README/spec enforce `NO_PROXY`; the smoke test includes this item |
+| a retry picks the same dead provider again | the demotion is *state* (a cooldown projection), not a per-request check; the previous project measured this failure mode at 62% of its failures (ADR-011) |
+| the failure path's judgement is re-implemented at each call site | one classifier in `router-core`, one table per reason class with a one-fixture minimum; the provider layer makes no decisions (§2) (ADR-011) |
+| the loop improves the measurement instead of the product | the gate definitions, the frozen corpus and the conformance assertions are outside the mutable scope, and a verdict records the evaluator commit and the corpus digest it ran against (ADR-012) |
+| an online experiment destroys the prefix cache | shadow first (no upstream call), then a session-bucketed canary decided at session start and never mid-session; shadow can never enter the cost gate (ADR-013) |
+| an auto-adopted parameter drifts past its declared envelope | declared triggers + automatic rollback + no promotion without the minimum sample + a re-proposal cooldown; only in-envelope parameters are auto-adoptable (ADR-013) |
 
 ## 12. Module and type landing list
 

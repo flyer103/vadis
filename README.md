@@ -92,7 +92,7 @@ autowork/                 the iteration loop side (Python orchestration + router
 - [User book (start here)](book/SUMMARY.md) — user-facing guide: what router is, how to connect a client, the cost levers, how to read the reports.
 - [Spec (WHAT)](docs/spec.md) — protocol contracts, config schema, observation and accounting conventions
 - [Design (HOW)](design/DESIGN.md) — crate layout, plugin runtime, cost engine, cache policy
-- [Decisions (WHY)](design/decisions/) — ADR-001…010
+- [Decisions (WHY)](design/decisions/) — ADR-001…013
 - [Autowork](autowork/program.md) — iteration charter, gates, direction pool
 
 ## Ops

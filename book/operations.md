@@ -24,7 +24,9 @@ misbehaves.
 - **Failover**: a configured ordered chain of routes is tried when an upstream errors,
   rate-limits or exhausts its quota; switching routes loses the prefix cache, and the
   re-prefill cost plus the origin route are recorded. An exhausted chain is a clean gateway
-  error, not a hang.
+  error, not a hang. A provider whose plan or account is exhausted is marked unavailable for a
+  cooldown (ADR-011), so requests stop being spent on a route that is known to be dead instead
+  of rediscovering that one request at a time.
 - **Degradation rules**: a failed transform falls back to the original payload and the
   request is still served; a prefix discontinuity warns by default and can be made
   rejecting; unknown fields pass through.
@@ -32,10 +34,14 @@ misbehaves.
   in the serving path depends on wall-clock time or turn order, so restarts do not change
   what a request looks like upstream.
 - **Upgrades and rollback**: one logical change per commit on a round branch, merged only
-  when the round's gates pass; a round that fails leaves documentation and no broken code.
+  when the round's gates pass; a round that fails leaves documentation and no broken code. A
+  bounded parameter may also be adopted online: it is tried on a share of *new* sessions only
+  (never changed mid-session, which would discard the prefix cache), and it reverts by itself
+  when its declared signals go wrong (ADR-012, ADR-013).
 - **Troubleshooting entry points**: client sees 503 with nothing in the logs → check the
   proxy prerequisite first; endpoint returns "not implemented" → that path is staged for a
-  later round; costs moved → compare prefix continuity between turns.
+  later round; costs moved → compare prefix continuity between turns; a provider seems to be
+  skipped entirely → it is inside a cooldown, which the health endpoint reports.
 
 ## Authoritative sources
 
@@ -45,6 +51,10 @@ misbehaves.
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store and the event-log / trace split.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
+- [`design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md`](../design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md)
+  — the error taxonomy, the provider cooldown and what a failover costs the cache.
+- [`design/decisions/ADR-013-online-iteration-rails.md`](../design/decisions/ADR-013-online-iteration-rails.md)
+  — how a parameter adopted online behaves on your traffic.
 - [`AGENTS.md`](../AGENTS.md) — build/test commands, version-control rules, environment
   gotchas.
 - [`autowork/program.md`](../autowork/program.md) — the round gates that gate a merge.
