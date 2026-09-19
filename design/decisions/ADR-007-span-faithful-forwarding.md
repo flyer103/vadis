@@ -1,61 +1,84 @@
-# ADR-007 — span 保真转发：请求体以原始字节传递，禁止 parse → reserialize 往返
+# ADR-007 — span-faithful forwarding: the request body travels as raw bytes, no parse → reserialize round trip
 
-- 状态：accepted
-- 日期：2026-09-19
-- 关联：AGENTS 硬约束 1/2；spec §2（字节边界）/§6（前缀块）；DESIGN §12.3/§12.3.1；实现 `crates/router-core/src/body.rs`
+- Status: accepted
+- Date: 2026-09-19
+- Related: AGENTS hard constraints 1/2; spec §2 (byte boundary) / §6 (prefix blocks); DESIGN §12.3/§12.3.1; implementation `crates/router-core/src/body.rs`
 
-## 背景
+## Background
 
-前缀缓存的一阶杠杆是**上游看到的字节跨轮不变**。实测（2026-09-19，codex → ZAI）显示客户端每轮全量
-重发 body（3 → 6 items），`store:false`、`previous_response_id` 缺席，因此前缀的稳定性完全由 router 的
-出站字节决定：同一会话第二轮 `cached_tokens` 达 14400/14520（99.2%），而任何一次"顺序变了/空白变了/
-未知字段没了"都会把命中率打回 0（按 miss 价重算整段前缀）。
+The first-order lever of prefix caching is that **the bytes the upstream sees stay unchanged across turns**.
+Measurement (2026-09-19, codex → ZAI) shows the client resends the whole body every round (3 → 6 items),
+with `store:false` and `previous_response_id` absent, so the stability of the prefix is decided entirely by
+router's outbound bytes: in the second round of the same session `cached_tokens` reaches 14400/14520
+(99.2%), while any single "the order changed / the whitespace changed / an unknown field is gone" pushes the
+hit rate back to 0 (the whole prefix recomputed at the miss price).
 
-最常见的破法是"解析成结构体再序列化回去"（parse → reserialize）：看起来是恒等变换，实际上字段顺序、
-未知字段、数值字面量（`1e-9` → `0.000000001`）、空白与转义形式都可能改变，甚至 JSON 语义也会变
-（重复键、大整数）。这类改写**不可检测、不可回滚**：缓存静默失效，成本反而上升。
+The most common way it breaks is "parse into a struct and serialize back" (parse → reserialize): it looks
+like the identity transform, but in practice field order, unknown fields, numeric literals
+(`1e-9` → `0.000000001`), whitespace and escape forms can all change, and even JSON semantics can change
+(duplicate keys, large integers). Such rewrites are **undetectable and irreversible**: the cache silently
+fails and the cost actually rises.
 
-## 决策
+## Decision
 
-1. **请求体在管线中以原始字节承载**：`RawBody(Vec<u8>)`（DESIGN §12.3.1）。它**不实现**
-   `DerefMut`/`AsMut`，也不暴露 `serde_json::Value` 的可变引用 —— 编译期挡住"顺手改一改"。
-2. **唯一允许的改写 = 删除顶层 router 自有字段**：白名单常量 `ROUTER_OWNED_TOP_LEVEL_KEYS`
-   （当前仅 `router_meta`；客户端合法的未知字段永不在列）。新增自有键必须改这个常量，不允许在调用点
-   散落第二份清单。
-3. **禁止 parse → reserialize 往返**：`remove_top_level_keys` 用**单遍 span 扫描器**（跟踪字符串/转义/
-   括号深度）只定位待删成员的字节区间后做区间剔除；`serde_json` **仅作为原始值片段的校验器**
-   （number/true/false/null），绝不产出任何出站字节。
-4. **编码器签名返回借用**：native 格的编码器返回 `Cow<'_, [u8]>`，字节相同时必须是 `Borrowed`
-   （零重建）；只有 translated 格才允许 `Owned`，且映射器必须是 `(content, stable config)` 的纯函数
-   （同内容 → 同上游字节，spec §2 / ADR-004）。
-5. **前缀块与 hash 的定义域 = 上游可见字节**：块 = 前缀区里的结构单元（一条 message / 一个 tool 定义 /
-   一个 input item），`hash = sha256(块原始字节)` hex 前 16 位（spec §6）。因此"删 router 自有字段"不改变
-   任何块 hash —— CONF-10 断言这一点。
-6. **删除的分隔符语义（R1-2c 钉死）**：连续命中白名单的成员构成一个"段"，段整体剔除并吞掉**段尾**与其
-   后继成员之间的逗号（含其间空白），段首逗号留给前一个保留成员；仅当首成员即段起点时才改吞段尾逗号。
-   不变式：**任何 `Ok` 输出必为合法 JSON**，且保留成员逐字节等于其输入 span。
-7. **边界行为的取舍（各有单测钉死，不"顺手修"）**：
-   - BOM 前缀 → `Err(NotTopLevelObject)`：剥离 BOM 属于白名单之外的改写，交调用方按 400 处理。
-   - 前导零数字（`01`）→ `Err(Malformed)`：不属于 RFC 8259 数值文法，不透传模棱两可的数值。
-   - 字符串**值**内的非法 UTF-8 → `Ok` 且逐字节透传（上游自裁）；**键**内非法 UTF-8 → `Err(Malformed)`
-     —— 键必须可解码才能与白名单做语义比对，不对称是有意的。
-8. **容器偏差如实记录**：蓝图写的是 `RawBody(Bytes)`，但 `bytes` crate 不在 `router-core` 的依赖白名单，
-   实取 `Vec<u8>`；出站零拷贝（`Bytes::from(vec)`）在 R2 的 proxy 层完成，字节语义不受影响。
+1. **The request body is carried as raw bytes through the pipeline**: `RawBody(Vec<u8>)` (DESIGN §12.3.1).
+   It does **not** implement `DerefMut`/`AsMut`, nor does it expose a mutable reference to
+   `serde_json::Value` — that blocks "just tweak it in passing" at compile time.
+2. **The only permitted rewrite = deleting top-level router-owned fields**: the whitelist constant
+   `ROUTER_OWNED_TOP_LEVEL_KEYS` (currently only `router_meta`; legitimate unknown client fields are never
+   in it). Adding an owned key must change that constant; a second list scattered at call sites is not
+   allowed.
+3. **The parse → reserialize round trip is forbidden**: `remove_top_level_keys` uses a **single-pass span
+   scanner** (tracking strings/escapes/bracket depth) to locate only the byte ranges of the members to be
+   deleted and then remove those intervals; `serde_json` serves **only as a validator of raw value
+   fragments** (number/true/false/null) and never produces any outbound byte.
+4. **The encoder signature returns a borrow**: the native cell's encoder returns `Cow<'_, [u8]>`, and when
+   the bytes are identical it must be `Borrowed` (zero rebuild); only the translated cell may return
+   `Owned`, and its mapper must be a pure function of `(content, stable config)` (same content → same
+   upstream bytes, spec §2 / ADR-004).
+5. **The domain of prefix blocks and hashes = the bytes the upstream sees**: a block = a structural unit in
+   the prefix region (one message / one tool definition / one input item), and
+   `hash = the first 16 hex chars of sha256(block raw bytes)` (spec §6). Therefore "deleting router-owned
+   fields" changes no block hash — CONF-10 asserts exactly that.
+6. **The separator semantics of deletion (pinned by R1-2c)**: members that consecutively hit the whitelist
+   form a "run"; the run is removed as a whole and swallows the comma between the **run's end** and its
+   successor member (including the whitespace in between), while the comma at the run's start is left to the
+   previous retained member; only when the first member is itself the start of the run does it swallow the
+   trailing comma instead. Invariant: **any `Ok` output must be valid JSON**, and retained members are
+   byte-for-byte equal to their input span.
+7. **Boundary-behaviour trade-offs (each pinned by a unit test, never "fixed in passing")**:
+   - A BOM prefix → `Err(NotTopLevelObject)`: stripping the BOM is a rewrite outside the whitelist, left to
+     the caller to handle as a 400.
+   - A leading-zero number (`01`) → `Err(Malformed)`: not part of the RFC 8259 number grammar, so no
+     ambiguous number is passed through.
+   - Invalid UTF-8 inside a string **value** → `Ok` and passed through byte for byte (upstream decides);
+     invalid UTF-8 inside a **key** → `Err(Malformed)` — a key must be decodable to be compared
+     semantically with the whitelist; the asymmetry is intentional.
+8. **Container deviation recorded honestly**: the blueprint wrote `RawBody(Bytes)`, but the `bytes` crate is
+   not on `router-core`'s dependency allowlist, so `Vec<u8>` is used in practice; outbound zero-copy
+   (`Bytes::from(vec)`) happens in R2's proxy layer and the byte semantics are unaffected.
 
-## 理由
+## Rationale
 
-- 把"不许改字节"从**纪律**变成**类型事实**：没有可变视图就写不出意外改写，代码评审只需审白名单常量。
-- span 扫描是 O(n) 单遍、无分配重编码，既快又不会引入规范化副作用；它与"前缀块按结构单元切分"用同一
-  套扫描语义，指标与数据面不会各说各话。
-- `Cow<'_, [u8]>` 让"native 路径必须是借用"成为签名层面的约束：一旦有人把 native 编码器写成重建字节，
-  类型签名与 CONF-01/02/03 的字节等价断言会一起失败，而不是悄悄退化。
+- It turns "no byte may change" from **discipline** into a **type fact**: with no mutable view you cannot
+  write an accidental rewrite, and code review only has to review the whitelist constant.
+- The span scan is a single O(n) pass with no allocating re-encode: fast, and free of normalization side
+  effects; it uses the same scanning semantics as "splitting prefix blocks by structural unit", so the
+  metrics and the data plane never tell different stories.
+- `Cow<'_, [u8]>` makes "the native path must borrow" a signature-level constraint: once someone writes the
+  native encoder as a byte rebuild, the type signature and CONF-01/02/03's byte-equivalence assertions fail
+  together, instead of degrading quietly.
 
-## 后果
+## Consequences
 
-- native passthrough 的"上游可见字节 == 客户端字节（减去白名单字段）"成为可断言的契约（CONF-10 已有
-  真实执行用例；链路级断言待 R2）。测试矩阵 `deletion_position_matrix*` 与对抗性输入表是**永久回归**，
-  新增删除语义必须扩展它们。
-- 决定所依赖的解析视图（`JsonDoc`，保序）只用于**决策**，绝不允许回流到出站路径。
-- 任何"顺手规范化"的需求（trim、重排键、统一数字写法）都视为硬约束 1 的违规：要么放弃该变换，要么在
-  插件层面显式登记为 transform 并承担缓存代价（spec §6 的 `cache_impact`）。
-- 该决策使 `prefix_continuity` 指标可信：它掉下来时，原因只可能在我们显式做的 transform 上。
+- "native passthrough's upstream-visible bytes == the client's bytes (minus the whitelist fields)" becomes an
+  assertable contract (CONF-10 already has real executing cases; the link-level assertion comes in R2). The
+  `deletion_position_matrix*` test matrix and the adversarial input table are a **permanent regression**; new
+  deletion semantics must extend them.
+- The parse view the decision relies on (`JsonDoc`, order-preserving) is used for **decisions only** and is
+  never allowed to flow back into the outbound path.
+- Any "just normalize it in passing" request (trim, reorder keys, unify number notation) counts as a
+  violation of hard constraint 1: either abandon that transform, or register it explicitly as a transform at
+  the plugin layer and bear the cache cost (spec §6's `cache_impact`).
+- This decision makes the `prefix_continuity` metric trustworthy: when it drops, the cause can only be a
+  transform we explicitly performed.

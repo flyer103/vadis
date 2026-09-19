@@ -1,42 +1,49 @@
-# ADR-002 — 插件运行时采用 Cordis 语义（revertible effects + reactive coeffects）
+# ADR-002 — the plugin runtime adopts Cordis semantics (revertible effects + reactive coeffects)
 
-- 状态：accepted
-- 日期：2026-09-19
-- 依据：Yifan Shi, Wei Zhang, Tianyi Cui, *A Programming Paradigm for Spatiotemporal Composability*,
-  arXiv:2608.25512（§3 机制、§5.1 核心库、§5.2 声明式 loader 与 HMR）
+- Status: accepted
+- Date: 2026-09-19
+- Basis: Yifan Shi, Wei Zhang, Tianyi Cui, *A Programming Paradigm for Spatiotemporal Composability*,
+  arXiv:2608.25512 (§3 mechanisms, §5.1 the core library, §5.2 the declarative loader and HMR)
 
-## 背景
+## Background
 
-插件系统要长期承载"成本/效果实验"：插件会被频繁加载、卸载、并存（A/B、shadow）、并相互依赖。
-朴素钩子式插件有两个已知缺陷：**卸载不干净**（副作用残留，无法判定某实验的真实影响）与**依赖靠人工
-排序/全局约定**（加一个插件要改别人的代码）。论文把这两个问题分别形式化为 temporal composability
-（可逆副作用）与 spatial composability（被动声明的依赖解析）。
+The plugin system must carry "cost/effect experiments" for the long term: plugins are loaded, unloaded and
+coexist frequently (A/B, shadow), and they depend on one another. Naive hook-style plugins have two known
+defects: **unclean unload** (side effects linger, so an experiment's real impact cannot be judged) and
+**dependencies resting on manual ordering / global convention** (adding a plugin means editing someone
+else's code). The paper formalizes these two problems as temporal composability (revertible side effects)
+and spatial composability (passively declared dependency resolution).
 
-## 决策
+## Decision
 
-采用论文的 **context paradigm** 作为运行时内核，取其中四组原语：
+Adopt the paper's **context paradigm** as the runtime kernel and take four groups of primitives from it:
 
-| 论文原语 | 本项目用法 |
+| Paper primitive | Usage in this project |
 |---|---|
-| `ctx.effect(cb) → dispose`（LIFO 逆累加） | 每个 transform/服务注册必须自带逆；卸载插件 = 回滚其全部 effect |
-| `ctx.set/get(key)` + `notify → refresh` | 类型化服务槽；**提供者下线时依赖者先停用**，再撤绑定 |
-| `fiber.inject`（coeffect 声明） | 插件声明依赖；未满足时停在加载等待，不乱序报错 |
-| `ctx.isolate(key, realm)` / `ctx.intercept(key, md)` | 同 key 多 realm（同策略两版本并存做 shadow）；不换绑定只改用法（采样/超时） |
-| entries + keyed diff | 声明式 `plugins:` 列表；per-field 最小操作（config 自 diff / disabled 卸载 / id 变更重建） |
+| `ctx.effect(cb) → dispose` (LIFO rollback) | every transform/service registration must carry its own inverse; unloading a plugin = rolling back all of its effects |
+| `ctx.set/get(key)` + `notify → refresh` | typed service slots; **when a provider goes offline its dependents are deactivated first**, then the binding is withdrawn |
+| `fiber.inject` (a coeffect declaration) | a plugin declares its dependencies; while unsatisfied it stops at load-waiting instead of erroring out of order |
+| `ctx.isolate(key, realm)` / `ctx.intercept(key, md)` | multiple realms under one key (two versions of one policy coexisting as a shadow); change the usage only, not the binding (sampling/timeout) |
+| entries + keyed diff | the declarative `plugins:` list; per-field minimal operations (config self-diff / disabled unload / rebuild on id change) |
 
-## Rust 落地取舍（重要）
+## Rust landing trade-offs (important)
 
-论文的 HMR 依赖动态模块加载。本项目：
+The paper's HMR depends on dynamic module loading. This project:
 
-- **tier-A（编译期链接）插件没有模块级 HMR**——代码变更 = 重建 + 重启。只做**配置级协调**
-  （config / 权重 / 规则 TOML 立即生效）。
-- **tier-B（进程外 UDS/WASM）插件具备模块级重载**——实验类与模型决策类插件强制走 tier-B。
-- 为压低重启代价：cache 账本、粘性表、trace 缓冲由状态服务落盘并在重启后交接（论文 §1.2.3 指出的
-  "重启丢弃进程内状态"问题在本项目由状态服务化解）。
+- **tier-A (link-time) plugins have no module-level HMR** — a code change = rebuild + restart. Only
+  **config-level coordination** is done (config / weights / rule TOML take effect immediately).
+- **tier-B (out-of-process UDS/WASM) plugins do have module-level reload** — experiment-class and
+  model-decision-class plugins are forced to go tier-B.
+- To keep the restart cost low: the cache ledger, the sticky table and the trace buffer are persisted by
+  the state service and handed over after a restart (the "a restart discards in-process state" problem the
+  paper points out in §1.2.3 is resolved in this project by the state service).
 
-## 后果
+## Consequences
 
-- 插件必须实现 `Effect` 逆（Rust 侧是显式 `undo` 闭包 + RAII 的组合）；review 时要检查"卸载后
-  是否真的回到加载前状态"，并用测试断言（加载→卸载→状态等价）。
-- 插件间依赖写在 manifest 的 `inject` 里，而不是代码里硬编顺序；加载顺序由运行时解析。
-- realm 隔离让 A/B 从"两次实验"变成"一次并存对比"，这是本项目实验效率的关键。
+- A plugin must implement the `Effect` inverse (on the Rust side a combination of an explicit `undo`
+  closure + RAII); review must check "does an unload really return to the pre-load state" and assert it
+  with a test (load → unload → state equivalence).
+- Inter-plugin dependencies are written in the manifest's `inject`, not hard-coded as an order in code; the
+  runtime resolves the load order.
+- Realm isolation turns A/B from "two experiments" into "one coexisting comparison", which is the key to
+  this project's experiment efficiency.

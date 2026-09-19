@@ -1,45 +1,52 @@
-# ADR-004 — native passthrough 优先；跨协议确定性翻译；v0.1 不做服务端状态
+# ADR-004 — native passthrough first; deterministic cross-protocol translation; v0.1 does no server-side state
 
-- 状态：accepted
-- 日期：2026-09-19
+- Status: accepted
+- Date: 2026-09-19
 
-## 背景
+## Background
 
-需求是支持 3 种协议（OpenAI chat completions / OpenAI responses / Anthropic messages）。同时"照顾
-prompt cache"要求上游看到的前缀字节跨轮稳定。翻译层如果不做确定性约束，就会成为最大的缓存破坏源。
-另外必须回答：是否需要支持服务端会话状态（`store:true` / `previous_response_id`）。
+The requirement is to support 3 protocols (OpenAI chat completions / OpenAI responses / Anthropic messages).
+At the same time "taking care of the prompt cache" requires the prefix bytes the upstream sees to be stable
+across turns. If the translation layer has no determinism constraint, it becomes the biggest cache-breaking
+source. We must also answer: is server-side session state (`store:true` / `previous_response_id`) needed?
 
-## 决策
+## Decision
 
-1. **native passthrough 优先**：入站协议 == provider `wire_api` 时，只允许删除 router 自有字段，
-   其余字节原样转发。
-2. **跨协议翻译必须确定性**：映射器是 `(content, stable config)` 的纯函数，同一内容永远产出同一
-   上游字节；有损点必须显式登记（spec §2 清单）并写 trace。
-3. **v0.1 不做服务端状态**：入站 `store:true` 或非空 `previous_response_id` → **粘性路由到同一
-   (provider, model)** 保真 + trace 打 `stateful_inbound` 标记；无法保证粘性时才 400。
+1. **native passthrough first**: when the inbound protocol == the provider's `wire_api`, the only permitted
+   mutation is deleting router-owned fields; every other byte is forwarded as is.
+2. **Cross-protocol translation must be deterministic**: a mapper is a pure function of
+   `(content, stable config)`, and the same content always produces the same upstream bytes; lossy points
+   must be registered explicitly (the list in spec §2) and written into the trace.
+3. **v0.1 does no server-side state**: an inbound `store:true` or a non-empty `previous_response_id` →
+   **sticky routing to the same (provider, model)** for fidelity + the trace marks `stateful_inbound`; only
+   when stickiness cannot be guaranteed is it a 400.
 
-## 证据（实测，2026-09-19）
+## Evidence (measured, 2026-09-19)
 
-对 codex CLI 0.137（`wire_api="responses"` → ZAI）做本地抓包（完整一轮，含一次工具调用）：
+A local packet capture of codex CLI 0.137 (`wire_api="responses"` → ZAI), one complete round including one
+tool call:
 
-| 观测 | 值 |
+| Observation | Value |
 |---|---|
-| 请求体顶层字段 | `client_metadata, include, input, model, parallel_tool_calls, prompt_cache_key, reasoning, store, stream, tool_choice, tools` |
-| `store` | `false`（两轮都是） |
-| `previous_response_id` | 两轮都不存在 |
-| `input` 长度 | 3 items（首轮）→ 6 items（工具调用后）→ **全量重发** |
-| `prompt_cache_key` | 两轮相同（= session id），上游响应回显该字段 |
-| 上游缓存 | `cached_tokens` 960/14409 → 14400/14520（99.2%） |
+| request body top-level fields | `client_metadata, include, input, model, parallel_tool_calls, prompt_cache_key, reasoning, store, stream, tool_choice, tools` |
+| `store` | `false` (both rounds) |
+| `previous_response_id` | absent in both rounds |
+| `input` length | 3 items (first round) → 6 items (after the tool call) → **full resend** |
+| `prompt_cache_key` | identical in both rounds (= session id), the upstream response echoes the field |
+| upstream cache | `cached_tokens` 960/14409 → 14400/14520 (99.2%) |
 
-静态证据一致：`codex-rs/core/src/client.rs` 硬编码 `store: false` 且 HTTP 路径不设
-`previous_response_id`（该字段只属于 WebSocket 增量传输与 remote compaction）；
-`hermes/agent/transports/codex.py` 同样 `"store": False` + `prompt_cache_key=session_id`。
+The static evidence agrees: `codex-rs/core/src/client.rs` hard-codes `store: false` and the HTTP path sets
+no `previous_response_id` (that field belongs only to the WebSocket incremental transport and remote
+compaction); `hermes/agent/transports/codex.py` likewise has `"store": False` + `prompt_cache_key=session_id`.
 
-## 后果
+## Consequences
 
-- 服务端状态缺席的成本极低，而实现它的复杂度（session 表、失效、并发、跨 provider 语义差异）很高；
-  这项复杂度被推迟到有实测需求为止（`stateful_inbound_rate` 指标持续监控）。
-- `prompt_cache_key` 升为会话身份的一等来源，用于粘性表与 cache 账本键。
-- 客户端全量重发 ⇒ 前缀缓存的命运完全由 router 的 transform 决定 ⇒ `prefix_continuity` 成为阻塞门。
-- codex 若切到 WebSocket 传输，HTTP-only 的 v0.1 依赖其 fallback 到 HTTP（客户端已有
-  `fallback_to_http`）；此事记录在案，作为未来观测项。
+- The cost of the missing server-side state is extremely low, while the complexity of implementing it
+  (session table, invalidation, concurrency, cross-provider semantic differences) is high; that complexity
+  is deferred until there is a measured need (the `stateful_inbound_rate` metric keeps monitoring it).
+- `prompt_cache_key` is promoted to a first-class source of session identity, used for the sticky table and
+  the cache-ledger key.
+- Clients resend everything ⇒ the fate of the prefix cache is decided entirely by router's transforms ⇒
+  `prefix_continuity` becomes a blocking gate.
+- If codex switches to the WebSocket transport, the HTTP-only v0.1 depends on its fallback to HTTP (the
+  client already has `fallback_to_http`); this is recorded as a future observation item.

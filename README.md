@@ -1,101 +1,101 @@
 # router
 
-多协议 LLM 网关：**字节保真的数据面 + 可逆的插件运行时 + 可实测的成本引擎**。
+A multi-protocol LLM gateway: **a byte-faithful data plane + a revertible plugin runtime + a measurable cost engine**.
 
-给日常的 agent（codex / hermes / claude code）用：客户端把 base_url 指过来，router 决定请求走哪个
-(provider, model)、在**不破坏上游前缀缓存**的前提下省 token，并把每一次决定与每一分钱记进可回放的
-trace。
+For everyday agents (codex / hermes / claude code): point the client's base_url here and router decides
+which (provider, model) a request takes, saves tokens **without breaking the upstream prefix cache**, and
+records every decision and every cent into a replayable trace.
 
-## 现状
+## Status
 
 | | |
 |---|---|
-| 阶段 | **骨架就绪**：cargo workspace 可编译、`serve` 可起（`/health` 200 + 三协议端点 `501` 桩）、五档成本/配额/breakeven 纯函数与 `RawBody` 字节原语已实现并有单测；**转发与 trace 未实现**（Round 2）。见 `autowork/STATE.md` |
-| 选模型 | **显式指定** (provider, model) 或别名；自动选择是插件槽，v0.1 不启用 |
-| 协议 | 入站/出站均支持 OpenAI chat completions / OpenAI responses / Anthropic messages |
-| 成本 | P0 缓存保真 → P1 输入侧载荷压缩 → P2 输出侧纪律 → P3 provider 套利 |
-| 迭代 | `autowork/` 循环侧持续迭代产品（多 profile + kanban，见 `autowork/program.md`） |
+| Phase | **Skeleton ready**: the cargo workspace compiles, `serve` starts (`/health` 200 + the three protocol endpoints as `501` stubs), the five-tier cost/quota/breakeven pure functions and the `RawBody` byte primitive are implemented with unit tests; **forwarding and trace are not implemented yet** (Round 2). See `autowork/STATE.md` |
+| Model choice | **Explicit** (provider, model) or an alias; automatic selection is a plugin slot, not enabled in v0.1 |
+| Protocols | Inbound and outbound both support OpenAI chat completions / OpenAI responses / Anthropic messages |
+| Cost | P0 cache fidelity → P1 input-side payload compression → P2 output-side discipline → P3 provider arbitrage |
+| Iteration | the `autowork/` loop side keeps iterating the product (multi-profile + kanban, see `autowork/program.md`) |
 
 ## Quick Start
 
 ```bash
-cp config.example.yaml config.yaml     # 编辑 roster：provider / model / 价格 / 配额
-set -a && source .env && set +a        # provider keys 只从 env 读，绝不写进 yaml
+cp config.example.yaml config.yaml     # edit the roster: provider / model / price / quota
+set -a && source .env && set +a        # provider keys are read from env only, never written into yaml
 cargo run -p router-cli -- serve --config config.yaml
 ```
 
-客户端接入（**必须**先做，否则 macOS 系统代理会截走发往 localhost 的请求）：
+Client onboarding (**must** be done first, or the macOS system proxy intercepts requests going to localhost):
 
 ```bash
-export NO_PROXY=127.0.0.1,localhost     # codex(reqwest) / hermes(httpx) 都读这个变量
+export NO_PROXY=127.0.0.1,localhost     # both codex (reqwest) and hermes (httpx) read this variable
 ```
 
-codex 侧：
+On the codex side:
 
 ```toml
 [model_providers.router]
 base_url = "http://127.0.0.1:8790/v1"
-wire_api = "responses"                  # 或 "chat"
+wire_api = "responses"                  # or "chat"
 env_key  = "ROUTER_TOKEN"
 ```
 
 ## CLI
 
 ```bash
-router serve      --config config.yaml          # 启动网关
-router stats      --window 24h                  # 成本 / 缓存命中 / stateful 占比 / 每 transform 实测收益
-router replay     --trace traces/x.jsonl --config config.yaml   # 离线回放：同一份真实代码路径算成本
-router trace tail                               # 跟随查看决定与计账流水
+router serve      --config config.yaml          # start the gateway
+router stats      --window 24h                  # cost / cache hits / stateful share / measured gain per transform
+router replay     --trace traces/x.jsonl --config config.yaml   # offline replay: cost computed on the same real code path
+router trace tail                               # follow the decisions and the accounting stream
 ```
 
 ## API
 
-入站端点（三者等价，按协议镜像上游语义）：
+Inbound endpoints (the three are equivalent and mirror the upstream semantics per protocol):
 
-| Method | Path | 协议 |
+| Method | Path | Protocol |
 |---|---|---|
 | POST | `/v1/chat/completions` | OpenAI chat completions |
 | POST | `/v1/responses` | OpenAI responses |
 | POST | `/v1/messages` | Anthropic messages |
-| GET | `/health` | 存活 + 已装载插件/服务 |
+| GET | `/health` | liveness + the plugins/services loaded |
 | GET | `/metrics` | Prometheus |
 
-`model` 字段接受：`provider/model`、配置中的别名、或 `auto`（v0.1 返回 400 并提示由插件接管）。
-响应中附带 `router_meta`：命中的插件链、每步 transform 的计账、session 与缓存状态。
+The `model` field accepts `provider/model`, an alias from the config, or `auto` (v0.1 returns 400 and says a plugin must take over).
+Responses carry `router_meta`: the plugin chain that hit, the accounting of each transform step, and the session and cache state.
 
 ## Build & Test
 
 ```bash
 cargo build --workspace
-cargo test  --workspace          # 含 tests/conformance 的 3×3 协议矩阵
+cargo test  --workspace          # includes the 3×3 protocol matrix in tests/conformance
 cargo clippy --workspace -- -D warnings
 ```
 
-## 目录
+## Layout
 
 ```
-crates/router-core        领域模型、决定管线、成本引擎、cache 账本、插件 trait
-crates/router-protocol    3 协议编解码、翻译矩阵、usage 归一化
-crates/router-providers   provider 适配（wire_api 能力、鉴权、重试、SSE）
-crates/router-runtime     Cordis 语义运行时（effect / coeffect / fiber / 声明式 loader）
-crates/router-plugins     内置 tier-A 插件
-crates/router-proxy       数据面（axum），字节保真转发
+crates/router-core        domain model, decision pipeline, cost engine, cache ledger, plugin trait
+crates/router-protocol    codec for the 3 protocols, translation matrix, usage normalization
+crates/router-providers   provider adapters (wire_api capability, auth, retry, SSE)
+crates/router-runtime     the Cordis-semantics runtime (effect / coeffect / fiber / declarative loader)
+crates/router-plugins     built-in tier-A plugins
+crates/router-proxy       data plane (axum), byte-faithful forwarding
 crates/router-cli         serve / stats / replay / trace
-crates/router-plugin-sdk  tier-B 进程外插件协议
-tests/conformance         协议保真、前缀稳定、计账口径
-autowork/                 迭代循环侧（Python 编排 + router replay 做策略模拟）
+crates/router-plugin-sdk  out-of-process tier-B plugin protocol
+tests/conformance         protocol fidelity, prefix stability, the accounting convention
+autowork/                 the iteration loop side (Python orchestration + router replay for policy simulation)
 ```
 
-## 设计文档
+## Design documents
 
 - [User book (start here)](book/SUMMARY.md) — user-facing guide: what router is, how to connect a client, the cost levers, how to read the reports.
-- [Spec (WHAT)](docs/spec.md) — 协议契约、配置 schema、观测与计账口径
-- [Design (HOW)](design/DESIGN.md) — crate 布局、插件运行时、成本引擎、缓存策略
+- [Spec (WHAT)](docs/spec.md) — protocol contracts, config schema, observation and accounting conventions
+- [Design (HOW)](design/DESIGN.md) — crate layout, plugin runtime, cost engine, cache policy
 - [Decisions (WHY)](design/decisions/) — ADR-001…008
-- [Autowork](autowork/program.md) — 迭代章程、gate、方向池
+- [Autowork](autowork/program.md) — iteration charter, gates, direction pool
 
 ## Ops
 
-- 不做服务端会话状态：入站 `store:true` / 非空 `previous_response_id` → 粘性路由 + trace 打标。
-- 缓存是一阶成本杠杆：任何改写都必须是**内容确定性**的（同一内容 → 同一上游字节）。
-- 观测指标见 `docs/spec.md` §观测契约；离线回放是唯一算钱的权威口径。
+- No server-side session state: an inbound `store:true` / a non-empty `previous_response_id` → sticky routing + a trace marker.
+- Cache is the first-order cost lever: every rewrite must be **content-deterministic** (same content → same upstream bytes).
+- Metrics are described by the observation contract in `docs/spec.md`; offline replay is the only authoritative way to compute money.

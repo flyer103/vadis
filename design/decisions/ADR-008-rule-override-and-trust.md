@@ -1,52 +1,67 @@
-# ADR-008 — 规则文件的三级覆盖（首个命中生效）与 trust 门（v0.1 不启用）
+# ADR-008 — the three-level rule-file override (the first hit takes effect) and the trust gate (not enabled in v0.1)
 
-- 状态：accepted
-- 日期：2026-09-19
-- 关联：ADR-003（声明式、可逆、逐条计账的 transform 管线）；spec §4.4；DESIGN §12.9 Q4；`rules/tool_output.toml`
+- Status: accepted
+- Date: 2026-09-19
+- Related: ADR-003 (a declarative, revertible, individually accounted transform pipeline); spec §4.4; DESIGN §12.9 Q4; `rules/tool_output.toml`
 
-## 背景
+## Background
 
-规则即数据（ADR-003）：压缩策略以 TOML 规则文件承载，`builtin/transform_rules` 负责装载与执行。
-需要回答两个问题：**多份规则文件同时存在时，哪一个生效**；以及**规则是否需要 rtk 式的 trust 门**
-（来源不可信的规则文件必须显式授信才执行）。
+Rules are data (ADR-003): compression policy is carried by TOML rule files, and `builtin/transform_rules`
+loads and executes them. Two questions must be answered: **when several rule files exist at once, which one
+takes effect**; and **do rules need an rtk-style trust gate** (a rule file from an untrusted source must be
+explicitly trusted before it executes).
 
-这两个问题在旧项目里是"事故级"的：规则来源纷杂时，如果采取合并语义，"当前生效的是哪条规则"变成
-一个不可推断的问题，任何一次成本变化都失去归因链；而如果无脑信任任何来源，规则文件就成了一条
-任意改写出站字节的通道（对前缀缓存是直接破坏）。
+Both questions were "incident-grade" in the old project: when rule sources are heterogeneous, adopting merge
+semantics turns "which rule is currently in effect" into an undeducible question, and any cost change loses
+its attribution chain; while trusting any source blindly makes a rule file a channel for arbitrarily
+rewriting outbound bytes (a direct break of the prefix cache).
 
-## 决策
+## Decision
 
-1. **查找顺序（三级）**：`.router/rules.toml`（项目）→ `~/.config/router/rules.toml`（用户）→
-   内置（编译期内嵌）。**首个命中生效**（first match wins）。
-2. **不做合并、不做逐条覆盖**：选中的那一份文件就是全部规则；不足的规则要么在更靠前的位置显式提供，
-   要么由 PR 补进更靠前的那份。禁止 deep merge / 键级覆盖 —— "生效规则集"必须能被一次打开文件读出来。
-3. **v0.1 不启用 trust 门**：规则文件按"本机仓库资产"对待（与 config、代码同级别、同一信任域），
-   装载前不做签名/来源校验，也不要求显式授信。
-4. **装载失败必须显式**：任一规则的内联测试失败、正则编译失败或 DSL 语义失败 → **该条规则不装载**，
-   在启动日志与 `/health` 报出，其余规则照常；执行期失败按 spec §8 fail-safe 回退原文并记
-   `errors[].kind = transform_error`（绝不半改、绝不静默）。
-5. **重新评估 trust 门的触发条件**（任一成立即必须重新评估，不得默认沿用本条决策）：
-   - 出现**非本机作者**来源的规则文件（下载、第三方仓库、他人分享）；
-   - 规则文件进入**网络/共享分发**路径（打包分发、远端同步、插件自带规则）；
-   - 出现"规则可影响出站字节、但来源不可信"的具体用例（例如插件市场里的 transform 规则）。
-   最小演进形态是"来源标记 + 拒绝未标记规则"，**不允许**退化为静默加载。
+1. **Lookup order (three levels)**: `.router/rules.toml` (project) → `~/.config/router/rules.toml` (user) →
+   builtin (compiled in). **The first hit takes effect** (first match wins).
+2. **No merging, no per-rule override**: the selected file is the whole rule set; a missing rule must either
+   be provided explicitly at an earlier position or be added to that earlier file by a PR. Deep merge /
+   key-level override is forbidden — the "effective rule set" must be readable by opening one file.
+3. **v0.1 does not enable the trust gate**: rule files are treated as "local repository assets" (the same
+   level as config and code, in the same trust domain); no signature/origin check before loading, and no
+   explicit trust required.
+4. **A load failure must be explicit**: if any rule's inline test fails, a regex fails to compile or the DSL
+   semantics fail → **that rule is not loaded**, it is reported in the startup log and in `/health`, and the
+   remaining rules work as usual; a runtime failure falls back to the original text per spec §8 fail-safe
+   and records `errors[].kind = transform_error` (never half-rewrite, never silently).
+5. **Trigger conditions for re-evaluating the trust gate** (any one holding means it must be re-evaluated;
+   this decision must not be carried over by default):
+   - a rule file appears whose source is a **non-local author** (a download, a third-party repository,
+     someone else's share);
+   - a rule file enters a **network/shared distribution** path (packaged distribution, remote sync, rules
+     shipped with a plugin);
+   - a concrete case appears where "rules can affect outbound bytes but the source is untrusted" (e.g.
+     transform rules in a plugin marketplace).
+   The minimal evolution is "an origin marker + rejecting unmarked rules"; it is **not allowed** to degrade
+   into silent loading.
 
-## 理由
+## Rationale
 
-- 首个命中 + 不合并让"生效规则集"是一个确定、可复现、可审计的函数（`rules verify` 的输入就是它），
-  这是 §4 计账可归因的前提。
-- v0.1 的规则只可能来自本机作者的仓库：trust 门此时是零收益的复杂度（每个本地编辑都要走授信流程），
-  而它防护的威胁（不可信来源）在 v0.1 的部署形态里不存在。**延后是判断，不是遗忘** —— 所以把触发
-  条件写死在 ADR 里。
-- 与 AGENTS 硬约束一致：策略产物是 config / 规则 TOML / tier-B 插件的**唯一**注入面，产物本身不进
-  服务路径的"运行时决策"，因此来源校验应当发生在装载边界而不是执行期。
+- First-hit + no merging makes the "effective rule set" a definite, reproducible, auditable function (it is
+  the input of `rules verify`), which is the precondition for §4's attributable accounting.
+- v0.1's rules can only come from a local author's repository: at this point the trust gate is a
+  zero-benefit complexity (every local edit would go through a trust workflow), while the threat it guards
+  against (an untrusted source) does not exist in v0.1's deployment shape. **Deferring is a judgement, not
+  an omission** — so the trigger conditions are written into the ADR.
+- Consistent with the AGENTS hard constraints: policy artifacts are the **only** injection surface of config
+  / rule TOML / tier-B plugins, and the artifacts themselves do not enter the serving path's "runtime
+  decision", so origin verification should happen at the load boundary rather than at execution time.
 
-## 后果
+## Consequences
 
-- `router rules verify` 成为装载前的可执行门禁：内联测试是规则的**唯一**规格（同内容 → 同输出），
-  失败即不装载；这使"规则写错了"表现为"规则没生效 + 显式日志"，而不是"字节被悄悄改了"。
-- 三级顺序意味着项目级文件**完全遮蔽**用户级与内置规则；用户若要"只覆盖一条"，必须复制整份文件后
-  修改 —— 这是刻意的取舍（可读性 > 便利性），并在 `rules/tool_output.toml` 的文件头写明。
-- 规则文件的来源一旦超出本机信任域，必须回到本 ADR 重新裁定；在此之前的任何"顺手加签名校验"都属于
-  未经评估的范围扩张。
-- GAP-Q4（DESIGN §12.9）由此关闭：覆盖语义已定、trust 门已裁定为不启用 + 带触发条件。
+- `router rules verify` becomes an executable gate before loading: inline tests are a rule's **only** spec
+  (same content → same output) and a failure means no load; this makes "the rule was written wrong" show up
+  as "the rule did not take effect + an explicit log" instead of "the bytes were changed quietly".
+- The three-level order means a project-level file **completely shadows** user-level and builtin rules; a
+  user who wants to "override just one rule" must copy the whole file and then edit it — a deliberate
+  trade-off (readability > convenience), documented in the header of `rules/tool_output.toml`.
+- Once a rule file's source goes beyond the local trust domain, this ADR must be re-adjudicated; any "just
+  add a signature check in passing" before that is an unevaluated scope expansion.
+- GAP-Q4 (DESIGN §12.9) is closed by this: the override semantics are settled, and the trust gate is ruled
+  not enabled + with trigger conditions.

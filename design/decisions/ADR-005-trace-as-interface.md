@@ -1,36 +1,48 @@
-# ADR-005 — Trace 是产品↔autowork 的唯一接口；autowork = Python 编排 + 产品 replay
+# ADR-005 — the trace is the only product↔autowork interface; autowork = Python orchestration + the product's replay
 
-- 状态：accepted
-- 日期：2026-09-19
+- Status: accepted
+- Date: 2026-09-19
 
-## 背景
+## Background
 
-autowork 循环要能持续迭代产品（成本策略、插件、规则）。旧项目的最大教训是**策略双实现**：产品用
-Go 实现策略，评测侧在 Python 里重实现一遍，于是产生 train/serve skew（分类器/特征口径不一致），
-多轮实验的结论被口径问题污染。第二个教训是把研究观测塞进服务路径（注入内部上下文，导致
-prompt_tokens 是竞品的 6 倍，成本口径直接失真）。
+The autowork loop must keep iterating on the product (cost policy, plugins, rules). The old project's
+biggest lesson was **a double implementation of the policy**: the product implemented the policy in Go and
+the evaluation side re-implemented it in Python, which produced train/serve skew (inconsistent
+classifier/feature conventions) and polluted many rounds' conclusions with convention problems. The second
+lesson was pushing research observation into the serving path (injecting internal context, which made
+prompt_tokens 6× the competitor's and directly distorted the cost convention).
 
-## 决策
+## Decision
 
-1. **方向单一**：产品 → autowork 只通过 **trace JSONL**（spec §6 的 DecisionRecord）；autowork →
-   产品只通过**策略产物**（config / 规则 TOML / tier-B 插件）。研究代码绝不进服务路径。
-2. **autowork 语言 = Python（uv）编排**：数据收集、判分、统计、报表用生态最成熟的工具；**不做策略
-   逻辑的二次实现**。
-3. **策略模拟永远调用产品自身**：`router replay --trace ... --config ...` 使用与生产同一个 binary、
-   同一份决定管线与编码路径，只把出站 HTTP 替换为本地模拟。离线回放因此天然无 skew，且可复现。
-4. **gate 只在回放上成立**：任何"更省/更好"的结论必须能在固定 trace 上重放出来；live A/B 只作为旁证。
+1. **A single direction**: product → autowork only through **trace JSONL** (the DecisionRecord of spec §6);
+   autowork → product only through **policy artifacts** (config / rule TOML / tier-B plugin). Research code
+   never enters the serving path.
+2. **The autowork language = Python (uv) orchestration**: data collection, judging, statistics and reports
+   use the most mature tools in the ecosystem; **no second implementation of the policy logic**.
+3. **Policy simulation always calls the product itself**: `router replay --trace ... --config ...` uses the
+   same binary, the same decision pipeline and the same encoding path as production, replacing only the
+   outbound HTTP with a local simulation. Offline replay is therefore skew-free by construction and
+   reproducible.
+4. **A gate only holds on replay**: any "cheaper/better" conclusion must be replayable on a fixed trace;
+   live A/B serves as corroboration only.
 
-## 理由
+## Rationale
 
-- 判分/统计/可视化在 Python 侧成本低一个数量级；而"与生产逐字节一致"的部分在 Rust 侧已经有了实现，
-  重复实现是净损失。
-- trace 作为唯一接口让"研究不进服务路径"成为可验证的结构事实（可以断言的边界），而不是纪律要求。
-- 回放口径与在线口径同源，使"省了多少"从观点变成可复算的数字。
+- Judging/statistics/visualization cost an order of magnitude less on the Python side; and the part that
+  must be "byte-identical to production" is already implemented on the Rust side, so re-implementing it is a
+  net loss.
+- The trace as the only interface makes "research does not enter the serving path" a verifiable structural
+  fact (a boundary that can be asserted) rather than a discipline requirement.
+- The replay convention and the online convention share one origin, which turns "how much did it save" from
+  an opinion into a recomputable number.
 
-## 后果
+## Consequences
 
-- trace schema 是产品契约的一部分（spec §6），变更需同步 autowork harness（同仓，原子提交）。
-- autowork 只能观测到 trace 里有的东西；缺少的维度必须先在产品侧补齐——这是刻意的约束（避免研究侧
-  靠推断补数据）。
-- tier-B 插件的实验（判分/探索类）走进程外协议，天然带超时与崩溃隔离；tier-A 只承载确定性路径。
-- 需要真实上游调用的实验（判分、生成）保留预算门；付费轮次必须事前确认预算。
+- The trace schema is part of the product contract (spec §6); a change must be synchronized with the
+  autowork harness (same repo, atomic commit).
+- autowork can only observe what is in the trace; a missing dimension must first be filled in on the product
+  side — a deliberate constraint (it keeps the research side from patching data by inference).
+- Experiments with tier-B plugins (judging/exploration class) go through the out-of-process protocol and come
+  with timeouts and crash isolation by construction; tier-A carries only the deterministic path.
+- Experiments that need real upstream calls (judging, generation) keep the budget gate; paid rounds must have
+  their budget confirmed in advance.

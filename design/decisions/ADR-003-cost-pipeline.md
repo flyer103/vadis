@@ -1,41 +1,49 @@
-# ADR-003 — 省成本 = 可逆、声明式、逐条计账的 transform 管线
+# ADR-003 — saving cost = a revertible, declarative, individually accounted transform pipeline
 
-- 状态：accepted
-- 日期：2026-09-19
+- Status: accepted
+- Date: 2026-09-19
 
-## 背景
+## Background
 
-"内置省 token"最容易变成一堆硬编码技巧，无法归因、无法回滚，且常常**与提示词缓存冲突**——压缩改写
-早期上下文会让整段前缀缓存失效，省下的 30% 被重算的 re-prefill 吃掉。社区已有可复用的成熟形态：
-rtk（Apache-2.0，Rust，声明式 TOML 过滤管线 + 内联测试 + 原文 tee/retrieve、fail-safe passthrough、
-<10ms 开销）；caveman（其 proxy 为 BSL-1.1，仅作设计参考，不嵌入）。
+"Built-in token saving" most easily degenerates into a pile of hard-coded tricks that cannot be attributed
+or rolled back, and that often **conflict with the prompt cache** — compressing or rewriting early context
+invalidates the whole prefix cache, and the 30% saved is eaten by the recomputed re-prefill. The community
+already has reusable mature shapes: rtk (Apache-2.0, Rust, a declarative TOML filter pipeline + inline
+tests + original-text tee/retrieve, fail-safe passthrough, <10ms overhead); caveman (its proxy is BSL-1.1,
+used as a design reference only, not embedded).
 
-## 决策
+## Decision
 
-1. **省成本 = transform 管线**，每条 transform 是一个插件，必须：
-   可逆（ADR-002）、内容确定（禁用轮次/时间/随机依赖）、逐条计账、失败回退原文。
-2. **优先级固定**（一阶在前，实测支撑：同会话第二轮 `cached_tokens` 14400/14520 = 99.2%）：
+1. **Saving cost = a transform pipeline**, where each transform is a plugin that must be: revertible
+   (ADR-002), content-deterministic (no dependency on turn/clock/RNG), individually accounted, and falling
+   back to the original text on failure.
+2. **A fixed priority** (first-order first, backed by measurement: the second round of the same session has
+   `cached_tokens` 14400/14520 = 99.2%):
 
-   | 级 | 手段 | v0.1 |
+   | Tier | Means | v0.1 |
    |---|---|---|
-   | P0 | 前缀缓存保真（零改写、粘性、断点注入、cache 账本） | ✅ |
-   | P1 | 输入侧载荷压缩（tool_result/日志/JSON/diff/搜索结果；原文 tee + retrieve） | ✅ |
-   | P2 | 输出侧纪律（append-only 指令注入、max_tokens/stop、结构化输出约束） | ✅ |
-   | P3 | provider 套利（命中计价、峰谷、配额套餐优先级、batch） | ✅ |
-   | P4 | 去重/裁剪/摘要（改写早期内容，与缓存冲突最大） | 延后 |
+   | P0 | prefix-cache fidelity (zero rewrite, stickiness, breakpoint injection, cache ledger) | ✅ |
+   | P1 | input-side payload compression (tool_result/logs/JSON/diff/search results; original-text tee + retrieve) | ✅ |
+   | P2 | output-side discipline (append-only instruction injection, max_tokens/stop, structured-output constraints) | ✅ |
+   | P3 | provider arbitrage (hit pricing, peak/off-peak, plan quota priority, batch) | ✅ |
+   | P4 | dedup/trim/summarize (rewrites early content, the biggest cache conflict) | deferred |
 
-3. **规则即数据**：压缩规则用 TOML 描述（形态参考 rtk：管线阶段、match_output、keep/strip_lines、
-   truncate、head/tail、max_lines、on_empty），**每条规则必须内联测试**（input/expected），三级覆盖
-   （项目 → 用户 → 内置）。新规则的准入 = 内联测试全绿 + 缓存回归通过。
-4. **计账二元口径**：`verified`（上游 usage 实测差值，需对照回合）与 `inferred`（本地估算）。只有
-   verified 能进 gate、能对外报数；报告必须声明口径、样本量、时间窗。
-5. **许可纪律**：可复用 Apache-2.0/MIT 的实现思路与代码；BSL/非 OSI 许可（如 caveman runtime）只
-   读设计不嵌入。
+3. **Rules are data**: compression rules are described in TOML (shaped after rtk: pipeline stages,
+   match_output, keep/strip_lines, truncate, head/tail, max_lines, on_empty), and **every rule must have
+   inline tests** (input/expected), with three-level override (project → user → builtin). Admission of a new
+   rule = all inline tests green + the cache regression passes.
+4. **A binary accounting convention**: `verified` (the measured delta of upstream usage, requiring a
+   comparison round) and `inferred` (a local estimate). Only verified may enter a gate or be reported
+   externally; a report must state its convention, sample size and time window.
+5. **License discipline**: reuse the implementation ideas and code of Apache-2.0/MIT; BSL/non-OSI licenses
+   (e.g. the caveman runtime) are read for design only and never embedded.
 
-## 后果
+## Consequences
 
-- 每条 transform 都会带来"added tokens 换 saved tokens"的净收益问题；净收益为负的规则必须能被
-  gate 拦下（这也是 verified 口径存在的意义）。
-- 输入侧压缩**只作用于工具/环境载荷**，绝不改写用户意图：第三方实测（JetBrains 86 任务；Adobe
-  CAVEWOMAN, arXiv:2606.24083）显示压缩人类 prompt 会让模型答得更长更差。
-- P4 延后是刻意决定：任何改写历史的规则都要先有 `prefix_continuity` 度量与回退机制。
+- Every transform raises the net-gain question of "added tokens for saved tokens"; a rule with a negative
+  net gain must be stoppable by the gate (this is also why the verified convention exists).
+- Input-side compression **applies only to tool/environment payloads** and never rewrites user intent:
+  third-party measurements (JetBrains, 86 tasks; Adobe CAVEWOMAN, arXiv:2606.24083) show that compressing a
+  human prompt makes the model answer longer and worse.
+- Deferring P4 is a deliberate decision: any rule that rewrites history needs a `prefix_continuity` metric
+  and a rollback mechanism first.

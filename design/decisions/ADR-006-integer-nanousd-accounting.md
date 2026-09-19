@@ -1,44 +1,60 @@
-# ADR-006 — 计账单位为整数 NanoUsd（定点金额，禁止 f64 累加）
+# ADR-006 — the accounting unit is integer NanoUsd (fixed-point amounts, no f64 accumulation)
 
-- 状态：accepted
-- 日期：2026-09-19
-- 关联：spec §6（成本）/§7（计账口径）；DESIGN §5/§12.4；实现 `crates/router-core/src/cost.rs`
+- Status: accepted
+- Date: 2026-09-19
+- Related: spec §6 (cost) / §7 (accounting convention); DESIGN §5/§12.4; implementation `crates/router-core/src/cost.rs`
 
-## 背景
+## Background
 
-router 的产出口径是"这条策略省了多少钱"，而这个数字要能**逐字节复算**：trace 里记下的成本必须能被
-`router replay` 用同一份代码重算出完全相同的值。单请求成本量级是 1e-7 ~ 1e-3 USD，用 `f64` 累加在
-百万级请求上会漂移，且 IEEE-754 的取整行为依赖运算顺序 —— 两个"实现等价"的路径会给出不同字节的报表，
-gate 上的"净收益 > 0"因此会变成"取决于谁先算"。
+router's output convention is "how much money did this policy save", and that number must be **recomputable
+byte for byte**: the cost recorded in the trace must be recomputed by `router replay` with the same code
+into exactly the same value. A single request's cost is on the order of 1e-7 ~ 1e-3 USD; accumulating with
+`f64` over millions of requests drifts, and IEEE-754's rounding behaviour depends on operation order — two
+"equivalent" implementations produce reports with different bytes, so the gate's "net gain > 0" becomes
+"whoever computes first decides".
 
-同时 config 里的价格是人类可读的字符串（USD/1K，官方页多以 USD/1M 公布），**装载期**不可避免要接触
-小数文本。问题不是"能不能用浮点"，而是"浮点能在哪一层停留"。
+At the same time the prices in config are human-readable strings (USD/1K, while official pages mostly
+publish USD/1M), so **load time** inevitably touches decimal text. The question is not "may floating point
+be used" but "in which layer may floating point stay".
 
-## 决策
+## Decision
 
-1. **金额定点为整数纳美元（nano-USD，1e-9 USD）**：`NanoUsd(u64)`、单价 `Price(u64)` = nano-USD / 1K token。
-   决定路径（选模、guard、quota、breakeven、计账、trace）**全程整数**。
-2. **金额 → 纳美元的转换点唯一且只在装载期**：config 的 `USD/1K` 一次性整数化为 `Price((v * 1e9).round() as u64)`
-   （DESIGN §12.5）；运行期不再出现任何小数，`v < 0` 或 `round` 后为 0 视为装载错误。
-3. **禁止 `f64` 参与成本累加**：`router-core` 以 crate 级 `#![deny(clippy::float_arithmetic)]` 强制；
-   唯一的豁免是 `Usage::cache_hit_rate()` —— 它是**派生指标**（不是金额路径），逐点标注 `allow`。
-4. **取整点唯一**：每档 `tokens × price(每 1K)` 除以 1000 时向下取整（`saturating_div_1k`），聚合用
-   整数（饱和）加法；除这一处外全程无取整。将来若引入按比例分摊，必须复用同一个取整点，不得新增第二个。
-5. **溢出用饱和，不用 panic**：金额路径不得因异常输入 panic（`saturating_add` / `saturating_mul_pct`）；
-   区间估算用 `u128` 中间量。
-6. **小数只出现在最终格式化层**：报表/trace 的字符串化在边界处发生，内部类型不承载"近似值"。
+1. **Amounts are fixed-point integer nano-USD (1e-9 USD)**: `NanoUsd(u64)`, and the unit price `Price(u64)` =
+   nano-USD / 1K token. The decision path (model choice, guard, quota, breakeven, accounting, trace) is
+   **integers all the way**.
+2. **The amount → nano-USD conversion point is unique and only at load time**: the config's `USD/1K` is
+   integer-ized once as `Price((v * 1e9).round() as u64)` (DESIGN §12.5); no decimal appears at runtime any
+   more, and `v < 0` or a `round` result of 0 counts as a load error.
+3. **No `f64` in cost accumulation**: `router-core` enforces it with a crate-level
+   `#![deny(clippy::float_arithmetic)]`; the only exemption is `Usage::cache_hit_rate()` — it is a
+   **derived metric** (not on the money path) and is annotated `allow` at each point.
+4. **A single rounding point**: each tier's `tokens × price(per 1K)` divides by 1000 with floor
+   (`saturating_div_1k`), and aggregation uses integer (saturating) addition; apart from that one place
+   there is no rounding anywhere. If proportional allocation is introduced later, it must reuse the same
+   rounding point and must not add a second one.
+5. **Overflow saturates rather than panicking**: the money path must not panic on abnormal input
+   (`saturating_add` / `saturating_mul_pct`); interval estimates use `u128` intermediates.
+6. **Decimals appear only in the final formatting layer**: report/trace stringification happens at the
+   boundary, and the internal types carry no "approximate value".
 
-## 理由
+## Rationale
 
-- 整数让 trace → 报表的复算是**同构**的：同一份 trace 两次回放必然逐字段相同（CONF-19 的断言基础）。
-- 转换点唯一 ⇒ "price 少写一个 0" 这类错误的暴露位置只有一个（装载），而不是散落在决策路径里。
-- 饱和而非 panic ⇒ 上游给的畸形 usage（例如 `cached > total`）降级为"数字偏大"而不是"进程崩"，与
-  spec §8「fail-safe、不阻塞请求」一致（`uncached()` 同样用 `saturating_sub`）。
+- Integers make trace → report recomputation **isomorphic**: replaying the same trace twice necessarily
+  yields field-by-field identical results (the basis of CONF-19's assertion).
+- A unique conversion point ⇒ an error like "one 0 missing in the price" can surface in only one place
+  (loading) instead of being scattered over the decision path.
+- Saturating instead of panicking ⇒ malformed usage from upstream (e.g. `cached > total`) degrades into
+  "the number is too large" rather than "the process crashes", consistent with spec §8 "fail-safe, do not
+  block the request" (`uncached()` uses `saturating_sub` too).
 
-## 后果
+## Consequences
 
-- 五档价与峰谷、quota、breakeven 的边界用例全部可用整数锚点钉死（例：`gain×100 == sf×cost` 恰好相等
-  必须判 `Stay(NotPaying)`），不再依赖浮点比较的容差。
-- 上游 `usage` 缺失时不得"估算补数"：缺口记 `result.usage_missing`，成本按 0 计并显式标注（§7 口径）。
-- 价格口径的权威仍在 config（`source` + TODO 标注），本 ADR 只定**表示**，不动价格来源纪律（AGENTS 硬约束 5）。
-- 若将来接入按 token 计价的分层/阶梯价，必须显式建模为新的档位而不是在中间层引入浮点。
+- The boundary cases of the five-tier price, peak/off-peak, quota and breakeven can all be pinned with
+  integer anchors (e.g. `gain×100 == sf×cost` being exactly equal must be judged `Stay(NotPaying)`), no
+  longer relying on floating-point comparison tolerance.
+- When upstream `usage` is missing, "estimating the numbers" is forbidden: the gap is recorded as
+  `result.usage_missing`, the cost counts as 0 and is marked explicitly (§7 convention).
+- The authority for the price convention remains the config (`source` + the TODO annotation); this ADR fixes
+  only the **representation** and does not touch the price-source discipline (AGENTS hard constraint 5).
+- If tiered/step pricing per token is introduced later, it must be modeled explicitly as new tiers rather
+  than introducing floating point in an intermediate layer.
