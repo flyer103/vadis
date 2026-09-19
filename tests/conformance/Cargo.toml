@@ -14,6 +14,11 @@ tokio = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 # CONF-25 drives the real `serve` assembly (lib target) in-process;
-# CONF-20..23 drive the real SQLite store.
+# CONF-20..23 drive the real SQLite store; CONF-20's pipeline twin drives
+# the real Forwarder with a fake transport.
 router-cli = { path = "../../crates/router-cli" }
 router-store = { path = "../../crates/router-store" }
+router-proxy = { path = "../../crates/router-proxy" }
+router-providers = { path = "../../crates/router-providers" }
+bytes = { workspace = true }
+http = { workspace = true }

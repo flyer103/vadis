@@ -480,9 +480,6 @@ impl Forwarder {
                         if let Some(u) = &usage {
                             attribute_tokens(&mut blocks, u);
                         }
-                        // The cache_ledger put rides on the intent event
-                        // (§12.10.6): the block set the NEXT request's
-                        // continuity is measured against.
                         let route_acc =
                             crate::accounting::route_accounting(&self.config, candidate);
                         let accountant = crate::accounting::Accountant {
@@ -490,10 +487,12 @@ impl Forwarder {
                             trace: self.trace.as_deref(),
                             accounting: route_acc.as_ref(),
                         };
-                        if let (Some(id), Some(s)) = (intent_id, session.as_deref()) {
-                            accountant.put_ledger(Some(s), &blocks, id);
-                        }
                         // Note R2's order: trace line, then cost/quota rows.
+                        // The continuity measurement inside `finish` reads
+                        // the session's PREVIOUS block set, so the ledger
+                        // put (replacing it with this request's blocks for
+                        // the NEXT request) must run after it — measure,
+                        // then replace (§12.10.6).
                         let ctx = crate::accounting::AccountCtx {
                             request_id,
                             received_event,
@@ -520,6 +519,9 @@ impl Forwarder {
                             &blocks,
                             upstream_ms,
                         );
+                        if let (Some(id), Some(s)) = (intent_id, session.as_deref()) {
+                            accountant.put_ledger(Some(s), &blocks, id);
+                        }
                         return ForwardOutcome::Success(ForwardSuccess {
                             status: resp.status,
                             content_type: resp.content_type,

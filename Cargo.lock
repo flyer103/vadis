@@ -933,8 +933,12 @@ dependencies = [
 name = "router-conformance"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "http",
  "router-cli",
  "router-core",
+ "router-providers",
+ "router-proxy",
  "router-store",
  "serde_json",
  "tokio",
