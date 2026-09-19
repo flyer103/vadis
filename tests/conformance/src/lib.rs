@@ -52,6 +52,47 @@ pub mod testkit {
         pub reason: &'static str,
         pub headers: Vec<(String, String)>,
         pub body: Vec<u8>,
+        /// `Some(..)` switches the mock into streaming mode: the body is
+        /// written with `transfer-encoding: chunked`, one chunk at a time
+        /// with the given delay; a chunk flagged `abort` closes the socket
+        /// mid-stream (the truncation fixture for CONF-13).
+        pub sse_chunks: Option<Vec<SseChunk>>,
+    }
+
+    /// One pre-framed streaming chunk.
+    #[derive(Clone)]
+    pub struct SseChunk {
+        pub bytes: Vec<u8>,
+        pub delay_ms: u64,
+        /// Close the connection instead of finishing the chunked body.
+        pub abort: bool,
+    }
+
+    impl SseChunk {
+        pub fn event(bytes: &[u8]) -> Self {
+            Self {
+                bytes: bytes.to_vec(),
+                delay_ms: 0,
+                abort: false,
+            }
+        }
+
+        pub fn event_after(bytes: &[u8], delay_ms: u64) -> Self {
+            Self {
+                bytes: bytes.to_vec(),
+                delay_ms,
+                abort: false,
+            }
+        }
+
+        /// Close the socket mid-stream after the delay.
+        pub fn abort_after(delay_ms: u64) -> Self {
+            Self {
+                bytes: Vec::new(),
+                delay_ms,
+                abort: true,
+            }
+        }
     }
 
     impl CannedResponse {
@@ -61,6 +102,18 @@ pub mod testkit {
                 reason,
                 headers: Vec::new(),
                 body: body.to_vec(),
+                sse_chunks: None,
+            }
+        }
+
+        /// A 200 SSE response streaming the chunks verbatim.
+        pub fn sse(chunks: Vec<SseChunk>) -> Self {
+            Self {
+                status: 200,
+                reason: "OK",
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+                body: Vec::new(),
+                sse_chunks: Some(chunks),
             }
         }
 
@@ -76,6 +129,9 @@ pub mod testkit {
         pub addr: SocketAddr,
         seen: Arc<Mutex<Vec<RecordedRequest>>>,
         queue: Arc<Mutex<VecDeque<CannedResponse>>>,
+        /// How many streaming connections ended with a write failure (the
+        /// peer — the router — closed first): the R5 cancellation signal.
+        peer_aborts: Arc<Mutex<u64>>,
     }
 
     impl MockUpstream {
@@ -84,8 +140,19 @@ pub mod testkit {
             let addr = listener.local_addr()?;
             let seen = Arc::new(Mutex::new(Vec::new()));
             let queue = Arc::new(Mutex::new(VecDeque::new()));
-            tokio::spawn(server_loop(listener, Arc::clone(&seen), Arc::clone(&queue)));
-            Ok(Self { addr, seen, queue })
+            let peer_aborts = Arc::new(Mutex::new(0u64));
+            tokio::spawn(server_loop(
+                listener,
+                Arc::clone(&seen),
+                Arc::clone(&queue),
+                Arc::clone(&peer_aborts),
+            ));
+            Ok(Self {
+                addr,
+                seen,
+                queue,
+                peer_aborts,
+            })
         }
 
         pub fn queue(&self, r: CannedResponse) {
@@ -96,12 +163,19 @@ pub mod testkit {
         pub fn requests(&self) -> Vec<RecordedRequest> {
             self.seen.lock().unwrap().clone()
         }
+
+        /// Streaming connections whose write side failed because the peer
+        /// closed first (R5's observable).
+        pub fn peer_aborts(&self) -> u64 {
+            *self.peer_aborts.lock().unwrap()
+        }
     }
 
     async fn server_loop(
         listener: TcpListener,
         seen: Arc<Mutex<Vec<RecordedRequest>>>,
         queue: Arc<Mutex<VecDeque<CannedResponse>>>,
+        peer_aborts: Arc<Mutex<u64>>,
     ) {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
@@ -109,8 +183,9 @@ pub mod testkit {
             };
             let seen = Arc::clone(&seen);
             let queue = Arc::clone(&queue);
+            let peer_aborts = Arc::clone(&peer_aborts);
             tokio::spawn(async move {
-                let _ = handle_connection(stream, seen, queue).await;
+                let _ = handle_connection(stream, seen, queue, peer_aborts).await;
             });
         }
     }
@@ -119,6 +194,7 @@ pub mod testkit {
         mut stream: TokioStream,
         seen: Arc<Mutex<Vec<RecordedRequest>>>,
         queue: Arc<Mutex<VecDeque<CannedResponse>>>,
+        peer_aborts: Arc<Mutex<u64>>,
     ) -> std::io::Result<()> {
         let fut = async {
             let req = read_request(&mut stream).await?;
@@ -146,6 +222,46 @@ pub mod testkit {
             _ => return Ok(()),
         };
         let mut out = format!("HTTP/1.1 {} {}\r\n", canned.status, canned.reason);
+        if canned.sse_chunks.is_some() {
+            out.push_str("content-type: text/event-stream\r\n");
+            for (k, v) in &canned.headers {
+                if !k.eq_ignore_ascii_case("content-type") {
+                    out.push_str(&format!("{k}: {v}\r\n"));
+                }
+            }
+            out.push_str("transfer-encoding: chunked\r\nconnection: close\r\n\r\n");
+            stream.write_all(out.as_bytes()).await?;
+            if let Some(chunks) = canned.sse_chunks {
+                for ch in &chunks {
+                    if ch.delay_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(ch.delay_ms)).await;
+                    }
+                    if ch.abort {
+                        // Abrupt close: no terminating chunk, no FIN
+                        // handshake niceties — the truncation fixture.
+                        let _ = stream.shutdown().await;
+                        return Ok(());
+                    }
+                    // Any write on the SSE path failing with the peer gone
+                    // — header, body or CRLF — is the same R5 observable.
+                    if stream
+                        .write_all(format!("{:x}\r\n", ch.bytes.len()).as_bytes())
+                        .await
+                        .is_err()
+                        || stream.write_all(&ch.bytes).await.is_err()
+                        || stream.write_all(b"\r\n").await.is_err()
+                    {
+                        // The peer (the router) closed first: R5's
+                        // cancellation reached the upstream.
+                        *peer_aborts.lock().unwrap() += 1;
+                        return Ok(());
+                    }
+                }
+            }
+            stream.write_all(b"0\r\n\r\n").await?;
+            stream.shutdown().await?;
+            return Ok(());
+        }
         out.push_str("content-type: application/json\r\n");
         for (k, v) in &canned.headers {
             out.push_str(&format!("{k}: {v}\r\n"));
@@ -227,6 +343,26 @@ pub mod testkit {
         body: &[u8],
         extra_headers: &[(&str, &str)],
     ) -> (u16, Vec<u8>, Vec<(String, String)>) {
+        http_post_with_opts(addr, path, body, extra_headers, ReadOpts::default())
+    }
+
+    /// Read-behavior knobs for `http_post_with_opts`.
+    #[derive(Default, Clone, Copy)]
+    pub struct ReadOpts {
+        /// Stop reading (and drop the connection) after this many body
+        /// bytes — the client-disconnect fixture. `None` reads to EOF.
+        pub stop_after_body_bytes: Option<usize>,
+    }
+
+    /// POSTs raw bytes with explicit read behavior; returns
+    /// (status, body bytes read so far, response headers).
+    pub fn http_post_with_opts(
+        addr: &str,
+        path: &str,
+        body: &[u8],
+        extra_headers: &[(&str, &str)],
+        opts: ReadOpts,
+    ) -> (u16, Vec<u8>, Vec<(String, String)>) {
         let mut stream = TcpStream::connect(addr).expect("connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
@@ -244,17 +380,29 @@ pub mod testkit {
 
         let mut buf = Vec::new();
         let mut chunk = [0u8; 4096];
+        let mut head_done = false;
         loop {
+            if let Some(stop) = opts.stop_after_body_bytes {
+                if head_done && body_len_so_far(&buf) >= stop {
+                    // Abrupt client disconnect: drop the socket without a
+                    // graceful FIN exchange.
+                    drop(stream);
+                    break;
+                }
+            }
             match stream.read(&mut chunk) {
                 Ok(0) => break,
                 Err(e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
                         || e.kind() == std::io::ErrorKind::Interrupted =>
                 {
-                    continue;
+                    continue
                 }
                 Err(_) => break,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    head_done = buf.contains_subseq(b"\r\n\r\n");
+                }
             }
         }
         let text = String::from_utf8_lossy(&buf);
@@ -285,6 +433,77 @@ pub mod testkit {
             _ => body,
         };
         (status, body, headers)
+    }
+
+    /// Body byte count after dechunking (streaming responses).
+    fn body_len_so_far(buf: &[u8]) -> usize {
+        match find_sub(buf, b"\r\n\r\n") {
+            Some(pos) => dechunk(&buf[pos + 4..]).len(),
+            None => 0,
+        }
+    }
+
+    /// Decodes chunked framing into the raw event byte sequence.
+    pub fn dechunk(chunked: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut rest = chunked;
+        while let Some(hdr_end) = find_sub(rest, b"\r\n") {
+            let hdr = String::from_utf8_lossy(&rest[..hdr_end]);
+            let Some(size) = hdr
+                .trim()
+                .split(';')
+                .next()
+                .and_then(|s| usize::from_str_radix(s, 16).ok())
+            else {
+                break;
+            };
+            if size == 0 {
+                break;
+            }
+            let start = hdr_end + 2;
+            if rest.len() < start + size {
+                // A chunk cut short by disconnect: keep the prefix.
+                out.extend_from_slice(&rest[start..]);
+                break;
+            }
+            out.extend_from_slice(&rest[start..start + size]);
+            rest = &rest[start + size..];
+            if rest.starts_with(b"\r\n") {
+                rest = &rest[2..];
+            }
+        }
+        out
+    }
+
+    /// Splits an SSE byte sequence into complete events (blank-line
+    /// terminated), returning each event's raw bytes **with** its
+    /// terminator — the byte-fidelity unit of CONF-13's assertions.
+    pub fn sse_events(bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut events = Vec::new();
+        let mut rest = bytes;
+        while let Some(pos) = find_sub(rest, b"\n\n") {
+            // Include one preceding \r of a CRLF terminator.
+            let mut end = pos + 2;
+            let mut event_end = pos + 1;
+            if pos > 0 && rest[pos - 1] == b'\r' {
+                event_end = pos;
+                end = pos + 2;
+            }
+            events.push(rest[..end.min(rest.len())].to_vec());
+            let _ = event_end;
+            rest = &rest[end.min(rest.len())..];
+        }
+        events
+    }
+
+    trait ContainsSub {
+        fn contains_subseq(&self, needle: &[u8]) -> bool;
+    }
+
+    impl ContainsSub for Vec<u8> {
+        fn contains_subseq(&self, needle: &[u8]) -> bool {
+            find_sub(self, needle).is_some()
+        }
     }
 
     // -----------------------------------------------------------------
