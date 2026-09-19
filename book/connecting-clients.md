@@ -58,9 +58,14 @@ provider call with — the key lives in the environment of the router process (t
 file names the environment variable, never the value), and the token the client sends
 router is the client's own bearer token.
 
-Set the model field to an explicit `provider/model` or to an alias defined in your config.
-`auto` is deliberately not enabled in v0.1: it returns an explicit error instead of
-guessing, and the selector slot is reserved for a plugin.
+Set the model field to an explicit `provider/model` or to an alias defined in your config. What you
+write there is a **route**, not a provider model name: router resolves it and sends the provider its
+own native model id, so `deepseek/deepseek-v4-pro` and an alias that points at it reach the upstream
+identically. Your own string is not lost — the trace records it as `decision.requested_model`
+alongside the native id it resolved to. Do **not** paste the bare native id into a client: it is not a
+route and not an alias, so it resolves to nothing and comes back as `404 unknown_model`. `auto` is
+deliberately not enabled in v0.1: it returns an explicit error instead of guessing, and the selector
+slot is reserved for a plugin.
 
 ## What you get back
 

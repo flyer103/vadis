@@ -195,9 +195,10 @@ providers:
         # TODO verify against official source
 
 aliases:
-  # alias → one route in the roster (`provider/model`). Aliases only resolve
-  # names and never rewrite request content, so an alias and the direct
-  # `provider/model` produce byte-identical bytes upstream.
+  # alias → one route in the roster (`provider/model`). An alias only resolves a
+  # name; the outbound `model` is replaced by the resolved roster id whichever
+  # form the client used (spec §2), so an alias and the direct `provider/model`
+  # produce byte-identical bytes upstream.
   coding-fast: deepseek/deepseek-v4-pro
   coding-bulk: moonshot/kimi-k2.7-code
   chat-fast: zai/glm-5.3-flash

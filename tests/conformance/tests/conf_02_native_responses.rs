@@ -1,8 +1,13 @@
 //! CONF-02 (DESIGN §10 conformance · fidelity): responses inbound →
 //! `wire_api: responses` native passthrough; the upstream-visible body is
-//! byte-identical to the client body minus router-owned top-level keys —
-//! proven over real HTTP against a loopback mock upstream (the same form
-//! as CONF-01; R2-2g will re-verify with a real client).
+//! byte-identical to the client body minus router-owned top-level keys, with
+//! the value of the top-level `model` member replaced by the resolved
+//! provider-native id — spec §2 permits exactly those two mutations (R2G1).
+//! Proven over real HTTP against a loopback mock upstream (the same form
+//! as CONF-01).
+//!
+//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the expectation
+//! below encodes the new contract, so it cannot pass before the rewrite exists.
 
 #![forbid(unsafe_code)]
 
@@ -11,7 +16,7 @@ use router_conformance::testkit::{self, CannedResponse};
 const CLIENT_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","router_meta":{"echo":true},"stream":false}
 "#;
 
-const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","stream":false}
+const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","stream":false}
 "#;
 
 const UPSTREAM_OK: &str = r#"{"id":"resp_1","object":"response","usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":900},"output_tokens":50,"total_tokens":1050}}"#;
@@ -47,6 +52,7 @@ fallback: []
     )
 }
 
+#[ignore = "CONF-02: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_02_native_responses_passthrough() {
     let dir = testkit::tempdir("conf02");
@@ -83,7 +89,7 @@ async fn conf_02_native_responses_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta"
+        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
     );
     assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
     // The session identity (prompt_cache_key) survives verbatim upstream.

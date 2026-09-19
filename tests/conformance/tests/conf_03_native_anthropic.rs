@@ -1,9 +1,14 @@
 //! CONF-03 (DESIGN §10 conformance · fidelity): anthropic inbound →
 //! `wire_api: anthropic` native passthrough; the upstream-visible body is
-//! byte-identical to the client body minus router-owned top-level keys —
-//! proven over real HTTP against a loopback mock upstream (the same form
-//! as CONF-01; R2-2g will re-verify with a real client). Anthropic auth
-//! travels as `x-api-key` + `anthropic-version`, never a bearer.
+//! byte-identical to the client body minus router-owned top-level keys, with
+//! the value of the top-level `model` member replaced by the resolved
+//! provider-native id — spec §2 permits exactly those two mutations (R2G1).
+//! Proven over real HTTP against a loopback mock upstream (the same form
+//! as CONF-01). Anthropic auth travels as `x-api-key` + `anthropic-version`,
+//! never a bearer.
+//!
+//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the expectation
+//! below encodes the new contract, so it cannot pass before the rewrite exists.
 
 #![forbid(unsafe_code)]
 
@@ -12,7 +17,7 @@ use router_conformance::testkit::{self, CannedResponse};
 const CLIENT_BODY: &str = r#"{"model":"mock/clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"router_meta":{"echo":true},"stream":false}
 "#;
 
-const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"mock/clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"stream":false}
+const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"stream":false}
 "#;
 
 const UPSTREAM_OK: &str = r#"{"id":"msg_1","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":2000,"output_tokens":32,"cache_creation_input_tokens":100,"cache_read_input_tokens":1800}}"#;
@@ -48,6 +53,7 @@ fallback: []
     )
 }
 
+#[ignore = "CONF-03: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_03_native_anthropic_passthrough() {
     let dir = testkit::tempdir("conf03");
@@ -85,7 +91,7 @@ async fn conf_03_native_anthropic_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta"
+        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
     );
     assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
 

@@ -115,8 +115,9 @@ and `safety_factor` defaults to 1.2. (In v0.1 the model is specified explicitly,
 
 ## 6. Cache policy (P0, the first-order lever)
 
-1. **Fidelity**: on the passthrough path the only permitted mutation is deleting router-owned fields;
-   for the same input the encoder must be byte-deterministic.
+1. **Fidelity**: on the passthrough path the only permitted mutations are deleting router-owned fields
+   and replacing the value of the top-level `model` member with the resolved native id (spec §2,
+   §12.10.7); for the same input the encoder must be byte-deterministic.
 2. **Content determinism**: a transform is a pure function of `(content, stable config)` — depending on
    the turn number, the wall clock or an RNG is forbidden. Any "rolling window / per-turn trimming"
    implementation counts as breaking the prefix (which is why P4 is deferred).
@@ -382,8 +383,13 @@ pub struct CanonicalRequest {
 pub struct RawBody(Bytes);
 impl RawBody {
     pub fn as_bytes(&self) -> &[u8];
-    /// The only permitted rewrite: deleting top-level router-owned fields. All other bytes are kept byte for byte.
+    /// Mutation (a) of the byte boundary: deleting top-level router-owned fields. All other bytes are kept byte for byte.
     pub fn remove_top_level_keys(&self, keys: &[&str]) -> Result<RawBody, RawEditError>;
+    /// Mutation (b): replacing the **value** of a top-level string member (in practice the outbound
+    /// `model`, spec §2). Byte-level, single pass, no parse→reserialize. `Cow::Borrowed` when the value
+    /// already is `value` (byte-identical input), `Cow::Owned` otherwise; `Err` when the member is
+    /// absent or its value is not a JSON string.
+    pub fn set_top_level_string(&self, key: &str, value: &str) -> Result<Cow<'_, [u8]>, BodyError>;
 }
 ```
 
@@ -401,10 +407,28 @@ impl RawBody {
   instead swallow the segment-tail comma. Invariant: any `Ok` output must be valid JSON, and the
   retained members are byte-for-byte equal to their input spans (the `deletion_position_matrix*` tests
   are a permanent regression matrix).
+- **Mutation (b) — `set_top_level_string`** (its settled semantics, so R2G2 and R2G3 cannot differ):
+  - **Only the value span moves.** The member's key bytes, its position in the document, the separators
+    and the whitespace around it, and every byte outside the member are byte-for-byte the input; the new
+    value is encoded as a JSON string (`"` + RFC 8259 escaping + `"`) inserted in place of the old value
+    span. It therefore cannot reorder members, re-escape unrelated strings or drop trailing whitespace —
+    the three ways a parse→reserialize would silently rewrite the body.
+  - **Idempotent and content-deterministic** (AGENTS constraint 2): the result depends only on
+    (content, key, value); a second application with the same value returns the first application, and a
+    value equal to the member's current value returns the input bytes unchanged (`Cow::Borrowed`).
+  - **An absent member is an error, never an insertion** (`Err`, not "add it and carry on"): the
+    passthrough path never invents a member the client did not send, and no reachable path needs the
+    insertion — a body whose `model` is missing or not a string is answered `400 invalid_request`
+    before the rewrite (spec §8). A present member whose value is **not** a JSON string is an error for
+    the same reason. The concrete variant names are the implementation's to choose (`RawEditError`'s
+    vocabulary plus these two), the *distinguishability* is the contract.
+  - **The same scanner** as `remove_top_level_keys` — the primitive and the deleter share
+    `scan_top_level_members`, never a second parser (the policy differs; the scanning does not).
 - Three settled boundary behaviors (the rationale for rejecting vs passing through, each pinned by a
   unit test):
   - **BOM prefix → `Err(NotTopLevelObject)`**: stripping the BOM is a rewrite outside the whitelist
-    (hard constraint 1 permits deleting router-owned fields only), so router has no right to "fix it in
+    (hard constraint 1 permits deleting router-owned fields and replacing the value of the top-level
+    `model` member — and nothing else), so router has no right to "fix it in
     passing" and it is left to the caller to handle as a 400.
   - **Leading-zero number (`01`) → `Err(Malformed)`**: the RFC 8259 number grammar does not contain this
     form; the raw value fragment is vetted by the serde_json validator, and an ambiguous number is not
@@ -416,7 +440,9 @@ impl RawBody {
     no safe way to decide delete-or-not.
 - The domain of the prefix hash = the raw bytes of `messages | input | tools` and the system-instruction
   position in the upstream-visible body (spec §6 "prefix"), so "deleting router fields" does not affect
-  that hash — CONF-10 asserts exactly this.
+  that hash — CONF-10 asserts exactly this. The `model` member is **not** in that domain either, so
+  mutation (b) does not affect it: `prefix_continuity` measures the conversation's fidelity, not the
+  route the request took (§12.10.7).
 - Prefix blocks (`prefix_blocks[]`): a block = the **smallest indivisible unit** in the prefix region
   (one message / one tool definition / one input item), recording `tokens` and `hash` per block;
   `hash = the first 16 hex chars of sha256(block raw bytes)`.
@@ -551,8 +577,8 @@ pub struct IdentityRec { pub request_id: String,
     pub session: Option<String>, pub thread_id: Option<String>, pub turn_index: u32 }
 pub struct ProtocolRec { pub r#in: Protocol, pub out: Protocol, pub translated: bool, pub lossy: Vec<LossyNote> }
 pub struct LossyNote { pub field: &'static str, pub reason: &'static str, pub action: LossyAction }
-pub struct DecisionRec { pub provider: String, pub model: String, pub selection_source: SelectionSource,
-    pub plugin_chain: Vec<String>, pub decision_ms: u32 }
+pub struct DecisionRec { pub provider: String, pub model: String, pub requested_model: Option<String>,
+    pub selection_source: SelectionSource, pub plugin_chain: Vec<String>, pub decision_ms: u32 }
 pub struct StateRec { pub stateful_inbound: bool, pub sticky_hit: bool, pub cache_control_breaks: u16 }
 pub struct PrefixRec { pub blocks: Vec<PrefixBlock>, pub continuity: Option<f32> }
 pub struct PrefixBlock { pub kind: BlockKind, pub index: u16, pub tokens: u64, pub hash: String }
@@ -580,7 +606,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 |---|---|---|
 | identity | `request_id` `event_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails; `event_id` is the join anchor into the event log, spec §4.5) |
 | protocol | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
-| decision | `provider` `model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` |
+| decision | `provider` `model` `requested_model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` (`model` = the resolved provider-native id, `requested_model` = the client's own string — spec §6 and §12.10.7) |
 | state | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
 | prefix | `prefix_blocks[]` (token count + hash) `prefix_continuity` | `prefix.blocks[].{tokens,hash}` `prefix.continuity` |
 | transform | `plugin` `added_input_tokens` `saved_input_tokens` `saved_output_tokens` `cache_impact` `verdict` | `transforms[].*` |
@@ -594,6 +620,9 @@ spec §6 field groups → Rust paths (auditable line by line):
   request and records `errors[].kind = trace_write_failed`.
 - `schema_version` only increments on a **breaking** change; adding an optional field does not change the
   version (the autowork side tolerates unknown fields).
+- `decision.requested_model` is such an addition (R2G1's contract, implemented in R2G3): `null` when the
+  request carried no parsable `model` (the field is present-and-null rather than omitted, the same stance
+  as `prefix.continuity` — an absent value is written as absent, never as a plausible substitute).
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
@@ -638,7 +667,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-25`)
+### 12.8 conformance case table (`CONF-01…CONF-27`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
@@ -647,9 +676,9 @@ written).
 
 | ID | Covers §10 | Assertion | Depends on implementation item |
 |---|---|---|---|
-| CONF-01 | conformance·fidelity | chat inbound → `wire_api: chat`: the upstream-visible body is byte-identical to the client body | router-protocol native path |
-| CONF-02 | same as above | responses → responses native: bytes are identical | same as above |
-| CONF-03 | same as above | anthropic → anthropic native: bytes are identical | same as above |
+| CONF-01 | conformance·fidelity | chat inbound → `wire_api: chat`: the upstream-visible body is byte-identical to the client body **minus the router-owned keys and with the top-level `model` replaced by the resolved native id** (spec §2, §12.10.7) | router-protocol native path + the `model` rewrite |
+| CONF-02 | same as above | responses → responses native: same two mutations, nothing else | same as above |
+| CONF-03 | same as above | anthropic → anthropic native: same two mutations, nothing else | same as above |
 | CONF-04 | same as above·translation | chat → responses: two requests with the same content produce **the same upstream bytes** (determinism); the lossy points are registered one by one | translation matrix + mappers |
 | CONF-05 | same as above | chat → anthropic: determinism + `cache_control` breakpoint positions stable | same as above + breakpoint injection |
 | CONF-06 | same as above | responses → chat: determinism + the lossy list (dropping reasoning must be marked) | same as above |
@@ -672,6 +701,8 @@ written).
 | CONF-23 | §10·state | **startup refusal, both kinds**: (a) a store that cannot be opened or migrated makes `serve` exit **non-zero** with the reason (never a silent in-memory fallback); (b) a second `serve` on the same state directory is refused at startup with a *distinguishable* "locked" reason | store startup + `router-cli` (§12.10.4) |
 | CONF-24 | §10·state | **trace ↔ event join**: every `DecisionRecord` carries an `event_id` that exists in `events` with `kind = request.received` and the same `request_id`; the request's accounting rows carry a `trace_ref` that resolves to that record's own line | store + trace (§12.10.5) |
 | CONF-25 | §10·state | **config-driven `serve`**: the listen address, the plugin set and the roster come from the config file — a config naming another address and another plugin set is what the process actually uses (`/health` reports the configured set, and the configured address is where it listens), with no hardcoded default surviving in the serving path | config parsing + `serve` (§12.10.2) |
+| CONF-26 | §10·invariant | **the client can speak TLS**: the workspace manifest declares `reqwest` with a TLS feature and does not re-enable its default features (an http-only client fails every real provider while every mock upstream stays plain http) | the workspace `Cargo.toml` (§12.10.1) |
+| CONF-27 | §10·fidelity + §12.10.7 | **the upstream receives the provider-native model id**: (a) client sends `provider/model` → the mock receives that provider's native id; (b) client sends an alias → the upstream request is **byte-identical** to (a)'s, and the trace's `decision.model` / `decision.requested_model` / `selection_source` say native id / client string / `alias`; (c) every other byte (whitespace, escapes, multi-byte UTF-8, trailing newline) is unchanged | the `model` rewrite (§12.10.7) + `decision.requested_model` (§12.6) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -685,6 +716,19 @@ consequences explicitly invited ("the last event before an upstream call is
 failure-mode table (item 8); CONF-23 from ADR-009 item 6/item 8; CONF-24 from spec §4.5's
 join key; CONF-25 from spec §4 (no behaviour outside the config).
 
+**Allocation of CONF-26 and CONF-27.** Two further owner-allocated IDs, recorded the same way (a human
+decision, not a loop outcome — ADR-012):
+
+- **CONF-26** was allocated by the operator's TLS fix (`fix/https-tls-backend`) and landed with it as
+  `tests/conf_26_https_capable_http_client.rs`; its row above is added retroactively, because a case that
+  exists in `tests/conformance/` and not in this table is exactly the drift the "case IDs are a contract"
+  rule below forbids.
+- **CONF-27** is allocated by the owner's R2G1 ruling (the outbound `model` is the provider-native id).
+  Its file lands with R2G1's contract commit, **`#[ignore]`d behind R2G3** (the wiring that makes it
+  true), and R2G3 un-ignores it. The same commit rewrote CONF-01/02/03's expected upstream body, so those
+  three are parked the same way until R2G3 lands: an expectation that encodes the new contract must not be
+  left asserting the old one, and it cannot pass before the implementation exists.
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -695,8 +739,11 @@ already attempted in this request (the in-request form of ADR-011 item 4's provi
 a second attempt on a dead provider is the failure mode it designs out). Routes already attempted
 are never retried within one request — the "not yet attempted" rule subsumes per-route retries on
 the buffered path. The five CONF cases of this card (01/02/03/10-chain/14) are un-ignored by the
-round that lands the provider adapters and the buffered forwarding path; their existing assertions
-stand as written.
+round that lands the provider adapters and the buffered forwarding path; CONF-01/02/03 then kept their
+original assertion (the client's `model` string verbatim) until R2G1's ruling changed the contract: R2G1
+rewrote their expected upstream body to the native id and parked all three `#[ignore]`d behind R2G3,
+which un-ignores them. The IDs, the files and the shape of the assertions are unchanged — the expected
+value moved with spec §2, which is the only thing that legitimately moves it.
 
 ### 12.9 Gaps and pending rulings (GAP-Q1…Q13)
 
@@ -742,12 +789,15 @@ historical register)**
 The sections above name the two R2 deliverables without landing them: the **data plane**
 (provider adaptation and the byte-level streaming relay, §12.10.1–§12.10.3) and the
 **store** (`trait Store`, the `events` table, its projections and the event wiring,
-§12.10.4–§12.10.6). This section lands their shape so `router-providers`, `router-proxy`,
-`router-cli` and the new `router-store` can be implemented in parallel against one sketch.
+§12.10.4–§12.10.6). §12.10.7 lands the one place the outbound body is mutated on the native
+path — the `model` rewrite of spec §2. This section lands their shape so
+`router-providers`, `router-proxy`, `router-cli` and the new `router-store` can be implemented
+in parallel against one sketch.
 
-It adds no field to spec §6, no error type to spec §8 and no key to spec §4. Where it
-touches a contract it cites it; the two places where a contract's *wording* is narrower than
-its intent are flagged explicitly as refinements (notes R1 and R2 in §12.10.5) rather than
+It adds no field to spec §6 (the `requested_model` of §12.10.7 is the spec's own field, written
+into §6), no error type to spec §8 and no key to spec §4. Where it
+touches a contract it cites it; the places where a contract's *wording* is narrower than
+its intent are flagged explicitly as refinements (notes R1–R4 in §12.10.5) rather than
 quietly reinterpreted.
 
 #### 12.10.1 Provider adaptation: `trait ProviderClient` and the `reqwest` implementation
@@ -1079,11 +1129,11 @@ follows ADR-009 item 4's single question (*may this fact be recomputed?*).
 
 | # | Pipeline step | Event | Written | Durability | Payload essentials |
 |---|---|---|---|---|---|
-| 1 | receive: the inbound bytes are read and hashed | `request.received` | once per request that entered the pipeline, before any decision | FULL | `protocol_in`, `protocol_out: null` (note R1), `client`, `session?`, `turn_index`, `body_hash` |
+| 1 | receive: the inbound bytes are read and hashed | `request.received` | once per request that entered the pipeline, before any decision | FULL | `protocol_in`, `protocol_out: null` (note R1), `client`, `session?`, `turn_index`, `body_hash` (the router-visible inbound bytes, note R4) |
 | 2 | transform chain, per step that changed the payload | `transform.applied` | after the step returns `Ok` and its report is built | NORMAL | plugin, added/saved tokens, `cache_impact`, verdict |
-| 3 | selector + guard chain | `decision.made` | once a route is chosen and the guards passed (or a `Downgrade` route taken) | NORMAL | provider, model, `selection_source`, plugin chain, `decision_ms`, `protocol_out` |
+| 3 | selector + guard chain | `decision.made` | once a route is chosen and the guards passed (or a `Downgrade` route taken) | NORMAL | provider, model (the provider-native id, §12.10.7), `requested_model` (the client's own string), `selection_source`, plugin chain, `decision_ms`, `protocol_out` |
 | 4 | session binding (after selection, before the attempt) | `session.bound` | only when the binding is created or moved; a sticky hit writes nothing | FULL | session key, provider, model, ttl |
-| 5 | forward — the intent | `upstream.submitted` | **before** the attempt's request bytes are handed to the wire | **FULL** | route, `attempt_index`, `attempt_id`, `body_hash` of the outbound bytes |
+| 5 | forward — the intent | `upstream.submitted` | **before** the attempt's request bytes are handed to the wire | **FULL** | route, `attempt_index`, `attempt_id`, `body_hash` of **that attempt's** byte-final bytes (note R4) |
 | 6 | forward — the outcome | `upstream.responded` | when the response head + body complete (buffered) or the stream ends (SSE) | FULL | status, raw `usage?`, latency, `wrote_full_request` |
 | 7 | classifier (a failure, `router-providers` → `router-core`) | `error.classified` | after `classify_upstream_error` returns, before the action's effect (ADR-011 item 8) | NORMAL | status, `reason`, `action`, matched table entry, `retry_after_s?`, `demotion?` |
 | 8 | failover: a route switch | `failover.triggered` | after the classification chose `FallbackProvider`, before the next `upstream.submitted` | FULL | reason, from → to, `reprefill_tokens` (inferred), `switch_cost_nano` (inferred) |
@@ -1127,8 +1177,22 @@ there. It holds where it can, and the difference is stated rather than glossed: 
 attempt** is covered by its FULL intent row (row 5, always before the wire), and the accounting
 rows commit at stream end before the last byte is written through. A streamed response whose
 usage never arrived is reported as `usage_missing` and nothing is charged. This is ADR-010's
-own asymmetry (a missing response is recoverable ambiguity; an unrecorded upstream call is an
-unaccountable charge) applied to the streaming path.
+own asymmetry (a missing response is recoverable ambiguity; an unrecorded upstream call is
+an unaccountable charge) applied to the streaming path.
+
+**R4 — the two `body_hash` domains.** Once the outbound `model` is rewritten (§12.10.7), the two rows
+that carry a `body_hash` no longer hash the same bytes, and each keeps the meaning its row's job implies:
+
+- Row 1 (`request.received`) hashes the **router-visible inbound** bytes: the client's body after the
+  router-owned-key deletion and before the rewrite. It identifies *what the client sent* — which is what
+  an operator checks a captured payload against (spec §4.5) — and it does not depend on the route taken.
+- Row 5 (`upstream.submitted`) hashes **that attempt's byte-final bytes**: after the rewrite, i.e.
+  exactly the bytes handed to the wire for that route. On the fallback chain (spec §4.2) each attempt
+  therefore carries its own hash, because the candidates' model ids differ.
+
+The two coincide when the client's `model` string already equals the native id. `prefix_blocks[]` is
+unaffected by the difference — `model` is outside the prefix domain (§12.6, §12.10.6) — so a block set
+computed once for the request remains valid for every attempt.
 
 **`turn_index`** is `requests_seen` for that session from the projection, read at receive time
 and incremented by the binding write; with no session, or on the session's first request, it is
@@ -1176,3 +1240,87 @@ row 5 of §12.10.5 is written (`upstream.submitted.body_hash` hashes exactly tho
   `reprefill_tokens` / `switch_cost_nano` in `failover.triggered`'s payload (§12.10.5 row 8);
   and the per-session block set as the `cache_ledger` projection (§12.10.4), which is what
   makes continuity computable for the *next* request — including after a restart.
+
+#### 12.10.7 The outbound `model` rewrite (spec §2 mutation (b))
+
+The ruling this section lands: **routing resolves first, and the request the upstream sees carries that
+route's own model id.** A client's `model` string is a *route name* — `provider/model` or an alias
+(spec §3) — and never travels to a provider. With the contract silent on where an outbound model name
+comes from, the client's string went upstream verbatim, so every real provider answered 400 (measured
+against deepseek and zai with a live client). spec §2 now states the rule; this section states where it
+is applied, which is what two implementers must not each improvise.
+
+**The point, per attempt, in order.** Today the outbound body is composed in **two** places, one per
+forwarding path — `crates/router-proxy/src/forward.rs:225-236` (buffered) and
+`crates/router-proxy/src/stream_forward.rs:176-193` (SSE) — and both must end up with the rewritten
+bytes. Two hand-copied compositions are exactly where the byte boundary dies (a later change lands in
+one of them), so the rewrite belongs in **one shared composition step** that both paths call:
+
+```
+raw: RawBody  = the client's bytes
+  → remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)    // mutation (a), §12.3.1
+  → set_top_level_string("model", route.model)            // mutation (b), §12.3.1  ← the rewrite
+  → body_sha16 / extract_prefix_blocks / build_request    // everything downstream sees these bytes
+```
+
+The primitive lives in `router-core` beside `remove_top_level_keys` (§12.3.1); the proxy calls it; the
+provider adapter sees only the result. Nothing else on the path may read the client's `model` string
+again after selection — the route is the single source for what goes out. The streaming path is the same
+request with a different relay (§12.10.3 R11): it is not entitled to a different body.
+
+ADR-007's "the only permitted rewrite = deleting top-level router-owned fields" predates spec §2's second
+mutation and is superseded in that one respect; the ADR's core rule — span-faithful editing, no
+parse→reserialize round trip — is unchanged and now covers both mutations. (The ADR file itself is
+append-only, so the pointer lives here.)
+
+**Per attempt, not per request.** The fallback chain walks routes whose model ids differ (spec §4.2), so
+the rewrite belongs *inside* the attempt loop and is applied to that attempt's route: each attempt's
+`upstream.submitted.body_hash` is its own byte-final bytes (§12.10.5 note R4). The two things that may
+still be computed once, outside the loop, are the ones the rewrite provably cannot change: the prefix
+blocks (below) and the session/quota state.
+
+**Why whole-value replacement, not a re-encoding.**
+
+- Only the member's **value span** moves. Its key, its position in the document, the separators,
+  the whitespace inside the member and every byte outside it are the input's, so the mutation stays
+  auditable: a reviewer compares two spans, not two documents.
+- A parse → reserialize round trip would re-escape strings, re-space or reorder members and rewrite the
+  body wholesale — every prefix byte would change, the upstream prompt cache would be destroyed for the
+  whole conversation (AGENTS constraint 2, DESIGN §6) and `body_hash` / `prefix_blocks[]` would stop
+  being identities of the request at all.
+- The rewrite is a pure function of (content, route): no clock, no turn number, no RNG. The same inbound
+  bytes plus the same route always produce the same outbound bytes — which is also what makes an alias
+  and a direct route to the same route **byte-identical upstream** (CONF-27).
+- It is deliberately the smallest possible second mutation. The reviewer's checklist stays "two
+  mutations" (spec §2); a third is a change to AGENTS constraint 1, which no round may make on its own
+  (ADR-012).
+
+**What it cannot touch.**
+
+| Not touched | Why |
+|---|---|
+| `prefix_blocks[]`, `prefix_continuity` | `model` is not in the prefix domain (spec §6: `messages` / `input` / `tools` + the system-instruction position), so no block hash moves — continuity keeps measuring conversation fidelity, not routing |
+| any other byte of the client's body | content, order, whitespace, tool schemas, unknown fields (CONF-11) and trailing whitespace after the closing brace (the scanner admits it) all survive |
+| session identity, quota, failover, SSE behaviour | one member's value changes; no other clause of §4/§8 is affected |
+
+**Trace and event fields.**
+
+| Where | Before | After |
+|---|---|---|
+| `decision.model` (§12.6) | the roster id (already) | unchanged meaning — and it is now also the string the upstream received (spec §6) |
+| `decision.requested_model` (§12.6) | does not exist | the client's own string, verbatim; `null` when the request carried none |
+| `selection_source` | `explicit` / `alias` / `plugin` | unchanged (two forms resolving to one route still differ here) |
+| `decision.made` payload (§12.10.5 row 3) | provider, model, `selection_source`, … | plus `requested_model` |
+| `upstream.submitted.body_hash` (§12.10.5 row 5) | the outbound body, computed once | **that attempt's** byte-final bytes (note R4) |
+
+**Failure semantics.** The rewrite either produces the bytes or the request does not go out: an `Err`
+from `set_top_level_string` is `500 internal` with `details.stage = "encode"`, no attempt is made and no
+cost is invented. It must **never** fall back to forwarding the client's string — that is exactly the
+defect this clause removes, and sending an alias upstream would turn a router bug into a provider 400 the
+trace cannot explain. The reachable path cannot take that branch anyway: a body whose `model` is missing
+or is not a string is answered `400 invalid_request` before selection (spec §8), and a resolved route
+always carries an id.
+
+**The translated path (R2-3).** The encoder of a translated cell must emit `route.model` for the same
+reason; mutation (b) is the native path's form of that rule. The native path is asserted by CONF-27
+(§12.8).

@@ -1,8 +1,13 @@
 //! CONF-01 (DESIGN §10 conformance · fidelity): chat inbound → `wire_api:
 //! chat` native passthrough; the upstream-visible body is byte-identical to
-//! the client body minus the router-owned top-level keys — proven over real
-//! HTTP against a loopback mock upstream that records exactly the bytes it
-//! received (no real key, no network egress).
+//! the client body minus the router-owned top-level keys, with the value of
+//! the top-level `model` member replaced by the resolved provider-native id —
+//! spec §2 permits exactly those two mutations (R2G1). Proven over real HTTP
+//! against a loopback mock upstream that records exactly the bytes it received
+//! (no real key, no network egress).
+//!
+//! `#[ignore]`d until R2G3 wires the rewrite (DESIGN §12.10.7): the expectation
+//! below encodes the new contract, so it cannot pass before the rewrite exists.
 
 #![forbid(unsafe_code)]
 
@@ -18,10 +23,11 @@ const CLIENT_BODY: &str = r#"{
 }
 "#;
 
-/// The same bytes minus the `router_meta` member and its leading comma —
-/// the only permitted rewrite (AGENTS constraint 1).
+/// The same bytes minus the `router_meta` member and its leading comma, and
+/// with the `model` value replaced by the route's native id (`mock/glm` → the
+/// roster entry `glm`) — the two permitted rewrites (AGENTS constraint 1).
 const EXPECTED_UPSTREAM_BODY: &str = r#"{
-  "model": "mock/glm",
+  "model": "glm",
   "messages": [{"role": "system", "content": "a{b}, \"quoted\" \\ backslash"}, {"role": "user", "content": "héllo 😀"}],
   "tools": [{"type": "function", "function": {"name": "f", "parameters": {"x": [1, 2, {"y": "brace } comma ,"}]}}}],
   "temperature": 1e-9,
@@ -62,6 +68,7 @@ fallback: []
     )
 }
 
+#[ignore = "CONF-01: depends on the outbound model rewrite (R2G3, DESIGN §12.10.7)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_01_native_chat_passthrough() {
     let dir = testkit::tempdir("conf01");
@@ -108,7 +115,7 @@ async fn conf_01_native_chat_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta"
+        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
     );
     // The router_meta substring really is absent upstream.
     assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));

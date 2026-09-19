@@ -37,15 +37,19 @@ inbound request aimed at one of those is refused rather than translated on a hun
 ## Native passthrough first
 
 When the inbound protocol matches the provider's `wire_api`, the request body is forwarded
-as the client's original **bytes**. The only permitted mutation is removing router-owned
-fields (the `router_meta` echo and routing hints): message content, ordering, whitespace,
-tool schemas and unknown fields are never rewritten. Concretely, the deletion is a
-byte-level span edit against a whitelist constant — never a parse-and-reprint of the body,
-because that is the most common way a gateway quietly changes what the provider sees.
+as the client's original **bytes**. Exactly two mutations are permitted, both byte-level span
+edits, never a parse-and-reprint of the body (that is the most common way a gateway quietly
+changes what the provider sees):
 
-You can rely on the byte boundary in a checkable form: after removing router-owned fields,
-the remaining bytes are byte-for-byte the client's, and the field removal never changes a
-prefix block's hash.
+- **removing router-owned fields** (the `router_meta` echo and routing hints), against a
+  whitelist constant;
+- **replacing the value of the top-level `model` field** with the provider's own model id —
+  the route you asked for, spelled the way that provider's API expects it. Message content,
+  ordering, whitespace, tool schemas and unknown fields are never rewritten.
+
+You can rely on the byte boundary in a checkable form: after those two edits, the remaining
+bytes are byte-for-byte the client's, and neither edit changes a prefix block's hash (the
+`model` field is not part of the prefix, and router-owned fields are not either).
 
 ## Deterministic translation second
 

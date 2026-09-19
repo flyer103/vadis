@@ -37,6 +37,28 @@ passthrough** (byte-faithful); different → **deterministic translation** (the 
 the same upstream bytes, keeping the prefix cache stable). Every provider must declare its supported
 capabilities in config; every translation cell must explicitly mark its lossy points.
 
+**The outbound `model` is the provider-native model id.** Routing is resolved **before** anything leaves
+the process: the client's `model` string is a **route name** (`provider/model` or an alias, §3), never a
+name the upstream is expected to understand. The outbound request therefore carries the roster entry's
+own model id (§4) — the string that provider's API actually accepts — and the client's literal string is
+kept in the trace as `decision.requested_model` (§6). Two client-side forms that resolve to the same
+route produce byte-identical upstream requests.
+
+Consequently the **byte boundary permits exactly two mutations**, both byte-level, both scoped, both
+auditable:
+
+| # | Mutation | Scope |
+|---|---|---|
+| (a) | **deleting router-owned top-level fields** (`router_meta` echo, routing hints) | whole members, with their separators; invariant: the output is valid JSON and every retained member is byte-for-byte its input span |
+| (b) | **replacing the value of the top-level `model` member** with the resolved provider-native model id | the member's **value span only** — its key, its position, the separators and whitespace around it, and every other byte are untouched |
+
+Everything else is passed through verbatim: message content, order, whitespace, tool schemas, unknown
+fields (§8) and even malformed value content the upstream is entitled to adjudicate. There is **no
+parse → reserialize round trip anywhere on the serving path** (ADR-007): (b) is a byte-level span
+replacement, not a re-encoding, precisely because a round trip would rewrite every byte of the body,
+invalidate the upstream prompt cache for the whole conversation and destroy the meaning of
+`body_hash` / `prefix_blocks[]`.
+
 List of lossy points (each must be handled one by one when translating — not "best effort"):
 
 | Semantics | chat | responses | anthropic | Handling |
@@ -56,9 +78,17 @@ The `model` field accepts three forms:
 3. `auto` — v0.1 returns `400` + an explicit error body (saying a plugin takes it over); the `Selector`
    slot is reserved structurally.
 
+Whichever form is used, selection resolves to exactly one **route** = (provider, model id) taken from the
+roster (§4). The route's id — the roster entry's model id, not the client's string — is what the outbound
+request carries (§2). The form the client used is recorded in the trace as `selection_source`
+(`explicit` / `alias`), and the client's literal string as `decision.requested_model` (§6). A bare
+provider-native model id is **not** an accepted inbound form: it is not a `provider/model` route and not
+an alias, so it resolves to nothing and is answered `404 unknown_model`.
+
 With an explicit specification, router still runs the **Guard stage** (quota / cost cap / capability /
 `max_tokens`); on a guard hit it acts per the configured policy (reject and explain why, or downgrade to
-the `fallback` chain).
+the `fallback` chain). A guard `Downgrade` picks another route, so it rewrites the outbound `model` to
+that route's id too (§2).
 
 ## 4. Config schema (the contract of `config.example.yaml`)
 
@@ -75,7 +105,7 @@ providers:
     wire_api: chat                     # chat | responses | anthropic
     supports: [chat, responses]        # inbound protocols this provider can be translated to
     models:
-      - id: <unique model id within the provider>
+      - id: <unique model id within the provider>   # the provider-native id; this is what goes upstream (§2)
         context: <context limit>
         price:                         # five-tier price, USD / 1K token: this file fixes only the **schema and convention**, it copies no values
           input_miss: <base price: cache miss>
@@ -107,6 +137,12 @@ plugins:
 
 fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # ordered route list, global granularity (§8)
 ```
+
+**Roster ids are provider-native.** `models[].id` is the exact string that provider's API expects, and it
+is what the outbound request carries (§2). A client never needs to know it: it writes a `provider/model`
+route or an alias (§3), and router substitutes the resolved id. Pasting a bare native id into a client is
+therefore **not** a shortcut — the inbound grammar has no bare-model form, so it resolves to nothing and
+the client gets `404 unknown_model`.
 
 ### 4.0 Price convention (preventing two copies from drifting)
 
@@ -236,7 +272,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 |---|---|
 | identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
 | protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
-| decision | `provider`, `model`, `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
+| decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | per step: `plugin`, `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1) |
@@ -244,6 +280,13 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `overhead_ms`, `upstream_ms` |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal}` (§8) |
+
+**`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
+`model` is the id the request was actually billed under at the upstream — the resolved roster entry's own
+id, which is also the string the outbound body carries (§2); `requested_model` is what the client wrote,
+verbatim. An alias and a direct route that resolve to the same route therefore share `decision.model` and
+differ in `requested_model` and `selection_source`. Neither field is ever re-derived from the other: the
+first is read from the route, the second from the inbound bytes.
 
 **Definition of `prefix_blocks[]`** (the precondition for comparability; two implementations must not
 each improvise):
