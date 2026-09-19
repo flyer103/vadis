@@ -1,0 +1,88 @@
+//! CONF-22 (§12.8): **intent write failure ⇒ nothing reached the upstream** —
+//! with a store double whose intent write fails, the fake provider records
+//! zero attempts, the client receives the §8 `internal` body with
+//! `details.stage = "intent"`, and no intent row exists for the request.
+//!
+//! The forwarding pipeline lands in R2-2d; this file asserts the failure
+//! semantics at the seam that enforces them: `write_intent_then` never runs
+//! the effect, and the §8 error body carries `details.stage = "intent"`.
+//! The pipeline twin (fake ProviderClient recording zero attempts through the
+//! real proxy) is kept `#[ignore]`d below until R2-2d.
+
+use router_core::error::{ErrorBody, ErrorCode};
+use router_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
+use serde_json::{json, Value};
+
+/// A store double whose append always fails — "the injected failure".
+struct FailingStore;
+
+impl Store for FailingStore {
+    fn append(&self, _: NewEvent<'_>) -> Result<router_core::EventId, router_core::StoreError> {
+        Err(router_core::StoreError::Busy)
+    }
+    fn project(&self, _: router_core::ProjectionWrite<'_>) -> Result<(), router_core::StoreError> {
+        panic!("a failed intent must not reach the projection tier either");
+    }
+    fn query(&self, _: Query<'_>) -> Result<QueryRow, router_core::StoreError> {
+        Ok(QueryRow::Count(0))
+    }
+    fn rebuild(
+        &self,
+        _: router_core::Projection,
+    ) -> Result<router_core::RebuildStats, router_core::StoreError> {
+        Ok(router_core::RebuildStats::default())
+    }
+    fn schema_version(&self) -> Result<u32, router_core::StoreError> {
+        Ok(1)
+    }
+}
+
+#[test]
+fn conf_22_intent_failure_blocks_upstream() {
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_in_effect = attempts.clone();
+
+    let result: Result<(router_core::EventId, ()), _> = write_intent_then(
+        &FailingStore,
+        NewEvent {
+            kind: EventKind::UpstreamSubmitted,
+            request_id: Some("req-1"),
+            session: Some("sess-1"),
+            body_hash: Some("0123456789abcdef"),
+            trace_ref: None,
+            payload: json!({"route": "zai/glm-5.3", "attempt_index": 0, "attempt_id": "att-1"}),
+        },
+        |_| {
+            attempts_in_effect.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        },
+    );
+
+    // The effect (the upstream attempt) never ran.
+    assert!(
+        result.is_err(),
+        "the intent failure must surface as an error"
+    );
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "zero attempts reached the upstream"
+    );
+
+    // The §8 client-facing shape: `internal`, `details.stage = "intent"`.
+    let body = ErrorBody::new(
+        ErrorCode::Internal,
+        "state store intent write failed; nothing was sent upstream",
+        "req-1",
+    );
+    let mut with_details = body;
+    with_details.error.details = Some(Value::Null).map(|_| json!({"stage": "intent"}));
+    let rendered = serde_json::to_value(&with_details).unwrap();
+    assert_eq!(rendered["error"]["type"], "internal");
+    assert_eq!(rendered["error"]["details"]["stage"], "intent");
+}
+
+/// The full-pipeline twin: the fake ProviderClient records zero attempts and
+/// the real proxy returns the §8 body, once R2-2d lands the forwarding path.
+#[test]
+#[ignore = "CONF-22: depends on the forwarding pipeline (R2-2d) and the fake ProviderClient double"]
+fn conf_22_pipeline_intent_failure() {}

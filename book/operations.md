@@ -23,11 +23,13 @@ Three startup outcomes are worth knowing before the first request:
 |---|---|
 | the config does not validate | the process **exits non-zero** and names the offending key and the reason. It never silently falls back to a default: a config you edited that "did not take effect" is the most expensive silent failure there is |
 | an env var named by `api_key_env` is missing | **not** a startup failure: that provider is marked unavailable and reported by `/health`; the rest of the roster still serves |
-| the state store cannot be opened or migrated | the process **exits non-zero** with the reason. There is no in-memory degraded mode — a gateway that enforced quota from numbers it could not recover would report figures it could not stand behind |
+| the state store cannot be opened or migrated | the process **exits non-zero** (exit code `4`) with the reason. There is no in-memory degraded mode — a gateway that enforced quota from numbers it could not recover would report figures it could not stand behind |
 
 Liveness is `GET /health`, which reports what this process actually loaded: the plugin
-set, each provider's key presence, and the resolved state path. A plugin listed as
-`disabled` in the config appears as disabled rather than missing.
+set, each provider's key presence, the resolved state path, and the state store's status
+(`open`, or the process would not be running — a store that cannot open is a startup
+refusal, see the table above). A plugin listed as `disabled` in the config appears as
+disabled rather than missing.
 
 A change to the config is applied as a diff — plugins reload without restarting the
 process. A change to the listen address is not a reload; restart for that one. Nothing in

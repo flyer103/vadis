@@ -13,5 +13,7 @@ tokio = { workspace = true }
 # Only for cross-checking output semantics in CONF cases (assertion parsing);
 # never present on any code path under test.
 serde_json = { workspace = true }
-# CONF-25 drives the real `serve` assembly (lib target) in-process.
+# CONF-25 drives the real `serve` assembly (lib target) in-process;
+# CONF-20..23 drive the real SQLite store.
 router-cli = { path = "../../crates/router-cli" }
+router-store = { path = "../../crates/router-store" }

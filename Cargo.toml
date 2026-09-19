@@ -9,6 +9,7 @@ members = [
     "crates/router-proxy",
     "crates/router-plugin-sdk",
     "crates/router-cli",
+    "crates/router-store",
     "tests/conformance",
 ]
 
@@ -24,3 +25,8 @@ sha2 = "0.10"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
+# rusqlite (bundled SQLite): DESIGN §12.1's allowlist names it for router-store
+# only (ADR-009 item 1) — the single crate that may open the state database.
+# "bundled" compiles the pinned libsqlite3 C library in, so the build does not
+# depend on a system SQLite (ADR-009's consequences accept the bundled C lib).
+rusqlite = { version = "0.40", features = ["bundled"] }

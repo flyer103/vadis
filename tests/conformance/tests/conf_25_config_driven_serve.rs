@@ -187,7 +187,8 @@ async fn conf_25_config_driven_serve() {
     assert_eq!(providers[0]["available"], false);
 
     //     - the resolved paths, anchored at the config file's directory
-    //       (spec §4.1 / §4.5), with the store honestly pending (R2-2c)
+    //     (spec §4.1 / §4.5), with the store open (R2-2c: the store is a
+    //     startup prerequisite — a running process opened it, CONF-23)
     let trace_dir = v["trace_dir"].as_str().unwrap();
     assert!(
         trace_dir.replace('\\', "/").ends_with("state/traces"),
@@ -198,7 +199,7 @@ async fn conf_25_config_driven_serve() {
         state_db.replace('\\', "/").ends_with("state/router.db"),
         "state_db fixed at <config dir>/state/router.db: {state_db}"
     );
-    assert_eq!(v["store"], "pending");
+    assert_eq!(v["store"], "open");
 
     // (c) no hardcoded default survived: the old stub default 8790 must be
     //     dead. (If serve still hardcoded it, the connect above to 39711

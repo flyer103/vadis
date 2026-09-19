@@ -14,6 +14,7 @@ pub mod cost;
 pub mod error;
 pub mod peak;
 pub mod quota;
+pub mod store;
 
 pub use body::{RawBody, RawEditError, ROUTER_OWNED_TOP_LEVEL_KEYS};
 pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};
@@ -24,3 +25,7 @@ pub use config::{
 pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
 pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
 pub use quota::{charge, OverQuota, QuotaPlan, QuotaState, QuotaVerdict, QuotaWindow};
+pub use store::{
+    write_intent_then, EventId, EventKind, NewEvent, Projection, ProjectionWrite, Query, QueryRow,
+    RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent, EVENT_SCHEMA_VERSION,
+};

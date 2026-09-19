@@ -53,6 +53,32 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     };
 
+    // The store is a startup prerequisite (ADR-009 item 6/8): open and
+    // migrate it before anything else runs. Failure exits non-zero with the
+    // distinguishable reason — there is no in-memory degraded mode, and no
+    // "state off" switch in v0.1. Exit code 4 (2 = config, 3 = bind).
+    let store = match router_store::SqliteStore::open(&rc.state_db) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("router: state store {}: {e}", rc.state_db.display());
+            return 4;
+        }
+    };
+    // config.applied is an intent/accounting event (ADR-010 item 2): FULL,
+    // committed before the process starts serving on top of it.
+    use router_core::store::Store as _;
+    let _config_applied = store.append(router_core::NewEvent {
+        kind: router_core::EventKind::ConfigApplied,
+        request_id: None,
+        session: None,
+        body_hash: None,
+        trace_ref: None,
+        payload: serde_json::json!({
+            "config_path": config_path,
+            "schema_version": store.schema_version().unwrap_or(0),
+        }),
+    });
+
     // Key presence is probed once at startup; the values themselves are
     // never read here (the provider client holds them, §12.10.1) and never
     // reported — only their presence travels to /health.
@@ -135,7 +161,7 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     };
     eprintln!(
-        "router listening on {addr} (config dir: {}, trace: {}, state: {} [store pending until R2-2c])",
+        "router listening on {addr} (config dir: {}, trace: {}, state: {} [store open])",
         rc.config_dir.display(),
         state.trace_dir,
         state.state_db

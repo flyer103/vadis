@@ -53,9 +53,10 @@ pub fn health_json(state: &AppState) -> Value {
         "providers": providers,
         "trace_dir": state.trace_dir,
         "state_db": state.state_db,
-        // R2-2c lands the store (trait Store, CONF-23); until then the path
-        // is resolved and reported honestly as pending.
-        "store": "pending",
+        // The store is a startup prerequisite: if it could not open, serve
+        // would have exited non-zero (CONF-23), so a running process reports
+        // "open" — the refusal reason never reaches /health.
+        "store": "open",
     })
 }
 
