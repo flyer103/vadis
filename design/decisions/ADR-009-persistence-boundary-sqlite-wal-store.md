@@ -112,6 +112,14 @@ What the measurement decides:
   0.100 / max 0.607 ms and a 16-row group commit p99 of 0.077 ms; the re-measurement above lands within one
   Python-call of it, so the conclusion does not depend on the harness.
 
+**Re-measurement is owed, and it is part of the R2-2 latency gate.** These numbers come from a
+Python `sqlite3` harness over 410 B rows. The write path that actually ships (`rusqlite` inside
+`crates/router-store`, real event payloads, a database that grows all day) must be re-measured as
+part of that gate, including one case with a much longer payload and one against a larger database
+file. This ADR's decision does not depend on the outcome — a factor of ten still leaves the write
+path far below an upstream round trip — but the gate's latency budget does, and the budget must
+name measured numbers rather than these.
+
 No number above is inferred; all of them come from these two runs. Reproducing them needs nothing but a WAL
 database, 410-byte `events` rows and the per-statement timing loop described here.
 
