@@ -752,6 +752,7 @@ written).
 | CONF-28 | §6 + §8·observation | **a terminal failure still writes its trace line**: an upstream 400 (deterministic `format_error`, never retried) leaves exactly one `DecisionRecord` with `errors[].details.error_class == "format_error"`, `result.status == 502`, `usage_missing: true` and nothing charged; companion cases pin the same one-line invariant on the connect-failure and pre-route paths | the terminal-failure record path (`Accountant::finish_failure`, §12.6) |
 | CONF-29 | §8·error behaviour | **a connection failure is not a timeout**: with the upstream pointed at a closed local port (connect refused, nothing written), `error.classified` carries `reason = "connect_failure"` and `action = "fallback_provider"` — never the `timeout` + `abort` pair the flattened no-status arm produced — and the client's terminal failure names the same class | `classify_upstream_error`'s no-status arm (§12.10.1's `transport_cause`, ADR-011 item 6 row 1) |
 | CONF-30 | §6 + §7·streaming observation | **the streaming path keeps the same books as the buffered path**: over a mock SSE upstream returning usage, a streamed request leaves one `DecisionRecord` with `session` resolved from `prompt_cache_key`, `cost.computed` written, and `session.bound` in the event log; the same session's second streaming turn records `prefix.continuity == 1.0` (a first-message swap drops it below 1.0); a stream whose usage never arrived keeps `usage_missing: true` and an absent cost. Pre-relay connect failure classifies `connect_failure` with `transport_cause` evidence, same as the buffered path | the stream relay's terminal accounting (`Accountant::finish_stream`, §12.10.5 note R3) |
+| CONF-31 | §6·prefix metric | **blocks are enumerated in the provider template order**: with a codex-shaped fixture (`input` serialized before `tools`, turn 2 appending items at the `input` tail), the trace's `prefix.blocks[]` kinds run `tools…, input_item…` and a pure append measures `prefix.continuity == 1.0`; mutating turn 1's first `input` item drops the ratio **below** 1.0 (the metric is bidirectionally movable, not a constant) | `extract_prefix_blocks`'s enumeration order (§12.10.6; the 2026-09-20 Plan A decision) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1338,6 +1339,15 @@ row 5 of §12.10.5 is written (`upstream.submitted.body_hash` hashes exactly tho
   they are the encoder's output. The domain is spec §6's: `messages` / `input` / `tools`
   members plus the system-instruction position — so deleting router-owned fields cannot change
   a block hash (CONF-10 asserts exactly that).
+- **Enumeration order = the provider's effective prompt (template) order** (2026-09-20 user
+  decision, Plan A): system-instruction position → `tools` → `messages` / `input` items — not
+  body byte order. The measured codex body serializes `input` *before* `tools`, while the
+  provider template places tools before the conversation, so under the old byte-order
+  enumeration a pure tail append in template order (a cache hit upstream: 99.1% verified on the
+  real pair) registered as a mid-sequence insertion and reported 0.250 (a ~4× under-report).
+  Enumerating in template order closes that gap: the same traffic reports 1.000. The decision
+  and its evidence live in the round 3 round file (`autowork/progress/`); CONF-31 pins the
+  order, and the harness guard `prefix_continuity_order_guard.py` records the history.
 - **`tokens` per block (GAP-Q14).** The dependency allowlist has no tokenizer, and putting an
   unverifiable one in the money path would be worse than estimating: block `tokens` is a
   proportional attribution of the **measured** `usage.input_total` over the prefix region by

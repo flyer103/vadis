@@ -14,6 +14,13 @@
 //! the hourly JSONL trace and cross-checked against the `cache_ledger`
 //! projection and the `request.received` event rows (the join CONF-24
 //! anchors on).
+//!
+//! Note on enumeration order: this fixture carries `messages` and no
+//! `tools`, so it is insensitive to the 2026-09-20 Plan A block-order
+//! change (template order: system → tools → conversation; spec §6) — its
+//! expectation value predates and survives the change unchanged. The
+//! codex-shaped body (`input` serialized before `tools`) is CONF-31's
+//! object.
 
 #![forbid(unsafe_code)]
 

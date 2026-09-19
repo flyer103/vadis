@@ -70,6 +70,15 @@ pub struct PrefixBlock {
 /// as the **first** block when present. Everything else is not prefix.
 /// Router-owned top-level keys are already gone from the outbound body, so
 /// deleting them cannot change a block hash (CONF-10's claim).
+///
+/// **Enumeration order = the provider's effective prompt (template)
+/// order** (2026-09-20 user decision, Plan A): system-instruction
+/// position → `tools` → `messages` / `input` items — never body byte
+/// order. The measured codex body serializes `input` before `tools` while
+/// the provider template places tools before the conversation, so under
+/// byte order a client's tail append (in template order) registered as a
+/// mid-sequence insertion and continuity under-reported a ~4× gap against
+/// the upstream's own verified hit rate. CONF-31 pins this order.
 pub fn extract_prefix_blocks(
     body: &RawBody,
 ) -> Result<Vec<PrefixBlock>, crate::body::RawEditError> {
@@ -90,16 +99,23 @@ pub fn extract_prefix_blocks(
 
     // The system-instruction position sits at the very front of the prefix
     // (spec §2's mapping rule: keep the position stable).
-    if let Some(&(ref k, s, e)) = spans.iter().find(|(k, _, _)| k == "system") {
-        let _ = k;
+    if let Some(&(_, s, e)) = spans.iter().find(|(k, _, _)| k == "system") {
         push(BlockKind::System, s, e);
     }
-    for (k, s, e) in &spans {
-        match k.as_str() {
-            "messages" => scan_array_elements(b, *s, *e, BlockKind::Message, &mut blocks),
-            "input" => scan_array_elements(b, *s, *e, BlockKind::InputItem, &mut blocks),
-            "tools" => scan_array_elements(b, *s, *e, BlockKind::Tool, &mut blocks),
-            _ => {}
+    // Then the template order: tools before the conversation members.
+    // `messages` and `input` never coexist on one wire shape; visiting
+    // `messages` first keeps a single deterministic order for both.
+    for wanted in ["tools", "messages", "input"] {
+        for (k, s, e) in &spans {
+            if k.as_str() != wanted {
+                continue;
+            }
+            let kind = match wanted {
+                "tools" => BlockKind::Tool,
+                "messages" => BlockKind::Message,
+                _ => BlockKind::InputItem,
+            };
+            scan_array_elements(b, *s, *e, kind, &mut blocks);
         }
     }
     Ok(blocks)
@@ -280,16 +296,80 @@ mod tests {
     }
 
     #[test]
-    fn extracts_messages_tools_and_system() {
+    fn extracts_in_template_order() {
         let body = RawBody::new(
             b"{\"system\":\"be brief\",\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"},{\"role\":\"assistant\",\"content\":\"yo\"}],\"tools\":[{\"name\":\"t1\"}],\"temperature\":0.7}"
                 .to_vec(),
         );
         let blocks = extract_prefix_blocks(&body).unwrap();
         let kinds: Vec<&str> = blocks.iter().map(|b| b.kind.as_str()).collect();
-        // system first (stable front position), then messages, then tools.
-        assert_eq!(kinds, vec!["system", "message", "message", "tool"]);
+        // Template order (CONF-31): system first, then tools, then the
+        // conversation — regardless of body byte order (tools was
+        // serialized after messages here).
+        assert_eq!(kinds, vec!["system", "tool", "message", "message"]);
         assert!(blocks.iter().all(|b| b.hash.len() == 16));
+    }
+
+    /// CONF-31's core shape: the measured codex body serializes `input`
+    /// before `tools`; turn 2 appends items at the `input` tail. In the
+    /// provider's template order that is a pure tail append, so continuity
+    /// must be exactly 1.0 — the regression this order change prevents
+    /// (byte-order enumeration reported 0.250 on the real pair while the
+    /// upstream verified hit rate was 0.991).
+    #[test]
+    fn codex_tail_append_is_full_continuity() {
+        fn body(input: &str) -> RawBody {
+            RawBody::new(
+                format!(
+                    "{{\"model\":\"m\",\"input\":[{input}],\"tools\":[{{\"name\":\"t1\"}},{{\"name\":\"t2\"}}],\"prompt_cache_key\":\"s\"}}"
+                )
+                .into_bytes(),
+            )
+        }
+        let turn1 = body(r#"{"type":"message","role":"user","content":"a"}"#);
+        let turn2 = body(concat!(
+            r#"{"type":"message","role":"user","content":"a"},"#,
+            r#"{"type":"message","role":"assistant","content":"b"},"#,
+            r#"{"type":"message","role":"user","content":"c"}"#
+        ));
+        let b1 = extract_prefix_blocks(&turn1).unwrap();
+        let b2 = extract_prefix_blocks(&turn2).unwrap();
+        // Enumerated in template order: tools first, then input items.
+        let kinds: Vec<&str> = b1.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["tool", "tool", "input_item"]);
+        // The input tail append is a true tail append in this order.
+        assert_eq!(prefix_continuity(&b1, &b2), Some(1.0));
+    }
+
+    /// The metric is bidirectionally movable, not a constant (CONF-31's
+    /// companion): mutating turn 1's *first input item* — the front of the
+    /// conversation — drops the ratio below 1.0 even though the tail and
+    /// the tools are unchanged.
+    #[test]
+    fn mutated_first_input_item_drops_continuity() {
+        fn body(first: &str, tail: &str) -> RawBody {
+            RawBody::new(
+                format!(
+                    "{{\"model\":\"m\",\"input\":[{first},{tail}],\"tools\":[{{\"name\":\"t1\"}}]}}"
+                )
+                .into_bytes(),
+            )
+        }
+        let a = extract_prefix_blocks(&body(
+            r#"{"type":"message","role":"user","content":"original"}"#,
+            r#"{"type":"message","role":"user","content":"tail"}"#,
+        ))
+        .unwrap();
+        let b = extract_prefix_blocks(&body(
+            r#"{"type":"message","role":"user","content":"REWRITTEN"}"#,
+            r#"{"type":"message","role":"user","content":"tail"}"#,
+        ))
+        .unwrap();
+        let c = prefix_continuity(&a, &b).expect("both turns have blocks");
+        assert!(
+            c < 1.0,
+            "a first-item mutation must drop the ratio (got {c}); a constant 1.0 would be a broken metric"
+        );
     }
 
     #[test]

@@ -34,6 +34,34 @@ stable**, and choosing a cheaper model is second-order.
 - **How to check the claim**: `router stats` to read the cost and cache report,
   `router replay` to recompute money over a fixed trace with the same code path.
 
+## Two cache numbers: a predictor and a fact
+
+When you look at a trace (or a `router stats` report) you will see two numbers that both talk
+about the prefix cache. They are not rivals and they are not interchangeable:
+
+- **`prefix.continuity` is a predictor.** Router computes it locally, from the shape of this
+  request's conversation blocks against the previous request of the same session. It answers
+  *"should* the upstream's prefix cache hit?" — 1.0 means "nothing at the front of your
+  conversation changed, the cache should hold". It is a **local prediction**, computed before
+  and independently of what the provider actually did, so it can be wrong: a provider may evict
+  a cache for reasons router cannot see. A value below 1.0 on traffic you did not expect to
+  change is a *trigger to go look*, not a verdict that money was lost.
+- **The cache hit rate the provider reports is the fact.** Every response carries the
+  provider's own usage accounting — how many of the input tokens were served from cache.
+  That number is **measured by the party that owns the cache**, and it is the only one that
+  counts when a saving or a loss is being claimed. If the predictor says 1.0 and the provider
+  reports no cache hits, believe the provider — and expect the two to move together, because
+  a genuine continuity drop almost always shows up in the next turn's measured hit rate.
+
+Why both exist: the predictor is available immediately, per request, even when the provider
+returns no usage at all; the fact is authoritative but only as good as the provider's own
+reporting. When no usage came back, the hit rate is simply **unknown** — not zero, and never
+written down as zero.
+
+The precise definitions (what a block is, the block order, and the inferred/verified
+accounting convention that decides which number a claim may rest on) live in one place:
+[`docs/spec.md` §6](../docs/spec.md) and [§7](../docs/spec.md).
+
 ## Plan-first routing: the subscription first, the metered account as the spill
 
 If you pay for a coding plan and also have pay-per-token access to the same model, you want
