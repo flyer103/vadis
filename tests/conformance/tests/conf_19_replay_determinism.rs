@@ -3,8 +3,8 @@
 
 #![forbid(unsafe_code)]
 
-#[ignore = "CONF-19: depends on the replay subcommand (R2+)"]
+#[ignore = "CONF-19: depends on the replay subcommand"]
 #[tokio::test]
 async fn conf_19_replay_determinism() {
-    unimplemented!("replay subcommand lands after Round 2");
+    unimplemented!("the replay subcommand is not implemented in v0.1");
 }

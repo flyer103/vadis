@@ -4,11 +4,11 @@
 //! handed to the wire is that attempt's `upstream.submitted` intent; nothing
 //! is written between the intent commit and the attempt.
 //!
-//! The forwarding pipeline lands in R2-2d; this file drives the invariant at
-//! the seam it is enforced on: `write_intent_then` (router-core) over the
-//! real SQLite store (router-store), with the "fake provider" as the effect
-//! closure that inspects the store at hand-off time. The pipeline case's
-//! `#[ignore]`d twin is kept below until R2-2d wires the real proxy.
+//! This file drives the invariant at the seam it is enforced on:
+//! `write_intent_then` (router-core) over the real SQLite store
+//! (router-store), with the "fake provider" as the effect closure that
+//! inspects the store at hand-off time. The pipeline case's `#[ignore]`d twin
+//! is kept below.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

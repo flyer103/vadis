@@ -25,8 +25,8 @@ product + a separate autowork repo).
   across files/repos).
 - The loop side's artifacts (rule TOML, config, tier-B plugins) must evolve consistently with the product
   contract in the same commit; a single repo makes "gate PASS → merge into main" one atomic operation.
-- Reference shape: the old `nexaroute/router` (the root is a Go product + a `research/` loop side) has
-  already proved that this organization can run for the long term.
+- Reference shape: an earlier, private Go implementation of the same idea (the root is the product
+  + a `research/` loop side) has already proved that this organization can run for the long term.
 
 ## Consequences
 

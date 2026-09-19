@@ -3,8 +3,8 @@
 
 #![forbid(unsafe_code)]
 
-#[ignore = "CONF-08: depends on the translation matrix + anthropic→chat mapper (R2)"]
+#[ignore = "CONF-08: depends on the translation matrix + anthropic→chat mapper"]
 #[tokio::test]
 async fn conf_08_translate_anthropic_chat() {
-    unimplemented!("translation matrix lands in Round 2");
+    unimplemented!("the anthropic→chat translation cell is not implemented in v0.1");
 }

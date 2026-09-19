@@ -8,13 +8,15 @@ record; a round that fails its gates leaves documentation and no broken code.
 
 ## Outline
 
-- **Where the project stands right now**: the non-streaming data plane is real — requests
-  are forwarded to upstreams with byte-faithful native passthrough, usage is normalized,
-  upstream failures are classified and can fail over — with streaming (SSE) and cross-protocol
-  translation still to come. See the state document rather than this page.
-- **The next step**: streaming and the trace/observation wiring, which is what turns the
-  cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a passing
-  round means only the parts that were measurable passed.
+- **Where the project stands right now**: the data plane is real — requests are forwarded to
+  upstreams with byte-faithful native passthrough, the streaming path relays the SSE stream
+  event byte-for-byte, usage is normalized, upstream failures are classified and can fail over,
+  and every terminal outcome lands in the trace. Cross-protocol translation is still to come, and
+  so is the reporting surface (`router stats` / `router replay` / `router trace tail`) that reads
+  those traces back out. See the state document rather than this page.
+- **The next step**: cross-protocol translation and the trace/observation wiring, which is what
+  turns the cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a
+  passing round means only the parts that were measurable passed.
 - **The iteration loop**: the direction pool lists the candidate rounds (real-client
   smoke tests, trace capture and replay corpora, input-side compression, output-side
   discipline, quota-aware routing, cache robustness, cost reporting, price verification,
@@ -27,7 +29,7 @@ record; a round that fails its gates leaves documentation and no broken code.
   multi-user/multi-node deployments, automatic model selection, and retrieval of
   tee'd original payloads.
 - **How to influence direction**: bring a hypothesis with a trace, a metric and an expected
-  delta; each round is aligned with the owner before it is executed.
+  delta; each round is aligned with the maintainer before it is executed.
 - **Where to look next**: the state document for current status and the program charter for
   gates, roles and the direction pool.
 

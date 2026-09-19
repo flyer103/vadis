@@ -2,6 +2,10 @@
 name = "router-proxy"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+description = "The axum data plane: byte-faithful forwarding, the SSE relay, /health and the per-request accounting that closes a trace record."
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 router-core = { path = "../router-core" }

@@ -5,8 +5,9 @@
 //! `error.classified` → the action's effect).
 //!
 //! Non-streaming only: a `stream: true` inbound body is refused with 501
-//! by this engine before any attempt runs (SSE lands in R2-2e), so an
-//! attempt never half-relays.
+//! by this engine before any attempt runs (a `stream: true` request is
+//! served by the SSE relay, never buffered here), so an attempt never
+//! half-relays.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -359,11 +360,12 @@ impl Forwarder {
             ));
         }
         if parsed.get("stream").and_then(|s| s.as_bool()) == Some(true) {
-            // SSE lands in R2-2e; never half-relay a stream buffered.
+            // A streaming request is not served on this path; never half-relay a
+            // stream buffered.
             return ForwardOutcome::Failure(ForwardFailure::new(
                 501,
                 ErrorCode::NotImplemented,
-                "streaming responses land in R2-2e; resend with stream: false",
+                "a streaming request is not served on this path; resend with stream: false",
             ));
         }
 
@@ -380,9 +382,10 @@ impl Forwarder {
                 format!("unknown provider '{}'", primary.provider),
             ));
         };
-        // Capability: the undeclared cell is a 400, never a best-effort
-        // translation (spec §8); the declared-but-different cell is a
-        // translation, which lands in R2-3.
+        // Capability: an inbound protocol outside the provider's declared
+        // `supports` is a 400, never a best-effort translation (spec §8).
+        // Translation between wire shapes is not implemented in v0.1, so a
+        // declared-but-different cell is refused below with a 501.
         if !provider.supports.contains(&proto_in) {
             let supports: Vec<&str> = provider.supports.iter().map(|w| w.as_str()).collect();
             return ForwardOutcome::Failure(ForwardFailure {
@@ -404,7 +407,7 @@ impl Forwarder {
                 501,
                 ErrorCode::NotImplemented,
                 format!(
-                    "translation {} -> {} lands in R2-3; this round forwards native routes only",
+                    "translation {} -> {} is not implemented in v0.1; only native routes are served",
                     proto_in, provider.wire_api
                 ),
             ));

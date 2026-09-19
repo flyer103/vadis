@@ -17,9 +17,10 @@ put provider keys in the environment, start the gateway.
 - **Start** `router serve --config config.yaml` and confirm liveness on `GET /health`.
 - **Point a client** at the gateway base URL — but do the local-proxy prerequisite from
   [Connecting clients](connecting-clients.md) first, or nothing will reach router.
-- **First request**: send one request in any of the three inbound protocols and read the
-  `router_meta` block in the response (plugin chain, per-transform accounting, session and
-  cache state).
+- **First request**: send one request in any of the three inbound protocols. The `router_meta`
+  response block (plugin chain, per-transform accounting, session and cache state) is planned
+  design intent, not served in v0.1 — today those same facts are read from the trace record
+  instead.
 - **Know where state lands**: traces are appended under the `trace.dir` configured for
   the run, and the gateway's own state (session stickiness, cache ledger, quota counters) is
   a local store beside the config file, so the two can be backed up together

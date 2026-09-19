@@ -2,8 +2,10 @@
 
 #![forbid(unsafe_code)]
 
-#[ignore = "CONF-11: depends on RawBody + encoder (R2)"]
+#[ignore = "CONF-11: the passthrough behaviour is implemented, but this case has no in-repo assertion yet"]
 #[tokio::test]
 async fn conf_11_unknown_fields_passthrough() {
-    unimplemented!("RawBody + encoder lands in Round 2");
+    unimplemented!(
+        "the passthrough behaviour is implemented; this case has no in-repo assertion yet"
+    );
 }
