@@ -31,8 +31,11 @@ pub async fn serve(config_path: &str) -> i32 {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Json;
+    use router_core::config::WireApi;
     use router_core::error::ErrorBody;
-    use router_proxy::{protocol_stub, AppState};
+    use router_core::store::Store as _;
+    use router_proxy::{AppState, ForwardOutcome, Forwarder};
+    use std::collections::HashMap;
 
     // Load-time contract (DESIGN §12.10.2): an illegal config exits
     // non-zero with the reason — never a silent fallback to defaults.
@@ -66,7 +69,6 @@ pub async fn serve(config_path: &str) -> i32 {
     };
     // config.applied is an intent/accounting event (ADR-010 item 2): FULL,
     // committed before the process starts serving on top of it.
-    use router_core::store::Store as _;
     let _config_applied = store.append(router_core::NewEvent {
         kind: router_core::EventKind::ConfigApplied,
         request_id: None,
@@ -115,8 +117,75 @@ pub async fn serve(config_path: &str) -> i32 {
         provider_keys,
     });
 
-    fn error_response(status: StatusCode, body: ErrorBody) -> Response {
-        (status, axum::Json(body)).into_response()
+    // The forwarding engine (DESIGN §12.10.5): one transport per provider
+    // with a key present, the api key values read once here and held only
+    // by the engine (never in /health, logs or events). A keyless provider
+    // gets no transport: the chain skips it and /health reports it
+    // unavailable.
+    let mut transports: HashMap<String, std::sync::Arc<dyn router_proxy::ProviderTransport>> =
+        HashMap::new();
+    let mut api_keys: HashMap<String, String> = HashMap::new();
+    for p in &rc.router.providers {
+        if let Some(v) = std::env::var_os(&p.api_key_env) {
+            let key = v.to_string_lossy().into_owned();
+            let timeout =
+                std::time::Duration::from_millis(rc.router.server.upstream_attempt_timeout.0);
+            match router_providers::ReqwestProviderClient::new(timeout) {
+                Ok(client) => {
+                    transports.insert(p.name.clone(), std::sync::Arc::new(client));
+                    api_keys.insert(p.name.clone(), key);
+                }
+                Err(e) => {
+                    eprintln!("router: provider '{}': client build failed: {e}", p.name);
+                }
+            }
+        }
+    }
+
+    let forwarder = std::sync::Arc::new(Forwarder {
+        config: rc.router.clone(),
+        transports,
+        api_keys,
+        store: Some(std::sync::Arc::new(store) as std::sync::Arc<dyn router_core::store::Store>),
+    });
+
+    /// One POST through the forwarding engine: body bytes in, the engine's
+    /// outcome mapped to an HTTP response. The body is forwarded verbatim
+    /// (minus router-owned keys) — never parsed and reserialized.
+    async fn proxy_endpoint(
+        forwarder: std::sync::Arc<Forwarder>,
+        proto_in: WireApi,
+        body: axum::body::Bytes,
+    ) -> Response {
+        let request_id = request_id();
+        let outcome = forwarder.forward(proto_in, &body, &request_id).await;
+        match outcome {
+            ForwardOutcome::Success(s) => {
+                let mut resp = Response::new(axum::body::Body::from(s.body));
+                *resp.status_mut() = StatusCode::from_u16(s.status).expect("upstream status maps");
+                if let Some(ct) = s.content_type {
+                    if let Ok(v) = ct.parse() {
+                        resp.headers_mut()
+                            .insert(axum::http::header::CONTENT_TYPE, v);
+                    }
+                }
+                if let Some(from) = s.failover_from {
+                    if let Ok(v) = from.to_string().parse() {
+                        resp.headers_mut().insert("x-router-failover-from", v);
+                    }
+                }
+                resp
+            }
+            ForwardOutcome::Failure(f) => {
+                let mut body = ErrorBody::new(f.code, f.message, request_id);
+                body.error.details = f.details;
+                (
+                    StatusCode::from_u16(f.status).expect("failure status maps"),
+                    Json(body),
+                )
+                    .into_response()
+            }
+        }
     }
 
     let app = axum::Router::new()
@@ -132,23 +201,23 @@ pub async fn serve(config_path: &str) -> i32 {
         )
         .route(
             "/v1/chat/completions",
-            post(|| async {
-                let (status, body) = protocol_stub(request_id(), "/v1/chat/completions");
-                error_response(StatusCode::from_u16(status).expect("valid status"), body)
+            post({
+                let forwarder = forwarder.clone();
+                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Chat, body)
             }),
         )
         .route(
             "/v1/responses",
-            post(|| async {
-                let (status, body) = protocol_stub(request_id(), "/v1/responses");
-                error_response(StatusCode::from_u16(status).expect("valid status"), body)
+            post({
+                let forwarder = forwarder.clone();
+                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Responses, body)
             }),
         )
         .route(
             "/v1/messages",
-            post(|| async {
-                let (status, body) = protocol_stub(request_id(), "/v1/messages");
-                error_response(StatusCode::from_u16(status).expect("valid status"), body)
+            post({
+                let forwarder = forwarder.clone();
+                move |body: axum::body::Bytes| proxy_endpoint(forwarder, WireApi::Anthropic, body)
             }),
         )
         .with_state(());

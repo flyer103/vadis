@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 router-core = { path = "../router-core" }
 router-proxy = { path = "../router-proxy" }
+router-providers = { path = "../router-providers" }
 router-store = { path = "../router-store" }
 axum = { workspace = true }
 tokio = { workspace = true }

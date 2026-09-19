@@ -51,6 +51,14 @@ where
     }
 }
 
+/// The production transport: the reqwest-backed client satisfies the
+/// monomorphized seam (DESIGN §12.10.1).
+impl ProviderSend for router_providers::ReqwestProviderClient {
+    fn send(&self, req: HttpRequest<Bytes>) -> impl Future<Output = AttemptOutcome> + Send {
+        router_providers::ReqwestProviderClient::send(self, req)
+    }
+}
+
 /// One forwarded request's terminal state for the caller (the axum handler
 /// or a conformance case).
 pub enum ForwardOutcome {
