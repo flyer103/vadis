@@ -49,7 +49,7 @@ pub struct PriceTable {
     pub peak: PeakTable,
 }
 
-/// Normalized usage (spec §6). Protocol parsing (R2) constructs it from the
+/// Normalized usage (spec §6). Protocol parsing constructs it from the
 /// three wire formats; this module only knows this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub struct Usage {

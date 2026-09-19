@@ -15,7 +15,7 @@
 //! Container deviation: the DESIGN sketch draws `RawBody(Bytes)`, but the
 //! `bytes` crate is not in `router-core`'s dependency whitelist (§12.1: only
 //! serde/serde_json), so `Vec<u8>` is used instead. The zero-copy outbound
-//! conversion (`Bytes::from(vec)`) happens in the proxy layer in R2; semantics
+//! conversion (`Bytes::from(vec)`) happens in the proxy layer; semantics
 //! are unaffected.
 
 use std::borrow::Cow;
