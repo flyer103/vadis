@@ -1,165 +1,186 @@
 # Design (HOW) — router
 
-口径：本文是**实现结构**的单一真相（模块边界、数据流、算法、测试策略）。对外行为见 `docs/spec.md`。
+Convention: this document is the single source of truth for the **implementation structure** (module
+boundaries, data flow, algorithms, test strategy). External behavior is in `docs/spec.md`.
 
-## 1. 全景
+## 1. Panorama
 
 ```mermaid
 flowchart LR
-  C["codex / hermes / claude code"] --> PX["router-proxy<br/>入站 HTTP + SSE"]
-  PX --> PD["router-protocol<br/>解析 / 归一 / 翻译"]
-  PD --> RT["router-runtime<br/>Context / fiber / 声明式 loader"]
-  RT --> TR["transform 链<br/>可逆 · 逐条计账"]
-  RT --> SEL["selector<br/>v0.1 显式 / 别名"]
-  RT --> GD["guard 链<br/>配额 · 成本 · 能力"]
-  TR --> PR["router-providers<br/>native 或翻译编码"]
+  C["codex / hermes / claude code"] --> PX["router-proxy<br/>inbound HTTP + SSE"]
+  PX --> PD["router-protocol<br/>parse / normalize / translate"]
+  PD --> RT["router-runtime<br/>Context / fiber / declarative loader"]
+  RT --> TR["transform chain<br/>reversible · accounted per step"]
+  RT --> SEL["selector<br/>v0.1 explicit / alias"]
+  RT --> GD["guard chain<br/>quota · cost · capability"]
+  TR --> PR["router-providers<br/>native or translated encoding"]
   SEL --> PR
   GD --> PR
   PR --> UP["upstream"]
-  RT --> ST["状态服务<br/>cache 账本 · 粘性表 · trace 缓冲"]
+  RT --> ST["state service<br/>cache ledger · sticky table · trace buffer"]
   ST --> TRC["trace JSONL"]
-  TRC --> AW["autowork 循环侧"]
-  AW --> ART["策略产物<br/>config / 规则 TOML / tier-B 插件"]
+  TRC --> AW["autowork loop side"]
+  AW --> ART["policy artifacts<br/>config / rule TOML / tier-B plugin"]
   ART --> RT
 ```
 
-三条硬边界（AGENTS.md 有约束条款）：字节边界、内容确定性、观测边界。
+Three hard boundaries (AGENTS.md carries the binding clauses): the byte boundary, content determinism,
+the observation boundary.
 
-## 2. crate 依赖方向
+## 2. crate dependency direction
 
 ```
 router-cli → router-proxy → router-protocol → router-core ← router-plugins
                     ↘ router-runtime ↗                 ↑
-                          router-providers        router-plugin-sdk (tier-B 协议类型)
+                          router-providers        router-plugin-sdk (tier-B protocol types)
 ```
 
-- `router-core`：请求/决定的领域模型、成本引擎、cache 账本、插件 trait。**不依赖任何 HTTP/协议 crate**。
-- `router-runtime`：Cordis 语义（§4）。`router-core` 的 trait 在此被装载为 fiber。
-- `router-protocol`：3 协议编解码 + 翻译矩阵 + `Usage` 归一化；纯函数，可单测穷举。
-- `router-providers`：wire 能力、鉴权、重试、SSE 解析；**不做决定**。
-- `router-proxy`：axum 数据面，字节保真转发与 SSE 透传。
-- `router-plugins`：内置 tier-A 插件（cache-guard、transform_rules、cost_ledger、quota_guard、sticky）。
+- `router-core`: the domain model of request/decision, the cost engine, the cache ledger, the plugin
+  traits. **Depends on no HTTP/protocol crate**.
+- `router-runtime`: Cordis semantics (§4). `router-core`'s traits are loaded here as fibers.
+- `router-protocol`: codec for the 3 protocols + translation matrix + `Usage` normalization; pure
+  functions, exhaustively unit-testable.
+- `router-providers`: wire capabilities, authentication, retry, SSE parsing; **makes no decisions**.
+- `router-proxy`: the axum data plane, byte-faithful forwarding and SSE passthrough.
+- `router-plugins`: the built-in tier-A plugins (cache-guard, transform_rules, cost_ledger, quota_guard,
+  sticky).
 
-## 3. 决定管线（一次请求的顺序）
+## 3. Decision pipeline (the order of one request)
 
 ```
-parse → session 解析 → transform 链 → selector → guard 链 → 编码 → 转发 → usage 归一 → 账本/trace
+parse → session resolution → transform chain → selector → guard chain → encode → forward → usage normalization → ledger/trace
 ```
 
-关键设计：**transform 与 guard 都在决定之后仍然可被 trace 归因**（每步写一条 transform 记录）；
-selector 在 v0.1 只做显式/别名解析，`auto` 留给插件——但槽位、契约、trace 字段现在就位，插件一上
-线无需改数据面。
+Key design: **both transform and guard remain trace-attributable after the decision** (one transform
+record is written per step); in v0.1 the selector only does explicit/alias resolution and `auto` is left
+to a plugin — but the slot, the contract and the trace fields are in place now, so a plugin needs no
+data-plane change when it lands.
 
-## 4. 插件运行时（对齐 Cordis 语义）
+## 4. Plugin runtime (aligned with Cordis semantics)
 
-论文给出的原语与本项目的落地映射（表由 ADR-002 固化）：
+The mapping from the paper's primitives to this project's implementation (fixed by ADR-002):
 
-| Cordis 原语 | 本项目的 Rust 形态 | 用途 |
+| Cordis primitive | This project's Rust form | Purpose |
 |---|---|---|
-| `ctx.effect(cb) → dispose` | `fn(&mut Ctx) -> Effect`，`Effect{undo: FnOnce}`，LIFO 累加 | 任何注册/改写自带逆；卸载插件 = 完整回滚 |
-| `ctx.set(key,value)` / `ctx.get(key)` + `notify → refresh` | 类型化服务槽 `ServiceKey<T>`；提供者进入 UNLOADING 时**依赖者先被停用**，再撤下绑定 | 插件间的依赖与被依赖关系不需要人工排序 |
-| `fiber.inject`（coeffect 声明） | manifest 声明 `inject: [services]`；未满足时**停在加载等待**而非报错 | 乱序加载安全 |
-| `ctx.isolate(key, realm)` | 同 key 多 realm → 两套独立绑定 | **A/B 与 shadow**：两个策略版本并存互不干扰 |
-| `ctx.intercept(key, metadata)` | 不改绑定、只改"怎么用" | 对单个插件设采样率、超时、shadow 开关 |
-| entries + keyed diff + HMR | 声明式 `plugins:` 列表 + per-field 最小操作 | 参数级实验无需重启 |
+| `ctx.effect(cb) → dispose` | `fn(&mut Ctx) -> Effect`, `Effect{undo: FnOnce}`, accumulated LIFO | any registration/rewrite carries its own inverse; unloading a plugin = a full rollback |
+| `ctx.set(key,value)` / `ctx.get(key)` + `notify → refresh` | typed service slot `ServiceKey<T>`; when a provider enters UNLOADING its **dependents are deactivated first**, then the binding is withdrawn | dependencies and dependents between plugins need no manual ordering |
+| `fiber.inject` (a coeffect declaration) | the manifest declares `inject: [services]`; while unsatisfied it **stops at load-waiting** instead of erroring | out-of-order loading is safe |
+| `ctx.isolate(key, realm)` | the same key with multiple realms → two independent sets of bindings | **A/B and shadow**: two policy versions coexist without interfering |
+| `ctx.intercept(key, metadata)` | does not change the binding, only "how it is used" | set the sample rate, timeout or shadow switch for one plugin |
+| entries + keyed diff + HMR | a declarative `plugins:` list + per-field minimal operations | parameter-level experiments need no restart |
 
-**Rust 的取舍（必须诚实面对）**：论文的 HMR 依赖 JS 动态模块加载。本项目 tier-A 插件是编译期链接，
-**没有模块级 HMR**——代码变更 = 重建 + 重启；只有**配置级协调**（config/权重/规则 TOML 立即生效）与
-tier-B（进程外）插件的模块级重载。为压低重启代价，`cache 账本 / 粘性表 / trace 缓冲`都在状态服务里
-落盘并在重启后交接，重启不丢会话上下文。
+**Rust's trade-off (must be faced honestly)**: the paper's HMR relies on dynamic module loading in JS.
+This project's tier-A plugins are linked at compile time, so there is **no module-level HMR** — a code
+change = rebuild + restart; only **config-level coordination** (config/weights/rule TOML take effect
+immediately) and module-level reload of tier-B (out-of-process) plugins exist. To keep the restart cost
+low, the `cache ledger / sticky table / trace buffer` all persist in the state service and are handed
+over after a restart, so a restart loses no session context.
 
-生命周期状态机（简化）：`LOADING → ACTIVE → UNLOADING → (removed)`；`inject` 未满足时停在 LOADING；
-卸载一个 fiber 时先让依赖者离开，再按 LIFO 执行其逆。失败状态带错误结果，不影响其它 fiber。
+Lifecycle state machine (simplified): `LOADING → ACTIVE → UNLOADING → (removed)`; while `inject` is
+unsatisfied it stays at LOADING; when unloading a fiber its dependents leave first, then its inverse is
+executed in LIFO order. A failed state carries an error result and does not affect other fibers.
 
-## 5. 成本引擎
+## 5. Cost engine
 
-**五档价 + 峰谷**：`input_miss`、`input_hit`、`cache_write`、`output`、`peak.multiplier`。
-单请求成本：
+**Five-tier price + peak/off-peak**: `input_miss`, `input_hit`, `cache_write`, `output`,
+`peak.multiplier`. Per-request cost:
 
 ```
 cost = input_miss × p_miss + input_cached × p_hit + cache_write × p_write + output × p_out   (× peak)
 ```
 
-**配额套餐**（coding plan 类）：套餐内边际成本记 0，但必须建模 `tokens_remaining` 与
-`over_quota: block|spill`；`spill` 时溢出部分按 `p_miss` 计。额度余量写入 trace（`quota_after`），
-使"额度用在了哪"可审计。
+**Quota plans** (coding-plan style): the marginal cost inside the plan is recorded as 0, but
+`tokens_remaining` and `over_quota: block|spill` must be modeled; under `spill` the overflow is charged
+at `p_miss`. The remaining allowance is written to the trace (`quota_after`), making "where the
+allowance was spent" auditable.
 
-**切换的代价模型（cache-aware breakeven）**：换模型会立刻失去前缀缓存、把整段前缀按 miss 价重算一次。
+**The cost model of switching (cache-aware breakeven)**: switching models immediately loses the prefix
+cache and recomputes the whole prefix once at the miss price.
 
 ```
 switch_gain  ≈ remaining_turns × tokens_per_turn × (p_stay − p_new)
 switch_cost  ≈ prefix_tokens × p_miss_new
-切换当且仅当 switch_gain > safety_factor × switch_cost
+switch if and only if switch_gain > safety_factor × switch_cost
 ```
 
-参数在 `config.cache.breakeven`；`remaining_turns` 由会话历史估计、`safety_factor` 默认 1.2。
-（v0.1 因显式指定模型，此式用于 **failover 与 quota spill** 的决策，不用于自动选模。）
+The parameters are in `config.cache.breakeven`; `remaining_turns` is estimated from the session history
+and `safety_factor` defaults to 1.2. (In v0.1 the model is specified explicitly, so this formula decides
+**failover and quota spill**, not automatic model selection.)
 
-## 6. 缓存策略（P0，一阶杠杆）
+## 6. Cache policy (P0, the first-order lever)
 
-1. **保真**：passthrough 路径只允许删除 router 自有字段；编码器对同一输入必须字节确定。
-2. **内容确定性**：transform 是 `(content, stable config)` 的纯函数——禁止依赖轮次、时间、随机数。
-   任何"滚动窗口/按轮裁剪"的实现都视为破坏前缀（P4 因此延后）。
-3. **粘性**：session → (provider, model) 映射，键优先取客户端给出的 `prompt_cache_key`（上游会回显，
-   实测可用），后备 `header:session-id` / `header:thread-id`；TTL 见 config。
-4. **断点注入**：向 anthropic 上游翻译时，按"稳定内容边界"注入 `cache_control`（同内容同位置），
-   断点数写入 trace（`cache_control_breaks`）。
-5. **状态服务交接**：账本与粘性表定期 snapshot；重启后加载，使 `prefix_continuity` 指标不因重启断裂。
+1. **Fidelity**: on the passthrough path the only permitted mutation is deleting router-owned fields;
+   for the same input the encoder must be byte-deterministic.
+2. **Content determinism**: a transform is a pure function of `(content, stable config)` — depending on
+   the turn number, the wall clock or an RNG is forbidden. Any "rolling window / per-turn trimming"
+   implementation counts as breaking the prefix (which is why P4 is deferred).
+3. **Stickiness**: a session → (provider, model) mapping, keyed preferentially by the client-supplied
+   `prompt_cache_key` (the upstream echoes it; measured to work), falling back to `header:session-id` /
+   `header:thread-id`; TTL is in config.
+4. **Breakpoint injection**: when translating to an anthropic upstream, inject `cache_control` at "stable
+   content boundaries" (same content → same position); the number of breakpoints is written to the trace
+   (`cache_control_breaks`).
+5. **State-service handover**: the ledger and the sticky table snapshot periodically; they are loaded
+   after a restart so the `prefix_continuity` metric does not break across restarts.
 
-## 7. 协议翻译层
+## 7. Protocol translation layer
 
-能力矩阵由 config 声明（`supports`），运行期构造 3×3 表：
+The capability matrix is declared in config (`supports`); the 3×3 table is constructed at runtime:
 
-- `native` 格 → 字节直通（唯一允许的操作是删 router 自有字段）。
-- `translated` 格 → 走显式映射器；每个映射器必须标注 `lossless | lossy(reason)`。
-- 有损时：写 trace、可选 `X-Router-Lossy` 响应头，绝不静默。
-- 入站未知字段原样保留（存在旁路侧信道），保证协议演进不丢信息。
+- a `native` cell → byte passthrough (the only permitted operation is deleting router-owned fields).
+- a `translated` cell → goes through an explicit mapper; every mapper must be marked
+  `lossless | lossy(reason)`.
+- when lossy: write the trace and optionally the `X-Router-Lossy` response header; never silently.
+- inbound unknown fields are kept verbatim (a bypass side channel exists), so protocol evolution loses
+  no information.
 
-## 8. 状态与持久化
+## 8. State and persistence
 
-单进程、无 DB。状态分三类：
+Single process, no DB. State falls into three classes:
 
-| 状态 | 介质 | 说明 |
+| State | Medium | Notes |
 |---|---|---|
-| cache 账本 / 粘性表 | 内存 + 定期 snapshot（JSON） | 重启交接；丢了只是统计回退，不影响正确性 |
-| trace | append-only JSONL（按小时滚动） | 产品 → autowork 的唯一接口；可被 `router replay` 消费 |
-| 配额余量 | 内存 + snapshot | 依赖上游 `usage` 累计，不猜测 |
+| cache ledger / sticky table | memory + periodic snapshot (JSON) | handover across a restart; losing it only regresses statistics, it does not affect correctness |
+| trace | append-only JSONL (rolled hourly) | the only interface from the product → autowork; consumable by `router replay` |
+| quota remaining | memory + snapshot | accumulates from the upstream `usage`, never guessed |
 
-## 9. Replay（同一份代码算钱）
+## 9. Replay (computing money with the same code)
 
-`router replay --trace t.jsonl --config c.yaml [--plugins p.yaml]`：把真实入站请求喂进**生产同一个决定
-管线**（同一个 binary，同一个 transform/编码路径），只把出站 HTTP 换成本地模拟（或真实重放一次，需
-预算门）。输出成本/缓存/延迟报表与 `prefix_continuity` 对照。
+`router replay --trace t.jsonl --config c.yaml [--plugins p.yaml]`: feeds real inbound requests into
+**the same production decision pipeline** (the same binary, the same transform/encoding path), replacing
+only the outbound HTTP with a local simulation (or a real replay once, behind a budget gate). It outputs
+a cost/cache/latency report contrasted against `prefix_continuity`.
 
-这条是 autowork 的地基：策略不可能在 Python 里重实现一遍而不产生 skew（旧项目的教训），所以策略模拟
-永远是产品的子命令。
+This is the foundation of autowork: a policy cannot be re-implemented in Python without producing skew
+(the lesson of the old project), so policy simulation is always a subcommand of the product.
 
-## 10. 测试策略
+## 10. Test strategy
 
-| 层 | 内容 |
+| Layer | Contents |
 |---|---|
-| 单元 | 协议编解码穷举（3×3）、`Usage` 归一、五档成本、breakeven 边界、realm 隔离、effect LIFO 回滚 |
-| conformance | 保真（上游可见 prefix hash == 客户端）、SSE 事件序列等价、tool call 往返、未知字段透传、错误码映射 |
-| 缓存 | 同 session 两轮 `prefix_continuity == 1.0`；启用每个 transform 后重测（防回归） |
-| 计账 | 每 transform 的 `verified/inferred` 标注存在；gate 只读 verified |
-| 交互 | 用真实 codex/hermes 各跑一轮接入冒烟（含 `NO_PROXY` 前提验证） |
+| unit | exhaustive protocol codec (3×3), `Usage` normalization, five-tier cost, breakeven boundaries, realm isolation, effect LIFO rollback |
+| conformance | fidelity (upstream-visible prefix hash == the client's), SSE event-sequence equivalence, tool-call round trip, unknown-field passthrough, error-code mapping |
+| cache | same-session two turns `prefix_continuity == 1.0`; re-measure after enabling each transform (regression guard) |
+| accounting | every transform carries a `verified/inferred` label; gates read verified only |
+| interaction | one onboarding smoke run each with the real codex/hermes (including verification of the `NO_PROXY` prerequisite) |
 
-## 11. 风险与对策
+## 11. Risks and mitigations
 
-| 风险 | 对策 |
+| Risk | Mitigation |
 |---|---|
-| 某个 transform 破坏前缀而不自知 | `prefix_continuity` 作为阻塞门；每个 transform 单独跑缓存回归 |
-| 翻译层有损导致客户端行为异常 | 有损清单进 spec；有损时显式标记 + conformance 用例 |
-| tier-A 无 HMR 导致实验迭代慢 | 参数/规则走配置级协调；实验类插件强制 tier-B |
-| 计账口径被"估算"污染 | verified/inferred 二元口径 + 报告必须声明样本量 |
-| 系统代理导致接入失败 | README/spec 强制 `NO_PROXY`；冒烟测试包含此项 |
+| a transform breaks the prefix without knowing it | `prefix_continuity` as a blocking gate; run the cache regression for each transform separately |
+| a lossy translation layer makes client behavior wrong | the lossy list goes into the spec; mark it explicitly when lossy + conformance cases |
+| no HMR for tier-A slows experiment iteration | parameters/rules go through config-level coordination; experiment-class plugins are forced to tier-B |
+| the accounting convention is polluted by "estimates" | the binary verified/inferred convention + reports must state the sample size |
+| a system proxy makes onboarding fail | README/spec enforce `NO_PROXY`; the smoke test includes this item |
 
-## 12. 模块与类型落地清单
+## 12. Module and type landing list
 
-本节把 §2/§4/§5/§6/§7 的结构落成**签名草图 + 用例 ID 表**，使实现方有唯一依据。
-只落"类型与契约的形状"，不含函数体；实现顺序见每条的「落点」。
+This section lands the structure of §2/§4/§5/§6/§7 as **signature sketches + a case-ID table**, giving
+implementers a single basis. It lands only "the shape of types and contracts", not function bodies; the
+implementation order is given by each row's "Lands in".
 
-### 12.1 crate 清单、依赖方向与第三方依赖白名单
+### 12.1 crate list, dependency direction and the third-party dependency allowlist
 
 ```
 router-cli → router-proxy → router-protocol → router-core ← router-plugins
@@ -167,33 +188,37 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
                           router-providers        router-plugin-sdk
 ```
 
-| crate | 公开面（对外可用的东西） | 允许的第三方依赖 | 落点 |
+| crate | Public surface (what is usable outside) | Permitted third-party dependencies | Lands in |
 |---|---|---|---|
-| `router-core` | 领域模型、成本/配额/breakeven 纯函数、插件 trait、`DecisionRecord` | `serde`, `serde_json`(preserve_order+arbitrary_precision), `sha2` | R1-2 起 |
-| `router-protocol` | 3 协议编解码、翻译矩阵、`Usage` 归一化、`raw_json`（span 保真编辑） | `serde_json` | R2 |
-| `router-providers` | `ProviderClient`（wire 能力、鉴权、重试、SSE 解析） | `reqwest`, `tokio`, `futures` | R2 |
-| `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber 状态机、声明式 loader | 无（纯 std + core） | R2 |
-| `router-plugins` | 内置 tier-A：cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | R2/R3 |
-| `router-proxy` | axum 数据面：字节保真转发、SSE 透传 | `axum`, `tokio`, `hyper`, `tower` | R2 |
-| `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | R1-2 起（serve 桩） |
-| `router-plugin-sdk` | tier-B 进程外插件协议类型（UDS 帧） | `serde_json` | R3 |
-| `router-conformance`（`tests/conformance/`） | CONF 用例（§12.8） | `tokio`, `axum`, 被测 crate | R1-2 空壳起 |
+| `router-core` | domain model, cost/quota/breakeven pure functions, plugin traits, `DecisionRecord` | `serde`, `serde_json`(preserve_order+arbitrary_precision), `sha2` | from R1-2 |
+| `router-protocol` | codec for the 3 protocols, translation matrix, `Usage` normalization, `raw_json` (span-faithful editing) | `serde_json` | R2 |
+| `router-providers` | `ProviderClient` (wire capabilities, authentication, retry, SSE parsing) | `reqwest`, `tokio`, `futures` | R2 |
+| `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | R2 |
+| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | R2/R3 |
+| `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | R2 |
+| `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | from R1-2 (serve stub) |
+| `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | R3 |
+| `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | from R1-2, as an empty shell |
 
-- **`router-core` 不依赖任何 HTTP / 协议 crate**（§2 硬约束）；抽查方式：`cargo tree -p router-core` 的依赖集合必须 ⊆ 白名单。
-- 依赖纪律：**新增依赖必须在 commit message 写明理由**（与本轮任务约束一致）。白名单外的依赖一律先讨论。
-- 每个 crate 根加 `#![forbid(unsafe_code)]`；`router-core` 另加 `#![deny(clippy::float_arithmetic)]`（金额只走 §12.4 的定点路径）。
-- 测试放置：单元测试用 `#[cfg(test)] mod tests` 就地放；conformance 放 `tests/conformance/tests/`（§12.8）。
+- **`router-core` depends on no HTTP / protocol crate** (§2 hard constraint); how it is spot-checked: the
+  dependency set of `cargo tree -p router-core` must be ⊆ the allowlist.
+- Dependency discipline: **a new dependency must have its reason written in the commit message**
+  (consistent with this round's task constraint). Any dependency outside the allowlist is discussed first.
+- Every crate root adds `#![forbid(unsafe_code)]`; `router-core` additionally adds
+  `#![deny(clippy::float_arithmetic)]` (money only takes the fixed-point path of §12.4).
+- Test placement: unit tests use `#[cfg(test)] mod tests` in place; conformance lives in
+  `tests/conformance/tests/` (§12.8).
 
-### 12.2 运行时原语（ADR-002 → Rust 签名草图）
+### 12.2 Runtime primitives (ADR-002 → Rust signature sketch)
 
-| Cordis 原语 | Rust 类型（`router-runtime`） | 语义落地点 |
+| Cordis primitive | Rust type (`router-runtime`) | Where the semantics land |
 |---|---|---|
-| `ctx.effect(cb) → dispose` | `Ctx::effect(Effect) -> EffectId` + `Effect { undo: Box<dyn FnOnce()+Send> }` | LIFO 栈；卸载 = 依次执行 undo |
-| `ctx.set/get(key)` + refresh | `Ctx::provide/get` + `ServiceKey<T>` | 提供者下线 → 依赖者先停用，再撤绑定 |
-| `fiber.inject` | `Plugin::inject() -> &[ServiceId]` | 未满足停在 `Loading{waiting_on}`，不报错 |
-| `ctx.isolate(key, realm)` | `Ctx::isolate(key, RealmId) -> RealmGuard` | 同 key 多套绑定（A/B 与 shadow 并存） |
-| `ctx.intercept(key, md)` | `Ctx::intercept(&key, InterceptMeta)` | 不改绑定只改"怎么用"（采样/超时/shadow） |
-| entries + keyed diff | `PluginCfg` 列表 + `apply_config_diff` | config 变更自 diff；`disabled` 卸载；`id`/`kind` 变更重建 |
+| `ctx.effect(cb) → dispose` | `Ctx::effect(Effect) -> EffectId` + `Effect { undo: Box<dyn FnOnce()+Send> }` | a LIFO stack; unload = run the undos in order |
+| `ctx.set/get(key)` + refresh | `Ctx::provide/get` + `ServiceKey<T>` | a provider going offline → its dependents are deactivated first, then the binding is withdrawn |
+| `fiber.inject` | `Plugin::inject() -> &[ServiceId]` | while unsatisfied it stays at `Loading{waiting_on}`, with no error |
+| `ctx.isolate(key, realm)` | `Ctx::isolate(key, RealmId) -> RealmGuard` | multiple sets of bindings for the same key (A/B and shadow coexist) |
+| `ctx.intercept(key, md)` | `Ctx::intercept(&key, InterceptMeta)` | does not change the binding, only "how it is used" (sample/timeout/shadow) |
+| entries + keyed diff | a `PluginCfg` list + `apply_config_diff` | a config change diffs itself; `disabled` unloads; an `id`/`kind` change rebuilds |
 
 ```rust
 pub struct PluginId(pub String);
@@ -211,7 +236,7 @@ pub const TRACE_SINK:    ServiceKey<dyn TraceSink>    = ServiceKey::new("trace_s
 pub struct Effect { undo: Option<Box<dyn FnOnce() + Send>> }
 impl Effect { pub fn new(f: impl FnOnce() + Send + 'static) -> Self; pub fn noop() -> Self; }
 
-pub struct Ctx { /* fiber 作用域：服务表 + effect 栈 + realm 表 */ }
+pub struct Ctx { /* fiber scope: service table + effect stack + realm table */ }
 impl Ctx {
     pub fn effect(&mut self, e: Effect) -> EffectId;
     pub fn provide<T: Send + Sync + 'static>(&mut self, key: ServiceKey<T>, v: Arc<T>) -> EffectId;
@@ -224,20 +249,22 @@ pub enum FiberState { Created, Loading { waiting_on: Vec<ServiceId> }, Active, U
 
 pub trait Plugin: Send + Sync {
     fn id(&self) -> &PluginId;
-    fn inject(&self) -> &'static [ServiceId];      // coeffect 声明；未满足 → 停在 Loading
+    fn inject(&self) -> &'static [ServiceId];      // coeffect declaration; unsatisfied → stays at Loading
     fn apply(&self, ctx: &mut Ctx) -> Result<Effect, PluginError>;
 }
 ```
 
-**卸载顺序（实现必须遵守，且有测试断言）**：① 递归把依赖者置 `Unloading` 并等其完成 →
-② 逆 LIFO 执行本 fiber 的 `Effect::undo` → ③ 撤下服务绑定 → ④ `Removed`。
-失败进入 `Failed(err)`，**不影响其它 fiber**（ADR-002 的"失败隔离"）。
-断言方式：装载→激活→卸载后，服务表与拦截表必须与装载前**深度相等**（R2 测试）。
+**Unload order (the implementation must follow it, and a test asserts it)**: ① recursively put the
+dependents into `Unloading` and wait for them to finish → ② run this fiber's `Effect::undo` in reverse
+LIFO → ③ withdraw the service bindings → ④ `Removed`. A failure goes to `Failed(err)` and **does not
+affect other fibers** (ADR-002's "failure isolation"). How it is asserted: after load → activate →
+unload, the service table and the intercept table must be **deep-equal** to what they were before
+loading (R2 test).
 
-### 12.3 决定管线的类型与每步失败语义
+### 12.3 Decision-pipeline types and the failure semantics of each step
 
 ```
-parse → session 解析 → transform 链 → selector → guard 链 → 编码 → 转发 → usage 归一 → 账本/trace
+parse → session resolution → transform chain → selector → guard chain → encode → forward → usage normalization → ledger/trace
 ```
 
 ```rust
@@ -249,15 +276,15 @@ pub struct Decision { pub route: RouteSpec, pub source: SelectionSource, pub plu
 
 pub trait Transform: Send + Sync {
     fn id(&self) -> &'static str;
-    /// 内容确定：禁读时钟/轮次/RNG。Err = 回退原文（spec §8），调用方记 trace。
+    /// Content-deterministic: reading the clock/turn/RNG is forbidden. Err = fall back to the original text (spec §8), the caller records the trace.
     fn apply(&self, req: &mut CanonicalRequest) -> Result<TransformReport, TransformError>;
 }
 pub struct TransformReport {
     pub added_input_tokens: u64, pub saved_input_tokens: u64, pub saved_output_tokens: u64,
     pub cache_impact: CacheImpact, pub verdict: Verdict, pub tee_id: Option<TeeId>,
 }
-pub enum CacheImpact { Neutral, Risky, Broken }      // Broken → cache_guard 的 strict_prefix 拒绝
-pub enum Verdict { Verified, Inferred }              // 只有 Verified 能进 gate（ADR-003/spec §7）
+pub enum CacheImpact { Neutral, Risky, Broken }      // Broken → cache_guard's strict_prefix rejects it
+pub enum Verdict { Verified, Inferred }              // only Verified can enter a gate (ADR-003/spec §7)
 
 pub trait Selector: Send + Sync { fn select(&self, req: &CanonicalRequest, roster: &Roster) -> Result<Decision, SelectError>; }
 pub trait Guard: Send + Sync { fn check(&self, cx: &GuardCx<'_>) -> GuardOutcome; }
@@ -265,25 +292,25 @@ pub enum GuardOutcome { Pass, Reject { code: ErrorCode, message: String }, Downg
 pub trait Observer: Send + Sync { fn on_decision(&self, rec: &DecisionRecord); fn on_error(&self, e: &RouterError); }
 ```
 
-| 步 | 失败语义 |
+| Step | Failure semantics |
 |---|---|
-| parse | 请求体不可解析 → `invalid_request` 400，不转发 |
-| session 解析 | 全部来源缺失 → `session = None`（trace 记 null，`sticky_hit=false`），**不是错误** |
-| transform | 任一环 `Err` → 回退原文 + `TransformRecord.error`；请求照常（spec §8） |
-| selector | `auto` → `auto_not_supported` 400（spec §3）；`provider/model` 不存在 → 404 |
-| guard | `Reject` → 归一错误体；`Downgrade` → 走该 route 并记 `failover_from` |
-| 编码 | 翻译格缺声明 → 400；有损 → 记 `lossy[]` + `X-Router-Lossy` |
-| 转发 | 5xx/429/quota 耗尽 → fallback 链；链尽 → 502 带最后一次 `upstream_status` |
-| usage 归一 | 上游缺 usage 字段 → 0 值 + trace `usage_missing: true`（**不猜**） |
-| 账本/trace | trace 写失败 → 请求照常，计数进 `trace_dropped` 指标（可观测的降级） |
+| parse | the request body is unparsable → `invalid_request` 400, not forwarded |
+| session resolution | every source is missing → `session = None` (the trace records null, `sticky_hit=false`), **not an error** |
+| transform | any step `Err` → fall back to the original text + `TransformRecord.error`; the request proceeds as usual (spec §8) |
+| selector | `auto` → `auto_not_supported` 400 (spec §3); a `provider/model` that does not exist → 404 |
+| guard | `Reject` → the normalized error body; `Downgrade` → take that route and record `failover_from` |
+| encoding | a translation cell missing its declaration → 400; lossy → record `lossy[]` + `X-Router-Lossy` |
+| forwarding | 5xx/429/quota exhausted → the fallback chain; chain exhausted → 502 carrying the last `upstream_status` |
+| usage normalization | the upstream is missing usage fields → zero values + trace `usage_missing: true` (**never guessed**) |
+| ledger/trace | a trace write failure → the request proceeds as usual, the count goes into the `trace_dropped` metric (an observable degradation) |
 
-#### 12.3.1 字节边界在类型上的落地（AGENTS 硬约束 1）
+#### 12.3.1 Landing the byte boundary in the types (AGENTS hard constraint 1)
 
 ```rust
 pub struct CanonicalRequest {
     pub protocol_in: Protocol,
-    pub raw: RawBody,                 // 客户端原始字节：唯一权威
-    pub doc: JsonDoc,                 // 保序解析视图（决策用；**不用于出站发送**）
+    pub raw: RawBody,                 // the client's raw bytes: the sole authority
+    pub doc: JsonDoc,                 // order-preserving parsed view (for decisions; **not used for outbound sending**)
     pub session: Option<SessionId>,
     pub thread_id: Option<String>,
     pub turn_index: u32,
@@ -291,39 +318,53 @@ pub struct CanonicalRequest {
 pub struct RawBody(Bytes);
 impl RawBody {
     pub fn as_bytes(&self) -> &[u8];
-    /// 唯一允许的改写：删除顶层 router 自有字段。其余字节逐字节保留。
+    /// The only permitted rewrite: deleting top-level router-owned fields. All other bytes are kept byte for byte.
     pub fn remove_top_level_keys(&self, keys: &[&str]) -> Result<RawBody, RawEditError>;
 }
 ```
 
-- `RawBody` **不实现** `DerefMut`/`AsMut`，也不暴露 `serde_json::Value` 的可变引用 → 编译期挡住"顺手改一改"。
-- `remove_top_level_keys` 用**单遍 JSON 扫描器**（只需顶层键的 span，跟踪字符串/转义/括号深度）
-  实现字节级删除；**禁止 parse → reserialize 往返**（那是字节边界最常见的破法）。
-- router 自有字段 = `router_meta` 回显 + 路由提示（spec §2）。删除清单是**白名单常量**，新增必须改这个常量。
-- 删除的分隔符语义（R1-2c 钉死）：连续命中白名单的成员构成一个"段"，段整体剔除并
-  吞掉**段尾**与其后继成员之间的逗号（含其间空白）；段首逗号留给前一个保留成员。
-  仅当首成员即段的起点时才改吞段尾逗号。不变式：任何 `Ok` 输出必为合法 JSON，且
-  保留成员逐字节等于其输入 span（`deletion_position_matrix*` 测试为永久回归矩阵）。
-- 三处已定边界行为（拒绝 vs 透传的取舍理由，各有单测钉死）：
-  - **BOM 前缀 → `Err(NotTopLevelObject)`**：剥离 BOM 是白名单之外的改写（硬约束 1
-    只允许删 router 自有字段），router 无权"顺手修"，交调用方按 400 处理。
-  - **前导零数字（`01`）→ `Err(Malformed)`**：RFC 8259 数值文法不含此形态；原始值
-    片段由 serde_json 校验器把关，不透传模棱两可的数值（不同上游解析分歧是隐患）。
-  - **字符串**值**内的非法 UTF-8 → `Ok` 且逐字节透传**：字节边界优先，router 不解释
-    值内容，合法性交上游裁决。注意不对称：**键**内非法 UTF-8 仍 `Err(Malformed)`——
-    键必须可解码才能与白名单做语义比对，比对不了就无法安全决定删或不删。
-- 前缀 hash 的定义域 = 上游可见 body 中 `messages | input | tools` 与系统指令位的原始字节
-  （spec §6「前缀」），因此"删 router 字段"不影响该 hash —— CONF-10 正是断言这一点。
-- 前缀块（`prefix_blocks[]`）：块 = 前缀区里的**最小不可分单元**（一条 message / 一个 tool 定义 /
-  一个 input item），逐块记 `tokens` 与 `hash`；`hash = sha256(块原始字节) 的 hex 前 16 位`。
-  （GAP-Q5：spec 未定义块粒度；本蓝图取"结构单元"而非定长 token 桶，因为前者与缓存断点对齐。）
+- `RawBody` **does not implement** `DerefMut`/`AsMut`, and exposes no mutable reference to a
+  `serde_json::Value` → a casual "just tweak it" is blocked at compile time.
+- `remove_top_level_keys` uses a **single-pass JSON scanner** (it needs only the spans of the top-level
+  keys, tracking strings/escapes/bracket depth) to delete at the byte level; a **parse → reserialize
+  round trip is forbidden** (that is the most common way the byte boundary is broken).
+- router-owned fields = the `router_meta` echo + routing hints (spec §2). The deletion list is a
+  **whitelist constant**; adding one requires changing that constant.
+- The separator semantics of deletion (pinned down in R1-2c): consecutive whitelist hits form one
+  "segment"; the segment is removed as a whole and swallows the comma between **its tail** and the
+  member that follows it (including the whitespace in between); the comma at the head of the segment is
+  left to the previous retained member. Only when the first member is the start of a segment does it
+  instead swallow the segment-tail comma. Invariant: any `Ok` output must be valid JSON, and the
+  retained members are byte-for-byte equal to their input spans (the `deletion_position_matrix*` tests
+  are a permanent regression matrix).
+- Three settled boundary behaviors (the rationale for rejecting vs passing through, each pinned by a
+  unit test):
+  - **BOM prefix → `Err(NotTopLevelObject)`**: stripping the BOM is a rewrite outside the whitelist
+    (hard constraint 1 permits deleting router-owned fields only), so router has no right to "fix it in
+    passing" and it is left to the caller to handle as a 400.
+  - **Leading-zero number (`01`) → `Err(Malformed)`**: the RFC 8259 number grammar does not contain this
+    form; the raw value fragment is vetted by the serde_json validator, and an ambiguous number is not
+    passed through (upstream parsers disagreeing is a hidden risk).
+  - **invalid UTF-8 inside a **string** value → `Ok` and passed through byte for byte**: the byte
+    boundary takes priority, router does not interpret value content, and legality is adjudicated by the
+    upstream. Note the asymmetry: invalid UTF-8 inside a **key** is still `Err(Malformed)` — a key must
+    be decodable to be compared semantically against the whitelist, and if it cannot be compared there is
+    no safe way to decide delete-or-not.
+- The domain of the prefix hash = the raw bytes of `messages | input | tools` and the system-instruction
+  position in the upstream-visible body (spec §6 "prefix"), so "deleting router fields" does not affect
+  that hash — CONF-10 asserts exactly this.
+- Prefix blocks (`prefix_blocks[]`): a block = the **smallest indivisible unit** in the prefix region
+  (one message / one tool definition / one input item), recording `tokens` and `hash` per block;
+  `hash = the first 16 hex chars of sha256(block raw bytes)`.
+  (GAP-Q5: the spec does not define block granularity; this blueprint takes a "structural unit" rather
+  than a fixed-length token bucket, because the former aligns with cache breakpoints.)
 
-### 12.4 成本 / 配额 / breakeven 纯函数（R1-2 的实现目标）
+### 12.4 Cost / quota / breakeven pure functions (the implementation target of R1-2)
 
 ```rust
-/// 金额定点：1 nano-USD = 1e-9 USD。决定路径与 trace 中不出现 f64。
+/// Money is fixed-point: 1 nano-USD = 1e-9 USD. No f64 appears in the decision path or the trace.
 pub struct NanoUsd(pub u64);
-/// 单价：nano-USD / 1K token（与 config 的 USD/1K 同形，只是整数化）。
+/// Unit price: nano-USD / 1K token (the same shape as the config's USD/1K, only integerized).
 pub struct Price(pub u64);
 pub struct PriceTable { pub input_miss: Price, pub input_hit: Price, pub cache_write: Price,
                         pub output: Price, pub peak: PeakTable }
@@ -337,64 +378,64 @@ impl Usage { pub fn uncached(&self) -> u64;  pub fn cache_hit_rate(&self) -> f32
 pub struct CostBreakdown { pub input_miss: NanoUsd, pub input_hit: NanoUsd, pub cache_write: NanoUsd,
                            pub output: NanoUsd, pub peak_applied_pct: u32, pub total: NanoUsd }
 
-/// 纯函数：cost(miss, hit, write, out, price, at) -> CostBreakdown
-/// cost_nano = Σ_tier ( tokens_tier × price_tier_nano_per_1k ) / 1000   （整数，最后一次除法向下取整）
-/// 峰段命中（at ∈ windows）→ 先求和无峰总值，再 × multiplier_pct / 100。
-/// input_miss 档用 usage.uncached()；output 档含 reasoning（上游多把 reasoning 计入 output）。
+/// Pure function: cost(miss, hit, write, out, price, at) -> CostBreakdown
+/// cost_nano = Σ_tier ( tokens_tier × price_tier_nano_per_1k ) / 1000   (integer; only the final division rounds down)
+/// A peak-window hit (at ∈ windows) → sum the no-peak total first, then × multiplier_pct / 100.
+/// The input_miss tier uses usage.uncached(); the output tier includes reasoning (most upstreams count reasoning into output).
 pub fn cost(usage: &Usage, price: &PriceTable, at: Timestamp, tz: Tz) -> CostBreakdown;
 ```
 
-配额（spec §4 `quota`，DESIGN §5）：
+Quota (spec §4 `quota`, DESIGN §5):
 
 ```rust
-pub enum QuotaWindow { Monthly { reset_day: u8 } }        // spec 只定义 monthly；其它值 = 装载错误
+pub enum QuotaWindow { Monthly { reset_day: u8 } }        // spec defines monthly only; any other value = a load error
 pub enum OverQuota { Block, Spill }
 pub struct QuotaPlan { pub models: Vec<String>, pub window: QuotaWindow, pub tokens: u64,
                        pub over_quota: OverQuota, pub source: String }
 pub struct QuotaState { pub plan_idx: usize, pub window_start_epoch_s: u64, pub tokens_used: u64 }
 pub enum QuotaVerdict {
     Inside  { remaining_before: u64 },
-    Spill   { billable_tokens: u64 },      // 溢出部分按 input_miss 计（DESIGN §5）
+    Spill   { billable_tokens: u64 },      // the overflow is charged at input_miss (DESIGN §5)
     Blocked { remaining: u64 },            // over_quota=block → Guard Reject(quota_exceeded)
 }
-/// 纯函数（唯一状态写入点）：tokens = usage.input_total + usage.output（本蓝图默认口径，见 GAP-Q1）
+/// Pure function (the only state write point): tokens = usage.input_total + usage.output (this blueprint's default convention; see GAP-Q1)
 pub fn charge(plan: &QuotaPlan, st: &mut QuotaState, usage: &Usage, now_epoch_s: u64) -> QuotaVerdict;
 ```
 
-cache-aware breakeven（DESIGN §5，整数化以避免浮点边界分歧）：
+cache-aware breakeven (DESIGN §5, integerized to avoid floating-point boundary disagreements):
 
 ```rust
 pub struct BreakevenParams { pub enabled: bool, pub min_remaining_turns: u32, pub safety_factor_pct: u32 }
 pub struct SwitchCandidate {
-    pub prefix_tokens: u64,      // 换模型要按 miss 价重算的前缀量
-    pub tokens_per_turn: u64,    // 预估后续每轮输入 token
-    pub remaining_turns: u32,    // 预估剩余轮次（无历史 → 0）
-    pub p_stay_hit: Price,       // 保持现状的下一轮单价 = 现模型 input_hit（已缓存）
-    pub p_new_miss: Price,       // 新模型 input_miss（换过去必然 miss 整段前缀）
+    pub prefix_tokens: u64,      // the amount of prefix recomputed at the miss price when switching models
+    pub tokens_per_turn: u64,    // estimated input tokens per following turn
+    pub remaining_turns: u32,    // estimated remaining turns (no history → 0)
+    pub p_stay_hit: Price,       // the next turn's unit price if staying = the current model's input_hit (already cached)
+    pub p_new_miss: Price,       // the new model's input_miss (switching necessarily misses the whole prefix)
 }
 pub enum StayReason { Disabled, RemainingTurnsZero, BelowMinRemainingTurns, NotPaying }
 pub enum SwitchVerdict { Switch { gain: NanoUsd, cost: NanoUsd },
                          Stay { reason: StayReason, gain: NanoUsd, cost: NanoUsd } }
-/// gain = remaining_turns × tokens_per_turn × (p_stay_hit − p_new_miss) / 1000   （i128 中间量）
+/// gain = remaining_turns × tokens_per_turn × (p_stay_hit − p_new_miss) / 1000   (an i128 intermediate)
 /// cost = prefix_tokens × p_new_miss / 1000
-/// Switch ⟺ gain × 100 > safety_factor_pct × cost      （严格大于；交叉相乘，无除法精度损失）
+/// Switch ⟺ gain × 100 > safety_factor_pct × cost      (strictly greater; cross-multiplied, so no precision is lost to division)
 pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict;
 ```
 
-**边界用例（R1-2 必须覆盖，逐条断言 `SwitchVerdict`）**：
+**Boundary cases (R1-2 must cover them, asserting the `SwitchVerdict` for each)**:
 
-| 用例 | 期望 |
+| Case | Expectation |
 |---|---|
 | `enabled = false` | `Stay(Disabled)` |
-| `remaining_turns = 0` | `Stay(RemainingTurnsZero)`（gain 恒 0） |
-| `remaining_turns < min_remaining_turns` | `Stay(BelowMinRemainingTurns)`（即便算式更优） |
-| `prefix_tokens = 0` | `Switch`（切换成本为 0，gain > 0） |
-| 恰好相等（`gain×100 == sf×cost`） | `Stay(NotPaying)`（严格大于才切） |
-| `p_stay_hit ≥ p_new_miss` | `Stay(NotPaying)`（不赚） |
-| 峰段命中 | `cost`/`gain` 均含 `×multiplier_pct/100` |
-| 整数分档 `input_miss=0.00015` | 解析为 `Price(150_000)`（无浮点残差） |
+| `remaining_turns = 0` | `Stay(RemainingTurnsZero)` (gain is always 0) |
+| `remaining_turns < min_remaining_turns` | `Stay(BelowMinRemainingTurns)` (even if the formula is better) |
+| `prefix_tokens = 0` | `Switch` (switching costs 0, gain > 0) |
+| exactly equal (`gain×100 == sf×cost`) | `Stay(NotPaying)` (switch only on strictly greater) |
+| `p_stay_hit ≥ p_new_miss` | `Stay(NotPaying)` (not profitable) |
+| a peak-window hit | both `cost`/`gain` include `×multiplier_pct/100` |
+| integer tiering `input_miss=0.00015` | parses to `Price(150_000)` (no floating-point residue) |
 
-### 12.5 配置类型与解析规则（`config.example.yaml` ↔ 类型）
+### 12.5 Config types and parsing rules (`config.example.yaml` ↔ types)
 
 ```rust
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
@@ -403,40 +444,40 @@ pub struct RouterConfig { pub server: ServerCfg, pub session: SessionCfg, pub ca
     pub providers: Vec<ProviderCfg>, pub aliases: BTreeMap<String, RouteSpec>,
     pub plugins: Vec<PluginCfg>, pub fallback: Vec<RouteSpec> }
 
-/// spec §4.1；`Rollover::Hourly` 是 v0.1 唯一取值 → 文件 `<dir>/YYYY-MM-DDTHH.jsonl`（UTC）。
+/// spec §4.1; `Rollover::Hourly` is the only value in v0.1 → the file `<dir>/YYYY-MM-DDTHH.jsonl` (UTC).
 pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 ```
 
-| 点 | 规则 |
+| Point | Rule |
 |---|---|
-| duration | `<整数><ms\|s\|m\|h>`，可拼接（`1h30m`）；非法 → 装载错误（带字段路径） |
-| context | `<整数>` 或 `<整数>k\|m`（k=1024, m=1048576）；用于 guard 的能力检查 |
-| price | 读作 f64（USD/1K），**装载时**转 `Price((v * 1e9).round() as u64)`；`v < 0` 或 `round` 后为 0 → 装载错误 |
-| peak.multiplier | 转 `multiplier_pct = (v*100).round()`；仅支持两位小数，否则装载错误 |
-| base_url | 必须已含版本段；router 只追加 `chat → /chat/completions`、`responses → /responses`、`anthropic → /v1/messages` |
-| `rules_file` | 相对**本 config 文件所在目录**解析（不是 CWD）；`trace.dir` 同此规则（spec §4.1） |
-| `trace.rollover` | 只接受 `hourly`（其它值 = 装载错误）；保留期**不是** config 键（v0.1 不自动清理） |
-| 未知字段 | `deny_unknown_fields` → **报错退出**（不静默忽略：配置是给人手写的，"改了没生效"是最贵的沉默失败） |
-| 密钥 | 只有 `api_key_env`；启动时 env 缺失 → 该 provider 标记不可用并在 `/health` 报出（不阻止其它 provider） |
-| `disabled: true` | 不装载该 fiber（不报错）；`/health` 列在 `plugins_disabled` |
-| 缺省值 | 只有 spec §4 明示的（`safety_factor: 1.2`、`sticky`、`over_quota`）有缺省；其余**没写即不启用** |
+| duration | `<integer><ms\|s\|m\|h>`, concatenable (`1h30m`); invalid → a load error (with the field path) |
+| context | `<integer>` or `<integer>k\|m` (k=1024, m=1048576); used by the guard's capability check |
+| price | read as f64 (USD/1K), converted **at load time** to `Price((v * 1e9).round() as u64)`; `v < 0`, or 0 after `round` → a load error |
+| peak.multiplier | converted to `multiplier_pct = (v*100).round()`; only two decimal places are supported, otherwise a load error |
+| base_url | must already contain the version segment; router only appends `chat → /chat/completions`, `responses → /responses`, `anthropic → /v1/messages` |
+| `rules_file` | resolved relative to **the directory containing this config file** (not the CWD); `trace.dir` follows the same rule (spec §4.1) |
+| `trace.rollover` | only `hourly` is accepted (any other value = a load error); retention is **not** a config key (v0.1 does no automatic cleanup) |
+| unknown fields | `deny_unknown_fields` → **errors out and exits** (no silent ignore: config is written by hand, and "I changed it but it did not take effect" is the most expensive silent failure) |
+| secrets | only `api_key_env`; when the env var is missing at startup → that provider is marked unavailable and reported on `/health` (it does not block other providers) |
+| `disabled: true` | that fiber is not loaded (no error); `/health` lists it under `plugins_disabled` |
+| defaults | only those the spec §4 states explicitly (`safety_factor: 1.2`, `sticky`, `over_quota`) have a default; everything else is **not enabled unless written** |
 
-### 12.6 DecisionRecord（trace 契约，spec §6 全覆盖）
+### 12.6 DecisionRecord (trace contract, fully covering spec §6)
 
 ```rust
 pub struct DecisionRecord {
-    pub schema_version: u16,            // trace 版本；autowork 侧按此做兼容（ADR-005）
-    pub ts: String,                     // RFC3339 UTC，毫秒
-    pub identity: IdentityRec,          // 身份
-    pub protocol: ProtocolRec,          // 协议
-    pub decision: DecisionRec,          // 决定
-    pub state: StateRec,                // 状态
-    pub prefix: PrefixRec,              // 前缀
-    pub transforms: Vec<TransformRecord>, // transform（每步一条）
+    pub schema_version: u16,            // trace version; the autowork side uses it for compatibility (ADR-005)
+    pub ts: String,                     // RFC3339 UTC, milliseconds
+    pub identity: IdentityRec,          // identity
+    pub protocol: ProtocolRec,          // protocol
+    pub decision: DecisionRec,          // decision
+    pub state: StateRec,                // state
+    pub prefix: PrefixRec,              // prefix
+    pub transforms: Vec<TransformRecord>, // transform (one per step)
     pub usage: Usage,                   // usage
-    pub cost: CostRec,                  // 成本
-    pub result: ResultRec,              // 结果
-    pub errors: Vec<TraceError>,        // 失败明细（spec §6「失败明细」，R1-4 已回写）
+    pub cost: CostRec,                  // cost
+    pub result: ResultRec,              // result
+    pub errors: Vec<TraceError>,        // failure details (spec §6 "failure details"; written back in R1-4)
 }
 
 pub struct IdentityRec { pub request_id: String, pub client: ClientKind, pub client_ua_raw: Option<String>,
@@ -458,43 +499,51 @@ pub struct QuotaAfter { pub provider: String, pub plan_idx: usize, pub tokens_us
 pub struct ResultRec { pub status: u16, pub upstream_status: Option<u16>, pub failover_from: Option<RouteSpec>,
     pub overhead_ms: u32, pub upstream_ms: Option<u32>, pub usage_missing: bool }
 
-/// spec §6「失败明细」的落地：**内部**失败明细（可多条），与 §12.7 给客户端的单次错误响应
-/// 不是同一个东西；两者共享 kind 词表。无失败 = 空数组（不省略）。
+/// The landing of spec §6 "failure details": the **internal** failure details (possibly several), which are
+/// not the same thing as the single error response given to the client in §12.7; the two share the kind vocabulary.
+/// No failure = an empty array (not omitted).
 pub struct TraceError { pub kind: TraceErrorKind, pub message: String,
     pub plugin: Option<String>, pub details: Option<serde_json::Value> }
 pub enum TraceErrorKind { TransformError, UpstreamError, TraceWriteFailed, Internal }
 ```
 
-spec §6 字段组 → Rust 路径（逐行可审计）：
+spec §6 field groups → Rust paths (auditable line by line):
 
-| spec §6 字段组 | 字段 | Rust 路径 |
+| spec §6 field group | Fields | Rust path |
 |---|---|---|
-| 身份 | `request_id` `client` `session` `thread_id` `turn_index` | `identity.*`（`client_ua_raw` 为附录，UA 归一失败时排障用） |
-| 协议 | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
-| 决定 | `provider` `model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` |
-| 状态 | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
-| 前缀 | `prefix_blocks[]`（token 数 + hash） `prefix_continuity` | `prefix.blocks[].{tokens,hash}` `prefix.continuity` |
+| identity | `request_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails) |
+| protocol | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
+| decision | `provider` `model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` |
+| state | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
+| prefix | `prefix_blocks[]` (token count + hash) `prefix_continuity` | `prefix.blocks[].{tokens,hash}` `prefix.continuity` |
 | transform | `plugin` `added_input_tokens` `saved_input_tokens` `saved_output_tokens` `cache_impact` `verdict` | `transforms[].*` |
 | usage | `input_total` `input_cached` `cache_write` `output` `reasoning` | `usage.*` |
-| 成本 | `cost.input_miss` `input_hit` `cache_write` `output` `total` `quota_after` | `cost.*` |
-| 结果 | `status` `upstream_status` `failover_from` `overhead_ms` `upstream_ms` | `result.*` |
-| 失败明细 | `errors[]`（`kind` `message` `plugin?` `details?`） | `errors[].*`（kind 词表与 §12.7 的错误体共享；内部明细 vs 客户端响应面的区别见上） |
+| cost | `cost.input_miss` `input_hit` `cache_write` `output` `total` `quota_after` | `cost.*` |
+| result | `status` `upstream_status` `failover_from` `overhead_ms` `upstream_ms` | `result.*` |
+| failure details | `errors[]` (`kind` `message` `plugin?` `details?`) | `errors[].*` (the kind vocabulary is shared with the error body of §12.7; the difference between internal details and the client-facing response is explained above) |
 
-- 落盘：`<config trace.dir>/YYYY-MM-DDTHH.jsonl`（spec §4.1；`trace.dir` 默认 `./state/traces`），
-  **append-only，按小时滚动**（DESIGN §8）；写失败不阻塞请求，并记 `errors[].kind = trace_write_failed`。
-- `schema_version` 只在**破坏性**变更时 +1；新增可选字段不改版本（autowork 侧容忍未知字段）。
-- 派生指标（`router stats`，spec §6「指标定义」）——全部可由 trace 单遍算出，不需要额外状态：
-  `cache_hit_rate = Σusage.input_cached / Σusage.input_total`；
-  `stateful_inbound_rate`、`prefix_continuity_p50`（按 session 分组取相邻请求）、
-  `verified_savings_tokens`（**只累加 `verdict=Verified`**）、`overhead_ms_p99 = result.overhead_ms` 的 p99。
-- 报告纪律：任何"省了多少"必须带口径（verified/inferred）、样本量、时间窗（spec §7）。
+- On disk: `<config trace.dir>/YYYY-MM-DDTHH.jsonl` (spec §4.1; `trace.dir` defaults to
+  `./state/traces`), **append-only, rolled hourly** (DESIGN §8); a write failure does not block the
+  request and records `errors[].kind = trace_write_failed`.
+- `schema_version` only increments on a **breaking** change; adding an optional field does not change the
+  version (the autowork side tolerates unknown fields).
+- Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
+  the trace, with no extra state needed:
+  `cache_hit_rate = Σusage.input_cached / Σusage.input_total`;
+  `stateful_inbound_rate`, `prefix_continuity_p50` (group by session, take adjacent requests),
+  `verified_savings_tokens` (**accumulates only `verdict=Verified`**), the p99 of
+  `overhead_ms_p99 = result.overhead_ms`.
+- Reporting discipline: any statement of "how much was saved" must carry the convention
+  (verified/inferred), the sample size and the time window (spec §7).
 
-### 12.7 错误语义与响应面（spec §8 的落地）
+### 12.7 Error semantics and the response surface (the landing of spec §8)
 
-> R1-4 起，下面的错误体 schema 与 `error.type`→HTTP 表**已在 `docs/spec.md` §8 成文**（spec 是对外
-> 契约的单一真相）；本节保留 `ErrorBody` 的 Rust 形态与实现细节，两者必须一致。
+> Since R1-4, the error-body schema and the `error.type`→HTTP table below **are already written into
+> `docs/spec.md` §8** (the spec is the single source of truth for the external contract); this section
+> keeps `ErrorBody`'s Rust form and the implementation details, and the two must agree.
 
-统一错误体（**所有**非 2xx 与桩端点同形；README 的成功响应带 router 自有字段 `router_meta`）：
+Unified error body (**all** non-2xx responses and the stub endpoints share one shape; README's success
+response carries the router-owned field `router_meta`):
 
 ```rust
 pub struct ErrorBody { pub error: ErrorDetail }
@@ -502,85 +551,91 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
                          pub request_id: String, pub details: Option<serde_json::Value> }
 ```
 
-| `error.type` | HTTP | 触发 |
+| `error.type` | HTTP | Trigger |
 |---|---|---|
-| `invalid_request` | 400 | 请求体不可解析 / 缺 `model` / 字段类型错 |
-| `unknown_provider` `unknown_model` | 404 | `provider/model` 或别名解析不到 |
-| `auto_not_supported` | 400 | `model: auto`（v0.1；提示由插件接管，spec §3） |
-| `capability_unsupported` | 400 | 入站协议 ∉ 该 provider `supports` |
-| `cost_cap_exceeded` | 403 | guard 成本上限命中 |
-| `quota_exceeded` | 429 | `quota.over_quota = block` 且额度耗尽 |
-| `stateful_unsupported` | 400 | stateful 入站且粘性无法保真（ADR-004） |
-| `upstream_error` | 502 | 上游错误且 fallback 链用尽（`details.upstream_status`） |
-| `upstream_timeout` | 504 | 上游尝试超时且链用尽 |
-| `not_implemented` | 501 | v0.1 三个协议端点的桩（R1-2） |
-| `internal` | 500 | 其它（含 trace 写失败的降级路径之外） |
+| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type |
+| `unknown_provider` `unknown_model` | 404 | `provider/model` or an alias does not resolve |
+| `auto_not_supported` | 400 | `model: auto` (v0.1; the hint says a plugin takes it over, spec §3) |
+| `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` |
+| `cost_cap_exceeded` | 403 | guard cost cap hit |
+| `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted |
+| `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004) |
+| `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
+| `upstream_timeout` | 504 | an upstream attempt timed out and the chain is exhausted |
+| `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (R1-2) |
+| `internal` | 500 | everything else (beyond the degradation path of a trace write failure) |
 
-响应头：`X-Router-Request-Id`（恒有）、`X-Router-Session`（解析出 session 时）、
-`X-Router-Lossy`（发生有损翻译时，DESIGN §7）。SSE 路径首个事件前必须已发这三个头。
+Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
+`X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
+already have been sent before the first event.
 
-### 12.8 conformance 用例表（`CONF-01…CONF-19`）
+### 12.8 conformance case table (`CONF-01…CONF-19`)
 
-位置：workspace 成员 `router-conformance`（`tests/conformance/`），用例文件 `tests/conf_<NN>_<slug>.rs`，
-测试函数名与文件同名。**未实现路径必须 `#[ignore = "CONF-NN: 依赖 <实现项>"]`**（显式可见，而不是不写）。
+Location: the workspace member `router-conformance` (`tests/conformance/`), case file
+`tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
+`#[ignore = "CONF-NN: depends on <implementation item>"]`** (explicitly visible, rather than simply not
+written).
 
-| ID | 覆盖 §10 | 断言 | 依赖实现项 |
+| ID | Covers §10 | Assertion | Depends on implementation item |
 |---|---|---|---|
-| CONF-01 | conformance·保真 | chat 入站 → `wire_api: chat`：上游可见 body 与客户端 body 逐字节相同 | router-protocol native 路径 |
-| CONF-02 | 同上 | responses → responses native：字节相同 | 同上 |
-| CONF-03 | 同上 | anthropic → anthropic native：字节相同 | 同上 |
-| CONF-04 | 同上·翻译 | chat → responses：同内容两次请求产出**同一上游字节**（确定性）；有损点逐条登记 | 翻译矩阵 + 映射器 |
-| CONF-05 | 同上 | chat → anthropic：确定性 + `cache_control` 断点位置稳定 | 同上 + 断点注入 |
-| CONF-06 | 同上 | responses → chat：确定性 + 有损清单（reasoning 丢弃须标记） | 同上 |
-| CONF-07 | 同上 | responses → anthropic：确定性 + 断点注入 | 同上 |
-| CONF-08 | 同上 | anthropic → chat：确定性 + `thinking` 处理 | 同上 |
-| CONF-09 | 同上 | anthropic → responses：确定性 + `tool_use` 映射 | 同上 |
-| CONF-10 | conformance·保真 + §12.3.1 | 删 router 自有字段后其余字节与客户端逐字节相同；`router_meta` 回显不会进入上游 | `RawBody::remove_top_level_keys` |
-| CONF-11 | conformance·未知字段 | 顶层与嵌套未知字段原样透传（含 `include`、`client_metadata` 等实测字段） | `RawBody` + 编码器 |
-| CONF-12 | conformance·tool call 往返 | chat `tool_calls`/`role=tool` ↔ responses `function_call*` ↔ anthropic `tool_use/result`：id 与顺序保留 | 翻译矩阵 |
-| CONF-13 | conformance·SSE | native 流式：上游 `event:`/`sequence_number` 逐事件等价透传；结束事件语义保留（responses 无 `[DONE]`） | router-proxy SSE 透传 |
-| CONF-14 | conformance·错误码 | 上游 400/401/429/5xx → §12.7 归一错误体；5xx/429 触发 fallback 并记 `failover_from` | proxy + guard/fallback |
-| CONF-15 | §10·缓存 | 同 session 两轮 passthrough：`prefix_continuity == 1.0` | cache 账本 + 粘性表 |
-| CONF-16 | §10·缓存 | 每个 transform 单独启用后重测缓存回归，不低于基线（参数化：逐插件一例） | transform 链 + 账本 |
-| CONF-17 | §10·计账 | 每条 `TransformRecord.verdict ∈ {Verified, Inferred}` 且 gate 只读 `Verified` | 计账实现 |
-| CONF-18 | §10·交互 | 真实 codex/hermes 各一轮冒烟（含 `NO_PROXY` 前提验证）—— 手动/带网络的 CI 专属 | 端到端 |
-| CONF-19 | §9·replay | 同一 trace 两次 `router replay` 的成本/缓存报表逐字段一致 | replay 子命令 |
+| CONF-01 | conformance·fidelity | chat inbound → `wire_api: chat`: the upstream-visible body is byte-identical to the client body | router-protocol native path |
+| CONF-02 | same as above | responses → responses native: bytes are identical | same as above |
+| CONF-03 | same as above | anthropic → anthropic native: bytes are identical | same as above |
+| CONF-04 | same as above·translation | chat → responses: two requests with the same content produce **the same upstream bytes** (determinism); the lossy points are registered one by one | translation matrix + mappers |
+| CONF-05 | same as above | chat → anthropic: determinism + `cache_control` breakpoint positions stable | same as above + breakpoint injection |
+| CONF-06 | same as above | responses → chat: determinism + the lossy list (dropping reasoning must be marked) | same as above |
+| CONF-07 | same as above | responses → anthropic: determinism + breakpoint injection | same as above |
+| CONF-08 | same as above | anthropic → chat: determinism + `thinking` handling | same as above |
+| CONF-09 | same as above | anthropic → responses: determinism + `tool_use` mapping | same as above |
+| CONF-10 | conformance·fidelity + §12.3.1 | after deleting router-owned fields the remaining bytes are byte-identical to the client's; the `router_meta` echo never reaches the upstream | `RawBody::remove_top_level_keys` |
+| CONF-11 | conformance·unknown fields | top-level and nested unknown fields are passed through verbatim (including the measured fields `include`, `client_metadata`) | `RawBody` + encoder |
+| CONF-12 | conformance·tool-call round trip | chat `tool_calls`/`role=tool` ↔ responses `function_call*` ↔ anthropic `tool_use/result`: id and order preserved | translation matrix |
+| CONF-13 | conformance·SSE | native streaming: the upstream's `event:`/`sequence_number` are passed through event-by-event equivalently; end-event semantics preserved (responses has no `[DONE]`) | router-proxy SSE passthrough |
+| CONF-14 | conformance·error codes | upstream 400/401/429/5xx → the normalized error body of §12.7; 5xx/429 triggers fallback and records `failover_from` | proxy + guard/fallback |
+| CONF-15 | §10·cache | same-session two-turn passthrough: `prefix_continuity == 1.0` | cache ledger + sticky table |
+| CONF-16 | §10·cache | after enabling each transform separately, re-measure the cache regression, not below the baseline (parameterized: one case per plugin) | transform chain + ledger |
+| CONF-17 | §10·accounting | every `TransformRecord.verdict ∈ {Verified, Inferred}` and gates read `Verified` only | the accounting implementation |
+| CONF-18 | §10·interaction | one smoke run each with the real codex/hermes (including verification of the `NO_PROXY` prerequisite) — manual / network-enabled CI only | end to end |
+| CONF-19 | §9·replay | two `router replay` runs over the same trace produce cost/cache reports identical field by field | the replay subcommand |
 
-用例 ID 是**契约**：`docs/spec.md` 新增行为 → 本节与 `tests/conformance/` 必须同步新增，
-编号只增不改（删除的用例保留 ID 并标 `removed`）。
+Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
+must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
+`removed`).
 
-### 12.9 缺口与待裁定（GAP-Q1…Q13）
+### 12.9 Gaps and pending rulings (GAP-Q1…Q13)
 
-**本轮不改既有条款，只登记。** 每条给出本蓝图采用的默认值与影响面。（R1-4 起按下表下方的
-「回写记录」处置：已定项写进 spec，未定项保持登记。）
+**This round changes no existing clause, it only registers.** Each entry gives the default this blueprint
+adopts and its blast radius. (From R1-4 on, the "write-back record" below the table governs: settled
+items are written into the spec, unsettled ones stay registered.)
 
-| # | 缺口 | 本蓝图默认 | 影响 |
+| # | Gap | This blueprint's default | Impact |
 |---|---|---|---|
-| Q1 | `quota` 计量口径未定义（input only？含 output？cache_read 是否计入） | `input_total + output` | 配额路由（D5）；需 spec 补一句 |
-| Q2 | trace 落盘路径/滚动/保留期未进 config（§3 的 `state/traces/` 是实现细节） | `state/traces/YYYY-MM-DDTHH.jsonl`，按小时 | R2 的 trace 实现；也可能要 config 段 |
-| Q3 | `tee + retrieve` 的存储与取回通道未定义（ADR-003 要求，spec 无端点） | 规则里先声明 `tee`，存储与端点后置 | P1 压缩（D3）的收益可回取性 |
-| Q4 | 规则"三级覆盖"的覆盖语义与是否要 rtk 式 trust 门未定义 | 首个命中生效；trust 门不实现 | 规则装载安全（D3） |
-| Q5 | `prefix_blocks[]` 的块粒度未定义 | 结构单元（message / tool 定义 / input item） | 缓存指标可比性 |
-| Q6 | 峰谷窗口的时区与"节假日"语义（`peak.windows`） | 窗口显式带 `tz`；节假日不建模 | 成本精度（D9） |
-| Q7 | breakeven 的 `p_stay` 档位（命中价 vs miss 价） | `p_stay = input_hit`；`switch_cost` 用 `p_new_miss` | failover/spill 决策（D5） |
-| Q8 | `stateful_inbound` "无法保真" 时的 400 判定条件未定义 | 粘性表有该 session 即视为可保真 | ADR-004 的落地 |
-| Q9 | 超 `context` 时的行为（400 还是交上游） | 交上游（不替上游做判断） | guard 行为 |
-| Q10 | 错误体 schema 与 `errors[]` 未在 spec §6 列出 | §12.6/§12.7 固化，建议回写 spec | autowork 解析 trace |
-| Q11 | plugin `inject` 未进 spec §4 schema（DESIGN §4 要求） | 已在 `config.example.yaml` 落地并标 GAP | 乱序加载安全 |
-| Q12 | `fallback` 链 schema 与切换粒度（全局 / 按模型）未在 spec §4 给出 | 全局有序 route 列表 | failover（D5） |
-| Q13 | 别名是否可指向 `auto` 或携带参数覆盖 | 仅 `provider/model` | 选择语义（§3） |
+| Q1 | the `quota` accounting convention is undefined (input only? including output? does cache_read count?) | `input_total + output` | quota routing (D5); the spec needs one more sentence |
+| Q2 | the trace on-disk path / rollover / retention are not in config (§3's `state/traces/` is an implementation detail) | `state/traces/YYYY-MM-DDTHH.jsonl`, hourly | R2's trace implementation; a config section may also be needed |
+| Q3 | the storage and retrieval channel of `tee + retrieve` are undefined (ADR-003 requires them, the spec has no endpoint) | declare `tee` in the rule first, storage and the endpoint come later | the retrievability of P1 compression's (D3) savings |
+| Q4 | the override semantics of the rules' "three-level override" and whether an rtk-style trust gate is needed are undefined | the first hit takes effect; no trust gate is implemented | rule loading safety (D3) |
+| Q5 | the block granularity of `prefix_blocks[]` is undefined | a structural unit (message / tool definition / input item) | cache-metric comparability |
+| Q6 | the time zone and "holiday" semantics of the peak windows (`peak.windows`) | windows carry an explicit `tz`; holidays are not modeled | cost accuracy (D9) |
+| Q7 | which tier breakeven's `p_stay` uses (hit price vs miss price) | `p_stay = input_hit`; `switch_cost` uses `p_new_miss` | failover/spill decisions (D5) |
+| Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 |
+| Q9 | the behavior when `context` is exceeded (400, or hand it to the upstream) | hand it to the upstream (do not judge on the upstream's behalf) | guard behavior |
+| Q10 | the error-body schema and `errors[]` are not listed in spec §6 | pinned down by §12.6/§12.7, recommended to be written back into the spec | autowork parsing the trace |
+| Q11 | the plugin `inject` is not in spec §4's schema (DESIGN §4 requires it) | already landed in `config.example.yaml` and marked GAP | out-of-order loading safety |
+| Q12 | the `fallback` chain schema and its switching granularity (global / per model) are not given in spec §4 | a global ordered route list | failover (D5) |
+| Q13 | whether an alias may point at `auto` or carry parameter overrides | `provider/model` only | selection semantics (§3) |
 
-ADR 处置（R1-4）：原建议的三条 ADR 已按编排者裁定落笔 —— `ADR-006`「整数 NanoUsd 定点计账」、
-`ADR-007`「span 保真转发（禁止 parse→reserialize 往返）」、`ADR-008`「规则三级覆盖与 trust 门」
-（v0.1 不启用 trust 门，并写明重新评估的触发条件）。三条都编码了已写死的类型与 conformance 断言，
-不再需要改 §12 的类型草图。
+ADR disposition (R1-4): the three originally proposed ADRs have been written as the orchestrator ruled —
+`ADR-006` "integer NanoUsd fixed-point accounting", `ADR-007` "span-faithful forwarding (no
+parse→reserialize round trip)", `ADR-008` "three-level rule override and the trust gate" (v0.1 does not
+enable the trust gate, and states the trigger condition for re-evaluating it). All three encode the types
+and conformance assertions already pinned down, so §12's type sketches no longer need changing.
 
-**R1-4 回写记录（2026-09-19；spec 已改，本节表格保留为历史登记）**
+**R1-4 write-back record (2026-09-19; the spec has been changed, this section's table is kept as a
+historical register)**
 
-| 处置 | 条目 |
+| Disposition | Items |
 |---|---|
-| 已写进 `docs/spec.md` | Q2 → §4.1；Q3 → §4.4（取回通道明确标"本版不实现"）；Q5 → §6「`prefix_blocks[]` 的定义」；Q10 → §6「失败明细」+ §8（错误体 + type→HTTP 表）；Q11 → §4.3；Q12 → §4.2 |
-| 已由 ADR-008 裁定 | Q4（覆盖语义 = 首个命中生效；trust 门 v0.1 不启用，重新评估的触发条件写在该 ADR 里） |
-| 采默认值（未进 spec；`config.example.yaml` 注释标注） | Q1（quota = `input_total + output`）、Q7（`p_stay = input_hit`）、Q9（超 context 交上游）、Q13（别名仅 `provider/model`） |
-| 留到 Round 2 / D3 | Q8（`stateful_inbound` 的 400 条件）、Q6（节假日不建模 = 已知偏差） |
-
+| already written into `docs/spec.md` | Q2 → §4.1; Q3 → §4.4 (the retrieval channel explicitly marked "not implemented in this version"); Q5 → §6 "the definition of `prefix_blocks[]`"; Q10 → §6 "failure details" + §8 (the error body + the type→HTTP table); Q11 → §4.3; Q12 → §4.2 |
+| already ruled by ADR-008 | Q4 (override semantics = the first hit takes effect; the trust gate is not enabled in v0.1, and the trigger condition for re-evaluation is written in that ADR) |
+| takes the default value (not written into the spec; annotated in `config.example.yaml` comments) | Q1 (quota = `input_total + output`), Q7 (`p_stay = input_hit`), Q9 (over context → hand it to the upstream), Q13 (an alias is only `provider/model`) |
+| left for Round 2 / D3 | Q8 (the 400 criterion for `stateful_inbound`), Q6 (holidays not modeled = a known deviation) |
