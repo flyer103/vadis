@@ -2,6 +2,7 @@
 name = "router-conformance"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "The protocol conformance suite: the 3×3 matrix, the byte/prefix invariants, the accounting convention and the store/observation contracts."
 license.workspace = true
 repository.workspace = true

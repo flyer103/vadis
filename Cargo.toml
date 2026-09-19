@@ -18,6 +18,14 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/flyer103/router"
+# The minimum supported Rust version — *measured*, not estimated, and not the same thing as
+# the toolchain CI uses (that one is pinned in `rust-toolchain.toml`). Measured 2026-09-20:
+#   rustup toolchain install 1.88.0 && cargo +1.88.0 build --workspace --locked   -> rc=0
+#   rustup toolchain install 1.87.0 && cargo +1.87.0 build --workspace --locked   -> refused,
+#   because the resolved dependencies declare a higher `rust-version` (the `icu_*` family
+#   requires 1.88). 1.88 is therefore the floor today; raising a dependency can raise it.
+# Members inherit this with `rust-version.workspace = true`.
+rust-version = "1.88"
 
 # The dependency whitelist = DESIGN §12.1. New dependencies must first be reconciled against the whitelist, with the rationale stated in the commit message.
 [workspace.dependencies]

@@ -1,0 +1,74 @@
+# The four gates this repository grades itself on (AGENTS.md "Commands"), run on every push
+# and every pull request. They are exactly the local commands, in the same order, so a green
+# run here means a green run there.
+#
+# - no secret is referenced anywhere in this workflow
+# - the job needs no repository write access
+# - the toolchain is pinned by `rust-toolchain.toml` in the repository root
+# - the cache is an optimisation only: a cold cache changes the run time, not the verdict
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  gates:
+    name: build / test / clippy / fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact compiler plus the clippy/rustfmt components;
+      # rustup installs that version here. Doing it in its own step keeps a toolchain
+      # problem visibly separate from a build problem.
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - name: Report the compiler actually in use
+        run: |
+          rustc --version
+          cargo --version
+          cargo clippy --version
+          cargo fmt --version
+
+      # `target/` plus the cargo registry: without this a cold run rebuilds every dependency,
+      # including the bundled SQLite C library that rusqlite compiles.
+      - name: Restore the cargo registry and target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      # tests/conformance is a workspace member, so the protocol matrix, the byte/prefix
+      # invariants and the accounting convention run as part of this step.
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
+      - name: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --no-fail-fast
+
+      - name: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check

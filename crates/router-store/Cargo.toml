@@ -2,6 +2,7 @@
 name = "router-store"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "The one local SQLite/WAL store (event log + projections) and the JSONL trace sink; the only writer of the state database."
 license.workspace = true
 repository.workspace = true

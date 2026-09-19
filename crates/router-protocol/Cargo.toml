@@ -2,6 +2,7 @@
 name = "router-protocol"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "The three-protocol codec: native-path usage normalization for the three wire shapes and the SSE block parser. (The cross-protocol translation matrix is not implemented in v0.1.)"
 license.workspace = true
 repository.workspace = true

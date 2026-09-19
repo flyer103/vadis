@@ -2,6 +2,7 @@
 name = "router-plugins"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Built-in tier-A plugins (cache guard, transform rules, cost ledger, quota guard, sticky sessions); not invoked from the serving path in v0.1."
 license.workspace = true
 repository.workspace = true

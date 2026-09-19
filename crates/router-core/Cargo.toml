@@ -2,6 +2,7 @@
 name = "router-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Domain core: config schema, decision pipeline, the byte-level body primitive, the cost / cache / quota / breakeven engines and the trace contract."
 license.workspace = true
 repository.workspace = true

@@ -2,6 +2,7 @@
 name = "router-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "The `router` executable: config loading and the `serve` command (the only subcommand in v0.1)."
 license.workspace = true
 repository.workspace = true

@@ -1,0 +1,9 @@
+# The toolchain the repository is developed and verified on. Pinning it makes "green here"
+# and "green in CI" mean the same compiler; `rustup` installs exactly this version on the
+# first cargo invocation in the checkout, so no manual step is needed.
+#
+# Not the same thing as the minimum supported version: that is `rust-version` in
+# `Cargo.toml` (`[workspace.package]`), which is measurably lower.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
