@@ -66,7 +66,7 @@ pub(crate) fn not_implemented_body(
 ) -> router_core::error::ErrorBody {
     router_core::error::ErrorBody::new(
         router_core::error::ErrorCode::NotImplemented,
-        format!("endpoint {endpoint} is a stub in this build; forwarding lands in Round 2"),
+        format!("endpoint {endpoint} is not implemented in v0.1"),
         request_id,
     )
 }

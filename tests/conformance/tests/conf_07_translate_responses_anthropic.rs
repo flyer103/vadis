@@ -6,5 +6,7 @@
 #[ignore = "CONF-07: depends on the translation matrix + breakpoint injection (R2)"]
 #[tokio::test]
 async fn conf_07_translate_responses_anthropic() {
-    unimplemented!("translation matrix + breakpoint injection lands in Round 2");
+    unimplemented!(
+        "the responses→anthropic translation cell (with cache_control breakpoint injection) is not implemented in v0.1"
+    );
 }

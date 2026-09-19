@@ -6,5 +6,5 @@
 #[ignore = "CONF-04: depends on the translation matrix + chat→responses mapper (R2)"]
 #[tokio::test]
 async fn conf_04_translate_chat_responses() {
-    unimplemented!("translation matrix lands in Round 2");
+    unimplemented!("the chat→responses translation cell is not implemented in v0.1");
 }

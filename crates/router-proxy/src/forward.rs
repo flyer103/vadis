@@ -404,7 +404,7 @@ impl Forwarder {
                 501,
                 ErrorCode::NotImplemented,
                 format!(
-                    "translation {} -> {} lands in R2-3; this round forwards native routes only",
+                    "translation {} -> {} is not implemented in v0.1; only native routes are served",
                     proto_in, provider.wire_api
                 ),
             ));
