@@ -385,8 +385,10 @@ is simply the first route the downgrade considers.
 - **The key absent ⇒ no inbound auth.** That is not a gap: "no key" *is* the local, single-user mode
   this document has always described, which is also what makes the key backward compatible — a config
   written before the key existed behaves exactly as it did.
-- **The key present, and the environment variable unset *or empty* ⇒ the process refuses to start**
-  (non-zero exit; the reason names the variable and the config path). A missing secret must **not** be
+- **The key present, and the environment variable unset *or empty* ⇒ the process refuses to start** —
+  exit code **`4`**, the code the other unsatisfiable-environment startup prerequisites use (the state
+  store, the trace directory), and the reason names both the variable and the config path. A missing secret
+  must **not** be
   read as "so no auth is required": that reading silently drops the operator's only access control,
   while the strict reading costs one start-up. **This is a requirement, not a recommendation**, and it
   has no override — there is no "auth off" switch to fall back to.

@@ -1064,7 +1064,7 @@ pub struct ResolvedConfig {
   | the §12.5 parsing rules for duration / context / price / peak multiplier | the §12.5 error verbatim, with the field path |
   | spec §4.6's `account` and `plan_policy` (ADR-014): `account` ∈ {`coding_plan`, `api`}; `primary` and `overflow` are distinct roster routes whose model id equals `family`; `primary`'s provider is `coding_plan` and `overflow`'s is `api`; the family's model is covered by the plan's `quota.models` when the primary provider declares a plan; at most one policy, one per family | an unknown `account` value; a `primary` on a metered provider; `primary == overflow`; a family that is not both routes' model id; a plan that does not cover the family — each named with the field path |
   | no unknown key — **including a `state:` section** | the message states that the state path is fixed in v0.1 (spec §4.5) and that a `state:` section is an additive future key |
-  | `server.auth_token_env` (spec §4.7): when the key is written, the environment variable it names must be **present and non-empty** | `server.auth_token_env names ROUTER_TOKEN, which is unset; refusing to start (starting without it would serve unauthenticated on a config that asked for a token)` — exit code **4**, the code the other unsatisfiable-environment prerequisites use (store, trace dir), not 2 (a config that cannot be parsed) |
+  | `server.auth_token_env` (spec §4.7): when the key is written, the environment variable it names must be **present and non-empty** | `router: config file <path>: server.auth_token_env names ROUTER_TOKEN, which is unset: refusing to start (a token-less start would serve unauthenticated)` — exit code **4**, the code the other unsatisfiable-environment prerequisites use (store, trace dir), not 2 (a config that cannot be parsed) |
 
 - **A missing `api_key_env` value is not a load error** (§12.5): that provider is marked
   unavailable and reported by `/health`; the rest of the roster still serves. A missing *key*
@@ -1747,9 +1747,10 @@ makes `/health`'s exemption structural rather than a path comparison (spec §4.7
   Neither message ever contains the expected token, any prefix of it, or the presented value.
 - The startup refusal (spec §4.7) is three lines next to the provider-key probe: read
   `std::env::var(name)`; on `Err` **or** an empty value print
-  `router: server.auth_token_env names <NAME>, which is <unset|empty>: refusing to start (a token-less start would serve unauthenticated)`
-  and return exit code **4** (§12.10.2's class for an unsatisfiable environment prerequisite). The token is
-  then moved into the gate and never re-read.
+  `router: config file <path>: server.auth_token_env names <NAME>, which is <unset|empty>: refusing to start (a token-less start would serve unauthenticated)`
+  — the config path in the existing `config file <path>: …` style, so a machine running several configs
+  says which one — and return exit code **4** (§12.10.2's class for an unsatisfiable environment
+  prerequisite). The token is then moved into the gate and never re-read.
 - The startup line gains the word §4.7's operators look for, in §9.1's vocabulary:
   `router listening on <addr> (config dir: …, trace: …, state: … [store open], auth: required|none)` —
   `required` when the key was written, `none` when it was not. The variable's **name** is not printed here
