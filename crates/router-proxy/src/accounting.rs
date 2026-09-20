@@ -99,6 +99,10 @@ pub struct AccountCtx<'a> {
     /// plan policy displaced this request's account (ADR-014); `None` on
     /// every other request (present-and-null on the wire).
     pub plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `state.sticky_hit`: the session already had a binding row
+    /// when the request arrived (the sticky-hit input forward.rs
+    /// computes for bind_session — one value, both sinks).
+    pub sticky_hit: bool,
 }
 
 /// The per-request accounting outcome the caller reports.
@@ -436,7 +440,7 @@ impl<'a> Accountant<'a> {
             },
             state: StateRec {
                 stateful_inbound: false,
-                sticky_hit: false,
+                sticky_hit: ctx.sticky_hit,
                 cache_control_breaks: 0,
             },
             prefix: PrefixRec {

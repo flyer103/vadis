@@ -123,6 +123,9 @@ struct RelayCtx {
     /// spec §6 `result.plan_switch` (ADR-014): the displacement the
     /// pre-flight recorded, carried to the relay's terminal record.
     plan_switch: Option<router_core::trace::PlanSwitchRec>,
+    /// spec §6 `state.sticky_hit`: the session already had a binding row
+    /// at pre-flight (the same value bind_session received).
+    sticky_hit: bool,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -411,6 +414,7 @@ impl Forwarder {
                     started,
                     now_epoch_s,
                     plan_switch: facts.plan_switch.clone(),
+                    sticky_hit: crate::forward::session_sticky_hit(&self.store, session.as_deref()),
                 },
                 &primary.provider,
                 &primary.model,
@@ -606,6 +610,10 @@ impl Forwarder {
                             blocks: facts.blocks.clone(),
                             client_requested_usage,
                             plan_switch: facts.plan_switch.clone(),
+                            sticky_hit: crate::forward::session_sticky_hit(
+                                &self.store,
+                                session.as_deref(),
+                            ),
                         };
                         let state = RelayState {
                             tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -1218,6 +1226,7 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
         started: ctx.started,
         now_epoch_s: ctx.now_epoch_s,
         plan_switch: ctx.plan_switch.clone(),
+        sticky_hit: ctx.sticky_hit,
     };
     let failover_from = st
         .failover_from

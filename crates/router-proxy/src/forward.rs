@@ -340,6 +340,7 @@ impl Forwarder {
                 started: facts.started,
                 now_epoch_s: facts.now_epoch_s,
                 plan_switch: facts.plan_switch.clone(),
+                sticky_hit: session_sticky_hit(&self.store, facts.session.as_deref()),
             },
             f,
             facts
@@ -583,6 +584,7 @@ impl Forwarder {
                     started,
                     now_epoch_s,
                     plan_switch: facts.plan_switch.clone(),
+                    sticky_hit,
                 },
                 &primary.provider,
                 &primary.model,
@@ -791,6 +793,7 @@ impl Forwarder {
                             started,
                             now_epoch_s,
                             plan_switch: facts.plan_switch.clone(),
+                            sticky_hit,
                         };
                         let _accounted = accountant.finish(
                             &ctx,
