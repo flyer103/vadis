@@ -39,7 +39,11 @@
 #            only the spec clause and no longer carry a GAP.
 
 server:
-  addr: "127.0.0.1:8790"        # local-first; think through auth before binding non-loopback (v0.1 has no auth)
+  addr: "127.0.0.1:8790"        # local-first; with server.auth_token_env set, bind it anywhere you can reach it — ingest is then authenticated
+  # auth_token_env: ROUTER_TOKEN # optional (spec §4.7): name of the env var whose value every inbound request
+                                 #   must present (Bearer / x-api-key); absent ⇒ no inbound auth. Left commented so the
+                                 #   copied example still starts before you have chosen a token (a set name with an
+                                 #   unset/empty variable refuses startup, spec §5.1).
   upstream_attempt_timeout: 60s # budget for a single upstream attempt (timeout → switch per the fallback chain, spec §8)
   request_timeout: 10m          # budget for the whole inbound request (including the full SSE duration)
 
