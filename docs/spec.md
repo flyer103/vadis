@@ -326,6 +326,15 @@ future key (the `state:` / `retention` precedent), never a reshaped section.
    records the re-prefill (`result.plan_switch.reprefill_tokens` / `switch_cost_nano`), `inferred` at decision
    time and `verified` once the switched attempt's usage has landed (§6; ADR-011 item 9's convention).
 
+**The `plan.switched` payload (spec amendment).** Besides the fields ADR-014 item 8 lists (`family`,
+`from_account` / `to_account`, `from_route` / `to_route`, `reason`, `probe`, `reprefill_tokens` +
+`switch_cost_nano`, `session`), the event carries **`cooldown_ms`** — the policy's then-current cooldown in
+milliseconds. It exists because the `plan_state` projection is derived state (§4.5): a rebuild must
+determine the row's informational `until_us` (`since_us + cooldown_ms`) from the log alone, without the
+config that produced the event — and events are never rewritten, so a later `cooldown` change must not
+change what the row said when it was written. The serving path itself always recomputes the probe gate
+from the *current* config against `since_us`.
+
 **Illegal combinations: what each one fails as.** The load-time checks are refusals at startup — the process does
 not come up and the message names the config path and the reason (§4.5: there is no partially-started process).
 They are deliberately **not** `error.type` values of §8: those describe the outcome of a request, and a config that

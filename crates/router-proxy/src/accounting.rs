@@ -17,7 +17,7 @@
 
 use std::time::Instant;
 
-use router_core::config::{QuotaCfg, RouteSpec, RouterConfig};
+use router_core::config::{AccountKind, QuotaCfg, RouteSpec, RouterConfig};
 use router_core::cost::{cost, CostBreakdown, NanoUsd, PriceTable};
 use router_core::prefix::PrefixBlock;
 use router_core::quota::{charge, window_start_for, OverQuota, QuotaPlan, QuotaState, QuotaWindow};
@@ -34,9 +34,17 @@ use crate::forward::{ForwardFailure, ForwardSuccess};
 /// The route-resolved accounting inputs: the model's price table and the
 /// provider's quota plans covering that model, both converted once per
 /// request from the config types (the float price conversion never re-runs).
+/// `in_plan` mirrors the provider entry's `account` (spec §4.6): the
+/// account is a property of the provider, so the roster lookup here is
+/// the single place it becomes an accounting fact.
 pub struct RouteAccounting {
     pub price: PriceTable,
     pub quota_plans: Vec<QuotaPlan>,
+    /// True when the route's provider declares `account: coding_plan`:
+    /// every request served by it books the plan's marginal cost 0 while
+    /// its `quota_after` is still recorded (spec §4.6 rule 4 / ADR-014
+    /// item 6). A quota-less coding_plan provider is still a plan.
+    pub in_plan: bool,
 }
 
 /// Resolves a route's accounting inputs from the config (roster lookup +
@@ -54,7 +62,12 @@ pub fn route_accounting(config: &RouterConfig, route: &RouteSpec) -> Option<Rout
         .filter(|q| q.models.iter().any(|m| m == &route.model))
         .map(quota_plan_from_cfg)
         .collect();
-    Some(RouteAccounting { price, quota_plans })
+    let in_plan = provider.account == AccountKind::CodingPlan;
+    Some(RouteAccounting {
+        price,
+        quota_plans,
+        in_plan,
+    })
 }
 
 /// `QuotaCfg` (config) → `QuotaPlan` (model), the one conversion point.
@@ -376,7 +389,19 @@ impl<'a> Accountant<'a> {
         let mut quota_after: Option<QuotaAfter> = None;
         if !usage_missing {
             if let Some(acc) = self.accounting {
-                breakdown = cost(&usage, &acc.price, ctx.now_epoch_s);
+                if acc.in_plan {
+                    // Spec §4.6 rule 4 / ADR-014 item 6: the account a
+                    // request was billed under follows from the serving
+                    // provider's `account` — a coding_plan provider's
+                    // requests book the plan's marginal cost 0. Every
+                    // bucket stays at the zero initialized above (the
+                    // switch's own re-prefill cost is priced separately
+                    // in `plan.switched`, not here); the quota charge
+                    // below still runs so `quota_after` is recorded
+                    // ("…and record `quota_after`").
+                } else {
+                    breakdown = cost(&usage, &acc.price, ctx.now_epoch_s);
+                }
                 if let Some(store) = self.store {
                     if let Some((plan_idx, plan)) = acc
                         .quota_plans
