@@ -95,6 +95,33 @@ pub enum ProbeBlockedBy {
     DeferredByWindow,
 }
 
+impl ProbeBlockedBy {
+    /// The spec §9.1 `probe.blocked_by` word for this arm, or `None` for
+    /// the two request-shaped arms (`NoSession`, `NotSessionBoundary`):
+    /// those are properties of a request that does not exist when
+    /// `/health` renders, and for every such request the claim would be
+    /// false, so the surface has no word for them (§9.1's table; DESIGN
+    /// §12.10.8). One vocabulary, derived from the guard's own enum, so
+    /// the report and the guard cannot disagree about *why* an attempt
+    /// is blocked (ADR-016 §13.3 L1a: this method is the single owner).
+    pub const fn blocked_by_surface_word(self) -> Option<&'static str> {
+        match self {
+            Self::RecoveryDisabled => Some("recovery_disabled"),
+            Self::NoSession => None,
+            Self::NotSessionBoundary => None,
+            // The account-state arm and the elapsed-time arm share the
+            // surface word: from the surface's point of view (no request
+            // in hand) both read "not yet back on the primary" — the
+            // deadline has not passed, whether because the family never
+            // left `primary` or because `since + cooldown` is still in
+            // the future.
+            Self::Cooldown => Some("cooldown"),
+            Self::PrimaryDemoted => Some("primary_cooling_down"),
+            Self::DeferredByWindow => Some("window_not_reset"),
+        }
+    }
+}
+
 /// The plan-state row as the rule sees it (read through the store seam).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanStateRow {
@@ -230,8 +257,7 @@ impl PlanFirstRule {
     }
 
     fn cooldown_us(&self) -> i64 {
-        // DurationVal is milliseconds (§12.5); µs = ms × 1_000.
-        (self.policy.cooldown.0 as i64).saturating_mul(1_000)
+        self.policy.cooldown_us()
     }
 }
 
@@ -509,5 +535,124 @@ mod tests {
     fn account_kind_words() {
         assert_eq!(AccountKind::CodingPlan.as_str(), "coding_plan");
         assert_eq!(AccountKind::Api.as_str(), "api");
+    }
+
+    // ------------------------------------------------------------------
+    // The §9.1 `blocked_by` surface, reduced to the guard (ADR-016
+    // §13.3 L1a: one owner — the surface word is derived from the
+    // guard's own arm, never re-decided at the report).
+    // ------------------------------------------------------------------
+
+    /// Build the request that renders the section for a family on
+    /// `overflow`: a fresh session (`turn_index == 1`, the surface's
+    /// own maximal view of the probe gate — any request it could be
+    /// asked about has these or is already blocked by a request-shaped
+    /// arm the surface does not name).
+    fn surface_req<'a>(now_us: i64) -> PlanRequest<'a> {
+        PlanRequest {
+            session: Some("surface"),
+            turn_index: 1,
+            state: PlanStateRow {
+                account: PlanAccount::Overflow,
+                since_us: 1_000_000,
+            },
+            now_us,
+            primary_allowed: true,
+            deferred_by_window: false,
+            overflow_spend: NanoUsd(0),
+        }
+    }
+
+    /// The word the surface would show, derived the way `/health`
+    /// derives it: evaluate the guard on the surface's reduced request
+    /// and take the arm's own `blocked_by_surface_word`.
+    fn surface_word(rule: &PlanFirstRule, now_us: i64) -> Option<&'static str> {
+        rule.probe_admitted(&surface_req(now_us))
+            .err()
+            .and_then(|e| e.blocked_by_surface_word())
+    }
+
+    #[test]
+    fn blocked_by_matrix_follows_the_guard_evaluation_order() {
+        let rule = PlanFirstRule::new(policy());
+        let deadline = 1_000_000 + 15 * 60 * 1_000_000;
+        // Before the deadline: `cooldown` (the first failing condition).
+        assert_eq!(surface_word(&rule, deadline - 1), Some("cooldown"));
+        // At/after the deadline, everything else healthy: admitted — the
+        // surface's `blocked_by: null` / `admitted: true`.
+        assert_eq!(surface_word(&rule, deadline), None);
+        assert_eq!(surface_word(&rule, deadline + 1), None);
+
+        // Each later condition alone, evaluated in the guard's order.
+        let mut p = policy();
+        p.recover = RecoveryMode::None;
+        let rule_none = PlanFirstRule::new(p);
+        assert_eq!(
+            surface_word(&rule_none, deadline + 1),
+            Some("recovery_disabled"),
+            "recover: none wins first, whatever the clock says"
+        );
+        let rule_demoted = PlanFirstRule::new(policy());
+        let mut r = surface_req(deadline + 1);
+        r.primary_allowed = false;
+        assert_eq!(
+            rule_demoted
+                .probe_admitted(&r)
+                .err()
+                .and_then(|e| e.blocked_by_surface_word()),
+            Some("primary_cooling_down")
+        );
+        let rule_window = PlanFirstRule::new(policy());
+        let mut r = surface_req(deadline + 1);
+        r.deferred_by_window = true;
+        assert_eq!(
+            rule_window
+                .probe_admitted(&r)
+                .err()
+                .and_then(|e| e.blocked_by_surface_word()),
+            Some("window_not_reset")
+        );
+
+        // The state arm and the time arm share the surface word `cooldown`:
+        // a family that never left `primary` has nothing to probe back to,
+        // and the section renders no `probe` member at all — but the guard
+        // arm is still nameable, and its word is `cooldown`, not a new one.
+        let mut r = surface_req(deadline + 1);
+        r.state.account = PlanAccount::Primary;
+        assert_eq!(
+            rule.probe_admitted(&r),
+            Err(ProbeBlockedBy::Cooldown),
+            "the state arm stays the `Cooldown` variant"
+        );
+        assert_eq!(
+            ProbeBlockedBy::Cooldown.blocked_by_surface_word(),
+            Some("cooldown")
+        );
+
+        // The request-shaped arms have no surface word — they are not
+        // columns of the report (§9.1's table), and the compiler enforces
+        // the exhaustiveness of that mapping above.
+        assert_eq!(ProbeBlockedBy::NoSession.blocked_by_surface_word(), None);
+        assert_eq!(
+            ProbeBlockedBy::NotSessionBoundary.blocked_by_surface_word(),
+            None
+        );
+    }
+
+    #[test]
+    fn cooldown_us_is_the_single_ms_to_us_conversion() {
+        // L1b's anchor: 900_000 ms (the store crate's own fixture value)
+        // is 900_000_000 µs — ×1_000, never ×1_000_000.
+        let mut p = policy();
+        p.cooldown = DurationVal(900_000);
+        assert_eq!(p.cooldown_us(), 900_000 * 1_000);
+        let rule = PlanFirstRule::new(p.clone());
+        assert_eq!(rule.cooldown_us(), 900_000 * 1_000);
+        // Saturation, not overflow.
+        p.cooldown = DurationVal(u64::MAX);
+        assert_eq!(p.cooldown_us(), i64::MAX);
+        // Zero stays zero (the rig default: deadline == since).
+        p.cooldown = DurationVal(0);
+        assert_eq!(p.cooldown_us(), 0);
     }
 }

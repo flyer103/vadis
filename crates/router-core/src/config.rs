@@ -813,6 +813,22 @@ pub struct PlanPolicyCfg {
     pub overflow_monthly_cap_usd: Option<CapUsdVal>,
 }
 
+impl PlanPolicyCfg {
+    /// The cooldown in unix **microseconds** — the single ms→µs conversion
+    /// (ADR-016 §13.3 L1b). `DurationVal` is milliseconds (§12.5); the
+    /// guard (`PlanFirstRule`), the `/health` probe deadline and the
+    /// `plan.switched` projection all call this method, so a unit drift
+    /// is impossible by construction. Saturates at `i64::MAX` (an absurd
+    /// config simply never admits a probe again) — a plain `as` cast
+    /// would wrap u64→i64 negative and admit every probe immediately,
+    /// which is the R5-F3 failure shape in miniature.
+    pub fn cooldown_us(&self) -> i64 {
+        i64::try_from(self.cooldown.0)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1_000)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterceptCfg {
