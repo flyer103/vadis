@@ -33,7 +33,7 @@ The contract clause and its measurement are in
 | POST | `/v1/chat/completions` | OpenAI chat completions |
 | POST | `/v1/responses` | OpenAI responses |
 | POST | `/v1/messages` | Anthropic messages |
-| GET | `/health` | liveness, plus what this process actually loaded |
+| GET | `/health` | liveness, plus what this process actually loaded (never requires a token) |
 
 The three protocol endpoints are equivalent: same decision pipeline, same accounting, and
 each mirrors its own protocol's upstream semantics. Which one you use is your client's
@@ -54,10 +54,17 @@ env_key  = "ROUTER_TOKEN"
 ```
 
 **hermes / claude code** are the same shape: override the base URL, keep the token in the
-environment. In every case the client's own API key is what router authenticates the
-provider call with — the key lives in the environment of the router process (the config
-file names the environment variable, never the value), and the token the client sends
-router is the client's own bearer token.
+environment.
+
+**What router does with the token a client sends it.** The token a client sends router is *not*
+the credential router uses upstream. Router ignores the client's `Authorization` / `x-api-key`
+header for provider calls: the credential it hands a provider is read from the environment of
+**the router process**, from the variable that provider's `api_key_env` names — the config names
+the variable, never the value. Inbound headers are read for one thing only, the session key
+sources of your `session` config, and they are never forwarded upstream. The client's token
+therefore has exactly one job: it is the client's key to **router itself**, and it only matters
+once inbound auth is turned on (next section). With auth off, whatever token your client sends
+is ignored.
 
 Set the model field to an explicit `provider/model` or to an alias defined in your config. What you
 write there is a **route**, not a provider model name: router resolves it and sends the provider its
@@ -67,6 +74,54 @@ alongside the native id it resolved to. Do **not** paste the bare native id into
 route and not an alias, so it resolves to nothing and comes back as `404 unknown_model`. `auto` is
 deliberately not enabled in v0.1: it returns an explicit error instead of guessing, and the selector
 slot is reserved for a plugin.
+
+## Requiring a token (inbound auth)
+
+Router can require a token from every client that talks to it. This is off unless you turn it on,
+and it is a one-line change to your config plus one environment variable:
+
+```bash
+# 1. make a token (any 32 random bytes are enough; the value is a secret)
+export ROUTER_TOKEN=$(openssl rand -hex 32)
+```
+
+```yaml
+# 2. name the variable in the router process's config — the name, never the value
+server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
+          auth_token_env: ROUTER_TOKEN }
+```
+
+3. Give the same value to each client. Both header forms are accepted, so either works:
+
+```bash
+curl -s http://127.0.0.1:8790/v1/chat/completions \
+  -H "Authorization: Bearer $ROUTER_TOKEN" -H 'content-type: application/json' \
+  -d '{"model":"<provider>/<model>","messages":[{"role":"user","content":"hi"}]}'
+
+curl -s http://127.0.0.1:8790/v1/chat/completions \
+  -H "x-api-key: $ROUTER_TOKEN" -H 'content-type: application/json' \
+  -d '{"model":"<provider>/<model>","messages":[{"role":"user","content":"hi"}]}'
+```
+
+For codex and hermes the token goes in the same variable their `env_key` names (the snippet above
+uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer`.
+
+Four things worth knowing before you rely on this:
+
+- **`GET /health` never needs a token.** It is the liveness probe; keep it token-free so your
+  supervisor (and your own `curl`) can see whether the process is up.
+- **A wrong or missing token is `401 unauthorized`**, in the same error shape as every other refusal
+  ([`docs/spec.md` §8](../docs/spec.md)). Nothing was sent upstream, so a `401` tells you about your
+  client's setup and never about a provider.
+- **Writing the key and leaving the variable unset is a startup refusal, not a quiet downgrade.**
+  If `ROUTER_TOKEN` is empty or missing in the router process's environment, `router serve` exits
+  with a non-zero code and says which variable it wanted. That is deliberate: a gateway that answers
+  "I could not find your token, so I skipped the check" is worse than one that refuses to start.
+- **No key at all = local, unauthenticated mode** — today's behaviour, and what a single-user
+  localhost setup wants. Nothing changes for existing configs.
+
+To rotate the token, change the value in the environment and restart the process; the token is read
+once at startup.
 
 ## What you get back
 
@@ -117,8 +172,10 @@ not. Backup, inspection and what the store does when it cannot be opened are in
 
 1. `export NO_PROXY=127.0.0.1,localhost` (and keep it for the client's whole lifetime).
 2. Start the gateway and confirm `curl -s http://127.0.0.1:8790/health` answers, and that
-   the report names the plugins, the providers whose keys are present, and the resolved
-   state path you expect.
+   the report names the plugins, the providers whose keys are present, whether inbound auth is
+   required (its `auth` member), and the resolved state path you expect. With auth on, check the
+   inverse in the same breath: `/health` still answers **without** a token, and a protocol endpoint
+   without one comes back `401 unauthorized`.
 3. Run **one full session**, not a single request: an agent's first turn misses the cache
    and the following turns should hit it. Watch the session in the trace, or run
    `router stats --config config.yaml --window 1h` over it, and confirm the first turn is
@@ -131,21 +188,27 @@ not. Backup, inspection and what the store does when it cannot be opened are in
 The three protocol endpoints are served today (the [README](../README.md) status lists what has
 landed). What still answers `501 not_implemented` is a route that would need cross-protocol
 translation — an inbound protocol that is not the provider's own `wire_api` (see
-[Protocols](protocols.md)). The two prerequisites above are the ones you need before any of it
-can reach router.
+[Protocols](protocols.md)). The proxy prerequisite above is the one you need before any of it can
+reach router at all; the token (if you turned inbound auth on) is what gets a request through the
+front door.
 
 ## Authoritative sources
 
 - [`docs/spec.md` §5](../docs/spec.md) — the access prerequisite, as a contract clause with
-  the measurement behind it.
+  the measurement behind it, and §5.1 for the token side of it.
 - [`docs/spec.md` §2](../docs/spec.md) — the inbound endpoint per protocol and the outbound
   selection rule.
 - [`docs/spec.md` §3](../docs/spec.md) — model selection semantics (`provider/model`,
   alias, `auto`).
+- [`docs/spec.md` §4.7](../docs/spec.md) — inbound token auth: the config key, the two accepted
+  header forms, the startup refusal when the environment variable is missing, the `/health`
+  exemption, and what a refused request leaves in the trace.
 - [`docs/spec.md` §4.1](../docs/spec.md) and [§4.5](../docs/spec.md) — where traces and the
   local store live, and how a relative path is resolved.
 - [`docs/spec.md` §6](../docs/spec.md) — the observation contract, including what the trace
   records about a session and a turn.
+- [`design/DESIGN.md` §12.11](../design/DESIGN.md) — where the guard, the comparison and the
+  refused request's trace record land in the code.
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the data plane and storage landing
   (streaming behaviour, config resolution, store).
 - [`README.md`](../README.md) — copy-pasteable client snippets and the `NO_PROXY` line.
