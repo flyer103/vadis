@@ -225,6 +225,31 @@ impl SqliteStore {
         Ok(store)
     }
 
+    /// Open an existing database **read-only** (spec §9.2: `router stats`
+    /// never writes, never migrates, and does not take the writer role
+    /// `serve` holds — a read-only connection is not the exclusive writer,
+    /// §4.5). No file is created: an absent, unreadable or too-new database
+    /// is an error the caller turns into an omitted figure, never a
+    /// mutation.
+    pub fn open_read_only(path: &Path) -> Result<Self, StoreError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| StoreError::Unopenable(format!("{}: {e}", path.display())))?;
+        let store = Self {
+            conn: Mutex::new(conn),
+        };
+        // Refuse a schema this binary cannot know (spec §9.2: an unreadable
+        // store omits the one log-held figure, it never guesses).
+        let supported = MIGRATIONS.last().map(|m| m.0).unwrap_or(0);
+        let current = store.schema_version()?;
+        if current > supported {
+            return Err(StoreError::SchemaTooNew {
+                found: current,
+                supported,
+            });
+        }
+        Ok(store)
+    }
+
     /// Apply forward-only migrations in order, one transaction each
     /// (the first write also satisfies the EXCLUSIVE-lock acquisition).
     fn migrate(&self) -> Result<(), StoreError> {

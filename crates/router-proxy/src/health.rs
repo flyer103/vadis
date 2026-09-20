@@ -1,4 +1,6 @@
-use router_core::config::RouterConfig;
+use router_core::config::{PlanPolicyCfg, RecoveryMode, RouterConfig};
+use router_core::plan::PlanAccount;
+use router_core::store::{Query, QueryRow, Store};
 use serde_json::{json, Map, Value};
 
 /// What `serve` actually loaded from one config file (CONF-25): built by
@@ -11,16 +13,22 @@ pub struct AppState {
     pub trace_dir: String,
     /// `<config dir>/state/router.db` (spec §4.5; fixed in v0.1).
     pub state_db: String,
-    /// For each provider: the `api_key_env` name and whether the env var was
-    /// present at startup. Key values never travel here (§12.10.2).
+    /// For each provider: the `api_key_env` name and whether the env var
+    /// was present at startup. Key values never travel here (§12.10.2).
     pub provider_keys: Vec<(String, String, bool)>,
+    /// The store `serve` opened: spec §9.1's `plan` section reads the
+    /// `plan_state` projection (and the two inputs of the probe gate that
+    /// are projections) through it — read-only queries on the writer's
+    /// own connection. `None` in assemblies without a store; the section
+    /// then reports a family that never switched.
+    pub store: Option<std::sync::Arc<dyn Store>>,
 }
 
 /// `/health` reports what was actually loaded (the R2-2b/2c contract,
 /// DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
 /// provider's key presence, the resolved trace/state paths, and the store
 /// status — honestly `pending` until R2-2c lands the store (then `open` or
-/// the refusal reason, CONF-23).
+/// the refusal reason, CONF-23). Spec §9.1 adds the `plan` member.
 pub fn health_json(state: &AppState) -> Value {
     let mut plugins = Vec::new();
     for p in &state.config.plugins {
@@ -57,7 +65,234 @@ pub fn health_json(state: &AppState) -> Value {
         // would have exited non-zero (CONF-23), so a running process reports
         // "open" — the refusal reason never reaches /health.
         "store": "open",
+        // Spec §9.1. `{"configured": false}` — and nothing else — when the
+        // loaded config declares no `plan_policy`: with no policy there is
+        // no family to name, and inventing one would be the "a state nobody
+        // can see" error in reverse.
+        "plan": plan_section_value(state),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Spec §9.1: `GET /health`'s `plan` section
+// ---------------------------------------------------------------------------
+
+/// The inputs the section needs beyond the config itself — every field is a
+/// projection read or a clock read, none is computed here (the same purity
+/// stance as `PlanFirstRule`, AGENTS constraint 2).
+pub(crate) struct PlanHealthInputs {
+    pub account: PlanAccount,
+    /// The last transition's instant; 0 for a family that never switched.
+    pub since_us: i64,
+    pub now_us: i64,
+    /// ADR-011's answer for the primary route right now.
+    pub primary_allowed: bool,
+    /// The local counter's only influence (spec §4.6 rule 3).
+    pub deferred_by_window: bool,
+}
+
+fn plan_section_value(state: &AppState) -> Value {
+    let Some(policy) = state.config.plan_policy.as_ref() else {
+        return json!({ "configured": false });
+    };
+    let inputs = gather_plan_inputs(state, policy);
+    plan_section(policy, &inputs)
+}
+
+/// Read the projections the section reports (spec §9.1's per-key semantics):
+/// the `plan_state` row (absent ⇒ `primary`, §4.6), ADR-011's cooldown for
+/// the primary provider, and the quota counter's window verdict.
+fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInputs {
+    let now = now_us();
+    let (account, since_us) = match state.store.as_ref().map(|s| {
+        s.query(Query::PlanState {
+            family: &policy.family,
+        })
+    }) {
+        Some(Ok(QueryRow::PlanState(Some(row)))) => (
+            if row.account == "overflow" {
+                PlanAccount::Overflow
+            } else {
+                PlanAccount::Primary
+            },
+            row.since_us,
+        ),
+        _ => (PlanAccount::Primary, 0),
+    };
+    PlanHealthInputs {
+        account,
+        since_us,
+        now_us: now,
+        primary_allowed: !provider_in_cooldown(state, &policy.primary.provider, now),
+        deferred_by_window: probe_deferred_by_window(state, policy, now),
+    }
+}
+
+/// The section itself, pure over (config, inputs) so the shape is unit-testable
+/// without a store. Every key is a read or an arithmetic on two known instants
+/// (`since + cooldown`); no figure here is an estimate (spec §9.1's closing
+/// rule, AGENTS constraint 5).
+pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Value {
+    let recover = if policy.recover == RecoveryMode::None {
+        "none"
+    } else {
+        "probe"
+    };
+    let common = |account: &str, since: Value, probe: Value| {
+        json!({
+            "configured": true,
+            "family": policy.family,
+            "primary": route_str(&policy.primary),
+            "overflow": route_str(&policy.overflow),
+            "recover": recover,
+            "account": account,
+            "since": since,
+            "probe": probe,
+        })
+    };
+    if i.account == PlanAccount::Primary {
+        // A family on its primary has nothing to probe back to (§4.6 rule 2:
+        // the probe IS the way back from `overflow`); `since` is null for a
+        // family that never switched (the absent `plan_state` row above).
+        return common("primary", Value::Null, Value::Null);
+    }
+    // Overflow: `probe.deadline` is recomputed from the **currently loaded**
+    // cooldown against `since_us` — the same recomputation the serving path
+    // does (ADR-014 item 10's mid-flight clause) — never the stored
+    // informational `until_us`, which a rebuild may have derived from a
+    // cooldown that has since changed. Always computable when `probe` is
+    // present, so no unprintable number exists here.
+    let deadline_us = i.since_us.saturating_add(cooldown_us(policy));
+    // `blocked_by` is the probe predicate's own evaluation order with the
+    // two request-shaped arms left out (§4.6 rule 2; DESIGN §12.10.8):
+    // `recovery_disabled` → `cooldown` → `primary_cooling_down` →
+    // `window_not_reset`, so the surface and the guard cannot disagree
+    // about *why*. "No session" / "not a session boundary" are properties
+    // of a request that does not exist yet and get no word here (§9.1's
+    // table: for every such request the claim would be false).
+    let blocked_by: Option<&str> = if policy.recover == RecoveryMode::None {
+        Some("recovery_disabled")
+    } else if i.now_us < deadline_us {
+        Some("cooldown")
+    } else if !i.primary_allowed {
+        Some("primary_cooling_down")
+    } else if i.deferred_by_window {
+        Some("window_not_reset")
+    } else {
+        None
+    };
+    let probe = json!({
+        "deadline": rfc3339_millis(deadline_us),
+        "admitted": blocked_by.is_none(),
+        "blocked_by": blocked_by,
+    });
+    common(
+        "overflow",
+        rfc3339_millis(i.since_us)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        probe,
+    )
+}
+
+fn route_str(r: &router_core::config::RouteSpec) -> String {
+    format!("{}/{}", r.provider, r.model)
+}
+
+/// `DurationVal` is milliseconds (§12.5); µs = ms × 1_000 — the same
+/// conversion `PlanFirstRule::cooldown_us` uses.
+fn cooldown_us(policy: &PlanPolicyCfg) -> i64 {
+    (policy.cooldown.0 as i64).saturating_mul(1_000)
+}
+
+fn now_us() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0)
+}
+
+/// RFC3339 UTC with millisecond precision (spec §9.1's `since` format).
+/// `None` for non-positive instants (a family that never switched).
+fn rfc3339_millis(us: i64) -> Option<String> {
+    if us <= 0 {
+        return None;
+    }
+    let s = (us / 1_000_000) as u64;
+    let ms = ((us % 1_000_000) / 1_000) as u64;
+    let (y, mo, d, minute, _) = router_core::peak::timestamp_parts(s, router_core::peak::Tz::Utc);
+    let (h, mi) = (minute / 60, minute % 60);
+    let sec = s % 60;
+    Some(format!(
+        "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{sec:02}.{ms:03}Z"
+    ))
+}
+
+// The two projection reads below mirror `Forwarder`'s private helpers
+// (`forward.rs` is outside R5-2's write-set). CONF-41 witnesses the surface
+// and the guard agree on the live path; a future change that touches both
+// files keeps them in step through that case.
+
+/// ADR-011's route-availability answer for the provider: a live cooldown
+/// row that has not expired refuses it right now.
+fn provider_in_cooldown(state: &AppState, provider: &str, now: i64) -> bool {
+    let Some(store) = &state.store else {
+        return false;
+    };
+    matches!(
+        store.query(Query::Cooldown {
+            provider,
+            model: None,
+        }),
+        Ok(QueryRow::Cooldown(Some(row))) if row.until_us > now
+    )
+}
+
+/// The local counter's window verdict (spec §4.6 rule 3, GAP-Q1): true when
+/// the primary provider declares a quota plan covering the family, that
+/// plan's current window has reached its allowance, and the plan's own
+/// window boundary has not passed yet — the probe waits for the boundary.
+fn probe_deferred_by_window(state: &AppState, policy: &PlanPolicyCfg, now: i64) -> bool {
+    let Some(store) = &state.store else {
+        return false;
+    };
+    let Some(provider) = state
+        .config
+        .providers
+        .iter()
+        .find(|p| p.name == policy.primary.provider)
+    else {
+        return false;
+    };
+    let Some(plans) = provider.quota.as_deref() else {
+        return false;
+    };
+    let now_s = (now.max(0) as u64) / 1_000_000;
+    for (plan_idx, q) in plans
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| q.models.iter().any(|m| m == &policy.family))
+    {
+        let qp = crate::accounting::quota_plan_from_cfg(q);
+        let router_core::quota::QuotaWindow::Monthly { reset_day } = qp.window;
+        let window_start_s = router_core::quota::window_start_for(now_s, reset_day);
+        let next_boundary_s = router_core::quota::next_reset(window_start_s, reset_day);
+        if now_s >= next_boundary_s {
+            continue;
+        }
+        let used = match store.query(Query::QuotaUsed {
+            provider: &provider.name,
+            plan_idx: plan_idx as u32,
+            window_start_us: (window_start_s as i64) * 1_000_000,
+        }) {
+            Ok(QueryRow::Count(n)) => n.max(0) as u64,
+            _ => 0,
+        };
+        if used >= qp.tokens {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn not_implemented_body(
@@ -69,4 +304,203 @@ pub(crate) fn not_implemented_body(
         format!("endpoint {endpoint} is not implemented in v0.1"),
         request_id,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use router_core::config::{CapUsdVal, DurationVal, OnPrimaryExhausted, RouteSpec};
+
+    fn policy(cooldown_ms: u64, recover: RecoveryMode) -> PlanPolicyCfg {
+        PlanPolicyCfg {
+            family: "m1".into(),
+            primary: RouteSpec {
+                provider: "p-plan".into(),
+                model: "m1".into(),
+            },
+            overflow: RouteSpec {
+                provider: "p-api".into(),
+                model: "m1".into(),
+            },
+            on_primary_exhausted: OnPrimaryExhausted::Spill,
+            recover,
+            cooldown: DurationVal(cooldown_ms),
+            overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+        }
+    }
+
+    fn inputs(account: PlanAccount, since_us: i64) -> PlanHealthInputs {
+        PlanHealthInputs {
+            account,
+            since_us,
+            now_us: since_us + 60 * 1_000_000, // a minute past the transition
+            primary_allowed: true,
+            deferred_by_window: false,
+        }
+    }
+
+    // §9.1's `configured: false` row: NO other key is present.
+    #[test]
+    fn no_policy_is_exactly_configured_false() {
+        let v = plan_section_value(&AppState {
+            config: no_policy_config(),
+            trace_dir: String::new(),
+            state_db: String::new(),
+            provider_keys: Vec::new(),
+            store: None,
+        });
+        assert_eq!(v, json!({ "configured": false }));
+    }
+
+    #[test]
+    fn primary_account_has_null_probe_and_null_since() {
+        let p = policy(900_000, RecoveryMode::Probe);
+        let v = plan_section(&p, &inputs(PlanAccount::Primary, 0));
+        assert_eq!(v["configured"], true);
+        assert_eq!(v["family"], "m1");
+        assert_eq!(v["primary"], "p-plan/m1");
+        assert_eq!(v["overflow"], "p-api/m1");
+        assert_eq!(v["recover"], "probe");
+        assert_eq!(v["account"], "primary");
+        assert_eq!(v["since"], Value::Null, "never switched ⇒ null");
+        assert_eq!(v["probe"], Value::Null, "nothing to probe back to");
+    }
+
+    // The card's own acceptance shape: deadline == since + cooldown, parsed
+    // back from the two RFC3339 strings rather than trusted.
+    #[test]
+    fn deadline_is_since_plus_current_cooldown() {
+        let since_us = 1_760_000_000_000_000i64; // arbitrary instant
+        let p = policy(15 * 60 * 1_000, RecoveryMode::Probe);
+        let v = plan_section(&p, &inputs(PlanAccount::Overflow, since_us));
+        assert_eq!(v["account"], "overflow");
+        let since = v["since"].as_str().expect("since is a string on overflow");
+        let deadline = v["probe"]["deadline"].as_str().expect("deadline");
+        assert_eq!(
+            parse_ms(deadline) - parse_ms(since),
+            15 * 60 * 1_000,
+            "deadline == since + the currently loaded cooldown"
+        );
+        // A minute past the transition is inside the 15m cooldown.
+        assert_eq!(v["probe"]["admitted"], false);
+        assert_eq!(v["probe"]["blocked_by"], "cooldown");
+    }
+
+    #[test]
+    fn blocked_by_follows_the_guard_order() {
+        let since_us = 1_760_000_000_000_000i64;
+        // Cooldown elapsed, but ADR-011 refuses the primary.
+        let p = policy(0, RecoveryMode::Probe);
+        let mut i = inputs(PlanAccount::Overflow, since_us);
+        i.primary_allowed = false;
+        let v = plan_section(&p, &i);
+        assert_eq!(v["probe"]["blocked_by"], "primary_cooling_down");
+        // Primary healthy, but the plan's window has not reset.
+        let mut i = inputs(PlanAccount::Overflow, since_us);
+        i.deferred_by_window = true;
+        let v = plan_section(&p, &i);
+        assert_eq!(v["probe"]["blocked_by"], "window_not_reset");
+        // Everything holds: admitted, blocked_by null.
+        let v = plan_section(&p, &inputs(PlanAccount::Overflow, since_us));
+        assert_eq!(v["probe"]["admitted"], true);
+        assert_eq!(v["probe"]["blocked_by"], Value::Null);
+        // recover: none wins over everything (evaluation order's first arm).
+        let p_none = policy(0, RecoveryMode::None);
+        let v = plan_section(&p_none, &inputs(PlanAccount::Overflow, since_us));
+        assert_eq!(v["recover"], "none");
+        assert_eq!(v["probe"]["blocked_by"], "recovery_disabled");
+        // And cooldown precedes primary_cooling_down: a demoted primary
+        // inside the cooldown still reports `cooldown` (the first failing
+        // condition is the honest answer).
+        let p15 = policy(15 * 60 * 1_000, RecoveryMode::Probe);
+        let mut i = inputs(PlanAccount::Overflow, since_us);
+        i.primary_allowed = false;
+        let v = plan_section(&p15, &i);
+        assert_eq!(v["probe"]["blocked_by"], "cooldown");
+    }
+
+    #[test]
+    fn rfc3339_anchors() {
+        // 2026-09-19T12:34:56Z is 1_789_821_296 (the store crate's own anchor).
+        let base_s: i64 = 1_789_821_296;
+        assert_eq!(
+            rfc3339_millis(base_s * 1_000_000).as_deref(),
+            Some("2026-09-19T12:34:56.000Z")
+        );
+        assert_eq!(
+            rfc3339_millis(base_s * 1_000_000 + 789_000).as_deref(),
+            Some("2026-09-19T12:34:56.789Z")
+        );
+        // Leap day, at whole milliseconds.
+        assert_eq!(
+            rfc3339_millis(951_868_799_000_000).as_deref(),
+            Some("2000-02-29T23:59:59.000Z")
+        );
+        assert_eq!(rfc3339_millis(0), None, "never-switched sentinel");
+    }
+
+    /// "YYYY-MM-DDTHH:MM:SS.mmmZ" → epoch milliseconds (test-side parser,
+    /// independent of the formatter under test).
+    fn parse_ms(ts: &str) -> i64 {
+        let (date, rest) = ts.split_once('T').expect("T");
+        let (time, _) = rest.split_once('.').expect("millis");
+        let mut d = date.split('-');
+        let y: i64 = d.next().unwrap().parse().unwrap();
+        let mo: u32 = d.next().unwrap().parse().unwrap();
+        let day: u32 = d.next().unwrap().parse().unwrap();
+        let mut t = time.split(':');
+        let h: i64 = t.next().unwrap().parse().unwrap();
+        let mi: i64 = t.next().unwrap().parse().unwrap();
+        let s: i64 = t.next().unwrap().parse().unwrap();
+        let ms: i64 = rest
+            .split_once('.')
+            .unwrap()
+            .1
+            .trim_end_matches('Z')
+            .parse()
+            .unwrap();
+        router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
+            + h * 3_600_000
+            + mi * 60_000
+            + s * 1_000
+            + ms
+    }
+
+    /// A config with no `plan_policy` — only the fields the section reads;
+    /// loader-level validation is router-cli's concern.
+    fn no_policy_config() -> RouterConfig {
+        use router_core::config::{
+            BreakevenCfg, CacheCfg, PluginCfg, RouterConfig, ServerCfg, SessionCfg, TraceCfg,
+        };
+        use std::collections::BTreeMap;
+        RouterConfig {
+            server: ServerCfg {
+                addr: "127.0.0.1:0".into(),
+                upstream_attempt_timeout: DurationVal(60_000),
+                request_timeout: DurationVal(600_000),
+            },
+            session: SessionCfg {
+                key_sources: vec!["prompt_cache_key".into()],
+                ttl: DurationVal(43_200_000),
+            },
+            cache: CacheCfg {
+                sticky: true,
+                breakeven: BreakevenCfg {
+                    enabled: true,
+                    min_remaining_turns: 2,
+                    safety_factor: router_core::config::MultiplierVal(1.1),
+                },
+            },
+            trace: TraceCfg {
+                dir: "./state/traces".into(),
+                rollover: router_core::config::Rollover::Hourly,
+            },
+            providers: Vec::new(),
+            aliases: BTreeMap::new(),
+            plugins: Vec::<PluginCfg>::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            state: None,
+        }
+    }
 }

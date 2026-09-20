@@ -33,7 +33,7 @@ pub async fn serve(config_path: &str) -> i32 {
     use axum::Json;
     use router_core::config::WireApi;
     use router_core::error::ErrorBody;
-    use router_core::store::Store as _;
+
     use router_proxy::{AppState, ForwardOutcome, Forwarder};
     use std::collections::HashMap;
 
@@ -57,9 +57,9 @@ pub async fn serve(config_path: &str) -> i32 {
     };
 
     // The store is a startup prerequisite (ADR-009 item 6/8): open and
-    // migrate it before anything else runs. Failure exits non-zero with the
-    // distinguishable reason — there is no in-memory degraded mode, and no
-    // "state off" switch in v0.1. Exit code 4 (2 = config, 3 = bind).
+    // migrate it before anything else runs. Failure exits non-zero with
+    // the distinguishable reason — there is no in-memory degraded mode, and
+    // no "state off" switch in v0.1. Exit code 4 (2 = config, 3 = bind).
     let store = match router_store::SqliteStore::open(&rc.state_db) {
         Ok(s) => s,
         Err(e) => {
@@ -67,9 +67,13 @@ pub async fn serve(config_path: &str) -> i32 {
             return 4;
         }
     };
+    // One shared handle: the Forwarder (writes + reads) and /health's plan
+    // section (reads, spec §9.1) go through the same single-connection
+    // store behind its mutex.
+    let store_dyn: std::sync::Arc<dyn router_core::store::Store> = std::sync::Arc::new(store);
     // config.applied is an intent/accounting event (ADR-010 item 2): FULL,
     // committed before the process starts serving on top of it.
-    let _config_applied = store.append(router_core::NewEvent {
+    let _config_applied = store_dyn.append(router_core::NewEvent {
         kind: router_core::EventKind::ConfigApplied,
         request_id: None,
         session: None,
@@ -77,7 +81,7 @@ pub async fn serve(config_path: &str) -> i32 {
         trace_ref: None,
         payload: serde_json::json!({
             "config_path": config_path,
-            "schema_version": store.schema_version().unwrap_or(0),
+            "schema_version": store_dyn.schema_version().unwrap_or(0),
         }),
     });
 
@@ -115,6 +119,10 @@ pub async fn serve(config_path: &str) -> i32 {
         trace_dir: rc.trace_dir.to_string_lossy().into_owned(),
         state_db: rc.state_db.to_string_lossy().into_owned(),
         provider_keys,
+        // Spec §9.1: the `plan` section reads the `plan_state` projection
+        // (and the probe gate's two projection inputs) through the writer's
+        // own connection — read-only queries, one mutex, no migration.
+        store: Some(store_dyn.clone()),
     });
 
     // The forwarding engine (DESIGN §12.10.5): one transport per provider
@@ -161,7 +169,7 @@ pub async fn serve(config_path: &str) -> i32 {
         config: rc.router.clone(),
         transports,
         api_keys,
-        store: Some(std::sync::Arc::new(store) as std::sync::Arc<dyn router_core::store::Store>),
+        store: Some(store_dyn.clone()),
         trace: Some(trace_writer),
         session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
     });
