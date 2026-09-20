@@ -166,12 +166,14 @@ while `serve` holds that state directory (see [Operations](operations.md)).
 
 1. **Prefix continuity** between adjacent turns in the same session. If it dropped, something at the
    *front* of the conversation changed: the client's own content (a different first message, an edited
-   turn), a translation, or a configuration change. In v0.1 no transform is wired, so the number is a
-   statement about the conversation and the routing, not about compression.
+   turn), a translation, a configuration change — or, if the transform mode is in use, a mid-session
+   mode or rule change (the drop is how that change is made visible). On the default path no transform
+   runs, so the number is a statement about the conversation and the routing.
 2. **The per-transform accounting** — which step claims what, and whether the claim is
-   verified or inferred. In v0.1 the list is empty on every request (`transform_mode` is
-   `passthrough`, `transforms` is empty), which is itself the check: a non-empty list means a mode was
-   asked for and something ran.
+   verified or inferred. In the default (passthrough) mode the list is empty on every request
+   (`transform_mode` is `passthrough`, `transforms` is empty), which is itself the check: a non-empty
+   list means a mode was asked for and something ran. Every figure it then shows is `inferred` until a
+   paired on/off measurement exists.
 3. **The failure mix** — how often the gateway switched routes, for which reason, and what
    each switch cost the cache.
 4. **The model choice** — last, not first. With prefix caching working, the model is the

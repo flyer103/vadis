@@ -26,17 +26,18 @@ stable**, and choosing a cheaper model is second-order.
   provider's own models; what happens when a quota runs out is a configured policy. The
   plan-first section below is the written version of this bullet.
 - **Breakeven**: the model-switch breakeven rule is implemented and is what prices a failover and a
-  plan spill (the `cache.breakeven` keys in your config). It does not yet judge a transform — there is
-  no transform to judge — and it will judge them by the same rule when one lands.
+  plan spill (the `cache.breakeven` keys in your config). It does not yet judge a transform — the
+  mode's per-step figures are estimates until the paired measurement exists — and it will judge them
+  by the same rule when one lands.
 - **The transform pipeline** and its priority order: cache fidelity, then input-side
-  payload reduction, then output-side discipline, then provider arbitrage (ADR-003). Every step is
-  declarative, individually accounted and reversible. **The input-side and output-side tiers are not
-  implemented in v0.1** (DESIGN §12.12 — the whole pipeline is `contract-only`): what is served is
-  cache fidelity plus arbitrage between your own accounts. Payload reduction is designed, gated behind
-  a mode the client asks for per request, and described below under *Payload compression: the mode
-  that is not on today*. Anything that rewrites history in place — summarising, trimming by position,
+  payload reduction, then output-side discipline, then provider arbitrage (ADR-003). The
+  **input-side tier is wired in v0.1 as an opt-in mode**: with a rule file configured and a
+  request that asks for the mode, router trims tool-output payloads (build logs, search hits,
+  diffs) by declared rules, records every edit in the trace and keeps the tee marker so nothing
+  is silently lost. Output-side discipline and provider arbitrage beyond route choice remain
+  future work. Anything that rewrites history in place — summarising, trimming by position,
   a rolling window — is deliberately out, because it breaks the upstream prefix cache and *raises* the
-  bill (ADR-019).
+  bill (ADR-019). How to turn the mode on is described below under *Payload compression*.
 - **Verified versus inferred**: only a measured usage difference counts as a saving, and a saving is a
   *difference between two worlds* — the request that ran and the one that did not. A local estimate is
   labelled `inferred` and can never be reported as measured; where no comparison happened, the honest
@@ -173,7 +174,7 @@ their fields and the rule that decides which of the two numbers a claim may rest
 provider's quota. It reacts to what the provider says and comes back when the provider allows
 it; the allowance itself stays the provider's business.
 
-## Payload compression: the mode that is not on today
+## Payload compression: an opt-in mode, off by default
 
 In an agent loop, the tokens are not mostly the conversation — they are the **tool output** piling up
 inside it: build logs, `grep` results, diffs, JSON returned by MCP servers. The client resends the whole
@@ -182,10 +183,12 @@ and router already has the rule *data* for it ([`rules/tool_output.toml`](../rul
 strip noise and progress lines, truncate over-long lines, cap the total, and leave a marker line saying
 what was dropped).
 
-**None of it runs in this version** — the engine behind those rules is `contract-only` (DESIGN §12.12),
-and the reason is not a delay. A content edit is in direct tension with the promise the rest of this
-chapter rests on (the bytes reaching the provider are the bytes the client sent, apart from two
-documented substitutions), so the contract was settled before the code. What it settles:
+**None of it runs unless your config and the request both ask for it** — the rules are inert as
+configured data until a request carries the mode header, and a request without the header is
+byte-identical to what the client sent no matter what the file says. A content edit is in direct
+tension with the promise the rest of this chapter rests on (the bytes reaching the provider are the
+bytes the client sent, apart from two documented substitutions), so the contract was settled before
+the code. What it settles:
 
 - **It is a mode the client asks for, per request** — a request header, not a setting. A request that
   does not ask is byte-identical to what the client sent, modulo those two substitutions (router-owned
@@ -206,9 +209,15 @@ documented substitutions), so the contract was settled before the code. What it 
   per-transform figure in `router stats` is an estimate and must be read as one: nothing here is a
   reported saving yet.
 
-When the mode lands, this chapter gains the "how to turn it on" paragraph and the report gains the
-measured per-transform saving. Until then, read the rule file as a plan rather than as behaviour: it is
-real, reviewed and tested as data, and nothing in the serving path executes it.
+To turn the mode on: declare the rule file in your config under `plugins:` (an entry of kind
+`builtin/transform_rules` with `config.rules_file` pointing at it — see
+[`config.example.yaml`](../config.example.yaml)), and have the **client** send
+`X-Router-Transform: transform` on the requests that want it. Both halves are required: the
+config decides which rules exist, the request decides whether they run, and a request without
+the header is byte-for-byte your own bytes no matter what is configured. Every figure a rule
+reports is an estimate until a paired on/off measurement exists, so the report gains its
+measured per-transform saving only when that measurement lands — until then the rule file's
+numbers are shapes, not savings.
 
 ## Authoritative sources
 
