@@ -19,6 +19,15 @@ record; a round that fails its gates leaves documentation and no broken code.
 - **The next step**: cross-protocol translation and the trace/observation wiring, which is what
   turns the cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a
   passing round means only the parts that were measurable passed.
+- **Decision models: evaluated, not adopted.** A small "structured decision" model — one call returns
+  every answer as a typed value with a probability — and a local open-weight alternative were measured
+  against each other and against our own hand-written error classifier, on our own task. Verdict:
+  **nothing is adopted.** A per-request decision has to fit inside the gateway's own latency budget,
+  and the option that answers from the cloud would also send the upstream's error text (which can quote
+  what you sent) off the machine. The strongest result is used **offline**: proposing improvements to
+  the routing tables that a human merges, and supplying the reference probabilities the semantic-
+  corroboration gate is currently missing. The conclusion, and the first step if it is ever adopted,
+  are in [`design/decisions/ADR-017`](../design/decisions/ADR-017-decision-model-evaluation-and-shadow-plan.md).
 - **The iteration loop**: the direction pool lists the candidate rounds (real-client
   smoke tests, trace capture and replay corpora, input-side compression, output-side
   discipline, quota-aware routing, cache robustness, cost reporting, price verification,
