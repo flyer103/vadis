@@ -1383,4 +1383,221 @@ mod tests {
         let err = SqliteStore::open(&dir.join("state/router.db")).unwrap_err();
         assert!(matches!(err, StoreError::Unopenable(_)), "got {err:?}");
     }
+
+    // (7) class guard: every Query variant's SQL actually executes on a
+    //     migrated database. This bug class has now struck three times
+    //     (R2's provider_cooldownWHERE, R4's sessions/quota_counters
+    //     reads): a backslash continuation whose next line starts with
+    //     whitespace silently loses that whitespace, the SQL becomes a
+    //     syntax error, and the serving path swallows it via .ok(). A
+    //     variant that returns Err here is unreadable in production,
+    //     whatever the unit tests say.
+    #[test]
+    fn every_query_variant_executes_without_sql_error() {
+        let dir = tempdir("query-exec");
+        let db = dir.join("state/router.db");
+        let s = SqliteStore::open(&db).unwrap();
+
+        // Seed one row per projection so the reads have data to find.
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::SessionBound,
+                request_id: Some("req-1"),
+                session: Some("sess-guard"),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({}),
+            })
+            .unwrap();
+        s.project(ProjectionWrite::SessionBound {
+            session_key: "sess-guard",
+            provider: "prov-a",
+            model: "glm-5.3",
+            ttl_us: 3_600_000_000,
+            last_event: ev,
+        })
+        .unwrap();
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::QuotaCharged,
+                request_id: Some("req-1"),
+                session: Some("sess-guard"),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({}),
+            })
+            .unwrap();
+        s.project(ProjectionWrite::QuotaCharged {
+            provider: "prov-a",
+            plan_idx: 0,
+            window_start_us: 0,
+            tokens: 105,
+            last_event: ev,
+        })
+        .unwrap();
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::FailoverTriggered,
+                request_id: Some("req-1"),
+                session: Some("sess-guard"),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({}),
+            })
+            .unwrap();
+        s.project(ProjectionWrite::ProviderCooldown {
+            scope: "provider",
+            provider: "prov-a",
+            model: "",
+            until_us: now_us() + 60_000_000,
+            reason: "quota_exhausted",
+            last_event: ev,
+        })
+        .unwrap();
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::PlanSwitched,
+                request_id: Some("req-1"),
+                session: Some("sess-guard"),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({
+                    "family": "glm-5.3",
+                    "from_account": "primary",
+                    "to_account": "overflow",
+                    "reason": "primary_exhausted",
+                    "probe": false,
+                    "cooldown_ms": 0i64,
+                }),
+            })
+            .unwrap();
+        s.project(ProjectionWrite::PlanSwitched {
+            family: "glm-5.3",
+            account: "overflow",
+            cooldown_us: 0,
+            last_event: ev,
+        })
+        .unwrap();
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::CostComputed,
+                request_id: Some("req-1"),
+                session: Some("sess-guard"),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({"route": "prov-b/glm-5.3", "total_nano": 200_000i64}),
+            })
+            .unwrap();
+        // cost.computed is its own projection sink (the events row is the
+        // read model for OverflowSpend); nothing further to project.
+
+        // Execute every Query variant. query_row maps "no row" to
+        // QueryRow::Count(0) semantics upstream, but a SQL *syntax* error
+        // surfaces as StoreError::Sql — exactly what this test exists to
+        // catch. The content of each row is other tests' business.
+        let cases: Vec<(&str, Result<QueryRow, StoreError>)> = vec![
+            (
+                "SessionBinding",
+                s.query(Query::SessionBinding {
+                    session_key: "sess-guard",
+                }),
+            ),
+            (
+                "SessionBindingsFor",
+                s.query(Query::SessionBindingsFor {
+                    provider: "prov-a",
+                    model: "glm-5.3",
+                }),
+            ),
+            (
+                "SessionRequestsSeen",
+                s.query(Query::SessionRequestsSeen {
+                    session_key: "sess-guard",
+                }),
+            ),
+            (
+                "QuotaUsed",
+                s.query(Query::QuotaUsed {
+                    provider: "prov-a",
+                    plan_idx: 0,
+                    window_start_us: 0,
+                }),
+            ),
+            (
+                "Cooldown",
+                s.query(Query::Cooldown {
+                    provider: "prov-a",
+                    model: Some("glm-5.3"),
+                }),
+            ),
+            (
+                "Cooldown(provider-wide)",
+                s.query(Query::Cooldown {
+                    provider: "prov-a",
+                    model: None,
+                }),
+            ),
+            (
+                "CacheLedgerBlocks",
+                s.query(Query::CacheLedgerBlocks {
+                    session_key: "sess-guard",
+                }),
+            ),
+            ("PlanState", s.query(Query::PlanState { family: "glm-5.3" })),
+            (
+                "OverflowSpend",
+                s.query(Query::OverflowSpend {
+                    family_route: "prov-b/glm-5.3",
+                    month_start_us: 0,
+                }),
+            ),
+            ("AllEvents", s.query(Query::AllEvents)),
+        ];
+        for (name, res) in cases {
+            let Ok(row) = res else {
+                panic!("Query::{name} returned Err — its SQL does not execute");
+            };
+            // Cooldown reads for a provider with a live row must find it;
+            // this pins the read the R2 fix made reachable.
+            if name == "Cooldown" {
+                assert!(
+                    matches!(row, QueryRow::Cooldown(Some(_))),
+                    "{name} lost the row"
+                );
+            }
+        }
+
+        // The two R4 fixes, pinned by content so a regression cannot hide
+        // behind "no Err": the seeded rows are actually visible.
+        let QueryRow::SessionBinding(Some(bind)) = s
+            .query(Query::SessionBinding {
+                session_key: "sess-guard",
+            })
+            .unwrap()
+        else {
+            panic!("SessionBinding must find the seeded row");
+        };
+        assert_eq!(bind.provider, "prov-a");
+        let QueryRow::Count(used) = s
+            .query(Query::QuotaUsed {
+                provider: "prov-a",
+                plan_idx: 0,
+                window_start_us: 0,
+            })
+            .unwrap()
+        else {
+            panic!("QuotaUsed returns Count");
+        };
+        assert_eq!(used, 105, "QuotaUsed must read the charged tokens, not 0");
+        let QueryRow::Count(spend) = s
+            .query(Query::OverflowSpend {
+                family_route: "prov-b/glm-5.3",
+                month_start_us: 0,
+            })
+            .unwrap()
+        else {
+            panic!("OverflowSpend returns Count");
+        };
+        assert_eq!(spend, 200_000, "OverflowSpend sums the seeded cost row");
+    }
 }
