@@ -399,6 +399,87 @@ mod tests {
     }
 
     #[test]
+    fn mid_session_never_probes_goes_where_state_says() {
+        // ADR-014 item 3's hard rule: a session already on overflow is
+        // never probed mid-session — every condition of the predicate
+        // holds except `turn_index == 1`, and the answer is still the
+        // state's route, not an experiment.
+        let rule = PlanFirstRule::new(policy());
+        let mut r = req();
+        r.turn_index = 2;
+        assert_eq!(
+            rule.probe_admitted(&r),
+            Err(ProbeBlockedBy::NotSessionBoundary)
+        );
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => {
+                assert_eq!(route.provider, "api");
+                assert_eq!(route.model, "glm-5.3");
+            }
+            other => panic!("mid-session must downgrade, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sessionless_never_probes_follows_current_state() {
+        // ADR-014 item 3: a sessionless request has no boundary to be
+        // admitted at — it follows the current account state and no more.
+        let rule = PlanFirstRule::new(policy());
+        let mut r = req();
+        r.session = None;
+        assert_eq!(rule.probe_admitted(&r), Err(ProbeBlockedBy::NoSession));
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => assert_eq!(route.provider, "api"),
+            other => panic!("sessionless on overflow must downgrade, got {other:?}"),
+        }
+        // On primary it passes on primary — the state, not a bet.
+        let mut r = req();
+        r.session = None;
+        r.state.account = PlanAccount::Primary;
+        match rule.decide(&r) {
+            PlanMove::Pass { route, probe } => {
+                assert_eq!(route.provider, "plan");
+                assert!(!probe);
+            }
+            other => panic!("sessionless on primary must pass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_counter_is_a_warning_never_a_reject_or_forced_spill() {
+        // ADR-014 item 2 / GAP-Q16: the local counter's verdict may not
+        // Reject a request and may not force a spill. Its only input to
+        // this rule is `deferred_by_window` (a probe deferral), so with
+        // the counter reading exhausted (`deferred_by_window: true`):
+        let rule = PlanFirstRule::new(policy());
+        // - a family still on its primary keeps serving on the primary
+        //   (the placeholder allowance refuses nothing);
+        let mut r = req();
+        r.session = None; // no probe to defer
+        r.state.account = PlanAccount::Primary;
+        r.deferred_by_window = true;
+        match rule.decide(&r) {
+            PlanMove::Pass { route, probe } => {
+                assert_eq!(route.provider, "plan");
+                assert!(!probe);
+            }
+            other => panic!("counter must not force a spill off primary, got {other:?}"),
+        }
+        // - a family on overflow keeps going where the state says —
+        //   deferring the experiment is not blocking the request.
+        let mut r = req();
+        r.deferred_by_window = true;
+        assert_eq!(
+            rule.probe_admitted(&r),
+            Err(ProbeBlockedBy::DeferredByWindow)
+        );
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => assert_eq!(route.provider, "api"),
+            other => panic!("counter must not reject an overflow request, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn family_membership() {
         let p = policy();
         assert!(route_in_family(
