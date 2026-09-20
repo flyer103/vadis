@@ -60,7 +60,7 @@ closes that hole without editing either historical ADR.
    `prefix_continuity` keep measuring conversation fidelity, not routing.
 7. **The translated path is bound by the same rule.** A translated cell's encoder must emit the route's
    model id as well; mutation (b) is the native path's form of it (lands with the translation matrix,
-   R2-3/R3; the native path is asserted by CONF-27).
+   the translation matrix's landing; the native path is asserted by CONF-27).
 
 ## Alternatives considered
 

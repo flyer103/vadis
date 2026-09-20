@@ -267,16 +267,16 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 
 | crate | Public surface (what is usable outside) | Permitted third-party dependencies | Lands in |
 |---|---|---|---|
-| `router-core` | domain model, cost/quota/breakeven pure functions, plugin traits, `DecisionRecord` | `serde`, `serde_json`(preserve_order+arbitrary_precision), `sha2` | from R1-2 |
-| `router-protocol` | codec for the 3 protocols, translation matrix, `Usage` normalization, `raw_json` (span-faithful editing) | `serde_json` | R2 |
-| `router-providers` | `ProviderClient` (wire capabilities, authentication, retry, SSE parsing) | `reqwest` (with a TLS feature — all real providers are https), `tokio`, `futures` | R2 |
-| `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | R2 |
-| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | R2/R3 |
-| `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | R2 |
-| `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | from R1-2 (serve stub) |
-| `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | R3 |
-| `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | R2 (ADR-009) |
-| `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | from R1-2, as an empty shell |
+| `router-core` | domain model, cost/quota/breakeven pure functions, plugin traits, `DecisionRecord` | `serde`, `serde_json`(preserve_order+arbitrary_precision), `sha2` | 2026-09-19 |
+| `router-protocol` | codec for the 3 protocols, translation matrix, `Usage` normalization, `raw_json` (span-faithful editing) | `serde_json` | 2026-09-19 |
+| `router-providers` | `ProviderClient` (wire capabilities, authentication, retry, SSE parsing) | `reqwest` (with a TLS feature — all real providers are https), `tokio`, `futures` | 2026-09-19 |
+| `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
+| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | 2026-09-19 / 2026-09-20 |
+| `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
+| `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | 2026-09-19 (serve stub) |
+| `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
+| `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | 2026-09-19 (ADR-009) |
+| `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | 2026-09-19, as an empty shell |
 
 - **`router-core` depends on no HTTP / protocol crate** (§2 hard constraint); how it is spot-checked: the
   dependency set of `cargo tree -p router-core` must be ⊆ the allowlist.
@@ -337,7 +337,7 @@ dependents into `Unloading` and wait for them to finish → ② run this fiber's
 LIFO → ③ withdraw the service bindings → ④ `Removed`. A failure goes to `Failed(err)` and **does not
 affect other fibers** (ADR-002's "failure isolation"). How it is asserted: after load → activate →
 unload, the service table and the intercept table must be **deep-equal** to what they were before
-loading (R2 test).
+loading (unit-tested).
 
 ### 12.3 Decision-pipeline types and the failure semantics of each step
 
@@ -413,14 +413,14 @@ impl RawBody {
   round trip is forbidden** (that is the most common way the byte boundary is broken).
 - router-owned fields = the `router_meta` echo + routing hints (spec §2). The deletion list is a
   **whitelist constant**; adding one requires changing that constant.
-- The separator semantics of deletion (pinned down in R1-2c): consecutive whitelist hits form one
+- The separator semantics of deletion (pinned down 2026-09-19): consecutive whitelist hits form one
   "segment"; the segment is removed as a whole and swallows the comma between **its tail** and the
   member that follows it (including the whitespace in between); the comma at the head of the segment is
   left to the previous retained member. Only when the first member is the start of a segment does it
   instead swallow the segment-tail comma. Invariant: any `Ok` output must be valid JSON, and the
   retained members are byte-for-byte equal to their input spans (the `deletion_position_matrix*` tests
   are a permanent regression matrix).
-- **Mutation (b) — `set_top_level_string`** (its settled semantics, so R2G2 and R2G3 cannot differ):
+- **Mutation (b) — `set_top_level_string`** (its settled semantics — ruled 2026-09-19 (`3074957`), implemented the same day (`233e05e`), so ruling and wiring cannot differ):
   - **Only the value span moves.** The member's key bytes, its position in the document, the separators
     and the whitespace around it, and every byte outside the member are byte-for-byte the input; the new
     value is encoded as a JSON string (`"` + RFC 8259 escaping + `"`) inserted in place of the old value
@@ -462,7 +462,7 @@ impl RawBody {
   (GAP-Q5: the spec does not define block granularity; this blueprint takes a "structural unit" rather
   than a fixed-length token bucket, because the former aligns with cache breakpoints.)
 
-### 12.4 Cost / quota / breakeven pure functions (the implementation target of R1-2)
+### 12.4 Cost / quota / breakeven pure functions (the implementation target of the 2026-09-19 bootstrap)
 
 ```rust
 /// Money is fixed-point: 1 nano-USD = 1e-9 USD. No f64 appears in the decision path or the trace.
@@ -536,7 +536,7 @@ pub enum SwitchVerdict { Switch { gain: NanoUsd, cost: NanoUsd },
 pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict;
 ```
 
-**Boundary cases (R1-2 must cover them, asserting the `SwitchVerdict` for each)**:
+**Boundary cases (the implementation must cover them, asserting the `SwitchVerdict` for each)**:
 
 | Case | Expectation |
 |---|---|
@@ -613,7 +613,7 @@ pub struct DecisionRecord {
     pub usage: Usage,                   // usage
     pub cost: CostRec,                  // cost
     pub result: ResultRec,              // result
-    pub errors: Vec<TraceError>,        // failure details (spec §6 "failure details"; written back in R1-4)
+    pub errors: Vec<TraceError>,        // failure details (spec §6 "failure details"; written back 2026-09-19)
 }
 
 pub struct IdentityRec { pub request_id: String,
@@ -688,7 +688,7 @@ spec §6 field groups → Rust paths (auditable line by line):
   request and records `errors[].kind = trace_write_failed`.
 - `schema_version` only increments on a **breaking** change; adding an optional field does not change the
   version (the autowork side tolerates unknown fields).
-- `decision.requested_model` is such an addition (R2G1's contract, implemented in R2G3): `null` when the
+- `decision.requested_model` is such an addition (contract ruled 2026-09-19 (`3074957`), implemented the same day (`233e05e`)): `null` when the
   request carried no parsable `model` (the field is present-and-null rather than omitted, the same stance
   as `prefix.continuity` — an absent value is written as absent, never as a plausible substitute).
 - `result.plan_switch` is such an addition too (ADR-014; spec §6): optional and present-and-null, so
@@ -717,7 +717,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 
 ### 12.7 Error semantics and the response surface (the landing of spec §8)
 
-> Since R1-4, the error-body schema and the `error.type`→HTTP table below **are already written into
+> Since the 2026-09-19 write-back, the error-body schema and the `error.type`→HTTP table below **are already written into
 > `docs/spec.md` §8** (the spec is the single source of truth for the external contract); this section
 > keeps `ErrorBody`'s Rust form and the implementation details, and the two must agree.
 
@@ -789,7 +789,7 @@ not written).
 | CONF-29 | §8·error behaviour | **a connection failure is not a timeout**: with the upstream pointed at a closed local port (connect refused, nothing written), `error.classified` carries `reason = "connect_failure"` and `action = "fallback_provider"` — never the `timeout` + `abort` pair the flattened no-status arm produced — and the client's terminal failure names the same class | `classify_upstream_error`'s no-status arm (§12.10.1's `transport_cause`, ADR-011 item 6 row 1) |
 | CONF-30 | §6 + §7·streaming observation | **the streaming path keeps the same books as the buffered path**: over a mock SSE upstream returning usage, a streamed request leaves one `DecisionRecord` with `session` resolved from `prompt_cache_key`, `cost.computed` written, and `session.bound` in the event log; the same session's second streaming turn records `prefix.continuity == 1.0` (a first-message swap drops it below 1.0); a stream whose usage never arrived keeps `usage_missing: true` and an absent cost. Pre-relay connect failure classifies `connect_failure` with `transport_cause` evidence, same as the buffered path | the stream relay's terminal accounting (`Accountant::finish_stream`, §12.10.5 note R3) |
 | CONF-31 | §6·prefix metric | **blocks are enumerated in the provider template order**: with a codex-shaped fixture (`input` serialized before `tools`, turn 2 appending items at the `input` tail), the trace's `prefix.blocks[]` kinds run `tools…, input_item…` and a pure append measures `prefix.continuity == 1.0`; mutating turn 1's first `input` item drops the ratio **below** 1.0 (the metric is bidirectionally movable, not a constant) | `extract_prefix_blocks`'s enumeration order (§12.10.6; the 2026-09-20 Plan A decision) |
-| CONF-32 | §4.6 / ADR-014 items 4–5·plan-first priority and the priced spill | while the account state is `primary` a family request is served by the primary route's own `base_url`; an upstream `403 quota_exhausted` spills it to the overflow route, the move is one `plan.switched` event (FULL), the trace carries `result.plan_switch` priced at the destination account's miss price, and `failover_from` names the route the failure moved the request off | plan-first routing (R4-2: the guard, the chain's family candidate, the `plan_state` projection) |
+| CONF-32 | §4.6 / ADR-014 items 4–5·plan-first priority and the priced spill | while the account state is `primary` a family request is served by the primary route's own `base_url`; an upstream `403 quota_exhausted` spills it to the overflow route, the move is one `plan.switched` event (FULL), the trace carries `result.plan_switch` priced at the destination account's miss price, and `failover_from` names the route the failure moved the request off | plan-first routing (2026-09-20, `fd3b3d6`: the guard, the chain's family candidate, the `plan_state` projection) |
 | CONF-33 | §4.6 hard rule 2 / ADR-014 item 3·the probe lives at the session boundary | both directions against each other: a session already on `overflow` does **not** probe mid-session (`turn_index == 2`, with `cooldown: 0s` so the cooldown cannot be the explanation); after the cooldown **and** the ADR-011 demotion have passed, a **new** session's first request is admitted as a probe on the primary, its success flips the family back (`plan.switched { reason: primary_recovered, probe: true }`) and pulls the already-spilled session back with it | same as CONF-32 |
 | CONF-34 | §4.6 / ADR-014 item 3·a sessionless request never probes | it has no boundary to be admitted at and probing per request is the flip item 1 forbids: it follows the current account state in both directions, and only the upstream moves the family back (`cooldown: 0s` throughout, so a cooldown cannot explain the negative) | same as CONF-32 |
 | CONF-35 | §4.6 hard rule 3 / ADR-014 item 2 (GAP-Q16)·the local counter is a warning | with a plan of exactly one request's chargeable tokens and `over_quota: block` — the most aggressive local verdict available — one served request makes the counter read exhausted while the mock upstream keeps answering 200s: the counter neither refuses a request nor forces a spill, and its one honest effect is deferring a probe to the plan's window boundary | same as CONF-32 |
@@ -797,18 +797,18 @@ not written).
 | CONF-37 | §4.6 / ADR-014 item 5·the switch path charges once | a turn that `403`s on the primary and is served by the overflow account walks the whole candidate chain, but `quota.charged` appears at most once for the primary's window and the overflow spend counts the single served response, not one per attempt. Asserted through the event-log rows `router stats` reads, not an internal builder | same as CONF-32 |
 | CONF-38 | §4.6 / ADR-014 item 7·`overflow_monthly_cap_usd` | the cap is compared against measured usage priced by the config table (the UTC month's overflow `cost.computed` rows) before the attempt: the request that crosses the cap is served, the next is refused with `cost_cap_exceeded` (403). Fixture: one served overflow response costs 184000 nano, so a cap of 0.000184 USD admits the first and refuses the second | same as CONF-32 |
 | CONF-39 | §4.6 / ADR-014 item 10's testability clause·the cooldown knob is usable | a `100ms` cooldown, end-to-end on the live path: while the window is open the boundary does **not** probe (the request is still served by the overflow account), and once it has passed the very same kind of boundary probes and wins — both halves, so neither can pass vacuously | `parse_duration`'s `ms` segment (config.rs) + the probe gate |
-| CONF-40 | §4.6 rule 4 / ADR-014 item 6·the account decides the books | an in-plan request (serving provider `account: coding_plan`) is 0 in every cost bucket and `total`, with `quota_after` still recorded when the provider declares a plan; an overflow request is priced at the model's real five-tier price. Both in one session, and again on a quota-less rig (a plan whose allowance is not published is still a plan), so a bug that zeroed everything or priced everything cannot pass | the in-plan accounting branch (`RouteAccounting.in_plan`, R4-6) |
-| CONF-41 | §9 (reporting surfaces)·`/health`'s plan section + `router stats` provenance | (a) a run whose config declares a `plan_policy` reports the family with `probe.deadline == since + cooldown`, and a run with no `plan_policy` has **no** fabricated plan section; (b) `router stats`' figures equal the sums computed independently from the trace rows and the event log in the case itself | `router stats` + `/health`'s plan section (R5-2) |
-| CONF-42 | §6 `plan_switch.reason: primary_cooling_down`·the third value's producing path | a request whose resolution lands on the family's `primary` while that provider is inside ADR-011's cooldown is served by the overflow route with `result.plan_switch { from: <primary>, to: <the route actually attempted>, reason: primary_cooling_down }` and `failover_from` naming the abandoned primary — and with **no** `plan.switched` event and the account state still `primary` (a cooldown may not move the account, §4.6 rule 3); the negative half: a healthy primary produces no such value | the pre-attempt cooldown displacement record (R5-4) |
+| CONF-40 | §4.6 rule 4 / ADR-014 item 6·the account decides the books | an in-plan request (serving provider `account: coding_plan`) is 0 in every cost bucket and `total`, with `quota_after` still recorded when the provider declares a plan; an overflow request is priced at the model's real five-tier price. Both in one session, and again on a quota-less rig (a plan whose allowance is not published is still a plan), so a bug that zeroed everything or priced everything cannot pass | the in-plan accounting branch (`RouteAccounting.in_plan`, 2026-09-20 `ba3636c`) |
+| CONF-41 | §9 (reporting surfaces)·`/health`'s plan section + `router stats` provenance | (a) a run whose config declares a `plan_policy` reports the family with `probe.deadline == since + cooldown`, and a run with no `plan_policy` has **no** fabricated plan section; (b) `router stats`' figures equal the sums computed independently from the trace rows and the event log in the case itself | `router stats` + `/health`'s plan section (2026-09-20, `7c3d83b`) |
+| CONF-42 | §6 `plan_switch.reason: primary_cooling_down`·the third value's producing path | a request whose resolution lands on the family's `primary` while that provider is inside ADR-011's cooldown is served by the overflow route with `result.plan_switch { from: <primary>, to: <the route actually attempted>, reason: primary_cooling_down }` and `failover_from` naming the abandoned primary — and with **no** `plan.switched` event and the account state still `primary` (a cooldown may not move the account, §4.6 rule 3); the negative half: a healthy primary produces no such value | the pre-attempt cooldown displacement record (2026-09-20, `582001f`) |
 | CONF-43 | spec §9.3·the documented command set | **docs ↔ CLI consistency, both directions**: every `router <subcommand>` mention in `book/` and `README.md` (direction: docs → CLI) must resolve in the real clap parser — as a served subcommand, or as a whitelisted deferral that sits inside a paragraph carrying a deferral marker; and every subcommand the parser accepts must be mentioned in the docs at least once (CLI → docs, whitelist-independent). The relation asserted is "documented set = parser's set, modulo explicitly marked deferrals", never a snapshot of either side | the CLI surface (`serve`, `stats`) + the two documentation sets |
 | CONF-44 | spec §6's `plan_switch` producer table (row ii)·the direction rule | **a state-driven displacement's `reason` is decided by destination, never by the account state read before the request**: on the third turn of an already-spilled family (nothing failed in the request, no probe admitted) the displacement to the overflow route says `primary_exhausted` with `failover_from: null` and `probe: false`; the spill round itself keeps `primary_exhausted` in the same run, so the two rows cannot drift | the guard's displacement record (both forwarding paths) |
 | CONF-45 | spec §4.7 + §8·inbound token auth | **the boundary guard, six ways**: ① no token → `401` (`unauthorized`, §8's body verbatim); ② a wrong token → `401`; ③ the right token, once as `Authorization: Bearer` and once as `x-api-key` → forwarded normally, with the upstream-visible bytes unchanged (the guard adds nothing to the body); ④ `GET /health` with no token → `200`; ⑤ **no `server.auth_token_env` ⇒ behaviour identical to before the key existed** (no auth anywhere); ⑥ the key written but its environment variable missing/empty ⇒ the process does not start (non-zero exit, the variable named on stderr). A 401's trace line — one record, `errors[].kind == "unauthorized"`, `usage_missing: true`, priced nowhere — is asserted with them | the start-up resolution (router-cli) + the guard (`router-proxy::auth`) + §12.11's record |
 
-**Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
+**Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
 as an edit to an existing case. The cases are asserted by the round that lands the
-implementation they name (R2-2b for CONF-25; R2-2c for CONF-20…24); their case files land
+implementation they name (the config-driven serve for CONF-25; the store landing for CONF-20…24); their case files land
 with those items and carry `#[ignore = "CONF-NN: depends on <item>"]` until then. The IDs
 are allocated once: they are not renumbered and not reused. CONF-20 is the case ADR-010's
 consequences explicitly invited ("the last event before an upstream call is
@@ -816,24 +816,24 @@ consequences explicitly invited ("the last event before an upstream call is
 failure-mode table (item 8); CONF-23 from ADR-009 item 6/item 8; CONF-24 from spec §4.5's
 join key; CONF-25 from spec §4 (no behaviour outside the config).
 
-**Allocation of CONF-28.** Allocated by the operator's R2G4 gap ruling (failed requests must still
-write their trace line; the ID was named on the R2G4 card). The shared terminal-failure recorder
+**Allocation of CONF-28.** Allocated by the operator's 2026-09-19 gap ruling (failed requests must still
+write their trace line; the ID was named on the allocating card). The shared terminal-failure recorder
 (`Accountant::finish_failure`, called once from the buffered path's `forward` wrapper) is
-deliberately a reusable seam: R2G8 routes the streaming path's terminal outcomes through the same
-function instead of a second inlined copy.
+deliberately a reusable seam: the streaming path's terminal outcomes were routed through the same
+function instead of a second inlined copy (2026-09-19, `3829104`).
 
-**Allocation of CONF-29.** Allocated by the operator's R2G5 ruling (a connection failure must not be
+**Allocation of CONF-29.** Allocated by the operator's 2026-09-19 ruling (a connection failure must not be
 classified `timeout`): the reason name `connect_failure` is defined in §8's failure-path clause above
 because ADR-011's v0.1 enum sketch lists no transport class — the ADR's *taxonomy* (item 6's evidence
 rows: "no connection was ever established" is a distinct, failover-eligible row) is what the class
 implements, so this is a wiring-table entry, not a new ADR decision.
 
-**Allocation of CONF-30.** Allocated by the operator's R2G8 ruling (the streaming path must run the
+**Allocation of CONF-30.** Allocated by the operator's 2026-09-19 ruling (the streaming path must run the
 same closing stages as the buffered path). Measured motivation: a real codex agent loop through the
 router left the trace directory **empty** for its streamed requests — session resolution,
 `session.bound`, prefix blocks, `cost.computed` and the `DecisionRecord` itself existed only on the
 buffered path, so codex/hermes traffic (which is permanently streaming) produced no analysis truth at
-all. R3 above already carries the design (the accounting rows commit at stream end, before the last
+all. §12.10.5 note R3 above already carries the design (the accounting rows commit at stream end, before the last
 byte is written through; a stream without usage is `usage_missing`, nothing charged); CONF-30 pins it,
 and pins the classification parity the same ruling ordered: a pre-relay connect failure on the stream
 path classifies `connect_failure` from `transport_cause` evidence, never `timeout`.
@@ -845,16 +845,16 @@ decision, not a loop outcome — ADR-012):
   `tests/conformance/tests/conf_26_https_capable_http_client.rs`; its row above is added retroactively, because a
   case that exists in `tests/conformance/` and not in this table is exactly the drift the "case IDs are a
   contract" rule below forbids.
-- **CONF-27** was allocated by the owner's R2G1 ruling (the outbound `model` is the provider-native id). Its file
-  landed with R2G1's contract commit `#[ignore]`d behind R2G3 (the wiring that makes it true), and **R2G3 closed
+- **CONF-27** was allocated by the owner's 2026-09-19 ruling (`3074957`; the outbound `model` is the provider-native id). Its file
+  landed with that contract commit `#[ignore]`d behind the wiring (`233e05e`) that makes it true, and **that wiring closed
   that ignore**: CONF-27 executes, and so do CONF-01/02/03, whose expected upstream body the same commit rewrote
   to the native id. Both rows above therefore describe cases that run, and no case file is parked any more.
 
-**Allocation of CONF-32…40 (ADR-014's plan-first routing) — satisfied by R4.** ADR-014 allocates no ID itself
+**Allocation of CONF-32…40 (ADR-014's plan-first routing) — satisfied 2026-09-20.** ADR-014 allocates no ID itself
 ("the implementing round allocates the conformance cases"), and it says nothing about which round implements the
-policy; the implementing round was **R4**, so R4 allocated the next free IDs with the case files: **CONF-32…39**
-by R4-3 (ten ADR-014 hard rules, red-then-green on the live serve path) and **CONF-40** by R4-6 (the in-plan-cost
-deviation closed). The allocation is a human decision (§12.8's own precedent for CONF-20…25), while the
+policy; the implementing round ran 2026-09-20 and allocated the next free IDs with the case files: **CONF-32…39**
+by that round's conformance card (ten ADR-014 hard rules, red-then-green on the live serve path) and **CONF-40** by the in-plan-cost
+deviation closure (`ba3636c`). The allocation is a human decision (§12.8's own precedent for CONF-20…25), while the
 obligation to have a witness is not — which is what this paragraph is for, now discharged row by row above. The
 candidate coverage ADR-014 named is witnessed one-to-one: a session displaced mid-flight keeps its account and
 does not probe (CONF-33 first half, CONF-34); a new session after the cooldown probes and records
@@ -863,10 +863,10 @@ refusing with a readable reason while `spill` continues (CONF-36 against CONF-32
 with `cost_cap_exceeded` (CONF-38); and `plan_switch`'s presence/absence against `failover_from` (CONF-32,
 CONF-34).
 
-**Allocation of CONF-41 and CONF-42 (R5's reporting round).** Allocated by the orchestrator's R5 cards, and
-recorded here in the same commit class as the contract they witness (R5-1, which writes spec §9 and §6's
-`plan_switch` producer table): **CONF-41** (`conf_41_*.rs`, R5-2 — the reporting surfaces of spec §9) and
-**CONF-42** (`conf_42_primary_cooling_down.rs`, R5-4 — the third `plan_switch` reason's producing path). Their
+**Allocation of CONF-41 and CONF-42 (the 2026-09-20 reporting round).** Allocated by the orchestrator's cards of that round, and
+recorded here in the same commit class as the contract they witness (`00e3934`, which writes spec §9 and §6's
+`plan_switch` producer table): **CONF-41** (`conf_41_*.rs`, `7c3d83b` — the reporting surfaces of spec §9) and
+**CONF-42** (`conf_42_primary_cooling_down.rs`, `582001f` — the third `plan_switch` reason's producing path). Their
 files land with those cards on the same round branch; until a file exists its row above is the allocation
 record, exactly as CONF-27's was while it was parked behind its implementation.
 
@@ -888,28 +888,28 @@ Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section a
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
 
-**R2-2d note — the failover chain walks routes, but never re-attempts a provider (spec §4.2).** The
+**Failover-chain note — the failover chain walks routes, but never re-attempts a provider (spec §4.2).** The
 chain walks "the next route **not yet attempted**" in list order, skipping routes of a provider
 already attempted in this request (the in-request form of ADR-011 item 4's provider-level demotion:
 a second attempt on a dead provider is the failure mode it designs out). Routes already attempted
 are never retried within one request — the "not yet attempted" rule subsumes per-route retries on
 the buffered path. The five CONF cases of this card (01/02/03/10-chain/14) are un-ignored by the
 round that lands the provider adapters and the buffered forwarding path; CONF-01/02/03 then kept their
-original assertion (the client's `model` string verbatim) until R2G1's ruling changed the contract: R2G1
-rewrote their expected upstream body to the native id and parked all three `#[ignore]`d behind R2G3,
+original assertion (the client's `model` string verbatim) until the 2026-09-19 ruling (`3074957`) changed the contract: it
+rewrote their expected upstream body to the native id and parked all three `#[ignore]`d behind the wiring (`233e05e`),
 which un-ignores them. The IDs, the files and the shape of the assertions are unchanged — the expected
 value moved with spec §2, which is the only thing that legitimately moves it.
 
 ### 12.9 Gaps and pending rulings (GAP-Q1…Q13)
 
-**This round changes no existing clause, it only registers.** Each entry gives the default this blueprint
-adopts and its blast radius. (From R1-4 on, the "write-back record" below the table governs: settled
+**This section changes no existing clause, it only registers.** Each entry gives the default this blueprint
+adopts and its blast radius. (From the 2026-09-19 write-back on, the "write-back record" below the table governs: settled
 items are written into the spec, unsettled ones stay registered.)
 
 | # | Gap | This blueprint's default | Impact |
 |---|---|---|---|
 | Q1 | the `quota` accounting convention is undefined (input only? including output? does cache_read count?) | `input_total + output` | quota routing (D5); the spec needs one more sentence |
-| Q2 | the trace on-disk path / rollover / retention are not in config (§3's `state/traces/` is an implementation detail) | `state/traces/YYYY-MM-DDTHH.jsonl`, hourly | R2's trace implementation; a config section may also be needed |
+| Q2 | the trace on-disk path / rollover / retention are not in config (§3's `state/traces/` is an implementation detail) | `state/traces/YYYY-MM-DDTHH.jsonl`, hourly | the trace implementation; a config section may also be needed |
 | Q3 | the storage and retrieval channel of `tee + retrieve` are undefined (ADR-003 requires them, the spec has no endpoint) | declare `tee` in the rule first, storage and the endpoint come later | the retrievability of P1 compression's (D3) savings |
 | Q4 | the override semantics of the rules' "three-level override" and whether an rtk-style trust gate is needed are undefined | the first hit takes effect; no trust gate is implemented | rule loading safety (D3) |
 | Q5 | the block granularity of `prefix_blocks[]` is undefined | a structural unit (message / tool definition / input item) | cache-metric comparability |
@@ -922,38 +922,38 @@ items are written into the spec, unsettled ones stay registered.)
 | Q12 | the `fallback` chain schema and its switching granularity (global / per model) are not given in spec §4 | a global ordered route list | failover (D5) |
 | Q13 | whether an alias may point at `auto` or carry parameter overrides | `provider/model` only | selection semantics (§3) |
 | Q14 | how `prefix_blocks[].tokens` is counted (spec §6 requires a per-block token count; the dependency allowlist has no tokenizer) | proportional attribution of the measured `usage.input_total` over the prefix region by block byte length; every figure derived from it (`prefix_tokens`, `reprefill_tokens`, `switch_cost_nano`) is therefore `inferred` (spec §7), while `prefix_continuity` — the fidelity metric — uses only block hashes and is unaffected | cache-metric comparability; the inferred/verified split (§12.10.6) |
-| Q15 | ADR-014's `account:` / `plan_policy:` are in spec §4 / §4.6 but not in `config.example.yaml` or the parser, and the example is the file an implementation reads directly (spec §4) | land both in the **same R3 round** that implements ADR-014; until then the example is exactly spec §4 minus these two keys (there is no drift in the other direction — it carries nothing the spec does not define) | `deny_unknown_fields` makes a key and its parser inseparable: an example ahead of the parser is an unservable file |
+| Q15 | ADR-014's `account:` / `plan_policy:` are in spec §4 / §4.6 but not in `config.example.yaml` or the parser, and the example is the file an implementation reads directly (spec §4) | land both in the **same round** that implements ADR-014; until then the example is exactly spec §4 minus these two keys (there is no drift in the other direction — it carries nothing the spec does not define) | `deny_unknown_fields` makes a key and its parser inseparable: an example ahead of the parser is an unservable file |
 | Q16 | which signal may `Reject` on a plan's allowance: today `over_quota: block` acts on the **local** counter, whose `tokens` may be a placeholder (Q1) | ADR-014 item 2 / §12.4's refinement: the local verdict warns and never gates, and the `Reject` follows upstream evidence | one refusal point moves behind upstream evidence; the local verdict stays visible in `cost.quota_after.verdict` |
 
-ADR disposition (R1-4): the three originally proposed ADRs have been written as the orchestrator ruled —
+ADR disposition (2026-09-19): the three originally proposed ADRs have been written as the orchestrator ruled —
 `ADR-006` "integer NanoUsd fixed-point accounting", `ADR-007` "span-faithful forwarding (no
 parse→reserialize round trip)", `ADR-008` "three-level rule override and the trust gate" (v0.1 does not
 enable the trust gate, and states the trigger condition for re-evaluating it). All three encode the types
 and conformance assertions already pinned down, so §12's type sketches no longer need changing.
 
-**R1-4 write-back record (2026-09-19; the spec has been changed, this section's table is kept as a
+**Write-back record (2026-09-19; the spec has been changed, this section's table is kept as a
 historical register)**
 
 | Disposition | Items |
 |---|---|
 | already written into `docs/spec.md` | Q2 → §4.1; Q3 → §4.4 (the retrieval channel explicitly marked "not implemented in this version"); Q5 → §6 "the definition of `prefix_blocks[]`"; Q10 → §6 "failure details" + §8 (the error body + the type→HTTP table); Q11 → §4.3; Q12 → §4.2 |
 | already ruled by ADR-008 | Q4 (override semantics = the first hit takes effect; the trust gate is not enabled in v0.1, and the trigger condition for re-evaluation is written in that ADR) |
-| takes the default value (not written into the spec; annotated in `config.example.yaml` comments) | Q1 (quota = `input_total + output`), Q7 (`p_stay = input_hit`), Q9 (over context → hand it to the upstream), Q13 (an alias is only `provider/model`), Q14 (added in R2-2a: prefix-block tokens are a proportional estimate of the measured usage, so everything derived from them is `inferred` — §12.10.6) |
+| takes the default value (not written into the spec; annotated in `config.example.yaml` comments) | Q1 (quota = `input_total + output`), Q7 (`p_stay = input_hit`), Q9 (over context → hand it to the upstream), Q13 (an alias is only `provider/model`), Q14 (registered 2026-09-19: prefix-block tokens are a proportional estimate of the measured usage, so everything derived from them is `inferred` — §12.10.6) |
 | deferred to later work | Q8 (the 400 criterion for `stateful_inbound`), Q6 (holidays not modeled = a known deviation) |
 
-**R2G7 write-back record (2026-09-20; ADR-014 landed, the spec has been changed, the table above stays a
+**Write-back record (2026-09-20, the ADR-014 landing; the spec has been changed, the table above stays a
 historical register)**
 
 | Disposition | Items |
 |---|---|
 | written into `docs/spec.md` | §4 (the `account` key and the `plan_policy` block), §4.6 (new: per-key semantics, defaults, the hard rules, the Guard-stage relation), §4.2 (the family's `overflow` precedes the chain), §6 (`result.plan_switch` + the switch's recompute-cost convention), §8 (the `quota_exceeded` and `cost_cap_exceeded` triggers) |
-| landed in `design/DESIGN.md` | §12.4 (which signal may refuse — the refinement of the local verdict), §12.5 (the parsing rules + `PlanPolicyCfg`), §12.6 (`ResultRec.plan_switch` / `PlanSwitchRec`, no `schema_version` move), §12.8 (the allocation owed by R3), §12.10.2 (the load-time validations), §12.10.4 (`plan_state` is DDL version 2), §12.10.5 (row 15 + note R5), §12.10.8 (the landing) |
-| newly registered by this round | Q15 (the config keys and the parser land together in R3), Q16 (the local verdict may not gate) |
+| landed in `design/DESIGN.md` | §12.4 (which signal may refuse — the refinement of the local verdict), §12.5 (the parsing rules + `PlanPolicyCfg`), §12.6 (`ResultRec.plan_switch` / `PlanSwitchRec`, no `schema_version` move), §12.8 (the allocation owed by the implementing round), §12.10.2 (the load-time validations), §12.10.4 (`plan_state` is DDL version 2), §12.10.5 (row 15 + note R5), §12.10.8 (the landing) |
+| newly registered by this round | Q15 (the config keys and the parser land together with ADR-014's implementation), Q16 (the local verdict may not gate) |
 | book | `book/cost-and-caching.md` gains the user-facing section (how to configure plan-first, when it spills, what a spill costs, and what a switch does to the upstream prefix cache) |
 
-### 12.10 Data plane and storage landing (the R2 blueprint)
+### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
-The sections above name the two R2 deliverables without landing them: the **data plane**
+The sections above name the two data-plane deliverables without landing them: the **data plane**
 (provider adaptation and the byte-level streaming relay, §12.10.1–§12.10.3) and the
 **store** (`trait Store`, the `events` table, its projections and the event wiring,
 §12.10.4–§12.10.6). §12.10.7 lands the one place the outbound body is mutated on the native
@@ -1079,17 +1079,17 @@ pub struct ResolvedConfig {
   It does **not** gate `router stats`: that command reads the config for `trace.dir` and accepts
   no requests, so a missing token variable leaves it working (the refusal belongs to the serving
   process, which is the only thing the token protects).
-- **`/health` reports what was actually loaded** (the R2-2b/2c contract): the plugin set
+- **`/health` reports what was actually loaded** (the config-driven contract): the plugin set
   (with `disabled` entries shown as disabled), each provider's key presence, **whether inbound
   auth is required and which variable holds the token (`auth: {required, env?}`, spec §9.1 —
   the name only, never the value)**, the resolved `trace_dir` and `state_db`, and the store's
-  status. Before R2-2c lands, the store's status is reported honestly as `pending` (the path is
+  status. Before the store landing, the store's status is reported honestly as `pending` (the path is
   resolved, opening is not implemented yet); once it lands, the value is `open` or the refusal
   reason (CONF-23). Because `serve` refuses to start when the token variable is missing (§4.7),
   a *running* process that reports `auth: {required: true}` has the token in hand: the member is
   a statement about the loaded config, and there is no reachable state in which it is `true` and
   unhonoured.
-- **No defaults outside the file.** The R1-2 stub's hardcoded `127.0.0.1:8790` address and
+- **No defaults outside the file.** The bootstrap stub's hardcoded `127.0.0.1:8790` address and
   hardcoded five-plugin list are removed and may not reappear in the serving path; the listen
   address, plugin set and roster come from the config and are asserted to do so by CONF-25.
 
@@ -1185,7 +1185,7 @@ CREATE TABLE events (                         -- the truth (ADR-010 item 2)
     schema_version INTEGER NOT NULL,                   -- the payload's own version, per row: old rows are never rewritten
     payload        TEXT    NOT NULL,                   -- JSON: the event's essentials
     body_hash      TEXT,                               -- first 16 hex of sha256(router-visible bytes); never the body
-    trace_ref      TEXT                                -- "<trace file>:<line>", written only where R2 allows it
+    trace_ref      TEXT                                -- "<trace file>:<line>", written only where §12.10.5 note R2 allows it
 );
 CREATE INDEX idx_events_request ON events(request_id, event_id);   -- replay one request, in order
 CREATE INDEX idx_events_kind_ts ON events(kind, ts_us);            -- the reason mix / counters over a window
@@ -1228,7 +1228,7 @@ CREATE TABLE provider_cooldown (              -- ADR-011 demotions: provider-wid
 );
 ```
 
-- **`plan_state` is DDL version 2, and it is not in the block above** (ADR-014, landing in R3). The family's
+- **`plan_state` is DDL version 2, and it is not in the block above** (ADR-014, landed 2026-09-20). The family's
   account state and its probe gate are a projection like the others; §12.10.8 gives its DDL and its rebuild
   rule. Its implementation adds one table through the forward-only migration list (`const MIGRATIONS`), and no
   existing row is rewritten (ADR-009 item 7) — which is why it is version 2 rather than an edit to the DDL
@@ -1306,7 +1306,7 @@ pub trait Store: Send + Sync {
   in exactly one allowlist row (§12.1), which is what keeps "events is the truth" a structural
   claim rather than a discipline.
 - **Measurement owed (ADR-009).** The numbers that authorize this design come from a Python
-  `sqlite3` harness; ADR-009's re-measurement clause makes it part of the R2-2 latency gate.
+  `sqlite3` harness; ADR-009's re-measurement clause makes it part of the data-plane latency gate.
   The gate's budget must name numbers measured through `rusqlite` in this real write path
   (including a long payload and a database that has grown all day), not the harness figures.
 
@@ -1533,15 +1533,15 @@ trace cannot explain. The reachable path cannot take that branch anyway: a body 
 or is not a string is answered `400 invalid_request` before selection (spec §8), and a resolved route
 always carries an id.
 
-**The translated path (R2-3).** The encoder of a translated cell must emit `route.model` for the same
+**The translated path.** The encoder of a translated cell must emit `route.model` for the same
 reason; mutation (b) is the native path's form of that rule. The native path is asserted by CONF-27
 (§12.8).
 
-#### 12.10.8 Plan-first routing (ADR-014; implemented in R4 on branch `round/4-plan-first`)
+#### 12.10.8 Plan-first routing (ADR-014; implemented 2026-09-20, `42917cb`…`ba3636c`)
 
 Spec §4.6 is the contract and ADR-014 is the why; this section is the landing — where the rule sits, what state
-it reads and writes, and where its trace and event fields come from. The keys and the parser landed in R4-1
-(GAP-Q15); the behaviour landed in R4-2. It adds no pipeline stage, no `error.type` and no spec §6 field group.
+it reads and writes, and where its trace and event fields come from. The keys and the parser landed in `42917cb`
+(GAP-Q15); the behaviour landed in `fd3b3d6`. It adds no pipeline stage, no `error.type` and no spec §6 field group.
 
 **The Guard rule form.** The policy is one rule of the resident quota guard (`builtin/quota_guard`, the
 `router-plugins` fiber the loader always keeps), evaluated **before** the allowance rule, and it answers with
@@ -1607,7 +1607,7 @@ displaced without a transition (the family is already spilled; a session is pull
 probe) and a transition can happen on a request that never completes.
 
 **Config.** §12.5's parsing rows and §12.10.2's validation rows are the checks. The keys and the parser landed
-in R4-1 together with `config.example.yaml` (GAP-Q15 closed): `deny_unknown_fields` means an example that
+in `42917cb` together with `config.example.yaml` (GAP-Q15 closed): `deny_unknown_fields` means an example that
 carries a key the parser does not know is an unservable file, so neither may get ahead of the other.
 
 **Surfaces.** `/health`'s `plan` section and `router stats` are **spec §9**: the first reports the family's

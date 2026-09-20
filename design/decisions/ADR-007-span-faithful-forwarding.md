@@ -40,7 +40,7 @@ fails and the cost actually rises.
    the prefix region (one message / one tool definition / one input item), and
    `hash = the first 16 hex chars of sha256(block raw bytes)` (spec §6). Therefore "deleting router-owned
    fields" changes no block hash — CONF-10 asserts exactly that.
-6. **The separator semantics of deletion (pinned by R1-2c)**: members that consecutively hit the whitelist
+6. **The separator semantics of deletion (pinned 2026-09-19)**: members that consecutively hit the whitelist
    form a "run"; the run is removed as a whole and swallows the comma between the **run's end** and its
    successor member (including the whitespace in between), while the comma at the run's start is left to the
    previous retained member; only when the first member is itself the start of the run does it swallow the
@@ -56,7 +56,7 @@ fails and the cost actually rises.
      semantically with the whitelist; the asymmetry is intentional.
 8. **Container deviation recorded honestly**: the blueprint wrote `RawBody(Bytes)`, but the `bytes` crate is
    not on `router-core`'s dependency allowlist, so `Vec<u8>` is used in practice; outbound zero-copy
-   (`Bytes::from(vec)`) happens in R2's proxy layer and the byte semantics are unaffected.
+   (`Bytes::from(vec)`) happens in the proxy layer and the byte semantics are unaffected.
 
 ## Rationale
 
@@ -72,7 +72,7 @@ fails and the cost actually rises.
 ## Consequences
 
 - "native passthrough's upstream-visible bytes == the client's bytes (minus the whitelist fields)" becomes an
-  assertable contract (CONF-10 already has real executing cases; the link-level assertion comes in R2). The
+  assertable contract (CONF-10 already has real executing cases; the link-level assertion comes with the data-plane landing). The
   `deletion_position_matrix*` test matrix and the adversarial input table are a **permanent regression**; new
   deletion semantics must extend them.
 - The parse view the decision relies on (`JsonDoc`, order-preserving) is used for **decisions only** and is

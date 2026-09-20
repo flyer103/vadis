@@ -112,7 +112,7 @@ What the measurement decides:
   0.100 / max 0.607 ms and a 16-row group commit p99 of 0.077 ms; the re-measurement above lands within one
   Python-call of it, so the conclusion does not depend on the harness.
 
-**Re-measurement is owed, and it is part of the R2-2 latency gate.** These numbers come from a
+**Re-measurement is owed, and it is part of the data-plane latency gate.** These numbers come from a
 Python `sqlite3` harness over 410 B rows. The write path that actually ships (`rusqlite` inside
 `crates/router-store`, real event payloads, a database that grows all day) must be re-measured as
 part of that gate, including one case with a much longer payload and one against a larger database
