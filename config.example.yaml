@@ -82,6 +82,8 @@ providers:
   # must handle the spec §2 lossy list item by item.
 
   - name: deepseek
+    # Region: the cited prices come from the platform's international docs
+    # (api-docs.deepseek.com, USD); no CN-mainland endpoint is configured here.
     base_url: https://api.deepseek.com            # official OpenAI-Format BASE URL
                                                   #   actual endpoints: /chat/completions, /responses
                                                   #   official Anthropic-Format BASE: https://api.deepseek.com/anthropic
@@ -124,6 +126,16 @@ providers:
   # model id appears once per account and the two entries differ in base_url,
   # wire_api and key. `plan_policy` at the end of this file names the pair.
   - name: zai-plan
+    # Region: international — api.z.ai; prices in USD from docs.z.ai.
+    # CN mainland (comment only; entries land with the currency round):
+    #   general endpoint:      https://open.bigmodel.cn/api/paas/v4
+    #   Coding Plan endpoint: https://open.bigmodel.cn/api/coding/paas/v4
+    #     (the official docs are explicit: the Coding Plan must use the
+    #     dedicated coding endpoint, not the general one)
+    #   CN price page: https://open.bigmodel.cn/pricing (table in CNY)
+    #   TODO: the CN entries' price tables land with the currency (CNY) round —
+    #   CNY prices are never FX-converted into this file's USD basis
+    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
     base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page: a coding plan may hand out
                                                   #   its own base URL instead of the metered entry's
@@ -161,6 +173,9 @@ providers:
         #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
 
   - name: zai
+    # Region: international — api.z.ai. The provider's CN-mainland endpoints
+    # and price page: see the comment block on zai-plan above (same provider,
+    # two regions; the active entry here is the international one).
     base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
                                                   #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
     api_key_env: ZAI_API_KEY
@@ -203,6 +218,15 @@ providers:
     # `overflow` in `plan_policy` at the end of this file.
 
   - name: moonshot
+    # Region: international — api.moonshot.ai; prices in USD from
+    # platform.moonshot.ai. CN mainland (comment only; entries land with the
+    # currency round):
+    #   pay-as-you-go endpoint: https://api.moonshot.cn/v1
+    #   CN price page: https://platform.moonshot.cn/docs/pricing/chat
+    #     (table in CNY)
+    #   TODO: the CN entries' price tables land with the currency (CNY) round —
+    #   CNY prices are never FX-converted into this file's USD basis
+    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
     base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
     api_key_env: KIMI_API_KEY                      # Kimi's official quickstart examples use MOONSHOT_API_KEY;
                                                   #   this repo names it KIMI_* per owner naming, so it is never
@@ -237,6 +261,20 @@ providers:
   # policy routes yet. Point `plan_policy` at it (family: the model id below)
   # to make it the preferred account instead of zai-plan.
   - name: moonshot-plan
+    # Region: international — api.moonshot.ai. CN mainland (comment only;
+    # entries land with the currency round):
+    #   coding subscription endpoint: https://api.kimi.com/coding/v1
+    #     (Anthropic form: https://api.kimi.com/coding/)
+    #   CN price page: https://platform.moonshot.cn/docs/pricing/chat
+    #     (table in CNY)
+    #   TODO: the CN entry's price table lands with the currency (CNY) round —
+    #   CNY prices are never FX-converted into this file's USD basis
+    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
+    # Kimi model ids differ per platform: the coding endpoint serves
+    # k3 / k3-256k / kimi-for-coding, the platform endpoint serves
+    # kimi-k3 / kimi-k2.7-code. Pairing one family across the two platforms
+    # therefore needs an id mapping (a spec change, another round) — which is
+    # why this round configures no plan_policy for Kimi.
     base_url: https://api.moonshot.ai/anthropic   # the Anthropic-compatible BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page (the metered entry above uses /v1)
     api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered moonshot entry above
