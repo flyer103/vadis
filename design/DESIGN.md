@@ -570,6 +570,13 @@ pub struct PlanPolicyCfg { pub family: String, pub primary: RouteSpec, pub overf
 
 /// spec §4.1; `Rollover::Hourly` is the only value in v0.1 → the file `<dir>/YYYY-MM-DDTHH.jsonl` (UTC).
 pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
+
+/// spec §4's `server` section, including §4.7's one added key. `auth_token_env` carries the **name** of
+/// an environment variable of this process; the value is read once by `router-cli` at startup and never
+/// reaches this type or `router-proxy` — `router-core` stays I/O-free (§12.10.2's split), and the token
+/// value never enters a config struct, a log line, a trace field or an event payload (§12.11).
+pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationVal,
+    pub request_timeout: DurationVal, pub auth_token_env: Option<String> }   // absent ⇒ no inbound auth
 ```
 
 | Point | Rule |
@@ -586,7 +593,8 @@ pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 | `trace.rollover` | only `hourly` is accepted (any other value = a load error); retention is **not** a config key (v0.1 does no automatic cleanup) |
 | `state` | **not** a config key in v0.1: the store path is fixed at `<config dir>/state/router.db` (spec §4.5, ADR-009); a `state:` section that moves the file (as `trace.dir` does) is an additive future key |
 | unknown fields | `deny_unknown_fields` → **errors out and exits** (no silent ignore: config is written by hand, and "I changed it but it did not take effect" is the most expensive silent failure) |
-| secrets | only `api_key_env`; when the env var is missing at startup → that provider is marked unavailable and reported on `/health` (it does not block other providers) |
+| `server.auth_token_env` (spec §4.7) | a plain string, or absent. Absent ⇒ **no inbound auth** (today's behaviour, and the backward-compatibility clause). Present ⇒ the named env var must exist **and be non-empty** or the process refuses to start — but that check is **not** this parser's: `router-core` never reads the environment (§12.10.2's split), so this row fixes only that the key is a string the parser carries through. The startup refusal and the empty-string rule are §12.11 |
+| secrets | only `api_key_env`; when the env var is missing at startup → that provider is marked unavailable and reported on `/health` (it does not block other providers). `auth_token_env` is the one exception: a missing value there refuses the start (§12.11) |
 | `disabled: true` | that fiber is not loaded (no error); `/health` lists it under `plugins_disabled` |
 | defaults | only those the spec §4 states explicitly (`safety_factor: 1.2`, `sticky`, `over_quota`) have a default; everything else is **not enabled unless written** |
 
@@ -642,9 +650,16 @@ pub struct PlanSwitchRec { pub from: String, pub to: String, pub reason: &'stati
 /// The landing of spec §6 "failure details": the **internal** failure details (possibly several), which are
 /// not the same thing as the single error response given to the client in §12.7; the two share the kind vocabulary.
 /// No failure = an empty array (not omitted).
-pub struct TraceError { pub kind: TraceErrorKind, pub message: String,
+///
+/// `kind` is a `String` produced by the one function that ties the two vocabularies together,
+/// `TraceError::kind_for_code(ErrorCode)`: `transform_error` / `upstream_error` / `trace_write_failed` /
+/// `internal`, plus §12.11's `unauthorized`. Its `match` is exhaustive, so a new `error.type` in §12.7's
+/// table cannot land without its trace word landing with it.
+/// *(This sketch used to write an `enum TraceErrorKind`; the implementation has always used the string
+/// mapping above, so the sketch was the drift — corrected here rather than left as a type that does not
+/// exist, which is the "documented but unreachable" defect in reverse.)*
+pub struct TraceError { pub kind: String, pub message: String,
     pub plugin: Option<String>, pub details: Option<serde_json::Value> }
-pub enum TraceErrorKind { TransformError, UpstreamError, TraceWriteFailed, Internal }
 ```
 
 spec §6 field groups → Rust paths (auditable line by line):
@@ -682,6 +697,14 @@ spec §6 field groups → Rust paths (auditable line by line):
   `plan_switch`) — and §12.10.8 lands the rest.
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
+- `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
+  **before** §12.10.5 row 1 — the parse / route / capability rejections already write it, and §12.11's
+  inbound-auth refusal is the same class (spec §6's pre-pipeline record). `0` can never collide with a real
+  row (`events.event_id` starts at 1), and the sentinel is what makes "no state-truth row" *visible* instead
+  of absent. **Scope of CONF-24's join assertion**: the row reads "every `DecisionRecord` carries an
+  `event_id` that exists in `events`" — read it as *every record of a request that entered the pipeline*
+  (§12.10.5 row 1's own words), which is the only reading under which it is true today. Its assertion, its
+  file and its ID are untouched; this bullet exists so the sentinel is a decision rather than an accident.
 - Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
   the trace, with no extra state needed:
   `cache_hit_rate = Σusage.input_cached / Σusage.input_total`;
@@ -713,6 +736,7 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 | `unknown_provider` `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `auto_not_supported` | 400 | `model: auto` (v0.1; the hint says a plugin takes it over, spec §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` |
+| `unauthorized` | 401 | the request carried no token, or a token that does not match `server.auth_token_env`'s value (spec §4.7; the error body's `details.header` names which header was read). Decided at the boundary, before the pipeline — it starts no failover walk (§12.11) |
 | `cost_cap_exceeded` | 403 | guard cost cap hit |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted |
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
@@ -725,7 +749,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-42`)
+### 12.8 conformance case table (`CONF-01…CONF-45`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -776,6 +800,9 @@ not written).
 | CONF-40 | §4.6 rule 4 / ADR-014 item 6·the account decides the books | an in-plan request (serving provider `account: coding_plan`) is 0 in every cost bucket and `total`, with `quota_after` still recorded when the provider declares a plan; an overflow request is priced at the model's real five-tier price. Both in one session, and again on a quota-less rig (a plan whose allowance is not published is still a plan), so a bug that zeroed everything or priced everything cannot pass | the in-plan accounting branch (`RouteAccounting.in_plan`, R4-6) |
 | CONF-41 | §9 (reporting surfaces)·`/health`'s plan section + `router stats` provenance | (a) a run whose config declares a `plan_policy` reports the family with `probe.deadline == since + cooldown`, and a run with no `plan_policy` has **no** fabricated plan section; (b) `router stats`' figures equal the sums computed independently from the trace rows and the event log in the case itself | `router stats` + `/health`'s plan section (R5-2) |
 | CONF-42 | §6 `plan_switch.reason: primary_cooling_down`·the third value's producing path | a request whose resolution lands on the family's `primary` while that provider is inside ADR-011's cooldown is served by the overflow route with `result.plan_switch { from: <primary>, to: <the route actually attempted>, reason: primary_cooling_down }` and `failover_from` naming the abandoned primary — and with **no** `plan.switched` event and the account state still `primary` (a cooldown may not move the account, §4.6 rule 3); the negative half: a healthy primary produces no such value | the pre-attempt cooldown displacement record (R5-4) |
+| CONF-43 | spec §9.3·the documented command set | **docs ↔ CLI consistency, both directions**: every `router <subcommand>` mention in `book/` and `README.md` (direction: docs → CLI) must resolve in the real clap parser — as a served subcommand, or as a whitelisted deferral that sits inside a paragraph carrying a deferral marker; and every subcommand the parser accepts must be mentioned in the docs at least once (CLI → docs, whitelist-independent). The relation asserted is "documented set = parser's set, modulo explicitly marked deferrals", never a snapshot of either side | the CLI surface (`serve`, `stats`) + the two documentation sets |
+| CONF-44 | spec §6's `plan_switch` producer table (row ii)·the direction rule | **a state-driven displacement's `reason` is decided by destination, never by the account state read before the request**: on the third turn of an already-spilled family (nothing failed in the request, no probe admitted) the displacement to the overflow route says `primary_exhausted` with `failover_from: null` and `probe: false`; the spill round itself keeps `primary_exhausted` in the same run, so the two rows cannot drift | the guard's displacement record (both forwarding paths) |
+| CONF-45 | spec §4.7 + §8·inbound token auth | **the boundary guard, six ways**: ① no token → `401` (`unauthorized`, §8's body verbatim); ② a wrong token → `401`; ③ the right token, once as `Authorization: Bearer` and once as `x-api-key` → forwarded normally, with the upstream-visible bytes unchanged (the guard adds nothing to the body); ④ `GET /health` with no token → `200`; ⑤ **no `server.auth_token_env` ⇒ behaviour identical to before the key existed** (no auth anywhere); ⑥ the key written but its environment variable missing/empty ⇒ the process does not start (non-zero exit, the variable named on stderr). A 401's trace line — one record, `errors[].kind == "unauthorized"`, `usage_missing: true`, priced nowhere — is asserted with them | the start-up resolution (router-cli) + the guard (`router-proxy::auth`) + §12.11's record |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -842,6 +869,20 @@ recorded here in the same commit class as the contract they witness (R5-1, which
 **CONF-42** (`conf_42_primary_cooling_down.rs`, R5-4 — the third `plan_switch` reason's producing path). Their
 files land with those cards on the same round branch; until a file exists its row above is the allocation
 record, exactly as CONF-27's was while it was parked behind its implementation.
+
+**Allocation and registration of CONF-43, CONF-44 and CONF-45.** These three rows are recorded here
+rather than in the paragraph of the change that allocated each one, because the registry *is* the
+contract and a case file that exists without a row is exactly the drift this section forbids:
+
+- **CONF-43** (`conf_43_cli_docs_consistency.rs`) and **CONF-44** (`conf_44_switch_reason_by_direction.rs`)
+  landed with the 2026-09-20 reporting/plan work and their rows were **missing from this table** until
+  the 2026-09-20 inbound-auth round added them. That is a registry gap closed, not a new decision: both
+  rows describe assertions that already execute, and neither file changes. The lesson is this section's
+  own rule, one file late.
+- **CONF-45** (`conf_45_*.rs`) is allocated by the operator's 2026-09-20 inbound-auth round, and its file
+  lands with the implementation it witnesses — the same change class as the contract it asserts (spec §4.7,
+  written by that round's contract card). Until the file exists, this row is the allocation record, the
+  parking rule CONF-27 and CONF-41/42 already used, and its ID is spent: not renumbered, not reused.
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -1023,15 +1064,31 @@ pub struct ResolvedConfig {
   | the §12.5 parsing rules for duration / context / price / peak multiplier | the §12.5 error verbatim, with the field path |
   | spec §4.6's `account` and `plan_policy` (ADR-014): `account` ∈ {`coding_plan`, `api`}; `primary` and `overflow` are distinct roster routes whose model id equals `family`; `primary`'s provider is `coding_plan` and `overflow`'s is `api`; the family's model is covered by the plan's `quota.models` when the primary provider declares a plan; at most one policy, one per family | an unknown `account` value; a `primary` on a metered provider; `primary == overflow`; a family that is not both routes' model id; a plan that does not cover the family — each named with the field path |
   | no unknown key — **including a `state:` section** | the message states that the state path is fixed in v0.1 (spec §4.5) and that a `state:` section is an additive future key |
+  | `server.auth_token_env` (spec §4.7): when the key is written, the environment variable it names must be **present and non-empty** | `server.auth_token_env names ROUTER_TOKEN, which is unset; refusing to start (starting without it would serve unauthenticated on a config that asked for a token)` — exit code **4**, the code the other unsatisfiable-environment prerequisites use (store, trace dir), not 2 (a config that cannot be parsed) |
 
 - **A missing `api_key_env` value is not a load error** (§12.5): that provider is marked
   unavailable and reported by `/health`; the rest of the roster still serves. A missing *key*
-  in the file is, of course, a load error.
+  in the file is, of course, a load error. **`auth_token_env` is the one exception, and
+  deliberately so**: a missing provider key costs one provider while the gateway keeps serving,
+  whereas a missing auth token would cost the access control itself — the tolerant reading is
+  a silent downgrade of the only thing standing between an open port and the roster, so it
+  refuses the start instead (spec §4.7). The check is a **process** fact (`std::env`), so it runs
+  in `router-cli` next to the provider-key probe — never in `router-core`, which stays I/O-free —
+  and it reads the variable **once**: the value lives only in the guard and is never written to a
+  struct that is serialized, a log line, a trace record or an event payload (§12.11).
+  It does **not** gate `router stats`: that command reads the config for `trace.dir` and accepts
+  no requests, so a missing token variable leaves it working (the refusal belongs to the serving
+  process, which is the only thing the token protects).
 - **`/health` reports what was actually loaded** (the R2-2b/2c contract): the plugin set
-  (with `disabled` entries shown as disabled), each provider's key presence, the resolved
-  `trace_dir` and `state_db`, and the store's status. Before R2-2c lands, the store's status
-  is reported honestly as `pending` (the path is resolved, opening is not implemented yet);
-  once it lands, the value is `open` or the refusal reason (CONF-23).
+  (with `disabled` entries shown as disabled), each provider's key presence, **whether inbound
+  auth is required and which variable holds the token (`auth: {required, env?}`, spec §9.1 —
+  the name only, never the value)**, the resolved `trace_dir` and `state_db`, and the store's
+  status. Before R2-2c lands, the store's status is reported honestly as `pending` (the path is
+  resolved, opening is not implemented yet); once it lands, the value is `open` or the refusal
+  reason (CONF-23). Because `serve` refuses to start when the token variable is missing (§4.7),
+  a *running* process that reports `auth: {required: true}` has the token in hand: the member is
+  a statement about the loaded config, and there is no reachable state in which it is `true` and
+  unhonoured.
 - **No defaults outside the file.** The R1-2 stub's hardcoded `127.0.0.1:8790` address and
   hardcoded five-plugin list are removed and may not reappear in the serving path; the listen
   address, plugin set and roster come from the config and are asserted to do so by CONF-25.
@@ -1582,3 +1639,146 @@ and the buffered and streaming paths are expected to carry it (writes: `forward.
 ADR-011), the byte boundary (§12.3.1, §12.10.7), the sticky binding's TTL and the meaning of `state.sticky_hit`
 (a binding *was* found; the account move is `plan_switch`'s job, so the two fields do not fight), and the SSE
 relay (§12.10.3): a displaced request is still one request, with one byte-final body per attempt.
+
+### 12.11 Inbound token auth (the landing of spec §4.7)
+
+Spec §4.7 is the contract; this section is where it lands, symbol by symbol, so two implementers cannot
+disagree about the shape. The one-sentence version: **a guard in front of the three protocol routes reads
+one header, compares it in constant time against a token the process read once from the environment, and
+either passes the untouched request through or answers `401` and leaves one trace line.**
+
+**Why the guard is not a pipeline stage.** It runs at the HTTP boundary, before `Forwarder::forward` —
+before the body is parsed, before session resolution, before any state write. Consequences worth stating
+explicitly, because each one is a thing that could otherwise be got wrong:
+
+- The **byte boundary is untouched** (AGENTS constraint 1): the guard reads headers and writes nothing into
+  the request bytes, so with a valid token the upstream-visible prefix is identical to a run with auth off.
+  The round's protocol-fidelity gate applies **with auth on**, which is exactly what CONF-45 ③ asserts.
+- There is **one guard for both forwarding paths** (buffered and streaming): it sits above the path split, so
+  the streaming path inherits it rather than reimplementing it — the "one shared function, both paths" rule.
+- **No state is written.** A refused request never reaches §12.10.5 row 1, so unauthenticated traffic cannot
+  write to the store (that is also why its trace record carries `event_id: 0`, §12.6).
+- **Determinism is not at stake** (AGENTS constraint 2): the guard is a pure function of (headers, the
+  startup token), not of turn number, clock or RNG — and it never touches content.
+- **Out of scope on purpose**: no rate limiting, no lockout, no per-IP counter, no `429` for a repeated
+  offender. v0.1 refuses and records; a limiter is a different feature with its own contract, and inventing
+  one here would be a second, undocumented policy.
+
+**Landing list** (each item is additive except where noted):
+
+| File | Change |
+|---|---|
+| `crates/router-core/src/error.rs` | `ErrorCode::Unauthorized` + its `as_str() = "unauthorized"` + `http_status() = 401` |
+| `crates/router-core/src/trace.rs` | the `ErrorCode::Unauthorized => "unauthorized"` arm in `TraceError::kind_for_code` (the `match` is exhaustive, so this is compile-forced) + its unit-test line |
+| `crates/router-proxy/src/auth.rs` | **new**: `AuthGate`, `AuthVerdict`, the constant-time comparison, and the refused request's record builder |
+| `crates/router-proxy/src/lib.rs` | `mod auth;` + the `pub use` of those items |
+| `crates/router-proxy/src/health.rs` | the `auth` member of `/health` (spec §9.1), read from `AppState::config.server.auth_token_env` — **no new `AppState` field**: the validated config already carries the key |
+| `crates/router-cli/src/lib.rs` | the startup resolution (env → token, or exit 4), the guard's wiring on the three routes, and the `401` response |
+| `crates/router-core/src/config.rs` | `ServerCfg.auth_token_env: Option<String>` (spec §4.7; §12.5 carries the parse row) — the same file the region/rename card touches, so the two commits must not overlap their hunks |
+| `config.example.yaml` | the key **commented out**, with a one-line reason (`# auth_token_env: ROUTER_TOKEN  # optional: uncomment to require a token; the variable must exist in this process's environment`). A live value in an example file that everyone copies would make every copied config refuse to start until the operator's environment holds a token — the example must not do that |
+| `tests/conformance/tests/conf_45_*.rs` | CONF-45 (§12.8), red first |
+
+**The guard (pure, `router-proxy::auth`).** No HTTP types and no I/O, so it unit-tests without a rig —
+the shape `resolve_session_key` (§12.10.5) already established for reading inbound headers:
+
+```rust
+/// The token this process expects, resolved once at startup from the env var that
+/// `server.auth_token_env` names. Constructed only when that key is written (spec §4.7):
+/// no key ⇒ no gate is installed at all, which is the strongest form of "behaves as before".
+pub struct AuthGate { token: String }
+
+/// `Refused.header` is what goes into the error body's `details.header` and the trace record:
+/// `Some("authorization")` / `Some("x-api-key")` when that header was read and did not match,
+/// `None` when the request presented neither.
+pub enum AuthVerdict { Admitted, Refused { header: Option<&'static str> } }
+
+impl AuthGate {
+    pub fn new(token: String) -> Self;
+    /// Pure: `&[(String, String)]` (lowercased names) is the same shape the forwarding path
+    /// takes, so the guard and the session key sources read headers the same way.
+    pub fn admits(&self, headers: &[(String, String)]) -> AuthVerdict;
+}
+
+/// The refused request's record (spec §6's pre-pipeline class, field by field — the spec table
+/// is authoritative; this is where it is built). `now_epoch_s` and `overhead_ms` are the guard's
+/// own clock reads, and the `ts` uses the record formatter `rfc3339_millis` this crate already
+/// owns (§12.6) rather than a second copy of it.
+pub fn refused_record(request_id: &str, proto_in: WireApi, verdict: &AuthVerdict,
+                      now_epoch_s: u64, overhead_ms: u32) -> DecisionRecord;
+```
+
+`admits` accepts, in order: `authorization: Bearer <token>` (case-insensitive scheme, a single space,
+the value trimmed of surrounding whitespace) and `x-api-key: <token>`; a match on either admits; a header
+that is absent, or whose form offers no credential (`Bearer` with none, no `Bearer ` scheme at all, an
+empty value) cannot admit. `Refused.header` names the **first of the two headers the request actually
+carried**, whether or not its form was usable — it is the diagnostic ("which header did this client
+send?"), so a malformed `Authorization` with no `x-api-key` beside it reports `Some("authorization")`, and
+`None` means the request carried neither. The
+comparison is **constant time in the compared length** (spec §4.7): no early return on the first differing
+byte, no branch on secret bytes; the two lengths are compared first, which is the accepted, documented leak
+that `subtle`'s own slice comparison has. It is hand-rolled: `subtle` is not on §12.1's allowlist and a byte
+loop does not justify widening it.
+
+**Wiring (`router-cli::serve`).** The guard is applied to the three protocol routes **only**, which is what
+makes `/health`'s exemption structural rather than a path comparison (spec §4.7):
+
+- Build each of the three protocol routes as its **own** router (one route per router) so that each can
+  carry its own layer instance; when the token resolved, apply
+  `axum::middleware::from_fn_with_state(<that route's gate>, …)` to that router, then merge the three into
+  the guarded set. One layer instance **per route** is what lets each carry its own `proto_in`
+  (`WireApi::Chat` / `Responses` / `Anthropic`) — the gate never has to guess a protocol from a path string,
+  and a fourth route added later cannot silently inherit a wrong one.
+- `/health` is registered outside that guarded set and keeps answering with no token.
+- When `server.auth_token_env` is absent, **no layer is installed** and the assembled router is byte-for-byte
+  the assembly v0.1 had before this key existed — CONF-45 ⑤ asserts the behaviour, and the structural form
+  makes it impossible for the guard to "half apply".
+- The gate's state is `{ gate, trace: Arc<dyn TraceWriter>, proto_in }`: the guard needs the sink to leave
+  the refused request's line (spec §4.7), and it takes the **same** `Arc<dyn TraceWriter>` the `Forwarder`
+  holds, so a refused request and a served one land in the same file with the same format.
+- On refusal: build the record, **write it, then** answer — the same order the end-of-request path uses
+  (the observation exists before the client is told). A write failure here is spec §8's non-blocking case and
+  does not change the response: the client is told `401` either way.
+- The `401` body is §8's: `ErrorBody::new(ErrorCode::Unauthorized, message, request_id)` with
+  `details = {"header": …}`, status from `http_status()` (401), and the **same `request_id`** as the trace
+  record and the `X-Router-Request-Id` header. The two frozen messages (so the case can assert them and no
+  implementer has to invent one):
+  - neither header present: `inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')`
+  - a token was presented and did not match: `inbound auth: the presented token does not match the value of the environment variable named by server.auth_token_env`
+  Neither message ever contains the expected token, any prefix of it, or the presented value.
+- The startup refusal (spec §4.7) is three lines next to the provider-key probe: read
+  `std::env::var(name)`; on `Err` **or** an empty value print
+  `router: server.auth_token_env names <NAME>, which is <unset|empty>: refusing to start (a token-less start would serve unauthenticated)`
+  and return exit code **4** (§12.10.2's class for an unsatisfiable environment prerequisite). The token is
+  then moved into the gate and never re-read.
+- The startup line gains the word §4.7's operators look for, in §9.1's vocabulary:
+  `router listening on <addr> (config dir: …, trace: …, state: … [store open], auth: required|none)` —
+  `required` when the key was written, `none` when it was not. The variable's **name** is not printed here
+  (the `/health` member carries it); the value is printed nowhere, ever.
+
+**`/health`'s member (spec §9.1).** `{"required": true, "env": "<the name>"}` when the key is written, and
+`{"required": false}` — with no other key — when it is not. It is derived in `health_json` from
+`state.config.server.auth_token_env`, so there is exactly one source for it and no second copy of the
+resolution logic to drift.
+
+**Tests.**
+
+- **Unit** (in `router-proxy/src/auth.rs`, `#[cfg(test)] mod tests`): equal tokens admit; a token differing
+  only in its **last** byte is refused (the case a "startsWith" bug passes and this catches); a prefix and a
+  superset are refused; an empty presented token is refused against a non-empty expected one and vice versa;
+  `authorization` and `x-api-key` both admit; a malformed `Authorization` (no scheme, no credential) is
+  refused with `header: Some("authorization")`; no headers → `header: None`; and the record builder produces
+  the field values spec §6's table fixes (`event_id: 0`, `provider: ""`, `usage_missing: true`, every cost
+  bucket 0, one error of kind `unauthorized`). *A timing assertion is deliberately not written*: a test
+  cannot prove constant-time behaviour, and a flaky timing test would be worse than none — the loop is
+  required to be reviewable, and this paragraph is the statement of what "reviewable" means.
+- **CONF-45** (§12.8) is the case: red first, then green, driving the real `serve` assembly over loopback
+  with a bare-TCP mock upstream, plus the exit-code half against `router_cli::serve`'s return value (the
+  pattern CONF-23 uses for its startup refusals) — no new testkit facility is needed, and
+  `tests/conformance/src/lib.rs` is not touched.
+
+**What this does not change.** The pipeline, the selector, the guards, the accounting, the trace schema
+version (`schema_version` stays 1: one new `kind` word and one new error type are additive), the SSE relay,
+the store's schema, and every existing `/health` member. The only observable difference on a config that
+does not write `server.auth_token_env` is the new `auth: {required: false}` member and the `auth: none`
+word on the startup line: **no request's behaviour changes at all**, which is what CONF-45 ⑤ asserts and
+what makes this round backward compatible by construction.
