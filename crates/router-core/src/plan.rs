@@ -25,7 +25,7 @@
 //! same inputs always give the same answer.
 
 use crate::config::{OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec};
-use crate::cost::NanoUsd;
+use crate::cost::Nano;
 use crate::error::ErrorCode;
 
 /// The family's account state (`plan_state`, DESIGN §12.10.8; 'primary'
@@ -133,7 +133,7 @@ pub struct PlanRequest<'a> {
     /// The family's metered spend in the current UTC month (measured,
     /// priced by the config table); compared against
     /// `overflow_monthly_cap_usd` only on the overflow route.
-    pub overflow_spend: NanoUsd,
+    pub overflow_spend: Nano,
 }
 
 impl PlanFirstRule {
@@ -281,7 +281,7 @@ mod tests {
             now_us: 1_000_000 + 16 * 60 * 1_000_000,
             primary_allowed: true,
             deferred_by_window: false,
-            overflow_spend: NanoUsd(0),
+            overflow_spend: Nano(0),
         }
     }
 
@@ -341,7 +341,7 @@ mod tests {
         p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0));
         let rule = PlanFirstRule::new(p);
         let mut r = req();
-        r.overflow_spend = NanoUsd(1);
+        r.overflow_spend = Nano(1);
         match rule.decide(&r) {
             PlanMove::Pass { probe, .. } => assert!(probe),
             other => panic!("expected a probe pass, got {other:?}"),
@@ -356,13 +356,13 @@ mod tests {
         let rule = PlanFirstRule::new(p);
         let mut r = req();
         r.session = None; // no probe to consider
-        r.overflow_spend = NanoUsd(20_000_000_000); // == 20 USD
+        r.overflow_spend = Nano(20_000_000_000); // == 20 USD
         match rule.decide(&r) {
             PlanMove::Reject { code, .. } => assert_eq!(code, ErrorCode::CostCapExceeded),
             other => panic!("expected a cap reject, got {other:?}"),
         }
         // Below the cap: Downgrade to the overflow route.
-        r.overflow_spend = NanoUsd(19_999_999_999);
+        r.overflow_spend = Nano(19_999_999_999);
         match rule.decide(&r) {
             PlanMove::Downgrade { route } => assert_eq!(route.provider, "api"),
             other => panic!("expected a downgrade, got {other:?}"),

@@ -11,15 +11,20 @@
 
 use serde::Serialize;
 
-use crate::cost::NanoUsd;
+use crate::cost::{Currency, Nano};
 use crate::error::ErrorCode;
 use crate::quota::{OverQuota, QuotaPlan, QuotaState, QuotaVerdict};
 use crate::Usage;
 
 /// The trace schema version. It only increments on a **breaking** change;
 /// adding an optional field does not (the autowork side tolerates unknown
-/// fields, ADR-005).
-pub const TRACE_SCHEMA_VERSION: u16 = 1;
+/// fields, ADR-005). Version **2** (ADR-018) adds `cost.currency` and
+/// `plan_switch.cost_currency` — not the optional-field exemption: the new
+/// fields change how the existing money fields are **read**, and a consumer
+/// that ignores them would sum CNY into USD. A v1 record is USD by
+/// definition (no non-USD route was configurable when it was written), so
+/// a window may hold both vintages unambiguously (DESIGN §12.6).
+pub const TRACE_SCHEMA_VERSION: u16 = 2;
 
 /// spec §6, one line per request.
 #[derive(Debug, Clone, Serialize)]
@@ -143,12 +148,16 @@ pub struct TransformRecord {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CostRec {
-    pub input_miss: NanoUsd,
-    pub input_hit: NanoUsd,
-    pub cache_write: NanoUsd,
-    pub output: NanoUsd,
+    pub input_miss: Nano,
+    pub input_hit: Nano,
+    pub cache_write: Nano,
+    pub output: Nano,
     pub peak_applied_pct: u32,
-    pub total: NanoUsd,
+    pub total: Nano,
+    /// spec §4.8: the unit every amount in this group is denominated in
+    /// — the currency of the provider entry `decision.provider` names.
+    /// Always written on a v2 record (a v1 record is USD by definition).
+    pub currency: Currency,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota_after: Option<QuotaAfter>,
 }
@@ -233,10 +242,20 @@ pub struct PlanSwitchRec {
     /// GAP-Q14) — an `inferred` figure; `None` when no session/ledger
     /// exists (serialized as null, spec §6).
     pub reprefill_tokens: Option<u64>,
-    /// `reprefill_tokens × p_miss(destination account)`, integer NanoUsd;
+    /// `reprefill_tokens × p_miss(destination account)`, integer Nano;
     /// an in-plan destination's marginal price is 0, so the return trip
     /// records the work and a money cost of 0.
     pub switch_cost_nano: Option<u64>,
+    /// spec §4.8: the unit `switch_cost_nano` is denominated in — the
+    /// **destination** route's currency, priced by the destination's
+    /// table. Present whenever `plan_switch` is not null, even where
+    /// `switch_cost_nano` is null (the unit is a fact about the
+    /// destination, not about the figure). It deliberately does not
+    /// borrow `cost.currency`: a family may span two currencies, and
+    /// when the destination's attempt fails and the chain serves a route
+    /// of another currency, the switch's price and the record's own cost
+    /// are in different units.
+    pub cost_currency: Currency,
 }
 
 /// spec §6 "failure details": the internal failure record — several
@@ -392,12 +411,13 @@ mod tests {
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {
-                input_miss: NanoUsd(1),
-                input_hit: NanoUsd(2),
-                cache_write: NanoUsd(0),
-                output: NanoUsd(3),
+                input_miss: Nano(1),
+                input_hit: Nano(2),
+                cache_write: Nano(0),
+                output: Nano(3),
                 peak_applied_pct: 100,
-                total: NanoUsd(6),
+                total: Nano(6),
+                currency: Currency::Usd,
                 quota_after: None,
             },
             result: ResultRec {
@@ -414,7 +434,11 @@ mod tests {
         // spec §6: no failure = an EMPTY array, not an omitted field.
         assert!(v.get("errors").is_some(), "errors must serialize");
         assert_eq!(v["errors"].as_array().map(Vec::len), Some(0));
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], 2); // v2 carries cost.currency (ADR-018)
+        assert_eq!(
+            v["cost"]["currency"], "USD",
+            "the cost group states its unit (spec 4.8)"
+        );
         assert_eq!(v["identity"]["event_id"], 7);
         assert_eq!(v["prefix"]["continuity"], 1.0);
     }

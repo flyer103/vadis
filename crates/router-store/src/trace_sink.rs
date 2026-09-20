@@ -156,7 +156,7 @@ mod tests {
         CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec,
         StateRec, TRACE_SCHEMA_VERSION,
     };
-    use router_core::{NanoUsd, Usage};
+    use router_core::{Currency, Nano, Usage};
 
     fn rec(request_id: &str, event_id: i64) -> DecisionRecord {
         DecisionRecord {
@@ -197,12 +197,13 @@ mod tests {
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {
-                input_miss: NanoUsd(0),
-                input_hit: NanoUsd(0),
-                cache_write: NanoUsd(0),
-                output: NanoUsd(0),
+                input_miss: Nano(0),
+                input_hit: Nano(0),
+                cache_write: Nano(0),
+                output: Nano(0),
                 peak_applied_pct: 100,
-                total: NanoUsd(0),
+                total: Nano(0),
+                currency: Currency::Usd,
                 quota_after: None,
             },
             result: ResultRec {

@@ -473,6 +473,10 @@ impl Forwarder {
                         probe: g.probe,
                         reprefill_tokens: None,
                         switch_cost_nano: None,
+                        // §4.8: the destination route's unit (the figures
+                        // above are null here, but the unit is a fact about
+                        // the destination and is stated regardless).
+                        cost_currency: self.route_currency(&g.route),
                     });
                 }
                 primary = g.route.clone();
@@ -704,6 +708,7 @@ impl Forwarder {
                         probe: false,
                         reprefill_tokens: reprefill,
                         switch_cost_nano: cost_nano,
+                        cost_currency: self.route_currency(candidate),
                     });
                 }
             }
@@ -848,6 +853,7 @@ impl Forwarder {
                                         probe: true,
                                         reprefill_tokens: None,
                                         switch_cost_nano: Some(0),
+                                        cost_currency: self.route_currency(&policy.primary),
                                     });
                                 }
                                 self.plan_probe_succeeded(request_id, policy, session.as_deref());
@@ -982,6 +988,7 @@ impl Forwarder {
                                         probe: false,
                                         reprefill_tokens: reprefill,
                                         switch_cost_nano: cost_nano,
+                                        cost_currency: self.route_currency(&policy.overflow),
                                     });
                                 }
                             }
@@ -1245,9 +1252,9 @@ impl Forwarder {
     /// The family's measured metered spend this UTC month (DESIGN
     /// §12.10.8: a SUM over the overflow route's `cost.computed` rows —
     /// no counter exists to disagree with the log).
-    fn overflow_spend(&self, policy: &PlanPolicyCfg) -> router_core::NanoUsd {
+    fn overflow_spend(&self, policy: &PlanPolicyCfg) -> router_core::Nano {
         let Some(store) = &self.store else {
-            return router_core::NanoUsd(0);
+            return router_core::Nano(0);
         };
         let month_start_us = month_start_us(now_us());
         let route = format!("{}/{}", policy.overflow.provider, policy.overflow.model);
@@ -1255,8 +1262,8 @@ impl Forwarder {
             family_route: &route,
             month_start_us,
         }) {
-            Ok(QueryRow::Count(n)) => router_core::NanoUsd(n.max(0) as u64),
-            _ => router_core::NanoUsd(0),
+            Ok(QueryRow::Count(n)) => router_core::Nano(n.max(0) as u64),
+            _ => router_core::Nano(0),
         }
     }
 
@@ -1265,6 +1272,17 @@ impl Forwarder {
             .providers
             .iter()
             .find(|p| p.name == route.provider)
+    }
+
+    /// A route's serving entry currency (spec §4.8) — the unit a
+    /// displacement's figures are denominated in. The USD default when
+    /// the route is somehow off-roster can never mislead: the record's
+    /// own `decision` names a roster route or the request failed before
+    /// one resolved.
+    pub(crate) fn route_currency(&self, route: &RouteSpec) -> router_core::Currency {
+        self.provider(route)
+            .map(|p| p.currency)
+            .unwrap_or(router_core::Currency::Usd)
     }
 
     fn resolve_route(&self, model: &str) -> Result<(RouteSpec, &'static str), ForwardFailure> {
@@ -1459,6 +1477,14 @@ impl Forwarder {
             }
         };
         let cooldown_us = (policy.cooldown.0 as i64).saturating_mul(1_000);
+        // §4.8: the destination route's unit denominates switch_cost_nano
+        // (the same destination the figures were priced at).
+        let dest_route = if *to == PlanAccount::Overflow {
+            policy.overflow.clone()
+        } else {
+            policy.primary.clone()
+        };
+        let cost_currency = self.route_currency(&dest_route);
         let ev = store
             .append(NewEvent {
                 kind: EventKind::PlanSwitched,
@@ -1476,6 +1502,9 @@ impl Forwarder {
                     "probe": probe,
                     "reprefill_tokens": reprefill,
                     "switch_cost_nano": cost_nano,
+                    // spec §4.8 (ADR-018): the unit switch_cost_nano is
+                    // denominated in — the destination route's currency.
+                    "currency": cost_currency.as_code(),
                     "session": session,
                     // What the projection's informational until_us is
                     // rebuilt from (DESIGN §12.10.8's rebuild rule).
@@ -1627,7 +1656,7 @@ impl Forwarder {
         }
         let tokens: u64 = blocks.iter().map(|b| b.tokens).sum();
         let cost_nano = crate::accounting::route_accounting(&self.config, to).map(|acc| {
-            // tokens × price(USD/1K) → NanoUsd, floored (§12.4 discipline).
+            // tokens × price(USD/1K) → Nano, floored (§12.4 discipline).
             let v = tokens as u128 * acc.price.input_miss.0 as u128 / 1000;
             if v > u64::MAX as u128 {
                 u64::MAX

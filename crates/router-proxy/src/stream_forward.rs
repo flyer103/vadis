@@ -299,6 +299,9 @@ impl Forwarder {
                         probe: g.probe,
                         reprefill_tokens: None,
                         switch_cost_nano: None,
+                        // §4.8: the destination route's unit (the buffered
+                        // path's twin writes the same value).
+                        cost_currency: self.route_currency(&g.route),
                     });
                 } else if g.probe {
                     // The admitted probe's return trip (spec §6): the
@@ -313,6 +316,7 @@ impl Forwarder {
                             probe: true,
                             reprefill_tokens: None,
                             switch_cost_nano: Some(0),
+                            cost_currency: self.route_currency(&policy.primary),
                         });
                     }
                 }
@@ -586,6 +590,7 @@ impl Forwarder {
                         probe: false,
                         reprefill_tokens: reprefill,
                         switch_cost_nano: cost_nano,
+                        cost_currency: self.route_currency(&cand.route),
                     });
                 }
             }
@@ -671,6 +676,7 @@ impl Forwarder {
                                         probe: true,
                                         reprefill_tokens: None,
                                         switch_cost_nano: Some(0),
+                                        cost_currency: self.route_currency(&policy.primary),
                                     });
                                 }
                                 self.plan_probe_succeeded(request_id, policy, session.as_deref());
@@ -795,6 +801,7 @@ impl Forwarder {
                                         probe: false,
                                         reprefill_tokens: reprefill,
                                         switch_cost_nano: cost_nano,
+                                        cost_currency: self.route_currency(&policy.overflow),
                                     });
                                 }
                             }

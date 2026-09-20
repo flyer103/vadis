@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use router_core::config::{AccountKind, QuotaCfg, RouteSpec, RouterConfig};
-use router_core::cost::{cost, CostBreakdown, NanoUsd, PriceTable};
+use router_core::cost::{cost, CostBreakdown, Currency, Nano, PriceTable};
 use router_core::prefix::PrefixBlock;
 use router_core::quota::{charge, window_start_for, OverQuota, QuotaPlan, QuotaState, QuotaWindow};
 use router_core::store::{EventId, EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
@@ -45,6 +45,10 @@ pub struct RouteAccounting {
     /// its `quota_after` is still recorded (spec §4.6 rule 4 / ADR-014
     /// item 6). A quota-less coding_plan provider is still a plan.
     pub in_plan: bool,
+    /// The serving entry's currency (spec §4.8): the unit of every
+    /// amount this route prices — `cost.currency` on the record and
+    /// `"currency"` on the `cost.computed` row.
+    pub currency: Currency,
 }
 
 /// Resolves a route's accounting inputs from the config (roster lookup +
@@ -53,7 +57,7 @@ pub struct RouteAccounting {
 pub fn route_accounting(config: &RouterConfig, route: &RouteSpec) -> Option<RouteAccounting> {
     let provider = config.providers.iter().find(|p| p.name == route.provider)?;
     let model = provider.models.iter().find(|m| m.id == route.model)?;
-    let price = model.price.to_price_table().ok()?;
+    let price = model.price.to_price_table(provider.currency).ok()?;
     let quota_plans = provider
         .quota
         .as_deref()
@@ -67,6 +71,7 @@ pub fn route_accounting(config: &RouterConfig, route: &RouteSpec) -> Option<Rout
         price,
         quota_plans,
         in_plan,
+        currency: provider.currency,
     })
 }
 
@@ -379,12 +384,16 @@ impl<'a> Accountant<'a> {
         // before the trace line so `quota_after` reflects the post-charge
         // state without rewriting anything.
         let mut breakdown = CostBreakdown {
-            input_miss: NanoUsd(0),
-            input_hit: NanoUsd(0),
-            cache_write: NanoUsd(0),
-            output: NanoUsd(0),
+            input_miss: Nano(0),
+            input_hit: Nano(0),
+            cache_write: Nano(0),
+            output: Nano(0),
             peak_applied_pct: 100,
-            total: NanoUsd(0),
+            total: Nano(0),
+            // The failure/usage-missing default: no table priced this
+            // record, so the unit is the USD default — and every amount
+            // is 0, which is why the choice cannot mislead (spec §4.8).
+            currency: Currency::Usd,
         };
         let mut quota_after: Option<QuotaAfter> = None;
         if !usage_missing {
@@ -490,6 +499,10 @@ impl<'a> Accountant<'a> {
                 output: breakdown.output,
                 peak_applied_pct: breakdown.peak_applied_pct,
                 total: breakdown.total,
+                // §4.8: the serving entry's own unit, from the accounting
+                // the route resolved (a usage-missing record keeps the USD
+                // default with all-zero amounts).
+                currency: breakdown.currency,
                 quota_after: quota_after.clone(),
             },
             result: ResultRec {
@@ -538,8 +551,12 @@ impl<'a> Accountant<'a> {
                         // priced at — the plan policy's overflow-cap spend
                         // query sums on it (DESIGN §12.10.8: measured
                         // usage priced by the config table, no second
-                        // counter).
+                        // counter). `currency` (§4.8) denominates every
+                        // `*_nano` here — the row is read on its own, and
+                        // the OverflowSpend projection is route-scoped,
+                        // hence single-currency by construction.
                         "route": format!("{}/{}", provider, model),
+                        "currency": breakdown.currency.as_code(),
                         "input_miss_nano": breakdown.input_miss.0,
                         "input_hit_nano": breakdown.input_hit.0,
                         "cache_write_nano": breakdown.cache_write.0,
