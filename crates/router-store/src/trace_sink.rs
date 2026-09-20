@@ -209,6 +209,7 @@ mod tests {
                 status: 200,
                 upstream_status: Some(200),
                 failover_from: None,
+                plan_switch: None,
                 overhead_ms: 0,
                 upstream_ms: None,
             },

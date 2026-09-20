@@ -26,18 +26,19 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use router_core::store::{
-    CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, Projection, ProjectionWrite, Query,
-    QueryRow, RebuildStats, SessionBindingRow, Store, StoreError, StoredEvent,
-    EVENT_SCHEMA_VERSION,
+    CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, PlanStateProjRow, Projection,
+    ProjectionWrite, Query, QueryRow, RebuildStats, SessionBindingRow, Store, StoreError,
+    StoredEvent, EVENT_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags};
 
 /// Store DDL version 1: the tables of DESIGN §12.10.4, verbatim in shape.
 /// Forward-only: appending a migration means adding a `(version, sql)` row
 /// here; a DDL migration never rewrites `events` rows (ADR-009 item 7).
-const MIGRATIONS: &[(u32, &str)] = &[(
-    1,
-    r#"
+const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        r#"
 CREATE TABLE schema_version (
     version    INTEGER NOT NULL,
     applied_at TEXT    NOT NULL
@@ -93,7 +94,22 @@ CREATE TABLE provider_cooldown (
     PRIMARY KEY (scope, provider, model)
 );
 "#,
-)];
+    ),
+    (
+        // DDL version 2 (ADR-014, DESIGN §12.10.8): the family's account
+        // state. Additive — one table, no existing row rewritten.
+        2,
+        r#"
+CREATE TABLE plan_state (
+    family     TEXT    PRIMARY KEY,
+    account    TEXT    NOT NULL,
+    since_us   INTEGER NOT NULL,
+    until_us   INTEGER,
+    last_event INTEGER NOT NULL
+);
+"#,
+    ),
+];
 
 /// The SQLite implementation. Construct through [`SqliteStore::open`].
 #[derive(Debug)]
@@ -309,6 +325,12 @@ impl SqliteStore {
                   FROM provider_cooldown ORDER BY scope, provider, model",
             )?;
         }
+        if want(Projection::PlanState) {
+            push(
+                "SELECT family, account, since_us, until_us, last_event \
+                  FROM plan_state ORDER BY family",
+            )?;
+        }
         out.sort();
         Ok(out)
     }
@@ -515,6 +537,46 @@ impl SqliteStore {
         }
         Ok(count)
     }
+
+    /// DESIGN §12.10.8's rebuild rule: scan `plan.switched` in `event_id`
+    /// order, per family — the last row's `to_account` is the current
+    /// account, its `ts_us` is `since_us`, its `event_id` is
+    /// `last_event`, and `until_us` comes from the payload (written as
+    /// `since_us +` the then-current cooldown, so the log alone
+    /// determines the row; the serving path recomputes the probe gate
+    /// from the *current* config against `since_us`).
+    fn rebuild_plan_state(
+        &self,
+        conn: &Connection,
+        events: &[StoredEvent],
+    ) -> Result<usize, StoreError> {
+        conn.execute("DELETE FROM plan_state", [])
+            .map_err(|e| map_err(false, e))?;
+        let mut count = 0usize;
+        for ev in events {
+            if ev.kind_raw != EventKind::PlanSwitched.as_str() {
+                continue;
+            }
+            let family = ev
+                .payload
+                .get("family")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let account = ev
+                .payload
+                .get("to_account")
+                .and_then(|v| v.as_str())
+                .unwrap_or("primary");
+            let until_us = ev.payload.get("probe_eligible_us").and_then(|v| v.as_i64());
+            conn.execute(
+                "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
+                params![family, account, ev.ts_us, until_us, ev.event_id.0],
+            )
+            .map_err(|e| map_err(false, e))?;
+            count += 1;
+        }
+        Ok(count)
+    }
 }
 
 impl Store for SqliteStore {
@@ -620,6 +682,28 @@ impl Store for SqliteStore {
                 tx.execute(
                     "INSERT INTO provider_cooldown (scope, provider, model, until_us, reason, last_event) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(scope, provider, model) DO UPDATE SET until_us = excluded.until_us, reason = excluded.reason, last_event = excluded.last_event",
                     params![scope, provider, model, until_us, reason, last_event.0],
+                )
+                .map_err(|e| map_err(false, e))?;
+            }
+            ProjectionWrite::PlanSwitched {
+                family,
+                account,
+                until_us,
+                last_event,
+            } => {
+                // since_us anchors on the event row's own ts_us (never a
+                // second clock read), so the incremental path and the
+                // rebuild compute identical values (CONF-21).
+                let since_us: i64 = tx
+                    .query_row(
+                        "SELECT ts_us FROM events WHERE event_id = ?1",
+                        params![last_event.0],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| map_err(false, e))?;
+                tx.execute(
+                    "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
+                    params![family, account, since_us, until_us, last_event.0],
                 )
                 .map_err(|e| map_err(false, e))?;
             }
@@ -746,6 +830,47 @@ impl Store for SqliteStore {
                     .map_err(|e| map_err(false, e))?;
                 QueryRow::CacheLedger(blocks)
             }
+            Query::PlanState { family } => {
+                let row = conn.query_row(
+                    "SELECT family, account, since_us, until_us, last_event FROM plan_state \
+                     WHERE family = ?1",
+                    params![family],
+                    |r| {
+                        Ok(PlanStateProjRow {
+                            family: r.get(0)?,
+                            account: r.get(1)?,
+                            since_us: r.get(2)?,
+                            until_us: r.get(3)?,
+                            last_event: r.get(4)?,
+                        })
+                    },
+                );
+                QueryRow::PlanState(match row {
+                    Ok(p) => Some(p),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(map_err(false, e)),
+                })
+            }
+            Query::OverflowSpend {
+                family_route,
+                month_start_us,
+            } => {
+                // DESIGN §12.10.8: the cap is compared against measured
+                // usage priced by the config table — a SUM over the
+                // family's overflow-route `cost.computed` rows in the
+                // UTC month. No separate counter exists to disagree with
+                // the log.
+                let nano: Result<i64, _> = conn.query_row(
+                    "SELECT COALESCE(SUM(CAST(json_extract(payload, '$.total_nano') AS INTEGER)), 0) \
+                     FROM events WHERE kind = 'cost.computed' \
+                     AND json_extract(payload, '$.route') = ?1 \
+                     AND ts_us >= ?2",
+                    params![family_route, month_start_us],
+                    |r| r.get(0),
+                );
+                let nano = nano.map_err(|e| map_err(false, e))?;
+                QueryRow::Count(nano)
+            }
             Query::AllEvents => QueryRow::Events(self.read_events(&conn)?),
         })
     }
@@ -771,6 +896,9 @@ impl Store for SqliteStore {
         }
         if want(Projection::ProviderCooldown) {
             stats.provider_cooldown = self.rebuild_cooldown(&conn, &events)?;
+        }
+        if want(Projection::PlanState) {
+            stats.plan_state = self.rebuild_plan_state(&conn, &events)?;
         }
         Ok(stats)
     }
@@ -1102,12 +1230,107 @@ mod tests {
 
     #[test]
     fn rfc3339_matches_fixed_anchors() {
-        // Anchors computed independently of this code (unix epoch arithmetic).
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(951_868_799), "2000-02-29T23:59:59Z"); // leap day
         assert_eq!(rfc3339_utc(1_767_225_600), "2026-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(1_789_821_296), "2026-09-19T12:34:56Z");
         assert_eq!(rfc3339_utc(4_107_542_400), "2100-03-01T00:00:00Z"); // 2100 is not a leap year
+    }
+
+    // (6) plan_state: incremental == rebuild (CONF-21's rule for the DDL
+    //     v2 projection, DESIGN §12.10.8), plus the query surface and
+    //     the additive migration from a v1 database.
+    #[test]
+    fn plan_state_projection_and_rebuild() {
+        let dir = tempdir("plan-state");
+        let db = dir.join("state/router.db");
+        let s = SqliteStore::open(&db).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 2, "DDL version 2");
+
+        let switched = || NewEvent {
+            kind: EventKind::PlanSwitched,
+            request_id: Some("req-1"),
+            session: Some("sess-1"),
+            body_hash: None,
+            trace_ref: None,
+            payload: json!({
+                "family": "glm-5.3",
+                "from_account": "primary",
+                "to_account": "overflow",
+                "reason": "primary_exhausted",
+                "probe": false,
+                "probe_eligible_us": 1_789_900_000_000_000i64,
+            }),
+        };
+        let ev = s.append(switched()).unwrap();
+        s.project(ProjectionWrite::PlanSwitched {
+            family: "glm-5.3",
+            account: "overflow",
+            until_us: Some(1_789_900_000_000_000),
+            last_event: ev,
+        })
+        .unwrap();
+
+        let QueryRow::PlanState(row) = s.query(Query::PlanState { family: "glm-5.3" }).unwrap()
+        else {
+            panic!("expected a plan_state row");
+        };
+        let inc = row.expect("the family switched");
+        assert_eq!(inc.account, "overflow");
+        assert_eq!(inc.until_us, Some(1_789_900_000_000_000));
+        assert_eq!(inc.last_event, ev.0);
+        // since_us is the event row's own ts_us, read back directly.
+        let ts_us: i64 = s
+            .raw_connection()
+            .query_row(
+                "SELECT ts_us FROM events WHERE event_id = ?1",
+                params![ev.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            inc.since_us, ts_us,
+            "since_us anchors on the event's own ts_us"
+        );
+
+        // A family that never switched has no row (⇒ primary).
+        assert!(matches!(
+            s.query(Query::PlanState { family: "other" }).unwrap(),
+            QueryRow::PlanState(None)
+        ));
+
+        // Rebuild from the log alone converges row for row.
+        s.rebuild(Projection::PlanState).unwrap();
+        let QueryRow::PlanState(after) = s.query(Query::PlanState { family: "glm-5.3" }).unwrap()
+        else {
+            panic!("expected a plan_state row");
+        };
+        assert_eq!(after.expect("still switched"), inc);
+    }
+
+    // (7) a v1 database migrates forward to v2 without touching events.
+    #[test]
+    fn v1_db_migrates_to_v2() {
+        let dir = tempdir("v1-to-v2");
+        let db = dir.join("state/router.db");
+        {
+            let s = SqliteStore::open(&db).unwrap();
+            s.append(NewEvent {
+                kind: EventKind::RequestReceived,
+                request_id: Some("req-old"),
+                session: None,
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({"protocol_in": "chat"}),
+            })
+            .unwrap();
+        }
+        let s = SqliteStore::open(&db).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 2);
+        let QueryRow::Events(evs) = s.query(Query::AllEvents).unwrap() else {
+            panic!("expected events");
+        };
+        assert_eq!(evs.len(), 1, "no row rewritten or lost");
     }
 
     #[test]

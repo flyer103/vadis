@@ -241,10 +241,16 @@ pub enum ProjectionWrite<'a> {
     /// row's own `ts_us` — the store reads it from `last_event`, so the
     /// incremental path and the rebuild compute identical values
     /// (CONF-21's rule) and no write depends on a second clock read.
+    /// `until_us` (`since_us +` the then-current cooldown, informational
+    /// only — the serving path recomputes the gate from the current
+    /// config) comes from the event payload, so the log alone determines
+    /// the row.
     PlanSwitched {
         family: &'a str,
         /// 'primary' | 'overflow' (the `to_account` of the event).
         account: &'a str,
+        /// Informational probe deadline; NULL on 'primary'.
+        until_us: Option<i64>,
         last_event: EventId,
     },
 }
