@@ -17,16 +17,18 @@ Everything the process does comes from that file: the listen address, the plugin
 roster, the aliases, the fallback chain, the trace directory and the state path. There is
 no hidden default address and no built-in plugin list to reconcile with it.
 
-Three startup outcomes are worth knowing before the first request:
+Four startup outcomes are worth knowing before the first request:
 
 | At startup | What happens |
 |---|---|
 | the config does not validate | the process **exits non-zero** and names the offending key and the reason. It never silently falls back to a default: a config you edited that "did not take effect" is the most expensive silent failure there is |
-| an env var named by `api_key_env` is missing | **not** a startup failure: that provider is marked unavailable and reported by `/health`; the rest of the roster still serves |
+| an env var named by `api_key_env` is missing | **not** a startup failure: that provider is marked unavailable and reported by `/health`; the rest of the roster still serves. A missing provider key costs one provider — the one env var whose absence stops the start is the token row below |
+| an env var named by `server.auth_token_env` is missing **and the key is written** | the process **exits non-zero** (exit code `4`) and names the variable. This is the one env var whose absence stops the start, and deliberately: a gateway that read "no token in the environment" as "so no auth is required" would drop the operator's only access control |
 | the state store cannot be opened or migrated | the process **exits non-zero** (exit code `4`) with the reason. There is no in-memory degraded mode — a gateway that enforced quota from numbers it could not recover would report figures it could not stand behind |
 
 Liveness is `GET /health`, which reports what this process actually loaded: the plugin
-set, each provider's key presence, the resolved state path, and the state store's status
+set, each provider's key presence, whether inbound auth is required (spec §4.7 — the
+variable's **name**, never its value), the resolved state path, and the state store's status
 (`open`, or the process would not be running — a store that cannot open is a startup
 refusal, see the table above). A plugin listed as `disabled` in the config appears as
 disabled rather than missing.
@@ -148,7 +150,7 @@ wrong (ADR-012, ADR-013).
 | Symptom | First thing to check |
 |---|---|
 | the client sees `503` and nothing reaches the logs | the local-proxy prerequisite (`NO_PROXY=127.0.0.1,localhost`) — see [Connecting clients](connecting-clients.md) |
-| the process exits immediately at startup | the config (it names the offending key) or the state store (permissions, a migration, or a second instance holding the writer lock) |
+| the process exits immediately at startup | the config (it names the offending key), the state store (permissions, a migration, or a second instance holding the writer lock), or — with `server.auth_token_env` written — a token variable that is unset or empty (see the startup table above) |
 | an endpoint returns "not implemented" | that path is staged for a later round; nothing is wrong with your setup |
 | costs moved | prefix continuity between turns in the same session, before anything else |
 | a provider seems to be skipped entirely | it is inside a cooldown, which `/health` reports |
