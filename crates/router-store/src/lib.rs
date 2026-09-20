@@ -798,7 +798,7 @@ impl Store for SqliteStore {
             } => {
                 let n: i64 = conn
                     .query_row(
-                        "SELECT tokens_used FROM quota_counters\
+                        "SELECT tokens_used FROM quota_counters \
                          WHERE provider = ?1 AND plan_idx = ?2 AND window_start_us = ?3",
                         params![provider, plan_idx as i64, window_start_us],
                         |r| r.get(0),
