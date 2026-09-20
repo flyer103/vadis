@@ -171,7 +171,8 @@ fn scan_array_elements(
 
 /// Scans one JSON element (object/array/string/raw) from `i`, returning
 /// the index just past it. Bracket/string tracking only — no parse.
-fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
+// make scan_element_end reachable from the transform module's array walker
+pub(crate) fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
     let mut j = i;
     match b[j] {
         b'"' => {

@@ -19,6 +19,7 @@ pub mod prefix;
 pub mod quota;
 pub mod store;
 pub mod trace;
+pub mod transform;
 
 pub use body::{RawBody, RawEditError, ROUTER_OWNED_TOP_LEVEL_KEYS};
 pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};

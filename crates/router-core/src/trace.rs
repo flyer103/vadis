@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::cost::NanoUsd;
 use crate::error::ErrorCode;
 use crate::quota::{OverQuota, QuotaPlan, QuotaState, QuotaVerdict};
+use crate::transform::TransformMode;
 use crate::Usage;
 
 /// The trace schema version. It only increments on a **breaking** change;
@@ -33,6 +34,13 @@ pub struct DecisionRecord {
     pub decision: DecisionRec,
     pub state: StateRec,
     pub prefix: PrefixRec,
+    /// The transform group (spec §6 / ADR-019): the mode in effect for this
+    /// request's outbound body — **always present**, `passthrough` on every
+    /// request that did not ask (and on every request refused before the
+    /// transform chain ran), so an empty `transforms[]` is disambiguated
+    /// between "no mode" and "mode on, nothing matched" — the reason the
+    /// mode is a sibling of the array and never derived from it.
+    pub transform_mode: TransformMode,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transforms: Vec<TransformRecord>,
     pub usage: Usage,
@@ -128,6 +136,11 @@ pub struct PrefixBlockRec {
 #[serde(rename_all = "snake_case")]
 pub struct TransformRecord {
     pub plugin: String,
+    /// What one step rewrote, and how much of it (spec §6 `edited_paths[]`,
+    /// ADR-019): one entry per payload node the step changed — the audit
+    /// surface of a content edit. A reviewer compares spans, not documents.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub edited_paths: Vec<EditedPath>,
     pub added_input_tokens: i64,
     pub saved_input_tokens: i64,
     pub saved_output_tokens: i64,
@@ -138,6 +151,20 @@ pub struct TransformRecord {
     pub tee_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One edited payload node of one transform step (spec §6 `edited_paths[]`,
+/// DESIGN §12.6): the node address (`input[7].output` — never a byte offset,
+/// the scan is what resolves it, per attempt) and the two byte counts, which
+/// are the **payload text's** length before and after the step, not the
+/// encoded span's (escaping belongs to the splicer and shows up in that
+/// attempt's `body_hash`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EditedPath {
+    pub path: String,
+    pub bytes_in: usize,
+    pub bytes_out: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,6 +415,7 @@ mod tests {
                 }],
                 continuity: Some(1.0),
             },
+            transform_mode: TransformMode::Passthrough,
             transforms: Vec::new(),
             usage: Usage::default(),
             usage_missing: false,
