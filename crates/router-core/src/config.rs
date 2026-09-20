@@ -2083,6 +2083,31 @@ mod tests {
     }
 
     #[test]
+    fn a_defaulted_tag_may_not_collide_with_a_later_written_tag() {
+        // The remaining order of §4.8's uniqueness rule: entry 0 writes
+        // nothing (tag = "glm-5.3"), entry 1 — a different model —
+        // writes family "glm-5.3". The tag resolves to two models: a
+        // load error, refused by the effective-tag comparison at the
+        // second entry (the mirror of the shadow test above).
+        let s = replace_nth(
+            PLANNED,
+            FLASH,
+            "\"id\": \"glm-5.3-flash\", \"family\": \"glm-5.3\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family tag 'glm-5.3' is already carried"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("models[1] (glm-5.3-flash).family"),
+            "the error names the second entry's key, got: {err}"
+        );
+    }
+
+    #[test]
     fn plan_policy_parses_with_the_spec_defaults_and_the_account_flag() {
         let cfg = planned();
         let policy = cfg.plan_policy.as_ref().expect("the policy parsed");
