@@ -575,7 +575,7 @@ pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 | peak.multiplier | converted to `multiplier_pct = (v*100).round()`; only two decimal places are supported, otherwise a load error |
 | `account` (spec §4.6) | `coding_plan` \| `api`; **absent ⇒ `api`**; any other value is a load error (`deny_unknown_fields` polices keys, not enum values) |
 | `plan_policy` (spec §4.6) | at most one section in v0.1; a second family is an additive future key, never a reshaped section. Its cross-field checks are §12.10.2's table (they are routing rules, not syntax) |
-| `overflow_monthly_cap_usd` (spec §4.6) | read as f64 USD and converted **at load time** to `NanoUsd((v * 1e9).round())` — one rounding, the same shape as `price` (§12.4); `v < 0` is a load error; absent means no cap. Every later comparison is integer |
+| `overflow_monthly_cap_usd` (spec §4.6) | read as a `CapUsdVal` (f64 USD) and converted **at load time** by `CapUsdVal::to_nano()` to `NanoUsd((v * 1e9).round())` — one rounding, the same shape as `price` (§12.4); a negative or non-finite value is a load error; absent means no cap. Every later comparison is integer |
 | base_url | must already contain the version segment; router only appends `chat → /chat/completions`, `responses → /responses`, `anthropic → /v1/messages` |
 | `rules_file` | resolved relative to **the directory containing this config file** (not the CWD); `trace.dir` follows the same rule (spec §4.1) |
 | `trace.rollover` | only `hourly` is accepted (any other value = a load error); retention is **not** a config key (v0.1 does no automatic cleanup) |

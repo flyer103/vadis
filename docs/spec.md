@@ -326,6 +326,31 @@ future key (the `state:` / `retention` precedent), never a reshaped section.
    records the re-prefill (`result.plan_switch.reprefill_tokens` / `switch_cost_nano`), `inferred` at decision
    time and `verified` once the switched attempt's usage has landed (§6; ADR-011 item 9's convention).
 
+**Illegal combinations: what each one fails as.** The load-time checks are refusals at startup — the process does
+not come up and the message names the config path and the reason (§4.5: there is no partially-started process).
+They are deliberately **not** `error.type` values of §8: those describe the outcome of a request, and a config that
+never loaded serves none. The two refusals the policy itself produces at run time do use §8's vocabulary (the last
+two rows).
+
+| Combination | Fails as | Message names |
+|---|---|---|
+| `account` is not `coding_plan` or `api` | load error | `providers[i].account` |
+| `primary` is not a roster route | load error | `plan_policy.primary` |
+| `overflow` is not a roster route | load error | `plan_policy.overflow` |
+| `primary` and `overflow` are the same route | load error | `plan_policy.overflow` |
+| `primary`'s provider is `account: api` | load error | `plan_policy.primary` |
+| `overflow`'s provider is `account: coding_plan` | load error | `plan_policy.overflow` |
+| `family` ≠ the model id of `primary` (or of `overflow`) | load error | `plan_policy.family` |
+| the primary provider declares a `quota` and `family` ∉ its `quota.models` | load error | `plan_policy.family` |
+| `overflow_monthly_cap_usd` is negative or not finite | load error | `plan_policy.overflow_monthly_cap_usd` |
+| `cooldown` is not a duration (`15m`, `1h30m`) | load error | `plan_policy.cooldown` |
+| any key inside `plan_policy` that §4.6 does not define | load error | `plan_policy` |
+| the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
+| the month's metered spend has reached `overflow_monthly_cap_usd` | `cost_cap_exceeded` (403, §8) | the family and the cap |
+
+Nothing else in §4.6 is an error: a `spill` is served (that is the point of the mode), and an `overflow` that fails
+too walks on into §4.2's chain, whose own exhaustion is §8's `upstream_error` / `upstream_timeout`.
+
 **Relation to the Guard stage (§3).** This policy **is one guard rule** and adds no pipeline stage: the chain
 already asks "may this request go on this route?", and the answer uses the existing vocabulary — `Pass` (this
 route is allowed), `Downgrade(<the overflow route>)` (a different route must be taken, and it is recorded),

@@ -70,18 +70,45 @@ a coin flip per request. That is what plan-first routing configures.
 
 **How you configure it.** Each provider entry says what it *is*: `account: coding_plan` for the
 subscription, `account: api` for the metered one (and `api` is the default when you write
-nothing). One optional top-level `plan_policy` section then names the pair:
+nothing). The same model therefore appears **twice** in the roster — once per account — and the
+two entries carry their own `base_url`, `wire_api` and API key, because those belong to the
+account and not to the model:
+
+```yaml
+providers:
+  - name: zai-plan
+    account: coding_plan
+    base_url: <your plan's endpoint>
+    api_key_env: ZAI_PLAN_KEY
+    wire_api: anthropic            # a coding plan is usually handed out in the Anthropic format
+    models: [ { id: glm-5.3, ... } ]   # taken from config.example.yaml (no price is copied here)
+  - name: zai
+    account: api                   # the default when the key is absent
+    base_url: https://api.z.ai/api/paas/v4
+    api_key_env: ZAI_API_KEY
+    wire_api: chat
+    models: [ { id: glm-5.3, ... } ]
+```
+
+The subscription entry may also carry the plan's own `quota` block — but it does not have to, and
+that is deliberate: a plan page often publishes a monthly **price** and no token allowance, and a
+plan whose allowance nobody can read is still a plan.
+
+One optional top-level `plan_policy` section then names the pair:
 
 ```yaml
 plan_policy:
   family: <the model id both routes serve>
-  primary: <the coding-plan route>
-  overflow: <the metered route>
+  primary: <the coding-plan route>   # must be an account: coding_plan route
+  overflow: <the metered route>      # must be an account: api route, distinct from primary
   on_primary_exhausted: spill        # or block
   recover: probe                     # or none
   cooldown: 15m
   # overflow_monthly_cap_usd: <usd>  # optional ceiling on metered spend
 ```
+
+`plan_policy` appears **at most once** in v0.1 (one family). A second plan account that no policy
+names is a legal roster entry — it is simply not routed specially yet.
 
 **When it spills.** Only when the provider itself says the plan is exhausted — an upstream
 `403`. Everything else about the design is about *not* spilling early: the plan's token
