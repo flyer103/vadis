@@ -230,10 +230,14 @@ pub(crate) fn rewrite_outbound_model<'a>(
 /// What the buffered path learned about a request before its terminal
 /// outcome — enough to write the failure `DecisionRecord` when the
 /// outcome is a failure (spec §6: one line per request, failures
-/// included). `now_epoch_s` is the request's single clock read (AGENTS
-/// constraint 2), reused by the terminal record instead of a second one.
-/// Shared with the streaming path (R2G8): both paths' failures record
-/// through the same facts shape.
+/// included). `now_epoch_s` is the request's clock read in whole
+/// seconds (reused by the terminal record) and `now_us` the same read
+/// in microseconds — ONE read, two projections of it (AGENTS
+/// constraint 2): the guard must judge the same instant `/health`
+/// reports (spec §9.1), so the µs truncation of the seconds word may
+/// not reach `PlanRequest::now_us` (R5-5 F3: the up-to-1s disagreement
+/// was the flake factory). Shared with the streaming path (R2G8): both
+/// paths' failures record through the same facts shape.
 pub(crate) struct RequestFacts<'a> {
     pub(crate) request_id: &'a str,
     pub(crate) received_event: Option<router_core::EventId>,
@@ -246,6 +250,8 @@ pub(crate) struct RequestFacts<'a> {
     pub(crate) decision_ms: u32,
     pub(crate) started: Instant,
     pub(crate) now_epoch_s: u64,
+    /// The same clock read as `now_epoch_s`, untruncated (µs).
+    pub(crate) now_us: i64,
     /// Prefix blocks of the cleaned body, set once mutation (a) ran.
     pub(crate) blocks: Vec<PrefixBlock>,
     /// The first route that failed over, for `result.failover_from`.
@@ -284,6 +290,10 @@ impl Forwarder {
         request_id: &str,
         headers: &[(String, String)],
     ) -> ForwardOutcome {
+        // One clock read, two projections (AGENTS constraint 2): the µs
+        // word feeds the plan guard (which must judge the same instant
+        // /health reports), the seconds word everything else.
+        let now_us = now_us();
         let mut facts = RequestFacts {
             request_id,
             received_event: None,
@@ -295,7 +305,8 @@ impl Forwarder {
             selection_source: "explicit",
             decision_ms: 0,
             started: Instant::now(),
-            now_epoch_s: (now_us() / 1_000_000).max(0) as u64,
+            now_epoch_s: (now_us / 1_000_000).max(0) as u64,
+            now_us,
             blocks: Vec::new(),
             failover_from: None,
             upstream_ms: None,
@@ -428,7 +439,7 @@ impl Forwarder {
         // guard may also refuse (block mode, overflow cap). Outside a
         // family (or with no policy) the request is untouched.
         let mut plan_guard_out: Option<PlanGuardOutcome> = None;
-        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s) {
+        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s, facts.now_us) {
             Ok(None) => {}
             Ok(Some(g)) => {
                 if g.route != primary {
@@ -1107,6 +1118,7 @@ impl Forwarder {
         session: Option<&str>,
         turn_index: u32,
         now_epoch_s: u64,
+        now_us: i64,
     ) -> Result<Option<PlanGuardOutcome>, ForwardFailure> {
         let Some(policy) = self.config.plan_policy.clone() else {
             return Ok(None);
@@ -1138,7 +1150,11 @@ impl Forwarder {
             session,
             turn_index,
             state,
-            now_us: (now_epoch_s as i64).saturating_mul(1_000_000),
+            // The µs word of the same read `/health` clocks itself with
+            // (R5-5 F3): deriving it back from the truncated seconds
+            // word made the guard refuse for up to ~1s after the
+            // surface already said `admitted: true`.
+            now_us,
             // ADR-011's route-availability answer for the primary (the
             // two constraints are read together, merged nowhere).
             primary_allowed: !self.provider_in_cooldown(&policy.primary.provider),

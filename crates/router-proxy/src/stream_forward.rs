@@ -175,6 +175,8 @@ impl Forwarder {
         request_id: &str,
         headers: &[(String, String)],
     ) -> StreamOutcome {
+        // One clock read, two projections — the buffered path's twin.
+        let now_us = now_us();
         let mut facts = RequestFacts {
             request_id,
             received_event: None,
@@ -186,7 +188,8 @@ impl Forwarder {
             selection_source: "explicit",
             decision_ms: 0,
             started: Instant::now(),
-            now_epoch_s: (now_us() / 1_000_000).max(0) as u64,
+            now_epoch_s: (now_us / 1_000_000).max(0) as u64,
+            now_us,
             blocks: Vec::new(),
             failover_from: None,
             upstream_ms: None,
@@ -264,7 +267,7 @@ impl Forwarder {
         // The plan policy's Guard stage (spec §4.6) — the same rule the
         // buffered path runs, before any attempt.
         let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
-        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s) {
+        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s, facts.now_us) {
             Ok(None) => {}
             Ok(Some(g)) => {
                 if g.route != primary {

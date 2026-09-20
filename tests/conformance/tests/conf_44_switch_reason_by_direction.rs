@@ -257,3 +257,92 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     );
     assert_eq!(rep.figures.switches_without_usage, 0);
 }
+
+/// The guard and the surface judge the SAME clock (R5-5 F3): a request
+/// arriving just past the deadline must be admitted the way `/health`
+/// says it is. The guard used to rebuild its instant from the truncated
+/// whole-seconds word (`now_epoch_s * 1e6`), so for up to ~1s after the
+/// true deadline the surface reported `admitted: true` while the guard
+/// still answered `Cooldown` (R5-5's H4c flake). The window is driven
+/// deterministically: the 403 carries `Retry-After: 0` (the demotion
+/// expires the moment it is written) and the family's cooldown is 0s,
+/// so the deadline IS the spill's own µs timestamp — and the boundary
+/// request is posted immediately, well inside the same whole second.
+/// A second-granular guard computes `now < since_us` for that request
+/// and silently spills it; the unified µs clock admits the probe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_44_guard_and_surface_judge_the_same_instant() {
+    let rig = rig("conf44-clock").await;
+    rig.plan.queue(testkit::plan_ok("t1"));
+    // The spill's 403 with a ZERO Retry-After: the provider demotion
+    // dies immediately, so the only thing that can block the next probe
+    // is the guard's own clock.
+    rig.plan.queue(
+        router_conformance::testkit::CannedResponse::json(
+            403,
+            "Forbidden",
+            br#"{"error":{"message":"You have exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+        )
+        .with_header("retry-after", "0"),
+    );
+    rig.plan.queue(testkit::plan_ok("probe-wins"));
+    rig.api.queue(testkit::plan_ok("spilled"));
+
+    let (s1, _b, _h) = rig.post(Some("S1"), 1);
+    assert_eq!(s1, 200);
+    let t_spill = std::time::SystemTime::now();
+    let (s2, _b2, _h2) = rig.post(Some("S1"), 2);
+    assert_eq!(s2, 200, "turn 2 spills to the metered account");
+
+    // The surface's verdict at its own µs clock, taken immediately: the
+    // family is on overflow and nothing blocks the probe anymore.
+    let h = http_get(&rig.listen_addr, "/health");
+    assert_eq!(h["plan"]["account"], "overflow");
+    assert_eq!(
+        h["plan"]["probe"]["admitted"],
+        true,
+        "cooldown 0s and a zero-TTL demotion: the surface admits"
+    );
+    assert_eq!(h["plan"]["probe"]["blocked_by"], serde_json::Value::Null);
+
+    // Immediately — /health and the spill are still inside the same
+    // whole second (the case aborts as indeterminate otherwise, never
+    // passes for the wrong reason) — the boundary request arrives.
+    assert!(
+        std::time::SystemTime::now()
+            .duration_since(t_spill)
+            .expect("clock")
+            < std::time::Duration::from_millis(700),
+        "indeterminate: the second boundary was crossed; re-run"
+    );
+    let (sp, _bp, _hp) = rig.post(Some("S2"), 1);
+    assert_eq!(sp, 200);
+    assert_eq!(
+        rig.plan.requests().len(),
+        3,
+        "the request was admitted the way the surface said: it probed \
+         the primary, whose 200 flips the family back"
+    );
+
+    let dir = rig.stop();
+    let evs = events(&dir);
+    let switches: Vec<&(String, serde_json::Value)> =
+        evs.iter().filter(|(k, _)| k == "plan.switched").collect();
+    assert_eq!(switches.len(), 2, "spill + recovery");
+    assert_eq!(switches[1].1["to_account"], "primary");
+    assert_eq!(switches[1].1["reason"], "primary_recovered");
+    assert_eq!(switches[1].1["probe"], true);
+}
+
+/// Minimal blocking GET (the CONF-25/41 style).
+fn http_get(addr: &str, path: &str) -> serde_json::Value {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).unwrap();
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
+    serde_json::from_str(body.trim()).expect("health json")
+}
