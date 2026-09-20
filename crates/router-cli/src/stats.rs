@@ -173,52 +173,44 @@ fn cost_nano(cost: &Value, key: &str) -> u64 {
     cost.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
-/// `router stats --config <path> --window <duration> [--json]`.
-/// Exit codes (spec §9.2): `0` a report was produced; `2` the invocation
-/// itself is unusable. Returns the process exit code.
-pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
-    let rc = match crate::config_load::load(Path::new(config_path)) {
-        Ok(rc) => rc,
-        Err(reason) => {
-            eprintln!("router: {reason}");
-            return 2;
-        }
-    };
+/// Everything `stats` computed for one invocation — the same figures it
+/// prints, exposed so conformance (CONF-41) can assert them directly
+/// against sums computed independently in the case itself.
+pub struct Report {
+    pub figures: TraceFigures,
+    pub events: EventFigures,
+    pub files_read: usize,
+    pub start_ms: i64,
+    pub now_ms: i64,
+}
+
+/// Compute the window's figures (the whole of `stats` minus the printing).
+pub fn report(config_path: &str, window: &str) -> Result<Report, String> {
+    let rc = crate::config_load::load(Path::new(config_path))
+        .map_err(|reason| format!("router: {reason}"))?;
     // `--window` uses the config duration grammar — parsed by the same
     // `DurationVal` the config itself uses, so two grammars cannot drift.
     let window_val: DurationVal =
-        match serde_json::from_value(serde_json::Value::String(window.to_string())) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "router: invalid --window '{window}': {e} (expected the config duration \
-                     grammar, e.g. '300ms', '90s', '15m', '1h30m'; there is no 'd' unit)"
-                );
-                return 2;
-            }
-        };
+        serde_json::from_value(serde_json::Value::String(window.to_string()))
+            .map_err(|e| format!("invalid window '{window}': {e}"))?;
     let now_ms = now_epoch_ms();
     let window_ms = window_val.0 as i64;
     let start_ms = now_ms.saturating_sub(window_ms);
 
     if !rc.trace_dir.is_dir() {
-        eprintln!(
-            "router: trace directory {} does not exist (trace.dir, spec 4.1)",
+        return Err(format!(
+            "trace directory {} does not exist (trace.dir, spec 4.1)",
             rc.trace_dir.display()
-        );
-        return 2;
+        ));
     }
 
-    let (records, files_read) = match read_window_records(&rc.trace_dir, start_ms, now_ms) {
-        Ok(x) => x,
-        Err(e) => {
-            eprintln!(
-                "router: cannot read trace directory {}: {e}",
+    let (records, files_read) =
+        read_window_records(&rc.trace_dir, start_ms, now_ms).map_err(|e| {
+            format!(
+                "cannot read trace directory {}: {e}",
                 rc.trace_dir.display()
-            );
-            return 2;
-        }
-    };
+            )
+        })?;
     let figs = aggregate(&records);
 
     // The event log, read-only; failure omits exactly one figure (the
@@ -276,22 +268,62 @@ pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
     if let Some(note) = &unknown_note {
         eprintln!("router: {note}");
     }
+    Ok(Report {
+        figures: figs,
+        events,
+        files_read,
+        start_ms,
+        now_ms,
+    })
+}
+
+/// `router stats --config <path> --window <duration> [--json]`.
+/// Exit codes (spec §9.2): `0` a report was produced; `2` the invocation
+/// itself is unusable. Returns the process exit code.
+pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
+    let rep = match report(config_path, window) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("router: {reason}");
+            return 2;
+        }
+    };
+    let rc = match crate::config_load::load(Path::new(config_path)) {
+        Ok(rc) => rc,
+        Err(reason) => {
+            eprintln!("router: {reason}");
+            return 2;
+        }
+    };
+    let unknown_note = if rep.events.log_was_read {
+        None
+    } else {
+        Some("unknown outcome requests omitted (state store unreadable)".to_string())
+    };
 
     if json {
         print_json(
             &ReportCtx {
                 rc: &rc,
                 window,
-                start_ms,
-                now_ms,
-                files_read,
+                start_ms: rep.start_ms,
+                now_ms: rep.now_ms,
+                files_read: rep.files_read,
                 unknown_note: &unknown_note,
             },
-            &figs,
-            &events,
+            &rep.figures,
+            &rep.events,
         );
     } else {
-        print_text(&rc, window, start_ms, now_ms, files_read, &figs, &events);
+        print_text(
+            &rc,
+            window,
+            rep.start_ms,
+            rep.now_ms,
+            rep.files_read,
+            &rep.figures,
+            &rep.events,
+        );
     }
     0
 }
