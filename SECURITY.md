@@ -29,13 +29,21 @@ backports to older tags.
 `router` is a **local process**: it listens on the port your config names, it holds your
 provider API keys (named in the config as environment variables, read from the environment at
 startup, never written to disk), and it **forwards the client's own request bytes** to the
-resolved upstream — so anything that can reach the listening port can spend your provider
-quota, and anything that can read the process environment, the local state database or the
-trace output can see your request metadata.
+resolved upstream. Reaching the listening port is therefore gated by **inbound auth**: unless
+`server.auth_token_env` names an environment variable whose value the request must present
+(as `Authorization: Bearer …` or `x-api-key: …`, compared in constant time against a token
+read once at startup), the three protocol endpoints answer `401` and reach no upstream — so a
+caller without the token cannot spend your provider quota. With the key absent (the local
+single-user mode) the gateway serves unauthenticated and that exposure returns: any caller
+that can reach the port can spend quota. Anything that can read the process environment,
+the local state database or the trace output can see your request metadata.
 
 In scope: the data plane (byte handling, credential handling, route resolution), the local
-store and the trace sink, and anything that makes the above worse — a request that leaks the
-provider key into a log, a trace record, an error body, or the upstream.
+store and the trace sink, the inbound-auth boundary (spec §4.7: constant-time comparison,
+`GET /health` the one structurally exempt endpoint, the token read once at startup and
+rotated only by restart, its value never printed or traced), and anything that makes the
+above worse — a request that leaks the provider key **or the inbound token** into a log, a
+trace record, an error body, or the upstream.
 
 Out of scope: the provider's own handling of your data (report that to the provider), and a
 deliberately exposed port or a config file shipped somewhere you do not control.
