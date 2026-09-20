@@ -9,3 +9,12 @@ repository.workspace = true
 
 [dependencies]
 router-core = { path = "../router-core" }
+# Allowlist = DESIGN §12.1's router-plugins row (toml, regex) plus the
+# workspace types router-core already pulls in (serde / serde_json / sha2):
+# json_compact validates with serde_json (arbitrary_precision keeps number
+# literals verbatim) and the tee marker hashes with the one hash convention.
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
+regex = { workspace = true }
