@@ -2015,6 +2015,74 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_family_tag_is_a_load_error() {
+        // §4.8: the key is "optional non-empty string" — an empty tag
+        // is neither the default (an absent key is) nor a usable name,
+        // and must be refused at load naming the entry's key.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family must be a non-empty string"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("models[0] (glm-5.3).family"),
+            "the error names the entry's key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_policys_family_must_equal_the_tag_both_routes_carry() {
+        // Only the primary is tagged "fam" while the policy still names
+        // the id "glm-5.3": a half-tagged family is not a family — the
+        // load refuses (spec §4.6/§4.8) rather than route a policy
+        // between routes it cannot recognize. The quota coverage check
+        // stays in terms of the primary's model ID, so quota alone
+        // would NOT have caught this.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains(
+                "must equal the family tag plan_policy.primary's model entry carries ('fam')"
+            ),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("plan_policy.family"),
+            "the error names the policy key, got: {err}"
+        );
+
+        // And the mirror: the overflow alone tagged is the same refusal
+        // with the overflow's name in the message.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            1,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains(
+                "must equal the family tag plan_policy.overflow's model entry carries ('fam')"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn plan_policy_parses_with_the_spec_defaults_and_the_account_flag() {
         let cfg = planned();
         let policy = cfg.plan_policy.as_ref().expect("the policy parsed");
