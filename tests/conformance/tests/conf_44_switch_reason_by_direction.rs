@@ -85,7 +85,11 @@ async fn conf_44_turn3_displacement_reason_is_decided_by_destination() {
     let (s3, _b3, _h3) = rig.post(Some("S1"), 3);
     assert_eq!(s3, 200, "turn 3 is still served (by the overflow account)");
     assert_eq!(rig.plan.requests().len(), 2, "turn 1 and the 403 only");
-    assert_eq!(rig.api.requests().len(), 2, "the overflow served turns 2 and 3");
+    assert_eq!(
+        rig.api.requests().len(),
+        2,
+        "the overflow served turns 2 and 3"
+    );
 
     let dir = rig.stop();
 
@@ -140,7 +144,10 @@ async fn conf_44_turn3_displacement_reason_is_decided_by_destination() {
         .find(|r| r["identity"]["turn_index"] == 2)
         .expect("the turn-2 record");
     assert_eq!(turn2["decision"]["provider"], "p-api");
-    assert_eq!(turn2["result"]["plan_switch"]["reason"], "primary_exhausted");
+    assert_eq!(
+        turn2["result"]["plan_switch"]["reason"],
+        "primary_exhausted"
+    );
     assert_eq!(turn2["result"]["plan_switch"]["probe"], false);
 }
 
@@ -181,7 +188,11 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     // primary — the request whose success flips the family back.
     let (sp, _bp, _hp) = rig.post(Some("S2"), 1);
     assert_eq!(sp, 200, "the probe is served by the primary");
-    assert_eq!(rig.plan.requests().len(), 3, "the probe reached the primary");
+    assert_eq!(
+        rig.plan.requests().len(),
+        3,
+        "the probe reached the primary"
+    );
 
     let dir = rig.stop();
 
@@ -190,21 +201,27 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     let evs = events(&dir);
     let switches: Vec<&(String, serde_json::Value)> =
         evs.iter().filter(|(k, _)| k == "plan.switched").collect();
-    assert_eq!(switches.len(), 2, "the spill and the recovery, nothing else");
+    assert_eq!(
+        switches.len(),
+        2,
+        "the spill and the recovery, nothing else"
+    );
     let back = switches
         .iter()
         .find(|(_, p)| p["to_account"] == "primary")
         .expect("the recovery row");
     assert_eq!(back.1["from_account"], "overflow");
     assert_eq!(back.1["reason"], "primary_recovered");
-    assert_eq!(back.1["probe"], true, "the probe's success IS the transition");
+    assert_eq!(
+        back.1["probe"], true,
+        "the probe's success IS the transition"
+    );
     let spill = switches
         .iter()
         .find(|(_, p)| p["to_account"] == "overflow")
         .expect("the spill row");
     assert_eq!(
-        spill.1["probe"],
-        false,
+        spill.1["probe"], false,
         "negative control: the spill row is not a probe"
     );
 
@@ -227,10 +244,12 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     );
     assert_eq!(ps["to"], "p-plan/m1");
     assert_eq!(ps["reason"], "primary_recovered");
-    assert_eq!(ps["probe"], true, "spec §6: this switch was the return trip");
     assert_eq!(
-        ps["switch_cost_nano"],
-        0,
+        ps["probe"], true,
+        "spec §6: this switch was the return trip"
+    );
+    assert_eq!(
+        ps["switch_cost_nano"], 0,
         "the way back costs 0: an in-plan destination's marginal price is 0"
     );
 
@@ -251,8 +270,7 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
         "both the spill and the return trip carry a plan_switch record"
     );
     assert_eq!(
-        rep.figures.switches,
-        trace_switches,
+        rep.figures.switches, trace_switches,
         "stats counts the probe's return trip too"
     );
     assert_eq!(rep.figures.switches_without_usage, 0);
@@ -299,8 +317,7 @@ async fn conf_44_guard_and_surface_judge_the_same_instant() {
     let h = http_get(&rig.listen_addr, "/health");
     assert_eq!(h["plan"]["account"], "overflow");
     assert_eq!(
-        h["plan"]["probe"]["admitted"],
-        true,
+        h["plan"]["probe"]["admitted"], true,
         "cooldown 0s and a zero-TTL demotion: the surface admits"
     );
     assert_eq!(h["plan"]["probe"]["blocked_by"], serde_json::Value::Null);

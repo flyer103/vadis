@@ -152,9 +152,19 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
     };
     if i.account == PlanAccount::Primary {
         // A family on its primary has nothing to probe back to (§4.6 rule 2:
-        // the probe IS the way back from `overflow`); `since` is null for a
-        // family that never switched (the absent `plan_state` row above).
-        return common("primary", Value::Null, Value::Null);
+        // the probe IS the way back from `overflow`). `since` is the ts of
+        // the `plan.switched` row that produced the CURRENT state (§9.1's
+        // letter): null only for a family that never switched (the absent
+        // `plan_state` row above) — a recovered family keeps the recovery
+        // row's ts, not a reset to null.
+        let since = if i.since_us > 0 {
+            rfc3339_millis(i.since_us)
+                .map(Value::String)
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        return common("primary", since, Value::Null);
     }
     // Overflow: `probe.deadline` is recomputed from the **currently loaded**
     // cooldown against `since_us` — the same recomputation the serving path
@@ -364,6 +374,29 @@ mod tests {
         assert_eq!(v["account"], "primary");
         assert_eq!(v["since"], Value::Null, "never switched ⇒ null");
         assert_eq!(v["probe"], Value::Null, "nothing to probe back to");
+    }
+
+    // §9.1's letter: `since` is "the ts of the plan.switched row that
+    // produced the current state", null ONLY for a family that never
+    // switched. A recovered family's current state was produced by the
+    // recovery row — so `since` is that row's ts (plan_state keeps it),
+    // and `probe` is still null (nothing to probe back to from primary).
+    #[test]
+    fn recovered_primary_keeps_the_recovery_row_ts_and_null_probe() {
+        let p = policy(900_000, RecoveryMode::Probe);
+        let recovery_ts_us = 1_760_000_000_000_000i64;
+        let v = plan_section(&p, &inputs(PlanAccount::Primary, recovery_ts_us));
+        assert_eq!(v["account"], "primary");
+        let since = v["since"].as_str().expect("since is the recovery row's ts");
+        assert_eq!(
+            since, "2025-10-09T08:53:20.000Z",
+            "the stored since_us, formatted — not a reset to null"
+        );
+        assert_eq!(
+            v["probe"],
+            Value::Null,
+            "primary still has nothing to probe"
+        );
     }
 
     // The card's own acceptance shape: deadline == since + cooldown, parsed
