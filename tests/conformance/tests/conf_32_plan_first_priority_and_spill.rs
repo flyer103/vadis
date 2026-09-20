@@ -74,7 +74,11 @@ async fn conf_32_primary_is_preferred_while_healthy() {
         "relayed verbatim"
     );
     assert_eq!(rig.plan.requests().len(), 1, "the primary was attempted");
-    assert_eq!(rig.api.requests().len(), 0, "the metered account is untouched");
+    assert_eq!(
+        rig.api.requests().len(),
+        0,
+        "the metered account is untouched"
+    );
     let seen = &rig.plan.requests()[0];
     assert_eq!(seen.method, "POST");
     assert!(
@@ -114,7 +118,11 @@ async fn conf_32_quota_exhausted_spills_records_switch_and_prices_reprefill() {
         String::from_utf8_lossy(testkit_ok_body("from-api").as_bytes()),
         "the metered bytes relayed verbatim"
     );
-    assert_eq!(rig.plan.requests().len(), 2, "one attempt per turn on the primary");
+    assert_eq!(
+        rig.plan.requests().len(),
+        2,
+        "one attempt per turn on the primary"
+    );
     assert_eq!(rig.api.requests().len(), 1, "one overflow attempt");
     let ff = headers2
         .iter()
@@ -128,7 +136,11 @@ async fn conf_32_quota_exhausted_spills_records_switch_and_prices_reprefill() {
     let evs = events(&dir);
     let switches: Vec<&(String, serde_json::Value)> =
         evs.iter().filter(|(k, _)| k == "plan.switched").collect();
-    assert_eq!(switches.len(), 1, "exactly one plan.switched per transition");
+    assert_eq!(
+        switches.len(),
+        1,
+        "exactly one plan.switched per transition"
+    );
     let (_k, p) = switches[0];
     assert_eq!(p["family"], "m1");
     assert_eq!(p["from_account"], "primary");

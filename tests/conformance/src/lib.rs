@@ -664,12 +664,7 @@ plan_policy:
         tag: &str,
         quota_yaml: &str,
         policy_yaml: &str,
-    ) -> (
-        MockUpstream,
-        MockUpstream,
-        PathBuf,
-        String,
-    ) {
+    ) -> (MockUpstream, MockUpstream, PathBuf, String) {
         let dir = tempdir(tag);
         let plan = MockUpstream::start().await.unwrap();
         let api = MockUpstream::start().await.unwrap();

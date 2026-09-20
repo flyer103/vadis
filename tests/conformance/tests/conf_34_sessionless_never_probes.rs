@@ -47,7 +47,11 @@ async fn conf_34_sessionless_never_probes_follows_the_state() {
 
     let (s1, _b, _h) = rig.post(None, 1);
     assert_eq!(s1, 200);
-    assert_eq!(rig.plan.requests().len(), 1, "the state was primary: served by the plan");
+    assert_eq!(
+        rig.plan.requests().len(),
+        1,
+        "the state was primary: served by the plan"
+    );
 
     let (s2, _b2, _h2) = rig.post(None, 1);
     assert_eq!(s2, 200, "spilled: the metered account answers");
@@ -96,7 +100,11 @@ async fn conf_34_sessionless_follows_the_state_back_after_a_real_probe() {
     // A NEW session's first turn is the admitted probe; it wins.
     let (sp, _bp, _hp) = rig.post(Some("S2"), 1);
     assert_eq!(sp, 200);
-    assert_eq!(rig.plan.requests().len(), 3, "the probe reached the primary");
+    assert_eq!(
+        rig.plan.requests().len(),
+        3,
+        "the probe reached the primary"
+    );
 
     // Now the sessionless request follows the recovered state.
     let (sn, _bn, _hn) = rig.post(None, 1);

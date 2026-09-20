@@ -104,7 +104,11 @@ async fn conf_35_local_counter_neither_rejects_nor_forces_a_spill() {
     // errored on 'expires_at_usFROM sessions' — turn 2 of a bound session
     // must be a sticky hit.
     assert_eq!(turn(1)["state"]["sticky_hit"], false, "turn 1 binds");
-    assert_eq!(turn(2)["state"]["sticky_hit"], true, "turn 2 hits the binding");
+    assert_eq!(
+        turn(2)["state"]["sticky_hit"],
+        true,
+        "turn 2 hits the binding"
+    );
 }
 
 /// The counter's one honest power (spec §4.6 rule 3): it may **defer the

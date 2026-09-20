@@ -83,7 +83,11 @@ async fn conf_33_mid_session_never_probes() {
          a probe happens only at a session boundary, and cooldown is 0s \
          so the cooldown cannot be the reason"
     );
-    assert_eq!(rig.api.requests().len(), 2, "the state routes turn 3 to overflow");
+    assert_eq!(
+        rig.api.requests().len(),
+        2,
+        "the state routes turn 3 to overflow"
+    );
 
     rig.stop();
 }
@@ -120,7 +124,11 @@ async fn conf_33_new_session_first_turn_probes_and_pulls_the_family_back() {
         3,
         "the probe reached the primary mock"
     );
-    assert_eq!(rig.api.requests().len(), 1, "the probe spent nothing metered");
+    assert_eq!(
+        rig.api.requests().len(),
+        1,
+        "the probe spent nothing metered"
+    );
 
     // The spilled session is pulled back with the family (its binding was
     // re-pointed by the recovery transition).
@@ -160,7 +168,10 @@ async fn conf_33_new_session_first_turn_probes_and_pulls_the_family_back() {
         .find(|r| r["identity"]["session"] == "S2" && r["identity"]["turn_index"] == 1)
         .expect("the probe's record");
     assert_eq!(probe_rec["decision"]["provider"], "p-plan");
-    assert_eq!(probe_rec["result"]["failover_from"], serde_json::Value::Null);
+    assert_eq!(
+        probe_rec["result"]["failover_from"],
+        serde_json::Value::Null
+    );
     // And the pulled-back session's next turn is on the plan account too.
     // (Its `turn_index` is larger than the request count: each account move
     // re-points the binding with a `session.bound` write, and the counter
