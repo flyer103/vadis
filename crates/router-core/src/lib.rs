@@ -22,8 +22,9 @@ pub mod trace;
 pub use body::{RawBody, RawEditError, ROUTER_OWNED_TOP_LEVEL_KEYS};
 pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};
 pub use config::{
-    ConfigError, ContextVal, DurationVal, PriceCfg, RouteSpec, RouterConfig, TokensVal,
-    KNOWN_BUILTIN_KINDS, KNOWN_SERVICE_SLOTS,
+    AccountKind, CapUsdVal, ConfigError, ContextVal, DurationVal, OnPrimaryExhausted,
+    PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, RouterConfig, TokensVal, KNOWN_BUILTIN_KINDS,
+    KNOWN_SERVICE_SLOTS,
 };
 pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
 pub use error::ErrorCode;

@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 
-use crate::cost::{Price, PriceTable};
+use crate::cost::{NanoUsd, Price, PriceTable};
 use crate::peak::{PeakTable, PeakWindow, Tz, Weekdays};
 
 /// A load-time rejection with the exact key it belongs to (§12.10.2: each
@@ -420,6 +420,38 @@ impl<'de> Deserialize<'de> for MultiplierVal {
     }
 }
 
+/// A USD amount as written (`overflow_monthly_cap_usd`), converted to integer
+/// [`NanoUsd`] only through [`CapUsdVal::to_nano`] — the same single load-time
+/// rounding `price` uses (ADR-006: integers everywhere downstream of this
+/// boundary).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapUsdVal(pub f64);
+
+impl CapUsdVal {
+    /// The one conversion point. A negative or non-finite amount is refused
+    /// rather than clamped: an unreadable guardrail must not silently become
+    /// "no guardrail" or "refuse everything" (spec §4.6, DESIGN §12.5).
+    #[allow(clippy::float_arithmetic)]
+    pub fn to_nano(self) -> Result<NanoUsd, String> {
+        let v = self.0;
+        if !v.is_finite() || v < 0.0 {
+            return Err(format!(
+                "the cap must be a finite USD amount >= 0 (got {v}); an absent key means no cap"
+            ));
+        }
+        Ok(NanoUsd((v * 1e9).round() as u64))
+    }
+}
+
+impl<'de> Deserialize<'de> for CapUsdVal {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(NumVisitor {
+            expecting: "a USD amount like 20.0",
+            wrap: CapUsdVal,
+        })
+    }
+}
+
 de_str!(MinutesVal, "a HH:MM time like '01:00'", |s: &str| {
     parse_hhmm(s).map(MinutesVal)
 });
@@ -656,6 +688,46 @@ pub struct QuotaCfg {
     pub source: String,
 }
 
+/// spec §4.6 `account`: what a provider entry **is** — the account its key, its
+/// endpoint and its allowance belong to. Absent means [`AccountKind::Api`]: the
+/// metered account is the ordinary case, and a roster that writes nothing means
+/// exactly what today's roster means (ADR-014 item 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountKind {
+    CodingPlan,
+    #[default]
+    Api,
+}
+
+impl AccountKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CodingPlan => "coding_plan",
+            Self::Api => "api",
+        }
+    }
+}
+
+impl fmt::Display for AccountKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match s.as_str() {
+            "coding_plan" => Ok(Self::CodingPlan),
+            "api" => Ok(Self::Api),
+            other => Err(de::Error::custom(format!(
+                "unknown account '{other}' (spec §4.6: expected coding_plan or api; an absent \
+                 key means api)"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderCfg {
@@ -664,9 +736,73 @@ pub struct ProviderCfg {
     pub api_key_env: String,
     pub wire_api: WireApi,
     pub supports: Vec<WireApi>,
+    /// spec §4.6; absent ⇒ [`AccountKind::Api`].
+    #[serde(default)]
+    pub account: AccountKind,
     pub models: Vec<ModelCfg>,
     #[serde(default)]
     pub quota: Option<Vec<QuotaCfg>>,
+}
+
+/// spec §4.6 `on_primary_exhausted`: what a family does once the upstream has
+/// declared its subscription account exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnPrimaryExhausted {
+    /// The family continues on the metered account at its real price.
+    #[default]
+    Spill,
+    /// The request is refused with a readable reason (§8 `quota_exceeded`)
+    /// instead of being served from the metered account.
+    Block,
+}
+
+/// spec §4.6 `recover`: whether the family probes its `primary` again after the
+/// cooldown (`probe`, the default), or never does (`none`: it returns at the
+/// plan's own window boundary, or by an operator action).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecoveryMode {
+    #[default]
+    Probe,
+    None,
+}
+
+/// spec §4.6's `cooldown` default: a floor between the move away from
+/// `primary` and the first admitted probe, not a schedule.
+fn default_cooldown() -> DurationVal {
+    DurationVal(15 * 60 * 1_000)
+}
+
+/// spec §4.6 `plan_policy`: one model family served by two accounts — the
+/// subscription first, the metered account as the spill (ADR-014). Optional:
+/// absent means no plan-first routing, and at most one policy exists in v0.1 (a
+/// second family is an additive future key, never a reshaped section).
+///
+/// Only **syntax** is enforced here; the cross-field rules (which routes, which
+/// accounts, which quota covers the family) are routing rules and live in
+/// [`RouterConfig::validate`] (DESIGN §12.5 / §12.10.2).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanPolicyCfg {
+    /// The model id both routes carry — and the key of the family's state.
+    pub family: String,
+    /// The subscription route: a roster route whose provider is
+    /// `account: coding_plan`.
+    pub primary: RouteSpec,
+    /// The metered route: a roster route, distinct from `primary`, whose
+    /// provider is `account: api`.
+    pub overflow: RouteSpec,
+    #[serde(default)]
+    pub on_primary_exhausted: OnPrimaryExhausted,
+    #[serde(default)]
+    pub recover: RecoveryMode,
+    #[serde(default = "default_cooldown")]
+    pub cooldown: DurationVal,
+    /// Optional guardrail on the family's metered spend in a UTC calendar
+    /// month; absent = no cap.
+    #[serde(default)]
+    pub overflow_monthly_cap_usd: Option<CapUsdVal>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -728,6 +864,11 @@ pub struct RouterConfig {
     pub aliases: BTreeMap<String, RouteSpec>,
     pub plugins: Vec<PluginCfg>,
     pub fallback: Vec<RouteSpec>,
+    /// spec §4.6 / ADR-014: the plan-first policy. Absent ⇒ no plan-first
+    /// routing (and a roster that declares `account: coding_plan` without a
+    /// policy is a legal, ordinary entry).
+    #[serde(default)]
+    pub plan_policy: Option<PlanPolicyCfg>,
     #[serde(default)]
     pub state: Option<StateKeyForbidden>,
 }
@@ -856,6 +997,119 @@ impl RouterConfig {
         self.providers
             .iter()
             .any(|p| p.name == r.provider && p.models.iter().any(|m| m.id == r.model))
+    }
+
+    fn provider(&self, name: &str) -> Option<&ProviderCfg> {
+        self.providers.iter().find(|p| p.name == name)
+    }
+
+    /// The spec §4.6 checks on `plan_policy` (DESIGN §12.10.2's row). They are
+    /// routing rules, not syntax, so serde cannot police them — and the order
+    /// below is the order a reader gets their message in: the routes exist →
+    /// they differ → each sits on the right kind of account → the family is both
+    /// routes' model id → the primary's declared plan covers the family → the
+    /// cap is a readable amount.
+    fn validate_plan_policy(&self) -> Result<(), ConfigError> {
+        let Some(policy) = &self.plan_policy else {
+            return Ok(());
+        };
+
+        // A route is a plan route only if the roster has it: `provider/model`
+        // with the model actually declared by that provider.
+        let resolve = |key: &str, route: &RouteSpec| -> Result<&ProviderCfg, ConfigError> {
+            self.provider(&route.provider)
+                .filter(|p| p.models.iter().any(|m| m.id == route.model))
+                .ok_or_else(|| {
+                    ConfigError::new(
+                        format!("plan_policy.{key}"),
+                        format!(
+                            "unknown route '{route}': plan_policy.{key} must be a \
+                             <provider>/<model> route in the roster (spec §4.6)"
+                        ),
+                    )
+                })
+        };
+        let primary = resolve("primary", &policy.primary)?;
+        let overflow = resolve("overflow", &policy.overflow)?;
+
+        if policy.primary == policy.overflow {
+            return Err(ConfigError::new(
+                "plan_policy.overflow",
+                format!(
+                    "must differ from plan_policy.primary ('{}'): the two accounts are distinct \
+                     routes (spec §4.6)",
+                    policy.primary
+                ),
+            ));
+        }
+
+        if primary.account != AccountKind::CodingPlan {
+            return Err(ConfigError::new(
+                "plan_policy.primary",
+                format!(
+                    "provider '{}' is account: {}; plan_policy.primary must be a route of a \
+                     provider declaring account: coding_plan (spec §4.6)",
+                    primary.name, primary.account
+                ),
+            ));
+        }
+
+        if overflow.account != AccountKind::Api {
+            return Err(ConfigError::new(
+                "plan_policy.overflow",
+                format!(
+                    "provider '{}' is account: {}; plan_policy.overflow must be a route of a \
+                     provider declaring account: api (spec §4.6)",
+                    overflow.name, overflow.account
+                ),
+            ));
+        }
+
+        for (key, model) in [
+            ("primary", &policy.primary.model),
+            ("overflow", &policy.overflow.model),
+        ] {
+            if model != &policy.family {
+                return Err(ConfigError::new(
+                    "plan_policy.family",
+                    format!(
+                        "family '{}' must equal the model id of plan_policy.{key} ('{model}'): \
+                         both routes serve the family (spec §4.6)",
+                        policy.family
+                    ),
+                ));
+            }
+        }
+
+        // A provider that declares a plan must cover the family (spec §4.6). A
+        // provider that declares none is legal: GAP-Q1 — a plan whose allowance
+        // is not published is still a plan.
+        let plans = primary.quota.as_deref().unwrap_or(&[]);
+        let covered = plans
+            .iter()
+            .any(|q| q.models.iter().any(|m| m == &policy.family));
+        if !plans.is_empty() && !covered {
+            let declared: Vec<&str> = plans
+                .iter()
+                .flat_map(|q| q.models.iter().map(String::as_str))
+                .collect();
+            return Err(ConfigError::new(
+                "plan_policy.family",
+                format!(
+                    "family '{}' is not covered by provider '{}''s quota.models {declared:?}: a \
+                     provider that declares a plan must include the family's model (spec §4.6)",
+                    policy.family, primary.name
+                ),
+            ));
+        }
+
+        if let Some(cap) = policy.overflow_monthly_cap_usd {
+            cap.to_nano().map_err(|reason| {
+                ConfigError::new("plan_policy.overflow_monthly_cap_usd", reason)
+            })?;
+        }
+
+        Ok(())
     }
 
     /// The §12.10.2 load-time validation table. Every failure names the key
@@ -1028,6 +1282,8 @@ impl RouterConfig {
                 }
             }
         }
+
+        self.validate_plan_policy()?;
 
         Ok(())
     }
@@ -1310,5 +1566,317 @@ mod tests {
         assert!(parse_route("p").is_err());
         assert!(parse_route("p/").is_err());
         assert!(parse_route("a/b/c").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // spec §4.6: `account` + `plan_policy` (ADR-014)
+    // -----------------------------------------------------------------------
+
+    // The plan-first shape: one model family (`glm-5.3`) served by two accounts,
+    // each account its own provider entry, plus a second subscription account
+    // that no policy names. Built through serde_json like HAPPY, so router-core
+    // still needs no YAML dependency (the shipped example's own parse is
+    // asserted by router-cli, which owns file I/O and YAML).
+    const PLANNED: &str = r#"{
+        "server": {"addr": "127.0.0.1:8790", "upstream_attempt_timeout": "60s", "request_timeout": "10m"},
+        "session": {"key_sources": ["prompt_cache_key"], "ttl": "12h"},
+        "cache": {"sticky": true, "breakeven": {"enabled": true, "min_remaining_turns": 3, "safety_factor": 1.2}},
+        "trace": {"dir": "./state/traces", "rollover": "hourly"},
+        "providers": [
+            {
+                "name": "zai-plan",
+                "base_url": "https://api.z.ai/api/anthropic",
+                "api_key_env": "ZAI_PLAN_KEY",
+                "wire_api": "anthropic",
+                "supports": ["anthropic"],
+                "account": "coding_plan",
+                "models": [
+                    {"id": "glm-5.3", "context": "200k",
+                     "price": {"input_miss": 0.0014, "input_hit": 0.00026, "cache_write": 0.0,
+                               "output": 0.0044, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"},
+                    {"id": "glm-5.3-flash", "context": "200k",
+                     "price": {"input_miss": 0.00015, "input_hit": 0.00003, "cache_write": 0.0,
+                               "output": 0.0005, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"}
+                ],
+                "quota": [{"models": ["glm-5.3"], "window": "monthly", "tokens": 100000000,
+                           "reset_day": 1, "over_quota": "block", "source": "s"}]
+            },
+            {
+                "name": "zai",
+                "base_url": "https://api.z.ai/api/paas/v4",
+                "api_key_env": "ZAI_API_KEY",
+                "wire_api": "chat",
+                "supports": ["chat"],
+                "models": [
+                    {"id": "glm-5.3", "context": "200k",
+                     "price": {"input_miss": 0.0014, "input_hit": 0.00026, "cache_write": 0.0,
+                               "output": 0.0044, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"},
+                    {"id": "glm-5.3-flash", "context": "200k",
+                     "price": {"input_miss": 0.00015, "input_hit": 0.00003, "cache_write": 0.0,
+                               "output": 0.0005, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"}
+                ]
+            },
+            {
+                "name": "moonshot-plan",
+                "base_url": "https://api.moonshot.ai/anthropic",
+                "api_key_env": "MOONSHOT_PLAN_KEY",
+                "wire_api": "anthropic",
+                "supports": ["anthropic"],
+                "account": "coding_plan",
+                "models": [
+                    {"id": "kimi-k3", "context": "1m",
+                     "price": {"input_miss": 0.003, "input_hit": 0.0003, "cache_write": 0.0,
+                               "output": 0.015, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"}
+                ],
+                "quota": [{"models": ["kimi-k3"], "window": "monthly", "tokens": 50000000,
+                           "reset_day": 1, "over_quota": "spill", "source": "s"}]
+            },
+            {
+                "name": "moonshot",
+                "base_url": "https://api.moonshot.ai/v1",
+                "api_key_env": "MOONSHOT_API_KEY",
+                "wire_api": "chat",
+                "supports": ["chat"],
+                "models": [
+                    {"id": "kimi-k3", "context": "1m",
+                     "price": {"input_miss": 0.003, "input_hit": 0.0003, "cache_write": 0.0,
+                               "output": 0.015, "peak": {"multiplier": 1.0, "windows": []}},
+                     "source": "s"}
+                ]
+            }
+        ],
+        "aliases": {},
+        "plugins": [],
+        "plan_policy": {"family": "glm-5.3", "primary": "zai-plan/glm-5.3", "overflow": "zai/glm-5.3"},
+        "fallback": ["zai/glm-5.3"]
+    }"#;
+
+    fn planned() -> RouterConfig {
+        let cfg: RouterConfig = serde_json::from_str(PLANNED).expect("planned config parses");
+        cfg.validate().expect("planned config validates");
+        cfg
+    }
+
+    /// Mutate the parsed policy (the cross-field checks are a function of the
+    /// typed config, so a mutation states the illegal combination directly).
+    fn planned_with(f: impl FnOnce(&mut PlanPolicyCfg)) -> RouterConfig {
+        let mut cfg = planned();
+        f(cfg.plan_policy.as_mut().expect("a policy"));
+        cfg
+    }
+
+    #[test]
+    fn plan_policy_parses_with_the_spec_defaults_and_the_account_flag() {
+        let cfg = planned();
+        let policy = cfg.plan_policy.as_ref().expect("the policy parsed");
+        assert_eq!(policy.family, "glm-5.3");
+        assert_eq!(policy.primary.to_string(), "zai-plan/glm-5.3");
+        assert_eq!(policy.overflow.to_string(), "zai/glm-5.3");
+        assert_eq!(policy.on_primary_exhausted, OnPrimaryExhausted::Spill); // §4.6 default
+        assert_eq!(policy.recover, RecoveryMode::Probe); // §4.6 default
+        assert_eq!(policy.cooldown, DurationVal(900_000)); // §4.6 default: 15m
+        assert!(policy.overflow_monthly_cap_usd.is_none()); // absent = no cap
+
+        assert_eq!(cfg.providers[0].account, AccountKind::CodingPlan);
+        // An `api` entry written either way is the same account: declared, or
+        // absent (the default — what today's roster already means).
+        assert_eq!(cfg.providers[1].account, AccountKind::Api);
+        assert_eq!(happy().providers[0].account, AccountKind::Api);
+    }
+
+    #[test]
+    fn plan_policy_accepts_every_key_it_defines() {
+        let s = PLANNED.replace(
+            r#""overflow": "zai/glm-5.3"}"#,
+            r#""overflow": "zai/glm-5.3", "on_primary_exhausted": "block", "recover": "none",
+               "cooldown": "1h30m", "overflow_monthly_cap_usd": 20.0}"#,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("the full key set parses");
+        cfg.validate().expect("the full key set validates");
+        let policy = cfg.plan_policy.as_ref().unwrap();
+        assert_eq!(policy.on_primary_exhausted, OnPrimaryExhausted::Block);
+        assert_eq!(policy.recover, RecoveryMode::None);
+        assert_eq!(policy.cooldown, DurationVal(5_400_000)); // 1h30m stacks
+        assert_eq!(
+            policy.overflow_monthly_cap_usd.unwrap().to_nano().unwrap(),
+            NanoUsd(20_000_000_000)
+        );
+    }
+
+    #[test]
+    fn both_keys_stay_optional() {
+        // The same roster with the policy line removed: the keys land together
+        // (GAP-Q15) but neither is required, and a subscription account no
+        // policy names is a legal entry (§4.6).
+        let s: String = PLANNED
+            .lines()
+            .filter(|l| !l.contains("\"plan_policy\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("parses without a policy");
+        cfg.validate().expect("validates without a policy");
+        assert!(cfg.plan_policy.is_none());
+        assert_eq!(cfg.providers[2].account, AccountKind::CodingPlan);
+    }
+
+    #[test]
+    fn unknown_account_value_is_refused_with_the_key_and_the_expected_words() {
+        let s = PLANNED.replace(
+            r#""account": "coding_plan""#,
+            r#""account": "subscription""#,
+        );
+        let err = deser_err(&s);
+        assert!(err.contains("subscription"), "got: {err}");
+        assert!(err.contains("coding_plan"), "got: {err}");
+        assert!(err.contains("account"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_policy_refuses_an_unknown_key() {
+        let s = PLANNED.replace(
+            r#""plan_policy": {"family""#,
+            r#""plan_policy": {"prefer": "plan", "family""#,
+        );
+        let err = deser_err(&s);
+        assert!(err.contains("unknown field"), "got: {err}");
+        assert!(err.contains("prefer"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_policy_scalars_are_parsed_by_the_one_grammar() {
+        // A duration is a duration everywhere: `15` is not one (§12.5).
+        let s = PLANNED.replace(
+            r#""overflow": "zai/glm-5.3"}"#,
+            r#""overflow": "zai/glm-5.3", "cooldown": "15"}"#,
+        );
+        let err = deser_err(&s);
+        assert!(err.contains("duration"), "got: {err}");
+
+        // Two enums, each with exactly the words §4.6 lists.
+        let s = PLANNED.replace(
+            r#""overflow": "zai/glm-5.3"}"#,
+            r#""overflow": "zai/glm-5.3", "on_primary_exhausted": "maybe"}"#,
+        );
+        let err = deser_err(&s);
+        assert!(err.contains("maybe"), "got: {err}");
+
+        let s = PLANNED.replace(
+            r#""overflow": "zai/glm-5.3"}"#,
+            r#""overflow": "zai/glm-5.3", "recover": "always"}"#,
+        );
+        let err = deser_err(&s);
+        assert!(err.contains("always"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_routes_must_be_roster_routes() {
+        let cfg = planned_with(|p| p.primary = parse_route("zai-plan/glm-9").unwrap());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.primary"), "got: {err}");
+        assert!(err.contains("zai-plan/glm-9"), "got: {err}");
+
+        let cfg = planned_with(|p| p.overflow = parse_route("nope/glm-5.3").unwrap());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.overflow"), "got: {err}");
+        assert!(err.contains("nope/glm-5.3"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_routes_must_differ() {
+        let cfg = planned_with(|p| p.overflow = p.primary.clone());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.overflow"), "got: {err}");
+        assert!(err.contains("differ"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_primary_must_sit_on_a_coding_plan_account() {
+        // A metered route as `primary`. The family checks are deliberately after
+        // the account checks, so this is the message a reader gets.
+        let cfg = planned_with(|p| p.primary = parse_route("moonshot/kimi-k3").unwrap());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.primary"), "got: {err}");
+        assert!(err.contains("moonshot"), "got: {err}");
+        assert!(err.contains("coding_plan"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_overflow_must_sit_on_an_api_account() {
+        let cfg = planned_with(|p| p.overflow = parse_route("moonshot-plan/kimi-k3").unwrap());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.overflow"), "got: {err}");
+        assert!(err.contains("moonshot-plan"), "got: {err}");
+        assert!(err.contains("account: api"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_family_must_be_the_model_id_of_both_routes() {
+        let cfg = planned_with(|p| p.family = "glm-5.3-flash".into());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.family"), "got: {err}");
+        assert!(err.contains("plan_policy.primary"), "got: {err}");
+
+        let cfg = planned_with(|p| p.overflow = parse_route("zai/glm-5.3-flash").unwrap());
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.family"), "got: {err}");
+        assert!(err.contains("plan_policy.overflow"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_family_must_be_covered_by_the_plans_own_quota() {
+        // glm-5.3-flash is a model of the primary provider (so the route is
+        // legal) but is not one of the plan's models.
+        let cfg = planned_with(|p| {
+            p.family = "glm-5.3-flash".into();
+            p.primary = parse_route("zai-plan/glm-5.3-flash").unwrap();
+            p.overflow = parse_route("zai/glm-5.3-flash").unwrap();
+        });
+        let err = validate_err(&cfg);
+        assert!(err.contains("plan_policy.family"), "got: {err}");
+        assert!(err.contains("quota.models"), "got: {err}");
+        assert!(err.contains("glm-5.3"), "got: {err}");
+    }
+
+    #[test]
+    fn plan_primary_needs_no_quota_at_all() {
+        // GAP-Q1: the plan's allowance is often unpublished, so a subscription
+        // account without a `quota` block is a legal primary — and it is the
+        // case the policy exists for.
+        let cfg = planned_with(|p| p.primary = parse_route("moonshot-plan/kimi-k3").unwrap());
+        assert!(validate_err(&cfg).contains("plan_policy.primary")); // account mismatch first
+
+        let mut cfg = planned();
+        cfg.providers[0].quota = None; // zai-plan declares no plan any more
+        cfg.validate()
+            .expect("a plan without a quota block is legal");
+    }
+
+    #[test]
+    fn plan_overflow_cap_must_be_a_readable_amount() {
+        let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(-1.0)));
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.overflow_monthly_cap_usd"),
+            "got: {err}"
+        );
+        assert!(err.contains(">= 0"), "got: {err}");
+
+        let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(f64::NAN)));
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.overflow_monthly_cap_usd"),
+            "got: {err}"
+        );
+
+        // 0 is a legal cap (a family that must never be served metered), and the
+        // conversion is the one rounding, in nano-USD (ADR-006).
+        let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0)));
+        cfg.validate().expect("a zero cap is legal");
+        assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), NanoUsd(500_000_000));
     }
 }

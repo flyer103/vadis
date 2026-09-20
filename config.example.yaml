@@ -115,6 +115,47 @@ providers:
         source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
         # TODO verify against official source
 
+  # The subscription account. spec §4.6: `account` is a property of the *entry*
+  # (the key, the endpoint and the allowance belong to the account), so one
+  # model id appears once per account and the two entries differ in base_url,
+  # wire_api and key. `plan_policy` at the end of this file names the pair.
+  - name: zai-plan
+    base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
+                                                  #   TODO verify against the plan's own page: a coding plan may hand out
+                                                  #   its own base URL instead of the metered entry's
+    api_key_env: ZAI_PLAN_KEY                     # the plan's key — a separate env var, because it is a separate account
+    wire_api: anthropic                           # coding plans are usually handed out in the Anthropic format (the Claude Code shape)
+    supports: [anthropic]
+    account: coding_plan                          # coding_plan | api (absent ⇒ api)
+    models:
+      - id: glm-5.3                               # the family's model id (plan_policy.family below); the metered entry serves the same id
+        context: 200k
+        price:                                    # the same model's official list price as the metered entry, same source:
+          input_miss: 0.0014                      #   inside the plan the marginal price is accounted **0** (spec §4.6 rule 4);
+          input_hit: 0.00026                      #   the table still has to be non-zero, because a zero tier is a load error (spec §4.0)
+          cache_write: 0.0
+          output: 0.0044
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
+        # TODO verify against official source
+    quota:                                        # the plan's own allowance: optional — a plan whose allowance is not
+      - models: [glm-5.3]                         # published is still a plan (spec §4.6), so this block may be deleted
+        window: monthly
+        tokens: 100_000_000                       # placeholder (the official page only publishes $18/month, no token allowance)
+        reset_day: 1
+        over_quota: block                         # block: reject with a stated reason; spill: the overflow is billed at input_miss
+        source: "https://docs.z.ai/guides/overview/quick-start @2026-09-19"
+        # The official page only publishes the GLM Coding Plan subscription
+        # price of $18/month, not a token allowance → the tokens value above is
+        # a placeholder.
+        # Under spec §4.6 (GAP-Q16) this local verdict is a **warning** for a
+        # plan: it is recorded in `cost.quota_after` and it may defer a probe,
+        # but the refusal follows upstream evidence and plan_policy's
+        # `on_primary_exhausted` — never this counter alone.
+        # TODO verify against official source: the allowance value, metering
+        #      basis (input+output? does it include cache_read?) and the reset
+        #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
+
   - name: zai
     base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
                                                   #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
@@ -153,19 +194,9 @@ providers:
           peak: { multiplier: 1.0, windows: [] }
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
         # TODO verify against official source
-    quota:                                        # subscription plan (GLM Coding Plan): marginal cost inside the plan recorded as 0
-      - models: [glm-5.3, glm-5.3-flash, glm-4.7]  # models covered by the plan (ids in the local roster)
-        window: monthly
-        tokens: 100_000_000                       # placeholder (the official page only publishes $18/month, no token allowance)
-        reset_day: 1
-        over_quota: block                         # block: reject with a stated reason; spill: the overflow is billed at input_miss
-        source: "https://docs.z.ai/guides/overview/quick-start @2026-09-19"
-        # The official page only publishes the GLM Coding Plan subscription
-        # price of $18/month, not a token allowance → the tokens value above is
-        # a placeholder.
-        # TODO verify against official source: the allowance value, metering
-        #      basis (input+output? does it include cache_read?) and the reset
-        #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
+    # no `quota:` on the metered entry: an allowance belongs to the subscription
+    # account above (spec §4.6 `account`), and the metered route is the family's
+    # `overflow` in `plan_policy` at the end of this file.
 
   - name: moonshot
     base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
@@ -193,6 +224,41 @@ providers:
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
         # TODO verify against official source
+
+  # The second subscription account, configured exactly like zai-plan above —
+  # with one difference that is the point of spec §4.6: v0.1 carries **at most
+  # one** `plan_policy`, so this plan account is a legal roster entry that no
+  # policy routes yet. Point `plan_policy` at it (family: the model id below)
+  # to make it the preferred account instead of zai-plan.
+  - name: moonshot-plan
+    base_url: https://api.moonshot.ai/anthropic   # the Anthropic-compatible BASE; the router appends /v1/messages
+                                                  #   TODO verify against the plan's own page (the metered entry above uses /v1)
+    api_key_env: MOONSHOT_PLAN_KEY
+    wire_api: anthropic
+    supports: [anthropic]
+    account: coding_plan
+    models:
+      - id: kimi-k2.7-code
+        context: 256k
+        price:                                    # the same model's official list price as the metered entry, same source
+          input_miss: 0.00095
+          input_hit: 0.00019
+          cache_write: 0.0
+          output: 0.004
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
+        # TODO verify against official source
+    quota:                                        # optional (spec §4.6): the plan's allowance, if the plan page publishes one
+      - models: [kimi-k2.7-code]
+        window: monthly
+        tokens: 100_000_000                       # placeholder — the plan page has not been read for an allowance value
+        reset_day: 1
+        over_quota: block
+        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
+        # TODO verify against official source: the coding-plan page (its
+        #      allowance, metering basis and reset timezone) — GAP-Q1
+        #      (DESIGN §12.9). The price source above is the *pricing* page the
+        #      metered entry cites; it is not a plan page.
 
 aliases:
   # alias → one route in the roster (`provider/model`). An alias only resolves a
@@ -250,3 +316,34 @@ fallback:
   - deepseek/deepseek-v4-pro
   - moonshot/kimi-k3
   - zai/glm-5.3
+
+plan_policy:
+  # spec §4.6 / ADR-014 — the subscription first, the metered account as the
+  # spill. Optional, and **at most one** in v0.1 (a second family is an additive
+  # future key, never a reshaped section). The keys and this example land
+  # together (GAP-Q15): `deny_unknown_fields` makes an example that carries a key
+  # the parser does not know an unservable file.
+  family: glm-5.3                    # required: the model id both routes carry — and the key of the family's state
+  primary: zai-plan/glm-5.3          # required: a roster route whose provider is `account: coding_plan`
+  overflow: zai/glm-5.3              # required: a distinct roster route whose provider is `account: api`. For a request inside
+                                     #   this family it is the first candidate after `primary`, before the `fallback` list above (§4.2)
+  on_primary_exhausted: spill        # spill | block (default spill). spill: the family continues on the metered account at its
+                                     #   real price. block: the request is refused with `quota_exceeded` (429, §8) instead of being
+                                     #   served from the metered account.
+  recover: probe                     # probe | none (default probe). probe: after the cooldown the first request of a new session
+                                     #   tries the plan again, and a success is recorded. none: no automatic probe — the family
+                                     #   returns at the plan's own window boundary, or by an operator action.
+  cooldown: 15m                      # default 15m: the floor between the move away from `primary` and the first admitted probe
+  # overflow_monthly_cap_usd: 20.0   # optional: a ceiling on this family's **metered** spend in a UTC calendar month, compared
+                                     #   against measured usage priced by this file's table. Once reached, the family's overflow
+                                     #   requests are refused with `cost_cap_exceeded` (403, §8). The request that crosses the
+                                     #   ceiling is served (its cost cannot be known beforehand), so the overshoot is at most one
+                                     #   request. Absent = no cap; commented out here on purpose — the shipped example imposes none.
+  # A plan's `quota` is a warning, not the authority (spec §4.6 rule 3, GAP-Q1):
+  # only an upstream `403 quota_exhausted` moves the account, and it may defer a
+  # probe until the plan's own window boundary has passed.
+
+# spec §4.6's other key lives on the provider entries above, not here:
+# `account: coding_plan | api` (absent ⇒ api) — see `zai-plan` and
+# `moonshot-plan`. Operators who want no speculative attempt at all write
+# `recover: none` above instead.

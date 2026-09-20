@@ -84,6 +84,7 @@ fn lexical_absolute(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::config::AccountKind;
 
     fn write_temp(name: &str, body: &str) -> (tempdir::TempDirGuard, PathBuf) {
         tempdir::write(name, body)
@@ -190,5 +191,37 @@ fallback: []
             path.parent(),
             "trace_dir should live under the config file's directory"
         );
+    }
+
+    /// The shipped example **is** the file an implementation reads directly
+    /// (spec §4), so it must always parse with the parser of the same commit:
+    /// `deny_unknown_fields` turns a key the parser does not know into an
+    /// unservable example, which is why the keys and the example land together
+    /// (GAP-Q15). This is the regression that keeps the two in step, and it
+    /// asserts the example exercises ADR-014's keys — a key that exists only in
+    /// the spec is a key nothing has ever parsed.
+    #[test]
+    fn the_shipped_example_parses_and_carries_the_plan_first_keys() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config.example.yaml");
+        let rc = load(&path).unwrap_or_else(|e| panic!("config.example.yaml: {e}"));
+        assert!(!rc.router.providers.is_empty());
+
+        let policy = rc
+            .router
+            .plan_policy
+            .as_ref()
+            .expect("the example exercises `plan_policy` (spec §4.6)");
+        assert_eq!(policy.family, "glm-5.3");
+        assert!(rc
+            .router
+            .providers
+            .iter()
+            .any(|p| p.account == AccountKind::CodingPlan));
+        assert!(rc
+            .router
+            .providers
+            .iter()
+            .any(|p| p.account == AccountKind::Api));
     }
 }
