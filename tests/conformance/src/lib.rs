@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-/// The in-test harness for the R2-2d forwarding cases: a loopback-only
+/// The in-test harness for the forwarding cases: a loopback-only
 /// mock upstream speaking just enough HTTP/1.1 for `reqwest` to talk to,
 /// plus small blocking-HTTP client/tempdir helpers in the CONF-25 style.
 ///
@@ -130,7 +130,7 @@ pub mod testkit {
         seen: Arc<Mutex<Vec<RecordedRequest>>>,
         queue: Arc<Mutex<VecDeque<CannedResponse>>>,
         /// How many streaming connections ended with a write failure (the
-        /// peer — the router — closed first): the R5 cancellation signal.
+        /// peer — the router — closed first): the cancellation signal (DESIGN §12.10.3 R5).
         peer_aborts: Arc<Mutex<u64>>,
     }
 
@@ -165,7 +165,7 @@ pub mod testkit {
         }
 
         /// Streaming connections whose write side failed because the peer
-        /// closed first (R5's observable).
+        /// closed first (the §12.10.3 R5 observable).
         pub fn peer_aborts(&self) -> u64 {
             *self.peer_aborts.lock().unwrap()
         }
@@ -243,7 +243,7 @@ pub mod testkit {
                         return Ok(());
                     }
                     // Any write on the SSE path failing with the peer gone
-                    // — header, body or CRLF — is the same R5 observable.
+                    // — header, body or CRLF — is the same §12.10.3 R5 observable.
                     if stream
                         .write_all(format!("{:x}\r\n", ch.bytes.len()).as_bytes())
                         .await
@@ -251,7 +251,7 @@ pub mod testkit {
                         || stream.write_all(&ch.bytes).await.is_err()
                         || stream.write_all(b"\r\n").await.is_err()
                     {
-                        // The peer (the router) closed first: R5's
+                        // The peer (the router) closed first: the §12.10.3 R5
                         // cancellation reached the upstream.
                         *peer_aborts.lock().unwrap() += 1;
                         return Ok(());

@@ -1,4 +1,4 @@
-//! CONF-43 (spec §9.3): **docs ↔ CLI consistency guard**. R5-1's verdict on
+//! CONF-43 (spec §9.3): **docs ↔ CLI consistency guard**. The verdict on
 //! `router replay` / `router trace tail` is **out** — spec §9.3 freezes them
 //! as "planned, not served" ("not subcommands of this binary"), and the
 //! version-control record agrees (`serve` and `stats` are the only landed

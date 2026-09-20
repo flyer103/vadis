@@ -187,7 +187,7 @@ async fn conf_25_config_driven_serve() {
     assert_eq!(providers[0]["available"], false);
 
     //     - the resolved paths, anchored at the config file's directory
-    //     (spec §4.1 / §4.5), with the store open (R2-2c: the store is a
+    //     (spec §4.1 / §4.5), with the store open (the store is a
     //     startup prerequisite — a running process opened it, CONF-23)
     let trace_dir = v["trace_dir"].as_str().unwrap();
     assert!(

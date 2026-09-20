@@ -2,7 +2,7 @@
 //! through **event-by-event byte-identically** — no re-framing, no
 //! reordering, no dropped terminal events — proven over real loopback
 //! HTTP against a mock SSE upstream, plus the disconnect and mid-stream
-//! failure semantics of DESIGN §12.10.3 (R5/R6).
+//! failure semantics of DESIGN §12.10.3 (requirements R5/R6).
 
 #![forbid(unsafe_code)]
 
@@ -187,7 +187,7 @@ async fn conf_13_b_midstream_failure_truncates_never_retries() {
     let _ = serve_task.await;
 }
 
-/// (c) R5: a client that disconnects mid-stream cancels the upstream —
+/// (c) §12.10.3 R5: a client that disconnects mid-stream cancels the upstream —
 /// the mock sees its connection drop before the remaining chunks are
 /// written. Observable form: the connection-close count rises while the
 /// request count stays one, and (deterministically) fewer than all

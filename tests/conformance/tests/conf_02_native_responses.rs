@@ -2,7 +2,7 @@
 //! `wire_api: responses` native passthrough; the upstream-visible body is
 //! byte-identical to the client body minus router-owned top-level keys, with
 //! the value of the top-level `model` member replaced by the resolved
-//! provider-native id — spec §2 permits exactly those two mutations (R2G1).
+//! provider-native id — spec §2 permits exactly those two mutations.
 //! Proven over real HTTP against a loopback mock upstream (the same form
 //! as CONF-01).
 

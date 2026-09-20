@@ -1,4 +1,4 @@
-//! CONF-44 (spec §6's producer table row ii / R5-5's F2): **a
+//! CONF-44 (spec §6's producer table row ii): **a
 //! state-driven displacement's `plan_switch.reason` is decided by
 //! direction — the destination account — never by the account state the
 //! guard read before the request.**
@@ -276,12 +276,12 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     assert_eq!(rep.figures.switches_without_usage, 0);
 }
 
-/// The guard and the surface judge the SAME clock (R5-5 F3): a request
+/// The guard and the surface judge the SAME clock: a request
 /// arriving just past the deadline must be admitted the way `/health`
 /// says it is. The guard used to rebuild its instant from the truncated
 /// whole-seconds word (`now_epoch_s * 1e6`), so for up to ~1s after the
 /// true deadline the surface reported `admitted: true` while the guard
-/// still answered `Cooldown` (R5-5's H4c flake). The window is driven
+/// still answered `Cooldown` (the clock-granularity flake). The window is driven
 /// deterministically: the 403 carries `Retry-After: 0` (the demotion
 /// expires the moment it is written) and the family's cooldown is 0s,
 /// so the deadline IS the spill's own µs timestamp — and the boundary

@@ -1,6 +1,6 @@
 //! CONF-28 (DESIGN §12.8, spec §6 + §8): **a terminal failure still writes
 //! its trace line** — the request that ends 502 is exactly the request the
-//! analysis truth is for. Measured motivation (R2G4's smoke): nine requests
+//! analysis truth is for. Measured motivation (the smoke): nine requests
 //! ending 502 left **zero** lines under `trace.dir` while successes landed
 //! normally; `decision` / `errors[]` / `failover_from` / `usage_missing`
 //! were all lost.
@@ -115,14 +115,14 @@ async fn conf_28_upstream_400_writes_one_failure_line() {
     );
 
     // Result fields per spec §6: the client-facing status, the upstream's
-    // own status mirrored into result.upstream_status (R2G8's field
+    // own status mirrored into result.upstream_status (the field
     // completion — the record answers "which provider said what"), and
     // the failover origin (absent here — format_error never fails over).
     assert_eq!(rec["result"]["status"], 502);
     assert_eq!(rec["result"]["upstream_status"], 400);
     assert_eq!(rec["result"]["failover_from"], serde_json::Value::Null);
 
-    // The attempted route is named, not blank (R2G8): the failure record
+    // The attempted route is named, not blank: the failure record
     // answers "which provider died" first.
     assert_eq!(rec["decision"]["provider"], "mock");
     assert_eq!(rec["decision"]["model"], "glm");

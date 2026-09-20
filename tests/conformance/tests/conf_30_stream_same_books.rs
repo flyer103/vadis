@@ -1,6 +1,6 @@
 //! CONF-30 (DESIGN §12.8, §12.10.5 note R3): **the streaming path keeps
-//! the same books as the buffered path**. Measured motivation (R2G8's
-//! smoke): a real codex agent loop left the trace directory empty for its
+//! the same books as the buffered path**. Measured motivation (the
+//! smoke that motivated it): a real codex agent loop left the trace directory empty for its
 //! streamed requests — session resolution, `session.bound`, prefix
 //! blocks, `cost.computed` and the `DecisionRecord` itself existed only
 //! on the buffered path, while codex/hermes traffic is permanently

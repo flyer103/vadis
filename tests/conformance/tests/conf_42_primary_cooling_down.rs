@@ -1,4 +1,4 @@
-//! CONF-42 (spec §6's producer table, R5-1's R4-G2 ruling / DESIGN §12.8):
+//! CONF-42 (spec §6's producer table, the operator's 2026-09-20 ruling / DESIGN §12.8):
 //! **`plan_switch.reason: primary_cooling_down` is produced, in the trace
 //! row only.** When ADR-011's cooldown projection refuses the family's
 //! primary route *before any attempt* — so the request is served by the

@@ -3,7 +3,7 @@
 //! deterministic, sub-millisecond transport failure in which *no request
 //! byte ever left the process* — nothing can have been billed — so it
 //! classifies as `connect_failure` with `action = fallback_provider`
-//! and walks the fallback chain. The pre-R2G5 classifier flattened every
+//! and walks the fallback chain. The earlier classifier flattened every
 //! no-status failure to `timeout` (which never fails over), polluting
 //! the "why did we switch" evidence and putting the recovery action on
 //! the wrong class.

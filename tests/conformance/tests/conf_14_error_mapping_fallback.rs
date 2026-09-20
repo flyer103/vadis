@@ -4,7 +4,7 @@
 //! exhaustion keyword demotes the **whole provider** (the next request
 //! skips it without an attempt); a deterministic 400 `format_error` is
 //! never retried. Proven over real HTTP against loopback mock upstreams
-//! (the same form as CONF-01; R2-2g re-verifies with a real client).
+//! (the same form as CONF-01; re-verified with a real client).
 
 #![forbid(unsafe_code)]
 
