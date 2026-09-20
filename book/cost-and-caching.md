@@ -82,7 +82,7 @@ providers:
   - name: zai-plan
     account: coding_plan
     base_url: <your plan's endpoint>
-    api_key_env: ZAI_PLAN_KEY
+    api_key_env: ZAI_CODING_API_KEY
     wire_api: anthropic            # a coding plan is usually handed out in the Anthropic format
     models: [ { id: glm-5.3, ... } ]   # taken from config.example.yaml (no price is copied here)
   - name: zai

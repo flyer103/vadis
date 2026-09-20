@@ -123,7 +123,7 @@ providers:
     base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page: a coding plan may hand out
                                                   #   its own base URL instead of the metered entry's
-    api_key_env: ZAI_PLAN_KEY                     # the plan's key — a separate env var, because it is a separate account
+    api_key_env: ZAI_CODING_API_KEY                 # the plan's key — a separate env var, because it is a separate account
     wire_api: anthropic                           # coding plans are usually handed out in the Anthropic format (the Claude Code shape)
     supports: [anthropic]
     account: coding_plan                          # coding_plan | api (absent ⇒ api)
@@ -200,7 +200,9 @@ providers:
 
   - name: moonshot
     base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
-    api_key_env: MOONSHOT_API_KEY
+    api_key_env: KIMI_API_KEY                      # Kimi's official quickstart examples use MOONSHOT_API_KEY;
+                                                  #   this repo names it KIMI_* per owner naming, so it is never
+                                                  #   mistaken for a typo of the platform's own variable
     wire_api: chat
     supports: [chat, anthropic]                   # official: compatible with both the OpenAI and Anthropic API formats
     models:
@@ -233,7 +235,7 @@ providers:
   - name: moonshot-plan
     base_url: https://api.moonshot.ai/anthropic   # the Anthropic-compatible BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page (the metered entry above uses /v1)
-    api_key_env: MOONSHOT_PLAN_KEY
+    api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered moonshot entry above
     wire_api: anthropic
     supports: [anthropic]
     account: coding_plan

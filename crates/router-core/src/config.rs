@@ -1594,7 +1594,7 @@ mod tests {
             {
                 "name": "zai-plan",
                 "base_url": "https://api.z.ai/api/anthropic",
-                "api_key_env": "ZAI_PLAN_KEY",
+                "api_key_env": "ZAI_CODING_API_KEY",
                 "wire_api": "anthropic",
                 "supports": ["anthropic"],
                 "account": "coding_plan",
@@ -1631,7 +1631,7 @@ mod tests {
             {
                 "name": "moonshot-plan",
                 "base_url": "https://api.moonshot.ai/anthropic",
-                "api_key_env": "MOONSHOT_PLAN_KEY",
+                "api_key_env": "KIMI_CODING_API_KEY",
                 "wire_api": "anthropic",
                 "supports": ["anthropic"],
                 "account": "coding_plan",
@@ -1647,7 +1647,7 @@ mod tests {
             {
                 "name": "moonshot",
                 "base_url": "https://api.moonshot.ai/v1",
-                "api_key_env": "MOONSHOT_API_KEY",
+                "api_key_env": "KIMI_API_KEY",
                 "wire_api": "chat",
                 "supports": ["chat"],
                 "models": [
