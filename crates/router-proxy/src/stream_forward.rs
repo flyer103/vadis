@@ -267,7 +267,13 @@ impl Forwarder {
         // The plan policy's Guard stage (spec §4.6) — the same rule the
         // buffered path runs, before any attempt.
         let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
-        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s, facts.now_us) {
+        match self.plan_guard(
+            &primary,
+            session.as_deref(),
+            turn_index,
+            now_epoch_s,
+            facts.now_us,
+        ) {
             Ok(None) => {}
             Ok(Some(g)) => {
                 if g.route != primary {

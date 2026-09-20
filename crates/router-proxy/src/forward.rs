@@ -439,7 +439,13 @@ impl Forwarder {
         // guard may also refuse (block mode, overflow cap). Outside a
         // family (or with no policy) the request is untouched.
         let mut plan_guard_out: Option<PlanGuardOutcome> = None;
-        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s, facts.now_us) {
+        match self.plan_guard(
+            &primary,
+            session.as_deref(),
+            turn_index,
+            now_epoch_s,
+            facts.now_us,
+        ) {
             Ok(None) => {}
             Ok(Some(g)) => {
                 if g.route != primary {
