@@ -44,14 +44,34 @@ what is served and what is not.
 
 ## Per-client setup
 
-**codex** declares a custom model provider:
+**codex** declares a custom model provider in `~/.codex/config.toml`:
 
 ```toml
+model_provider = "router"
+model = "coding-fast"                   # a route: provider/model or an alias from your config
+model_catalog_json = "~/.codex/models.json"
+
 [model_providers.router]
+name = "router"
 base_url = "http://127.0.0.1:8790/v1"
-wire_api = "responses"                  # or "chat"
+wire_api = "responses"                  # must equal the route's native protocol (see below)
 env_key  = "ROUTER_TOKEN"
 ```
+
+and a catalog entry for the slug in `~/.codex/models.json` — the copy-paste JSON (verified
+against codex-cli 0.137.0) is in the [README quick start](../README.md#quick-start). Then:
+
+```bash
+export NO_PROXY=127.0.0.1,localhost
+codex exec --skip-git-repo-check -C /tmp "Reply with the single word: pong" < /dev/null
+```
+
+`wire_api` here is the one easy mistake: it must equal the **provider's** `wire_api` for the
+route you picked, because v0.1 serves only native routes — a chat wire against the example
+roster's `deepseek` entry (native `responses`) answers `501 not_implemented`. Pick a
+chat-native route from your roster if your codex build cannot speak `responses`. The
+`--skip-git-repo-check` and `< /dev/null` flags and the `NO_PROXY` export are explained line
+by line in the README quick start.
 
 **hermes / claude code** are the same shape: override the base URL, keep the token in the
 environment.
@@ -105,7 +125,11 @@ curl -s http://127.0.0.1:8790/v1/chat/completions \
 ```
 
 For codex and hermes the token goes in the same variable their `env_key` names (the snippet above
-uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer`.
+uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer <token>`. Note the endpoint in
+these examples is the chat one: pair it with a chat-native route from your roster (the example
+file's `zai` or `moonshot` entries), or use `/v1/responses` for a responses-native route like
+`coding-fast` — v0.1 refuses the cross-protocol cell with `501 not_implemented` (see
+[Protocols](protocols.md)).
 
 Four things worth knowing before you rely on this:
 

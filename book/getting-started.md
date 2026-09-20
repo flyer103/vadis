@@ -1,7 +1,9 @@
 # Getting started
 
 Status: outline only. Commands below are the ones the repository already documents; this
-chapter does not restate config keys or price tables, it points at their definitions.
+chapter does not restate config keys or price tables, it points at their definitions. The
+copy-paste quick start itself — including the verified curl and codex examples — lives in the
+[README](../README.md#quick-start); this chapter stays the map of how the pieces fit together.
 
 Getting from a clone to a first request is four steps: build, copy the example config,
 put provider keys in the environment, start the gateway.
@@ -17,14 +19,20 @@ put provider keys in the environment, start the gateway.
   `server.auth_token_env` names a variable, and its value is never in the file
   ([`docs/spec.md` §4.7](../docs/spec.md)).
 - **Start** `router serve --config config.yaml` and confirm liveness on `GET /health` —
-  which answers without a token even when inbound auth is on.
+  which answers without a token even when inbound auth is on, and reports which auth mode
+  the process is in (`"auth":{"required":true,"env":"ROUTER_TOKEN"}` when the key is set).
+  One refusal to know about before it surprises you: with `auth_token_env` naming a
+  variable that is unset or empty, `router serve` exits with code 4 instead of starting
+  unauthenticated.
 - **Point a client** at the gateway base URL — but do the local-proxy prerequisite from
   [Connecting clients](connecting-clients.md) first, or nothing will reach router. If you
   turned inbound auth on, that chapter also has the token step.
-- **First request**: send one request in any of the three inbound protocols. The `router_meta`
-  response block (plugin chain, per-transform accounting, session and cache state) is planned
-  design intent, not served in v0.1 — today those same facts are read from the trace record
-  instead.
+- **First request**: send one request in any of the three inbound protocols, natively —
+  v0.1 serves only routes whose inbound protocol equals the provider's own `wire_api`
+  (a mismatch answers `501 not_implemented`; the README's curl example explains the fork
+  for the stock roster). The `router_meta` response block (plugin chain, per-transform
+  accounting, session and cache state) is planned design intent, not served in v0.1 —
+  today those same facts are read from the trace record instead.
 - **Know where state lands**: traces are appended under the `trace.dir` configured for
   the run, and the gateway's own state (session stickiness, cache ledger, quota counters) is
   a local store beside the config file, so the two can be backed up together
@@ -33,7 +41,8 @@ put provider keys in the environment, start the gateway.
 
 ## Authoritative sources
 
-- [`README.md`](../README.md) — quick start, CLI surface, endpoint table.
+- [`README.md`](../README.md) — quick start (the verified copy-paste path), CLI surface,
+  endpoint table.
 - [`config.example.yaml`](../config.example.yaml) — the roster, the price schema and its
   per-model `source` provenance.
 - [`docs/spec.md` §4](../docs/spec.md) — the config schema as a contract, §4.1 for the
