@@ -65,6 +65,38 @@ The precise definitions (what a block is, the block order, and the inferred/veri
 accounting convention that decides which number a claim may rest on) live in one place:
 [`docs/spec.md` §6](../docs/spec.md) and [§7](../docs/spec.md).
 
+## Currency: what a price is denominated in
+
+A price in the config is a number **and a unit**, and the unit is the provider entry's `currency`: `USD`
+when you write nothing, or `CNY` for a deployment whose official page prices in yuan. It applies to that
+entry's whole price table — every tier of every model — because those prices are one invoice from one
+account.
+
+- **Nothing is ever converted.** Router has no exchange rate, stores none, and does not translate a price, a
+  cost, or a report total from one currency to another. A CNY table is transcribed as CNY from the CNY page;
+  the accounting for a request served by that entry is in CNY. An "equivalent" figure computed from a rate
+  would be a number no vendor published — and it would make the report depend on when someone looked up the
+  rate, which is exactly what the fixed-point accounting exists to prevent.
+- **Which page is evidence depends on the region, and that is a rule you can check.** Each entry carries the
+  `source` URL it was transcribed from; a mainland entry cites the mainland page, an international entry the
+  international one. One region's table is never used as the evidence for another region's number.
+- **A tier the page prices in two tiers.** Some providers publish a cache-write price per cache lifetime
+  tier. Your config records the one your requests fall into — the page's own default when a request states
+  no lifetime — and the entry's comment names the other, so the number has a reason you can read.
+- **Reports are per currency, never mixed.** The cost lines of `router stats` are printed once per currency
+  present in the window, each labelled, and a window that holds two currencies shows **no** combined total:
+  adding them is the one thing router will not do, and it will not guess which unit you meant. The counts
+  (how many requests, how many switches) stay single, because a request is a request whichever account served
+  it. If you want a single-currency report, route only through entries of that currency — that is a
+  configuration choice, not a conversion.
+- **One cap is denomination-bound.** `overflow_monthly_cap_usd` is a ceiling in **USD**; if you write it on a
+  family whose metered route is priced in another currency, the config **refuses to load** instead of
+  comparing a dollar ceiling with a yuan spend (spec §4.6). Leave it out, and the family still spills — the
+  cap is a guardrail, not a requirement.
+
+The precise rules live in [`docs/spec.md` §4.8](../docs/spec.md) (what each key is and is not) and
+[§4.0](../docs/spec.md) (the price convention).
+
 ## Plan-first routing: the subscription first, the metered account as the spill
 
 If you pay for a coding plan and also have pay-per-token access to the same model, you want
@@ -97,11 +129,22 @@ The subscription entry may also carry the plan's own `quota` block — but it do
 that is deliberate: a plan page often publishes a monthly **price** and no token allowance, and a
 plan whose allowance nobody can read is still a plan.
 
+**When the two accounts do not use the same model id.** Vendors frequently serve the same model under
+different ids on the coding endpoint and on the metered platform — a plan endpoint's `k3-256k` and the
+platform's `kimi-k2.7-code` are one model to you and two strings to the vendors. Give both model entries the
+same `family` tag and write that tag in `plan_policy.family`: the router then treats the two routes as one
+family, while each route still sends the id **its own** provider expects, and the trace still records the
+string your client asked for. When the ids already agree you write nothing and the tag is the id — which is
+what a config written before tags existed keeps doing. Two things the tag is not: it is not a route (a client
+still writes `provider/model`, and a bare tag resolves to nothing), and it is not inferred (the router never
+guesses that `k3` and `kimi-k3` are the same model — you state it or it is not true)
+([`docs/spec.md` §4.8](../docs/spec.md)).
+
 One optional top-level `plan_policy` section then names the pair:
 
 ```yaml
 plan_policy:
-  family: <the model id both routes serve>
+  family: <the family tag both routes' model entries carry>   # §4.8 — see below when their ids differ
   primary: <the coding-plan route>   # must be an account: coding_plan route
   overflow: <the metered route>      # must be an account: api route, distinct from primary
   on_primary_exhausted: spill        # or block

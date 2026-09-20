@@ -36,6 +36,22 @@ question is about a number, the answer is a link, never a number.
   verdict first: only a measured (`verified`) difference may be reported as a saving, local
   estimates are labelled `inferred`. When cost moves, check prefix continuity between turns
   in the same session before anything else, then the per-transform accounting.
+- **"Can I configure both the China-mainland and the international endpoint of the same vendor?"**
+  Yes — they are two provider entries, because the endpoint and the key belong to the deployment
+  rather than to the model. Each entry declares which deployment it is (`region`) and, separately,
+  what currency its prices are written in (`currency`); the prices of the mainland entry come from
+  that deployment's own official page. Nothing converts between them: see
+  [`docs/spec.md` §4.8](../docs/spec.md) and [Currency](cost-and-caching.md#currency-what-a-price-is-denominated-in).
+- **"My plan and my pay-per-token account serve the same model but their model ids differ. Can the
+  plan-first policy still prefer the plan?"** Yes, with a **family tag**: both model entries declare
+  the same `family` string and the policy names that string, so the two routes are one family while
+  each keeps the id its own provider expects. Without the tag, the policy would have to assume the
+  ids are equal — the default, and the behaviour of every config that predates the tag.
+- **"Why does my report show two cost lines and no total?"** Because the window holds requests
+  priced in two currencies. Router never adds one currency to another and never converts one into
+  another, so it reports each currency separately and states no combined total — a single number
+  there would be the one figure it cannot compute honestly
+  ([`docs/spec.md` §9.2](../docs/spec.md)).
 
 ## Authoritative sources
 
@@ -45,6 +61,10 @@ question is about a number, the answer is a link, never a number.
 - [`docs/spec.md` §3](../docs/spec.md) — selection semantics and why `auto` is not enabled.
 - [`docs/spec.md` §4.0](../docs/spec.md) and [§7](../docs/spec.md) — price provenance and
   the savings convention.
+- [`docs/spec.md` §4.8](../docs/spec.md) — regions, currencies and the family tag (why two entries
+  of one vendor, why a price is never converted, and why a family may pair two different model ids).
+- [`design/decisions/ADR-018-currency-region-and-family-mapping.md`](../design/decisions/ADR-018-currency-region-and-family-mapping.md)
+  — why money is never mixed and what each of the three keys is for.
 - [`docs/spec.md` §4.4](../docs/spec.md) — rules, tee, and the missing retrieval channel.
 - [`docs/spec.md` §8](../docs/spec.md) — the error-type registry and its status codes.
 - [`design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md`](../design/decisions/ADR-011-upstream-error-taxonomy-and-recovery-actions.md)
