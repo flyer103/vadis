@@ -1744,7 +1744,7 @@ makes `/health`'s exemption structural rather than a path comparison (spec §4.7
   implementer has to invent one):
   - neither header present: `inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')`
   - a token was presented and did not match: `inbound auth: the presented token does not match the value of the environment variable named by server.auth_token_env`
-  Neither message ever contains the expected token, any prefix of it, or the presented value.
+  The second is dispatched by `Refused.header`, not by anything about the token's form: a malformed `Authorization` (no `Bearer` scheme, or a `Bearer` with an empty credential) offers no credential and cannot admit, but the header **was** carried, so it takes this message too. Neither message ever contains the expected token, any prefix of it, or the presented value.
 - The startup refusal (spec §4.7) is three lines next to the provider-key probe: read
   `std::env::var(name)`; on `Err` **or** an empty value print
   `router: config file <path>: server.auth_token_env names <NAME>, which is <unset|empty>: refusing to start (a token-less start would serve unauthenticated)`
