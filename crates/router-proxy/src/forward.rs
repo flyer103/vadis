@@ -127,7 +127,7 @@ pub fn mode_refused_record(
         CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec,
         StateRec, TraceError, TRACE_SCHEMA_VERSION,
     };
-    use router_core::NanoUsd;
+    use router_core::{Currency, Nano};
 
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
@@ -172,12 +172,17 @@ pub fn mode_refused_record(
         usage: router_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {
-            input_miss: NanoUsd(0),
-            input_hit: NanoUsd(0),
-            cache_write: NanoUsd(0),
-            output: NanoUsd(0),
+            input_miss: Nano(0),
+            input_hit: Nano(0),
+            cache_write: Nano(0),
+            output: Nano(0),
             peak_applied_pct: 100,
-            total: NanoUsd(0),
+            total: Nano(0),
+            // The pre-pipeline refusal default: no table priced this
+            // record, so the unit is the USD default — the same stance
+            // as the failure path in accounting.rs (spec §4.8), and
+            // every amount is 0, which is why it cannot mislead.
+            currency: Currency::Usd,
             quota_after: None,
         },
         result: ResultRec {
