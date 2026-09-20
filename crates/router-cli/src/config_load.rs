@@ -53,7 +53,9 @@ pub fn load(path: &Path) -> Result<ResolvedConfig, String> {
 /// Anchor a possibly relative path at the config directory, then normalize
 /// away `.` components (and non-leading `..` pairs) so `/health` and logs
 /// report one stable spelling. Absolute inputs are only normalized.
-fn resolve(config_dir: &Path, value: &str) -> PathBuf {
+/// Resolve a config-relative path (the trace.dir / rules_file discipline:
+/// absolute wins, else `<config_dir>/<value>`, lexically absolute).
+pub fn resolve(config_dir: &Path, value: &str) -> PathBuf {
     let joined = if Path::new(value).is_absolute() {
         PathBuf::from(value)
     } else {

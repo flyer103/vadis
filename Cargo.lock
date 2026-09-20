@@ -1101,6 +1101,7 @@ dependencies = [
  "clap",
  "futures",
  "router-core",
+ "router-plugins",
  "router-providers",
  "router-proxy",
  "router-store",
