@@ -616,14 +616,31 @@ impl Forwarder {
         }
 
         let mut attempted_providers: Vec<String> = Vec::new();
+        // The family's primary refused by ADR-011's cooldown projection
+        // before any attempt (spec §6's producer table, CONF-42): set by
+        // the skip below, consumed by the first candidate that is actually
+        // attempted.
+        let mut cooling_abandoned: Option<RouteSpec> = None;
         let mut last_class: Option<ErrorClass> = None;
         let mut last_upstream_status: Option<u16> = None;
         let mut attempt_index: u32 = 0;
 
         for candidate in &candidates {
-            if attempted_providers.iter().any(|p| p == &candidate.provider)
-                || self.provider_in_cooldown(&candidate.provider)
-            {
+            if attempted_providers.iter().any(|p| p == &candidate.provider) {
+                continue;
+            }
+            if self.provider_in_cooldown(&candidate.provider) {
+                // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
+                // `failover_from` table, row 2): the projection refused
+                // this candidate before any attempt, so the walk moves on
+                // — the skip *abandons* the route and `failover_from`
+                // names it, exactly like a failed attempt would.
+                failover_origin(&mut facts.failover_from, candidate);
+                if let Some(policy) = &self.config.plan_policy {
+                    if candidate == &policy.primary {
+                        cooling_abandoned = Some(candidate.clone());
+                    }
+                }
                 continue;
             }
             let Some(cand_provider) = self.provider(candidate).cloned() else {
@@ -637,6 +654,31 @@ impl Forwarder {
                 continue;
             };
             attempted_providers.push(candidate.provider.clone());
+
+            // The cooling displacement's record (spec §6's producer table,
+            // CONF-42): the family's primary was refused by the cooldown
+            // projection before any attempt and THIS candidate is the one
+            // actually serving the request — `to` is the route that
+            // answered, not a config guess. Trace row only: no
+            // `plan.switched` event and no `plan_state` move, because a
+            // cooldown is route availability, not a verdict on the plan
+            // (§4.6 rule 3). The figures follow the same convention a
+            // failover prices (ADR-011 item 9): the session's ledger
+            // tokens at the destination route's miss price, both null
+            // when no ledger exists.
+            if let Some(abandoned) = cooling_abandoned.take() {
+                if facts.plan_switch.is_none() {
+                    let (reprefill, cost_nano) = self.failover_cost(session.as_deref(), candidate);
+                    facts.plan_switch = Some(PlanSwitchRec {
+                        from: abandoned.to_string(),
+                        to: candidate.to_string(),
+                        reason: REASON_PRIMARY_COOLING_DOWN,
+                        probe: false,
+                        reprefill_tokens: reprefill,
+                        switch_cost_nano: cost_nano,
+                    });
+                }
+            }
 
             let api_key = self
                 .api_keys
@@ -1573,6 +1615,13 @@ impl Forwarder {
         }
     }
 }
+
+/// The third `plan_switch` reason word (spec §6's producer table /
+/// `PlanSwitchRec.reason`'s vocabulary): ADR-011's cooldown projection
+/// refused the family's primary before any attempt. Local to the proxy
+/// because only the two forwarding walks can produce it; the sibling
+/// words live in `router_core::plan` beside `plan.switched`'s writer.
+pub(crate) const REASON_PRIMARY_COOLING_DOWN: &str = "primary_cooling_down";
 
 /// The first route the request failed over from (spec §6
 /// `result.failover_from`): set once, never overwritten by later hops.

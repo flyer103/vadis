@@ -184,10 +184,18 @@ async fn conf_14_quota_exhausted_demotes_whole_provider() {
         "the demoted provider is not attempted again"
     );
     assert_eq!(rig.b.requests().len(), 2);
-    // No failover header on a direct hit.
-    assert!(headers2
+    // The skip is itself a displacement (spec §6's `failover_from` table,
+    // row 2): ADR-011's cooldown refused mock-a before any attempt, so the
+    // header names the abandoned route even though nothing failed here.
+    let from2 = headers2
         .iter()
-        .all(|(k, _)| !k.eq_ignore_ascii_case("x-router-failover-from")));
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-failover-from"))
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        from2,
+        Some("mock-a/glm"),
+        "the cooldown skip abandoned the route (spec 6, row 2)"
+    );
 
     rig.serve_task.abort();
     let _ = rig.serve_task.await;

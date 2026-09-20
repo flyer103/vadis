@@ -56,7 +56,7 @@ use serde_json::{json, Value};
 use crate::accounting::{AccountCtx, Accountant, RouteAccounting};
 use crate::forward::{
     resolve_session_key, rewrite_outbound_model, turn_index_for, ForwardFailure, Forwarder,
-    RequestFacts,
+    RequestFacts, REASON_PRIMARY_COOLING_DOWN,
 };
 use router_core::plan::{
     route_in_family, PlanAccount, REASON_PRIMARY_EXHAUSTED, REASON_PRIMARY_RECOVERED,
@@ -503,15 +503,57 @@ impl Forwarder {
         let mut last_upstream_status: Option<u16> = None;
         let mut last_class: Option<router_core::error_class::ErrorClass> = None;
 
+        // The family's primary refused by ADR-011's cooldown projection
+        // before any attempt (spec §6's producer table, CONF-42): set by
+        // the skip below, consumed by the first candidate actually
+        // attempted.
+        let mut cooling_abandoned: Option<RouteSpec> = None;
+
         for (ci, cand) in candidates.iter().enumerate() {
-            if attempted.iter().any(|p| p == &cand.route.provider)
-                || self.provider_in_cooldown(&cand.route.provider)
-            {
+            if attempted.iter().any(|p| p == &cand.route.provider) {
+                continue;
+            }
+            if self.provider_in_cooldown(&cand.route.provider) {
+                // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
+                // `failover_from` table, row 2): the projection refused
+                // this candidate before any attempt, so the walk moves on
+                // — the skip *abandons* the route and `failover_from`
+                // names it, exactly like a failed attempt would.
+                if failover_from.is_none() {
+                    failover_from = Some(cand.route.clone());
+                }
+                if let Some(policy) = &self.config.plan_policy {
+                    if cand.route == policy.primary {
+                        cooling_abandoned = Some(cand.route.clone());
+                    }
+                }
                 continue;
             }
             attempted.push(cand.route.provider.clone());
             let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
             facts.attempted_route = Some(cand.route.clone());
+
+            // The cooling displacement's record (spec §6's producer table,
+            // CONF-42), the streaming twin of the buffered walk's fill:
+            // the family's primary was refused by the cooldown projection
+            // before any attempt and THIS candidate is the one actually
+            // serving the request. Trace row only — no `plan.switched`
+            // event, no `plan_state` move (§4.6 rule 3); the figures
+            // follow the failover's price convention (ADR-011 item 9).
+            if let Some(abandoned) = cooling_abandoned.take() {
+                if facts.plan_switch.is_none() {
+                    let (reprefill, cost_nano) =
+                        self.failover_cost(session.as_deref(), &cand.route);
+                    facts.plan_switch = Some(PlanSwitchRec {
+                        from: abandoned.to_string(),
+                        to: cand.route.to_string(),
+                        reason: REASON_PRIMARY_COOLING_DOWN,
+                        probe: false,
+                        reprefill_tokens: reprefill,
+                        switch_cost_nano: cost_nano,
+                    });
+                }
+            }
 
             // Mutation (b), per attempt (§12.10.7): this route's native id.
             let outbound = match rewrite_outbound_model(&cleaned, &cand.route.model) {
