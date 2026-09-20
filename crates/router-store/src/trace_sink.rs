@@ -193,6 +193,7 @@ mod tests {
                 blocks: Vec::new(),
                 continuity: None,
             },
+            transform_mode: router_core::transform::TransformMode::Passthrough,
             transforms: Vec::new(),
             usage: Usage::default(),
             usage_missing: false,

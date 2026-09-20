@@ -32,6 +32,11 @@ rust-version = "1.88"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.10"
+# toml / regex: DESIGN §12.1's allowlist row for router-plugins (the
+# builtin/transform_rules rule file is TOML and its stages select by regex,
+# ADR-019 §7 / rules/tool_output.toml).
+toml = "0.8"
+regex = "1"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }

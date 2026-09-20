@@ -171,7 +171,8 @@ fn scan_array_elements(
 
 /// Scans one JSON element (object/array/string/raw) from `i`, returning
 /// the index just past it. Bracket/string tracking only — no parse.
-fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
+// make scan_element_end reachable from the transform module's array walker
+pub(crate) fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
     let mut j = i;
     match b[j] {
         b'"' => {
@@ -201,7 +202,16 @@ fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
                     }
                 } else {
                     match c {
-                        b'"' => stack.push(b'"'),
+                        b'"' => {
+                            stack.push(b'"');
+                            // Advance past the opening quote: re-reading it
+                            // with the string state on top would pop that
+                            // state immediately, leaving the string's
+                            // contents unprotected (a brace inside a payload
+                            // string then corrupts the element span — the
+                            // I2 fixture's grep payload found it).
+                            j += 1;
+                        }
                         b'{' | b'[' => {
                             stack.push(c);
                             j += 1;

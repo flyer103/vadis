@@ -207,12 +207,76 @@ pub async fn serve(config_path: &str) -> i32 {
     let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> =
         std::sync::Arc::new(trace_sink);
 
+    // The transform rule engine (spec §4.4 `builtin/transform_rules`,
+    // ADR-019): loaded from the first enabled `kind: builtin/transform_rules`
+    // plugin's `config.rules_file`. A rule that fails to load, compile or
+    // pass its inline tests does not load — the failure is named on the
+    // startup log (a countable, declared state), and the rest of the set
+    // serves. The mode is a request fact: this engine never edits a request
+    // that did not ask (I3 — the closed-mode byte equality).
+    let mut transform_engine: Option<std::sync::Arc<dyn router_core::transform::TransformEngine>> =
+        None;
+    for plug in &rc.router.plugins {
+        if plug.disabled || plug.kind != "builtin/transform_rules" {
+            continue;
+        }
+        let rules_file = plug
+            .config
+            .as_ref()
+            .and_then(|c| c.get("rules_file"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+        let Some(rules_file) = rules_file else {
+            eprintln!(
+                "router: plugins[{}] (kind builtin/transform_rules) has no config.rules_file: \
+                 not loaded (an engine that cannot find its rules is a named absence, \
+                 not a silent empty one)",
+                plug.id
+            );
+            continue;
+        };
+        let path = config_load::resolve(&rc.config_dir, &rules_file);
+        match router_plugins::load_path(&path) {
+            Ok((engine, report)) => {
+                for line in report.failure_lines() {
+                    eprintln!("router: {line}");
+                }
+                if report.loaded.is_empty() && report.failed.is_empty() {
+                    eprintln!(
+                        "router: transform_rules: rule file {} has no rules; \
+                         transform mode will ask-but-not-apply",
+                        path.display()
+                    );
+                }
+                transform_engine = Some(std::sync::Arc::new(engine));
+                // First hit wins (the three-level override is a later
+                // card's lookup ladder; v0.1 has one file).
+                break;
+            }
+            Err(e) => {
+                eprintln!(
+                    "router: transform_rules: rule file {}: {e}; not loaded \
+                     (a request that asks for transform mode runs with an empty ledger)",
+                    path.display()
+                );
+            }
+        }
+    }
+
     let forwarder = std::sync::Arc::new(Forwarder {
         config: rc.router.clone(),
         transports,
         api_keys,
         store: Some(store_dyn.clone()),
         trace: Some(trace_writer.clone()),
+        // The transform rule engine (spec §4.4 `builtin/transform_rules`,
+        // ADR-019): the loaded rule set, or `None` when no plugin declared
+        // one / the file failed to read — a request that asks for
+        // transform mode then runs with an empty ledger ("asked, not
+        // applied" — a countable state, spec §6). The mode is a request
+        // fact: this field never decides anything on the passthrough
+        // path (I3).
+        transform_engine,
         session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
     });
 
@@ -227,6 +291,37 @@ pub async fn serve(config_path: &str) -> i32 {
         body: axum::body::Bytes,
     ) -> Response {
         let request_id = request_id();
+        // The transform-mode opt-in, resolved at the boundary (ADR-019 §2,
+        // spec §2.1) — decided before the body is read. An unusable value
+        // is a 400 `invalid_request`: a typo must not silently disable a
+        // saving the client asked for, and it must never silently enable
+        // one. The header is not a body byte, so the opt-in cannot perturb
+        // the prefix (§2.1).
+        let transform_mode = match router_proxy::resolve_transform_mode(&headers) {
+            Ok(m) => m,
+            Err(f) => {
+                // Write, then answer — the same order the auth guard uses
+                // (the observation exists before the client is told); a
+                // trace write failure is §8's non-blocking case.
+                let now_epoch_s = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let record =
+                    router_proxy::mode_refused_record(&request_id, proto_in, &f, now_epoch_s, 0);
+                if let Some(t) = forwarder.trace.as_ref() {
+                    let _ = t.write(&record);
+                }
+                let mut eb = ErrorBody::new(f.code, f.message, &request_id);
+                eb.error.details = f.details;
+                let mut resp =
+                    (StatusCode::from_u16(f.status).expect("400 maps"), Json(eb)).into_response();
+                if let Ok(v) = request_id.parse() {
+                    resp.headers_mut().insert("x-router-request-id", v);
+                }
+                return resp;
+            }
+        };
         // The path split is decided by a shallow parse of `stream` only —
         // the same field the buffered engine refuses on, so the two paths
         // cannot both accept one request.
@@ -236,7 +331,7 @@ pub async fn serve(config_path: &str) -> i32 {
             .unwrap_or(false);
         if is_stream {
             return match forwarder
-                .forward_stream(proto_in, &body, &request_id, &headers)
+                .forward_stream(proto_in, &body, &request_id, &headers, transform_mode)
                 .await
             {
                 router_proxy::StreamOutcome::Success(s) => {
@@ -273,7 +368,7 @@ pub async fn serve(config_path: &str) -> i32 {
             };
         }
         let outcome = forwarder
-            .forward(proto_in, &body, &request_id, &headers)
+            .forward(proto_in, &body, &request_id, &headers, transform_mode)
             .await;
         match outcome {
             ForwardOutcome::Success(s) => {

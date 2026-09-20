@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 router-cli = { path = "../../crates/router-cli" }
 router-store = { path = "../../crates/router-store" }
 router-proxy = { path = "../../crates/router-proxy" }
+# CONF-63 loads the real builtin/transform_rules engine indirectly through
+# `serve` (the plugin config names the repo rule file); no direct dep needed.
 router-providers = { path = "../../crates/router-providers" }
 bytes = { workspace = true }
 http = { workspace = true }

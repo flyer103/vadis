@@ -356,6 +356,9 @@ pub struct Decision { pub route: RouteSpec, pub source: SelectionSource, pub plu
 pub trait Transform: Send + Sync {
     fn id(&self) -> &'static str;
     /// Content-deterministic: reading the clock/turn/RNG is forbidden. Err = fall back to the original text (spec §8), the caller records the trace.
+    /// Shape superseded by §12.12 (ADR-019): `apply_node(ctx, text) -> Option<TransformOutcome>` plus a
+    /// path-addressed plan applied as value spans over the client's bytes — the parsed view is never
+    /// what reaches the wire.
     fn apply(&self, req: &mut CanonicalRequest) -> Result<TransformReport, TransformError>;
 }
 pub struct TransformReport {
@@ -669,7 +672,8 @@ pub struct DecisionRecord {
     pub decision: DecisionRec,          // decision
     pub state: StateRec,                // state
     pub prefix: PrefixRec,              // prefix
-    pub transforms: Vec<TransformRecord>, // transform (one per step)
+    pub transforms: Vec<TransformRecord>, // transform (one per step that changed the payload; omitted when empty)
+    pub transform_mode: TransformMode,  // the mode in effect for this request's outbound body (ADR-019, spec §2.1/§6); always present
     pub usage: Usage,                   // usage
     pub cost: CostRec,                  // cost
     pub result: ResultRec,              // result
@@ -689,7 +693,13 @@ pub struct PrefixRec { pub blocks: Vec<PrefixBlock>, pub continuity: Option<f32>
 pub struct PrefixBlock { pub kind: BlockKind, pub index: u16, pub tokens: u64, pub hash: String }
 pub struct TransformRecord { pub plugin: String, pub added_input_tokens: i64, pub saved_input_tokens: i64,
     pub saved_output_tokens: i64, pub cache_impact: CacheImpact, pub verdict: Verdict,
-    pub tee_id: Option<String>, pub error: Option<String> }
+    pub edited_paths: Vec<EditedPath>, pub tee_id: Option<String>, pub error: Option<String> }
+/// What one step rewrote, and how much of it (ADR-019; spec §6's `edited_paths[]`): the audit surface of
+/// a content edit — a reviewer compares spans, not documents (§12.12, ADR-007's rationale). `path` is the
+/// node address (`input[7].output`), never a byte offset (the scan is what resolves it, per attempt), and
+/// the two byte counts are the **payload text's** length before and after the step, not the encoded span's
+/// (escaping belongs to the splicer and shows up in that attempt's `body_hash`).
+pub struct EditedPath { pub path: String, pub rule: String, pub bytes_in: usize, pub bytes_out: usize }
 pub struct CostRec { pub input_miss: Nano, pub input_hit: Nano, pub cache_write: Nano,
     pub output: Nano, pub peak_applied_pct: u32, pub total: Nano,
     /// spec §4.8 (ADR-018): the unit every amount in this record is denominated in — the currency of the
@@ -736,7 +746,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 | decision | `provider` `model` `requested_model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` (`model` = the resolved provider-native id, `requested_model` = the client's own string — spec §6 and §12.10.7) |
 | state | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
 | prefix | `prefix_blocks[]` (token count + hash) `prefix_continuity` | `prefix.blocks[].{tokens,hash}` `prefix.continuity` |
-| transform | `plugin` `added_input_tokens` `saved_input_tokens` `saved_output_tokens` `cache_impact` `verdict` | `transforms[].*` |
+| transform | `transform_mode` `plugin` `edited_paths[]` `added_input_tokens` `saved_input_tokens` `saved_output_tokens` `cache_impact` `verdict` | `transform_mode` + `transforms[].*` (the mode is a sibling of the array, never derived from it: an empty array is ambiguous between "no mode" and "mode on, nothing matched" — spec §6, ADR-019) |
 | usage | `input_total` `input_cached` `cache_write` `output` `reasoning` | `usage.*` |
 | cost | `cost.input_miss` `input_hit` `cache_write` `output` `total` `quota_after` | `cost.*` |
 | result | `status` `upstream_status` `failover_from` `plan_switch` `overhead_ms` `upstream_ms` | `result.*` (`plan_switch` is ADR-014's displacement record: spec §6 defines it, §12.10.8 lands it) |
@@ -768,6 +778,10 @@ spec §6 field groups → Rust paths (auditable line by line):
   `schema_version` stays 1. It is **not** a second name for `failover_from` — spec §6's own table fixes which
   facts set which of the two (a failure-class fact sets `failover_from`; the plan policy's account state sets
   `plan_switch`) — and §12.10.8 lands the rest.
+- `transform_mode` and `transforms[].edited_paths[]` are additions of the same class (ADR-019; spec §6):
+  the mode is present on every record and the path list only on a step that changed a payload, so a
+  reader that tolerates unknown fields reads an older record unchanged — an added key never moves the
+  version (§12.12 lands the rest).
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
@@ -805,7 +819,7 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 
 | `error.type` | HTTP | Trigger |
 |---|---|---|
-| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type |
+| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Router-Transform` value (spec §2.1, ADR-019) |
 | `unknown_provider` `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `auto_not_supported` | 400 | `model: auto` (v0.1; the hint says a plugin takes it over, spec §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` |
@@ -822,7 +836,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-56`)
+### 12.8 conformance case table (`CONF-01…CONF-63`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -875,6 +889,7 @@ not written).
 | CONF-42 | §6 `plan_switch.reason: primary_cooling_down`·the third value's producing path | a request whose resolution lands on the family's `primary` while that provider is inside ADR-011's cooldown is served by the overflow route with `result.plan_switch { from: <primary>, to: <the route actually attempted>, reason: primary_cooling_down }` and `failover_from` naming the abandoned primary — and with **no** `plan.switched` event and the account state still `primary` (a cooldown may not move the account, §4.6 rule 3); the negative half: a healthy primary produces no such value | the pre-attempt cooldown displacement record (2026-09-20, `582001f`) |
 | CONF-43 | spec §9.3·the documented command set | **docs ↔ CLI consistency, both directions**: every `router <subcommand>` mention in `book/` and `README.md` (direction: docs → CLI) must resolve in the real clap parser — as a served subcommand, or as a whitelisted deferral that sits inside a paragraph carrying a deferral marker; and every subcommand the parser accepts must be mentioned in the docs at least once (CLI → docs, whitelist-independent). The relation asserted is "documented set = parser's set, modulo explicitly marked deferrals", never a snapshot of either side | the CLI surface (`serve`, `stats`) + the two documentation sets |
 | CONF-44 | spec §6's `plan_switch` producer table (row ii)·the direction rule | **a state-driven displacement's `reason` is decided by destination, never by the account state read before the request**: on the third turn of an already-spilled family (nothing failed in the request, no probe admitted) the displacement to the overflow route says `primary_exhausted` with `failover_from: null` and `probe: false`; the spill round itself keeps `primary_exhausted` in the same run, so the two rows cannot drift | the guard's displacement record (both forwarding paths) |
+| CONF-60 | spec §2.1/§6, ADR-019 §2·the transform-mode opt-in channel | **the mode channel, four ways**: ① absence of `X-Router-Transform` ⇒ `passthrough`, the byte path; ② explicit `passthrough` ⇒ the same; ③ `transform` with no configured engine ⇒ "asked, not applied": served, `transform_mode: "transform"` on the trace, `transforms` omitted, upstream bytes byte-equal modulo (a)/(b); ④ any other value ⇒ `400 invalid_request` decided **before the body is read** (the wire sees nothing), §8's body + `X-Router-Request-Id`, and the pre-pipeline record class on the trace (`transform_mode: "passthrough"`, `event_id: 0`, `usage_missing: true`, `errors[].kind == "transform_error"`, priced nowhere) | the header resolution at the boundary (`router-proxy::resolve_transform_mode` + `router-cli`'s `mode_refused_record`, §12.12) |
 | CONF-45 | spec §4.7 + §8·inbound token auth | **the boundary guard, six ways**: ① no token → `401` (`unauthorized`, §8's body verbatim); ② a wrong token → `401`; ③ the right token, once as `Authorization: Bearer` and once as `x-api-key` → forwarded normally, with the upstream-visible bytes unchanged (the guard adds nothing to the body); ④ `GET /health` with no token → `200`; ⑤ **no `server.auth_token_env` ⇒ behaviour identical to before the key existed** (no auth anywhere); ⑥ the key written but its environment variable missing/empty ⇒ the process does not start (non-zero exit, the variable named on stderr). A 401's trace line — one record, `errors[].kind == "unauthorized"`, `usage_missing: true`, priced nowhere — is asserted with them | the start-up resolution (router-cli) + the guard (`router-proxy::auth`) + §12.11's record |
 | CONF-46 | spec §9.3·`GET /metrics` not served | **a bare 404, both layers**: against the real `serve` assembly over loopback (with a `/health` 200 liveness control on the same run), `GET /metrics` answers status `404` — never `200` (a served surface) and never `501` (a registered-but-unimplemented route), because an unregistered path has no handler to choose either — and the response carries no §8 error body: no JSON `error` member and no `X-Router-Request-Id` header (an unrouted path does not go through §8's formatter) | the `serve` route registration (router-cli), asserted without touching it |
 | CONF-47 | spec §9.3·unserved subcommands | **the parser's refusal, real exit code and wording**: `router replay --trace … --config …`, `router trace tail`, and the bare `router replay` / `router trace` are each refused by the same `Cli` parser `main` dispatches on — a usage error naming the subcommand (`unrecognized subcommand`, plus a usage line; checked by substring, not a frozen string), mapping to a non-zero process exit (clap's usage error → exit 2, never a silently ignored flag); a liveness control shows the same argv prefix with a served subcommand parses, proving the refusal is the subcommand itself | the CLI argument parser (`router_cli::Cli`, clap derive) |
@@ -885,6 +900,8 @@ not written).
 | CONF-56 | spec §9.2 + ADR-018 §6·`router stats --json` keeps its scalars with one currency and omits them when two are present | through the public surface the CLI's own print path calls (`stats::report` + `report_json`): (a) a single-currency window keeps every scalar cost key, adds `"currency"`, grows no `by_currency` member, the plan section's `switch_cost_currency` names the unit; (b) a mixed window (CONF-54's rig) omits the scalar cost keys and `currency`, presents the tiers only under per-currency maps holding exactly the currencies seen, the plan section's scalar switch keys absent and its `*_by_currency` maps present — while the currency-free figures (`requests`, `switches`, hit rate) stay single and unchanged, and the report exits 0 | the `--json` report builder (`router-cli` `stats::report_json`) |
 
 **Integration note (2026-09-21, `intern/merge-r6-r9`).** ADR-018's row set allocated `CONF-46…49`; 46/47 were burned by the parallel R6 branch (the two rows above) and the cases that landed with the implementation are **CONF-52…56** — the renumbering paragraphs below record the mapping. One row of the original allocation never landed a case file: **the USD cap over a non-USD overflow refused at load** (written as CONF-49's). Its load-time validation exists (`config.rs`'s `validate_plan_policy`, the `overflow_monthly_cap_usd` × `Currency::Usd` check) but no conformance case asserts it; recorded here rather than given a number — the row is re-allocated when a case lands, per the occupancy notes below.
+| CONF-61 | DESIGN §12.12 invariant I1 (ADR-019 item 4)·content determinism | with a fixed rule set, two runs of the composition step over identical inbound bytes produce **byte-identical upstream-visible bodies**, and the same content under a different session key produces the same output (the plan reads no session, clock, turn index or RNG); run on **both** forwarding paths (buffered via the transport seam, streaming via a mock upstream). Negative limb: the trimmed output differs from the untrimmed bytes — the edit is real, so a determinism pass cannot be vacuous | the shared composition step (`compose_transform_stage`) + the engine seam (`TransformEngine`) |
+| CONF-62 | DESIGN §12.12 invariant I3 (ADR-019 item 4)·closed-mode byte equality | with a **fully-populated engine loaded whose rule matches the fixture's payload**, a `passthrough`-mode request's upstream bytes equal the client's modulo exactly mutations (a) and (b) — the loaded, matching engine edited nothing (this is the limb that keeps CONF-01/02/03 non-vacuous now that a transform is configurable). Negative limb: the same content with mode `transform` produces the edit — different bytes, exactly the two mutations plus the one declared value-span edit | the mode check inside the composition step (§12.12) |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1064,6 +1081,14 @@ items are written into the spec, unsettled ones stay registered.)
 | Q15 | ADR-014's `account:` / `plan_policy:` are in spec §4 / §4.6 but not in `config.example.yaml` or the parser, and the example is the file an implementation reads directly (spec §4) | land both in the **same round** that implements ADR-014; until then the example is exactly spec §4 minus these two keys (there is no drift in the other direction — it carries nothing the spec does not define) | `deny_unknown_fields` makes a key and its parser inseparable: an example ahead of the parser is an unservable file |
 | Q16 | which signal may `Reject` on a plan's allowance: today `over_quota: block` acts on the **local** counter, whose `tokens` may be a placeholder (Q1) | ADR-014 item 2 / §12.4's refinement: the local verdict warns and never gates, and the `Reject` follows upstream evidence | one refusal point moves behind upstream evidence; the local verdict stays visible in `cost.quota_after.verdict` |
 | Q17 | the CN coding plans' published allowance is **not** a token count: `GLM Coding Plan` publishes credits (Lite 2,000/5 h + 10,000/week, Pro 12,000/60,000, Max 28,000/140,000) with a published deduction formula (GLM-5.3: input 6.9, cached 1.7, output 24 per 10,000, halved off-peak) and `Kimi Code` publishes usage windows (a 5-hour rolling window plus a monthly total). v0.1's `quota` is `{models, window: monthly, tokens, reset_day, over_quota}` — the figures here are quoted, not adopted, from `https://docs.bigmodel.cn/cn/coding-plan/overview` (`/glm-coding`) and `https://www.kimi.com/code/docs/`, both read **2026-09-21** (ADR-018 carries the source table; no config value is derived from them) | the CN plan entries carry **no** `quota`: §4.6 already rules that a plan whose allowance is not published is still a plan, and turning a credit allowance into a token figure would be fabrication. The allowance, the coefficients and the windows live in the entries' comments with their source URL and read date (ADR-018) | the local counter is absent for those plans (the upstream stays the only authority, §4.6 rule 3). A future round that wants credit accounting must model the coefficients, the two window kinds and the plan's peak multiplier explicitly — a config shape, not a convenience |
+
+| Q18 | a rule's `match_kind` is declared as a "payload category declaration" (`rules/tool_output.toml`), but nothing says where the category comes from: no wire field carries it and spec §4 defines no tool→kind table | the first rules select on `match_tool` alone, which is sufficient; `match_kind` is resolved by the implementing change (a declared tool→kind table in the plugin's config) | rule selection for the transform pipeline (§12.12); a rule that cannot select its targets must not fall back to guessing content (ADR-003) |
+| Q19 | the failing-rule reporting surface: `rules/tool_output.toml` says a rule that fails its inline tests is "reported in the startup log and `/health`", while spec §9.1's `/health` shape has no member for it | the startup log carries it; `/health` gains nothing until the surface's own contract is written | a documented surface with no shape must be named, not invented (§9.3's rule); the implementing change raises it |
+
+**A note on the numbering: Q17 is not absent by accident.** It belongs to the currency / region / route-tag
+contract that is being written on another branch of this repository, and this tree's table therefore
+jumps from Q16 to Q18. Numbers here are allocated once and never reused (§12.8's rule for case IDs; the
+same discipline applies to this register).
 
 ADR disposition (2026-09-19): the three originally proposed ADRs have been written as the orchestrator ruled —
 `ADR-006` "integer NanoUsd fixed-point accounting", `ADR-007` "span-faithful forwarding (no
@@ -1944,6 +1969,148 @@ does not write `server.auth_token_env` is the new `auth: {required: false}` memb
 word on the startup line: **no request's behaviour changes at all**, which is what CONF-45 ⑤ asserts and
 what makes this round backward compatible by construction.
 
+### 12.12 The transform pipeline: mode, edits, invariants and the ledger (ADR-019; **tier 1 wired**)
+
+Primitive **P6 `transform-chain` is wired for tier 1** (the engine
+`router-plugins/src/transform_rules.rs` loads `rules/tool_output.toml` — its 13 inline tests are the
+acceptance test; `router-cli` wires it from `plugins[].config.rules_file`; the mode channel,
+composition step and invariants I1/I3 landed in R9-2a, I2 + the ledger in R9-2b, pinned by
+CONF-60..63). What remains open is landing order ⑥ (the paired measurement that may turn a rule's
+net into a `verified` figure), ⑤'s CONF-16 half (the un-ignore: the case is still `#[ignore]`d with
+an empty body, and the fixture that would make it non-vacuous now exists in CONF-63), and the P4
+class (excluded by I2 by construction). This section is the
+contract the landed code answers to. The
+contract is ADR-019 (mode, edit discipline, three invariants, measurement); spec §2.1/§4.4/§6/§7 is the
+external promise; the rule format is already landed as data (`rules/tool_output.toml`, four rules, 13
+inline tests).
+
+**Shape: a content-level plan, byte-level application.** The transform is split in two on purpose, so
+that the half that decides is exhaustively unit-testable without a body and the half that edits is
+auditable by span comparison:
+
+| piece | home | what it is |
+|---|---|---|
+| `TransformMode` | `router-core` (type), resolved in `router-proxy` | `Passthrough \| Transform`, from `X-Router-Transform` — `router-core` never reads a header (§12.5/§12.11's split) |
+| the rule engine | `router-plugins` (`builtin/transform_rules`; allowlist `toml`, `regex`) | **text in, text out, per payload node**; the stage order, `match_*` selection, `tee` marker and `on_empty` are fixed by `rules/tool_output.toml`, and its inline tests are the parser's spec (ADR-003 item 3, ADR-008) |
+| the payload locator + value-span splicer | `router-core::body` | `NodePath` (object keys / array indices) → the node's **value span** in the client's bytes → splice the new text re-encoded as a JSON string; the same single-pass scanner as §12.3.1/§12.10.6, never a reserialize |
+| the ledger | `router-core::trace` (§12.6) | one `TransformRecord` per step that changed the payload, plus the record's own `transform_mode` |
+| the composition step | `router-proxy` (`forward.rs` + `stream_forward.rs`, **one shared helper**) | applies mutations (a)/(b) and then the plan's edits, per attempt; the L2 leak pattern says why this must stay one implementation |
+
+```rust
+// router-core. Sketch only: the plan is content-addressed, the bytes are resolved later.
+pub enum TransformMode { Passthrough, Transform }
+pub enum PathSeg { Key(String), Index(u32) }
+pub struct NodePath(pub Vec<PathSeg>);
+pub struct PayloadEdit { pub path: NodePath, pub rule: String, pub new_text: String,
+                         pub bytes_in: usize, pub bytes_out: usize }
+pub struct TransformPlan { pub edits: Vec<PayloadEdit>, pub reports: Vec<TransformReport> }
+
+/// Content-level: pure in (the node's text, stable config). `None` = leave this node alone.
+pub trait Transform: Send + Sync {
+    fn id(&self) -> &'static str;
+    fn apply_node(&self, ctx: PayloadCtx<'_>, text: &str) -> Option<TransformOutcome>;
+}
+
+impl RawBody {
+    /// One level deeper than `set_top_level_string`: replace the value spans addressed by `edits`
+    /// (`Cow::Borrowed` when the list is empty). Same escaping rule, same "an unresolvable address is
+    /// an error, never an invention" stance (§12.3.1).
+    pub fn apply_edits(&self, edits: &[PayloadEdit]) -> Result<Cow<'_, [u8]>, BodyError>;
+}
+```
+
+The `Transform` trait of §12.3 is **superseded in shape** by the sketch above (`apply_node` + a
+path-addressed plan, instead of `&mut CanonicalRequest`): a content edit reaches the wire as byte spans
+over the client's bytes, and §12.3's own note already says the parsed view is never used for outbound
+sending. `TransformReport`'s fields stand as written; the record gains `edited_paths[]` (spec §6).
+
+**Where it sits, and why that order.** §3's chain is unchanged:
+`parse → session resolution → transform chain → selector → guard chain → encode → forward → …`
+
+- The **plan is computed in the transform-chain stage**, from (the client's bytes, the mode, the
+  configured rule set) and nothing else — no clock, no session, no turn index, no route. One plan per
+  request, so a fallback chain does not recompute it, and I1 (content determinism) is decidable by
+  reading the stage's inputs.
+- The **spans are resolved in the composition step** (§12.10.7), per attempt, against the byte-final
+  body: `(a) delete router-owned members → (b) replace the top-level model value → (c) apply the plan's
+  edits → body_sha16 / extract_prefix_blocks / build_request`. Resolving *after* (a)/(b) is what makes
+  path addressing immune to the byte shifts those two mutations cause; everything downstream (the
+  provider, the event's `body_hash`, the trace's blocks) sees those bytes and only those.
+- **The same step serves both forwarding paths.** A second copy in `stream_forward.rs` is exactly the
+  L2 leak pattern, and the streaming path is the same request with a different relay (§12.10.3 R11).
+- **Before the guard chain**, per §3's order, so the guard judges the body that will actually be sent
+  (a trimmed body may fit a `context` limit, and a cost cap applies to the size that goes out). This is
+  also where the existing event wiring already puts the ledger: §12.10.5 row 2 writes `transform.applied`
+  after the step returns `Ok` and its report is built, i.e. with the plan — so a request the guard then
+  refuses keeps both its entries and its mode word, and **a ledger entry is a statement about the plan,
+  never a claim that those bytes left the process** (`result.status` is that answer; the review checklist
+  must not read one as the other). This ADR adds **no event kind and no event-payload field**: the row's
+  payload (plugin, added/saved tokens, `cache_impact`, verdict) is the state truth's own shape, and a
+  wish from the implementing card to carry the paths there would be a versioned event-schema change with
+  its own decision (`events.schema_version`, §12.10.4).
+- A transform whose `cache_impact` is `Broken` is refused by `cache_guard` under `strict_prefix: true`
+  (§12.3, spec §8's "prefix discontinuity" clause) — the existing refusal point, not a new one.
+
+**The three invariants, as assertions (ADR-019 items 4–5).** Each is stated so that it can be made to
+fail, and each has an accompanying negative limb so a vacuous pass is visible:
+
+| # | Assertion | Fixture / negative limb |
+|---|---|---|
+| I1 | with a fixed rule set, two runs of the composition step over identical inbound bytes produce byte-identical outbound bodies, identical `body_hash`, and identical ledger bytes; and the *same* bytes with a different session and `turn_index` produce the same output | the same fixture is composed with the clock advanced and with a different session id: any difference fails. Run it on **both** forwarding paths |
+| I2 | with a fixed rule set, turn 2's body = turn 1's + appended items ⇒ `out(1)` is a **byte prefix** of `out(2)`, and the trace's `prefix.continuity == 1.0` | negative limb: a rule that trims by position (a rolling window) fails the same fixture — the assertion distinguishes a monotone rule set from a non-monotone one instead of asserting a constant |
+| I3 | with `transform_rules` loaded and rules that **do match** the fixture payload, a request **without** the header produces bytes equal to the client's modulo (a)/(b) — including the payload the rule would have trimmed | negative limb: the same request **with** `X-Router-Transform: transform` produces the edit **and** one ledger entry, so the pair distinguishes mode-off from mode-on |
+
+**Conformance IDs are not allocated here.** The case files live in `tests/conformance/` (outside this
+round's write-set) and §12.8's rule is explicit that an ID is a human decision. What the implementing
+card needs is stated above as assertion intent: (i) a new case per invariant limb, whose row says which
+invariant it pins; (ii) **the I3 limb attached to the fidelity family** (CONF-01/02/03), because that
+family's byte equality is what a configurable transform could make vacuous — and changing an existing
+case's assertion is itself a human decision (AGENTS 9), so the row move and the case change land
+together; (iii) **CONF-16 leaves `#[ignore]`** in the same change, with the I2 fixture as its body
+(its own ignore reason is *"no transform exists to enable yet … a vacuous body would be an always-true
+test"* — this is the fixture that makes it non-vacuous).
+
+**Failure semantics.**
+
+| Event | Behaviour | Record |
+|---|---|---|
+| unusable `X-Router-Transform` value | `400 invalid_request`, before the body is read (spec §2.1, §8) | the pre-pipeline record class of spec §6 |
+| a rule fails to load / compile / pass its inline tests | that rule **does not apply** (the rest of the set loads); payload verbatim (ADR-003's fail-safe, the rule file's own hard constraint 3) | `errors[].kind = transform_error`, naming the rule |
+| the applier cannot resolve a path / splice a value | the request is forwarded **unedited** (fail-safe), never a partially edited body and never the client's string substituted for a value | `transform_error` + `transform_mode: transform` with an empty `transforms[]` — "asked, not applied" is a countable state, which is the point of the separate mode field |
+| a plan that was computed but the guard then refused | the edited bytes never left the process; the entries stay (they describe the plan) and the refusal is the record's own `result.status` | `transform_mode: transform` + the step entries, as spec §6 defines them |
+
+The applier's failure is deliberately **not** a `500` (unlike mutation (b), §12.10.7): (b) is a
+correctness requirement — without the native id no provider can serve the request — whereas a payload
+edit is an optimisation, and turning a compression bug into an outage of the whole session is a worse
+outcome than serving the bytes the client sent.
+
+**Latency.** One scan per candidate payload node, one rule-engine pass per matched node, one splice
+pass over the body — no whole-body re-encoding, so the plan is O(body + Σ payload) with no
+allocation of a rewritten document. The budget is `autowork/program.md`'s gate ("the decision +
+transform overhead p99 stays within budget, benchmarked against rtk's <10ms shape") and is re-measured
+by the round that lands this; **no latency number is claimed here**, and the rule format's own knobs
+(`min_input_bytes`, the byte-budget guard) are what a rule that costs more than it saves is expected to
+use.
+
+**What it does not change.** `RouteSpec` and the route vocabulary (the mode is a request fact, never a
+route property, so CONF-27's "alias ≡ direct, byte-identical" claim is untouched); the two-mutation
+table; `schema_version` (both additions are optional fields, §12.6); the store (the ledger is
+trace-only, no new event kind, no projection); and `/health`'s shape — a *disabled* rule set is already
+reported through the existing `plugins_disabled` clause (§12.5), while the **failing-rule** reporting
+that `rules/tool_output.toml` promises ("the startup log and `/health`") has no shape in spec §9.1,
+which is a different surface's contract and **not this round's write-set**: named here as an open item
+for the implementing card to raise, rather than quietly invented.
+
+**Landing order for the implementing cards.** ① `NodePath` + `apply_edits` in `router-core::body`
+(unit-level, with an adversarial fixture matrix in the style of the deletion matrix: escapes, multi-byte
+UTF-8, a path that resolves to a non-string, an absent path); ② `TransformMode` + the header resolution
+in `router-proxy` (the 400, and `transform_mode` on **every** record constructor — the four
+`DecisionRecord` sites); ③ the composition-step application + the ledger plumbing on both forwarding
+paths through the one helper; ④ the `builtin/transform_rules` engine against
+`rules/tool_output.toml`, whose 13 inline tests are its acceptance test; ⑤ the conformance cases above
+plus CONF-16's un-ignore; ⑥ the paired measurement that turns the first rule's net gain into a
+`verified` figure — the only step that may be reported as a saving (spec §7).
+
 ## 13. Primitive register, module map and leak register (ADR-016)
 
 The vocabulary is ADR-016's; this chapter is the enumeration. It answers three questions that §2–§12 answer
@@ -1966,7 +2133,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | P3 | `resolution` | exactly one route per request from the roster (explicit/alias); the native id is what the outbound body carries; `auto` → 400, undeclared capability → 400 | spec §3, §4, §8; §3, §7, §12.3 | `router-core/src/config.rs:226,746,872`; `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | wired, with L2/L3/L4 |
 | P4 | `policy-guard` | the route/refusal decision is a pure predicate over (route, projections, stable config, one clock read) with a normative order; transitions follow upstream evidence only | spec §4.2, §4.6, §8; ADR-011; ADR-014; §12.3, §12.4, §12.10.8 | `router-core/src/plan.rs:109,151,183`; `error_class.rs:226`; `quota.rs:113`; `breakeven.rs:70`; `forward.rs:1121-1200` | wired, with L1/L6 |
 | P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → autowork channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
-| P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving | ADR-003; ADR-008; spec §4.4, §6, §7; §6, §12.3 | **none** (`router-plugins/src/lib.rs:1-4` is a stub; `transforms: Vec::new()` at `accounting.rs:483`, `auth.rs:170`) | **contract-only** |
+| P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `router-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `router-core/src/transform.rs`; composition step `router-proxy/src/forward.rs::compose_transform_stage`; wiring `router-cli/src/lib.rs` (`plugins[].config.rules_file`); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
 | P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
 | P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; §4, §12.2 | **none** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` are stubs; `inject`/`isolate`/`intercept` parse at `config.rs:816-840`, validate at `config.rs:1232-1261`, are consumed by nobody) | **contract-only** |
@@ -1990,13 +2157,14 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | `router-proxy/src/auth.rs` | P2 | part of the pipeline: it runs before the body is parsed and writes no store row |
 | `router-proxy/src/forward.rs` | the buffered pipeline: P3 (`resolve_route :1270`), P4 (`plan_guard :1121`, `provider_in_cooldown :1308`, `probe_deferred_by_window :1201`), P1 (`rewrite_outbound_model :223`, the key deletion `:528`), P5 (the record assembly), P7 (the event sequence) | a second copy of a primitive the streaming path also needs (see L2) |
 | `router-proxy/src/stream_forward.rs` | the same pipeline over the streaming medium (the shared helpers are the point: `plan_guard`, `record_classification`, `resolve_session_key`, `turn_index_for`, `rewrite_outbound_model`) | its own resolution (`resolve_route :981`) or its own capability check (`:332-345`) |
-| `router-proxy/src/accounting.rs` | P5 (the record's single writer, `Accountant::commit :358`) + P8 (the five-tier pricing) | a second writer of the trace: `transforms: Vec::new() :483` is the current, honest shape of a chain with no steps |
+| `router-proxy/src/accounting.rs` | P5 (the record's single writer, `Accountant::commit :358`) + P8 (the five-tier pricing) | a second writer of the trace: with the tier-1 chain wired, `transforms` carries the composition step's real ledger (`ctx.transforms`, `:509`); the closed mode still yields the empty list |
 | `router-proxy/src/health.rs` | **consumer** of P4/P7 for `/health` (spec §9.1) | a second implementation of the guard (L1): it reports what the policy says, it does not re-decide |
 | `router-cli/src/lib.rs` | the `serve` assembly: P2's wiring (`:314` `/health` outside the guarded set, `:344-375` the per-route gate), the startup prerequisites | a place where a route's guard is applied by path comparison |
 | `router-cli/src/stats.rs` | **consumer** of P5/P7/P8 for `router stats` (spec §9.2; `report :188`, the read-only store open `:221`, the window scan `:366`) | a writer, or a reader that estimates what it cannot compute |
 | `router-store/src/lib.rs` | P7's SQLite/WAL implementation (migrations, the writer lock `:218`) | a second domain model |
 | `router-store/src/trace_sink.rs` | P5's on-disk sink (`TraceSink :40`, `write :73`) | a place that decides the record's content |
-| `router-plugins/`, `router-runtime/`, `router-plugin-sdk/` | P6 and P9 — **contract-only** (`*.rs:1-4` stubs) | a claim that a transform or a realm exists today |
+| `router-plugins/` | P6's rule engine (`transform_rules.rs`: loads `rules/tool_output.toml`, runs its inline tests at load, serves the composition step) — the other tier-A plugins remain stubs | a claim that cache_guard / cost_ledger / quota_guard / sticky exist today |
+| `router-runtime/`, `router-plugin-sdk/` | P9 — **contract-only** (`*.rs:1-4` stubs) | a claim that a realm exists today |
 | `tests/conformance/` | the assertions that pin P1/P3/P5/P7 (and the ones that will pin the others; §12.8 is the table) | a place to move an invariant in order to pass (AGENTS 9; ADR-012) |
 | `autowork/` | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
 
@@ -2012,7 +2180,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | **L2b** | P3 | the `supports` capability check and its 400 body | `router-proxy/src/forward.rs:491-507` | `router-proxy/src/stream_forward.rs:332-345` | spec §8's `capability_unsupported` is a contract; two renderings can drift in `details`/message | **open** |
 | **L3** | P7/P5 | the two reporting consumers read the same state by **different mechanisms** | `/health` reads through the writer's own connection (`router-proxy/src/health.rs:104-135` via `AppState::store`, `:24-28`) | `router stats` scans the trace directory and opens the store read-only (`router-cli/src/stats.rs:188-283`, `:221`, `:366`) | only one of them works while the other is true: the read-only open is refused while `serve` holds `PRAGMA locking_mode = EXCLUSIVE` (`router-store/src/lib.rs:218`, R6-G3), so the "same fact, two views" is really "two facts, one of them unavailable" | **open**; a read seam must state which figures each consumer can honestly obtain |
 | **L4** | P3 | the reserved `auto`/`Selector` slot | prose says reserved (`docs/spec.md:78-79`; `design/DESIGN.md:14,367`, §3's closing paragraph) | code has no slot: the refusal is a literal comparison (`router-proxy/src/forward.rs:403-407`), there is no `trait Selector`, and `decision.selection_source` is a `String` (`router-core/src/trace.rs:88`) whose third value is absent from spec §3's own list | the repository's own rule forbids this shape ("a documented-but-unreachable surface is a defect", spec §9.3); the honest options are to define the value or delete it — **a human decision** | **open, by design**; recorded rather than silently kept |
-| **L5** | P6, P9 | primitives whose absence is load-bearing for accepted modes | `router-plugins/src/lib.rs:1-4`, `router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` (stubs) | ADR-003 (the whole transform contract), ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9, and no saving today comes from P6 (`transforms: Vec::new()`); a plan that reads as if these existed wastes a round | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
+| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` (stubs) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
 | **L6** | P4 | the guard's answer vocabulary: `GuardOutcome` is named as existing vocabulary (`router-core/src/plan.rs:3-5`) and sketched in `design/DESIGN.md:368-369`, but no such type exists | the code answers with a plan-specific `PlanMove` (`router-core/src/plan.rs:52-69`) | the caller is a hand-written method with its own outcome struct (`router-proxy/src/forward.rs:156,1121-1200`) | a second rule would invent a second move type, so "the guard chain" is a paragraph rather than an interface — which is exactly what a decision provider needs | **open** (becomes real when a second rule lands) |
 
 Three shapes that are **not** leaks, listed so the register is not re-litigated:
@@ -2062,7 +2230,7 @@ built today?" is answerable without reading a round file.
 | workflow | primitives | modes |
 |---|---|---|
 | W1 `connect a client` | P2, P1, P3, P5, P7 (P4 when a policy is configured) | M1, M2 |
-| W2 `save tokens` | P1, P8, P3, P4 (P6 contributes nothing today) | M2, M1 |
+| W2 `save tokens` | P1, P8, P3, P4, P6 (tier 1: the mode + rule engine are wired, R9-2a/2b; every ledger figure stays `inferred` until the paired measurement of order ⑥ exists) | M2, M1 |
 | W3 `read the report` | P5, P7, P8, P4 | — (and see L1/L3) |
 | W4 `keep the plan preferred` | P3, P4, P7, P8 | M2 |
 | W5 `iterate a policy` (the loop) | P5, P7 (+ the loop-side artifacts) | M3, M4, M5 (all blocked on L5) |

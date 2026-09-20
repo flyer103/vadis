@@ -15,8 +15,8 @@ pub use accounting::{
 };
 pub use auth::{refused_message, refused_record, AuthGate, AuthVerdict};
 pub use forward::{
-    BoxedAttempt, ForwardFailure, ForwardOutcome, ForwardSuccess, Forwarder, ProviderSend,
-    ProviderTransport,
+    mode_refused_record, resolve_transform_mode, BoxedAttempt, ForwardFailure, ForwardOutcome,
+    ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
 pub use health::{health_json, AppState, ProviderKeyFacts};
 pub use stream_forward::{StreamOutcome, StreamSuccess};

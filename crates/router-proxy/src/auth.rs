@@ -16,6 +16,7 @@ use router_core::trace::{
     CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec, StateRec,
     TraceError, TRACE_SCHEMA_VERSION,
 };
+use router_core::transform::TransformMode;
 
 /// The token this process expects, resolved once at startup from the env
 /// var that `server.auth_token_env` names. Constructed only when that key
@@ -167,6 +168,11 @@ pub fn refused_record(
             blocks: Vec::new(),
             continuity: None,
         },
+        // A request refused by the inbound auth guard never entered the
+        // pipeline (spec §6's pre-pipeline class): no step was even
+        // planned, so the mode word is `passthrough` and nothing is
+        // claimed (ADR-019's "refused before the transform chain ran").
+        transform_mode: TransformMode::Passthrough,
         transforms: Vec::new(),
         usage: router_core::Usage::default(),
         usage_missing: true,

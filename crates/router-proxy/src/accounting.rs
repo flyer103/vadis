@@ -24,8 +24,10 @@ use router_core::quota::{charge, window_start_for, OverQuota, QuotaPlan, QuotaSt
 use router_core::store::{EventId, EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
 use router_core::trace::{
     CostRec, DecisionRec, DecisionRecord, IdentityRec, PlanSwitchRec, PrefixBlockRec, PrefixRec,
-    ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TraceWriter, TRACE_SCHEMA_VERSION,
+    ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TraceWriter, TransformRecord,
+    TRACE_SCHEMA_VERSION,
 };
+use router_core::transform::TransformMode;
 use router_core::Usage;
 use serde_json::json;
 
@@ -121,6 +123,23 @@ pub struct AccountCtx<'a> {
     /// when the request arrived (the sticky-hit input forward.rs
     /// computes for bind_session — one value, both sinks).
     pub sticky_hit: bool,
+    /// spec §6 `transform_mode`: the mode in effect for this request's
+    /// outbound body (ADR-019). `Passthrough` on every request that did
+    /// not ask and on every pre-pipeline refusal (a 401 never ran the
+    /// chain, so nothing is claimed); `Transform` when the header asked.
+    pub transform_mode: TransformMode,
+    /// The transform chain's ledger (spec §6 `transforms[]`): one entry
+    /// per step that changed the payload. A failure path keeps whatever
+    /// steps had already applied — an entry describes the plan, not what
+    /// reached the wire (that is `result.status`'s answer).
+    pub transforms: Vec<TransformRecord>,
+    /// The applier's fail-safe entry (DESIGN §12.12's failure table): when
+    /// a plan's edits could not be spliced, the body was forwarded
+    /// unedited, `transforms[]` is empty ("asked, not applied" — the
+    /// countable state the separate mode field exists for) and the
+    /// degradation is declared here as `errors[].kind = transform_error`,
+    /// never as a partial edit.
+    pub transform_error: Option<TraceError>,
 }
 
 /// The per-request accounting outcome the caller reports.
@@ -374,7 +393,13 @@ impl<'a> Accountant<'a> {
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
     ) -> AccountResult {
-        let errors = extra_errors;
+        let mut errors = extra_errors;
+        // The applier's fail-safe, if it fired, is the request's first
+        // error: it happened at the transform-chain stage, before anything
+        // downstream (DESIGN §12.12's failure-table order).
+        if let Some(te) = ctx.transform_error.clone() {
+            errors.insert(0, te);
+        }
         let overhead_ms = ctx.started.elapsed().as_millis() as u32;
         let usage = usage.unwrap_or_default();
 
@@ -489,7 +514,8 @@ impl<'a> Accountant<'a> {
                     .collect(),
                 continuity,
             },
-            transforms: Vec::new(),
+            transform_mode: ctx.transform_mode,
+            transforms: ctx.transforms.clone(),
             usage,
             usage_missing,
             cost: CostRec {

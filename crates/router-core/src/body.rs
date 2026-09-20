@@ -236,6 +236,190 @@ impl RawBody {
         out.extend_from_slice(&b[m.val_end..]);
         Ok(Cow::Owned(out))
     }
+
+    /// The transform-mode splicer (ADR-019 / DESIGN §12.12): one level
+    /// deeper than `set_top_level_string` — replace the value spans
+    /// addressed by `edits` (paths such as `messages[3].content`), splicing
+    /// each node's new text re-encoded as a JSON string. Every byte outside
+    /// the declared spans is the input's, byte for byte; a parse →
+    /// reserialize round trip is forbidden here exactly as it is on the
+    /// passthrough path. Same escaping rule, same "an unresolvable address
+    /// is an error, never an invention" stance (§12.3.1).
+    ///
+    /// - `edits` empty → `Cow::Borrowed` (the input bytes, unchanged);
+    /// - paths are resolved against **these** bytes first (all of them,
+    ///   before any splice: the application is all-or-nothing), then the
+    ///   edits are spliced in ascending span order into a fresh buffer,
+    ///   copying the untouched spans from the input — so every offset is
+    ///   computed against the original bytes and never shifts mid-apply;
+    /// - a path that resolves to an absent node or a non-string value is
+    ///   `Err(Malformed)` — the caller's fail-safe serves the payload
+    ///   verbatim, never a partially edited body (spec §8);
+    /// - two edits resolving to the same span are `Err(Malformed)`;
+    /// - pure function of (bytes, edits) — no clock, no RNG, no turn number
+    ///   (AGENTS hard constraint 2).
+    pub fn apply_edits(
+        &self,
+        edits: &[crate::transform::PayloadEdit],
+    ) -> Result<Cow<'_, [u8]>, RawEditError> {
+        if edits.is_empty() {
+            return Ok(Cow::Borrowed(self.as_bytes()));
+        }
+        let b = self.as_bytes();
+        // Resolve every span first (fail before any splice: all-or-nothing).
+        let mut spans: Vec<usize> = Vec::with_capacity(edits.len());
+        for e in edits {
+            spans.push(resolve_string_value_start(b, &e.path)?);
+        }
+        // Splice in ascending span order into a fresh buffer; `pos` is an
+        // offset into the *input*, so replacements never shift it.
+        let mut order: Vec<usize> = (0..edits.len()).collect();
+        order.sort_by_key(|&i| spans[i]);
+        let mut out = Vec::with_capacity(b.len());
+        let mut pos = 0usize;
+        for &i in &order {
+            let s = spans[i];
+            // The value is a JSON string starting at s; its closing quote is
+            // resolved by the same escape-aware scanner.
+            let val_end = scan_json_string(b, s)?;
+            if s < pos {
+                // Overlapping/duplicate spans: an unresolvable plan, never
+                // an invention.
+                return Err(RawEditError::Malformed { offset: s });
+            }
+            out.extend_from_slice(&b[pos..s]);
+            append_json_string(&mut out, &edits[i].new_text);
+            pos = val_end;
+        }
+        out.extend_from_slice(&b[pos..]);
+        Ok(Cow::Owned(out))
+    }
+}
+
+/// Walk `path` from the top level and return the byte offset of the addressed
+/// node's value start (the opening quote for a string value). Key lookup
+/// walks object members with the shared scanner (decoded-equality key
+/// matching, last occurrence wins); index lookup walks array elements with
+/// the bracket-tracking scan. Absent nodes and non-string targets are
+/// `Err(Malformed)` — an unresolvable address is an error, never an
+/// invention.
+fn resolve_string_value_start(
+    b: &[u8],
+    path: &crate::transform::NodePath,
+) -> Result<usize, RawEditError> {
+    use crate::transform::PathSeg;
+
+    let mut cursor: (usize, usize) = (0, b.len()); // the value span we are inside
+    for seg in path.0.iter() {
+        match seg {
+            PathSeg::Key(key) => {
+                // The cursor must be an object.
+                let s = skip_ws(b, cursor.0);
+                if s >= cursor.1 || b[s] != b'{' {
+                    return Err(RawEditError::Malformed { offset: s });
+                }
+                let members = scan_object_members(b, s, cursor.1)?;
+                let mut found: Option<(usize, usize)> = None;
+                for m in &members {
+                    if decode_json_string(b, m.key_start, m.key_end)? == *key {
+                        found = Some((m.val_start, m.val_end));
+                    }
+                }
+                let Some((vs, ve)) = found else {
+                    return Err(RawEditError::Malformed { offset: s });
+                };
+                cursor = (vs, ve);
+            }
+            PathSeg::Index(n) => {
+                let s = skip_ws(b, cursor.0);
+                if s >= cursor.1 || b[s] != b'[' {
+                    return Err(RawEditError::Malformed { offset: s });
+                }
+                let mut i = s + 1;
+                let mut seen = 0u32;
+                let mut found: Option<(usize, usize)> = None;
+                loop {
+                    let j = skip_ws(b, i);
+                    if j >= cursor.1 || b[j] == b']' {
+                        break;
+                    }
+                    let el_end = crate::prefix::scan_element_end(b, j, cursor.1);
+                    if seen == *n {
+                        found = Some((j, el_end));
+                        break;
+                    }
+                    seen += 1;
+                    i = el_end;
+                    let k = skip_ws(b, i);
+                    if k < cursor.1 && b[k] == b',' {
+                        i = k + 1;
+                    } else {
+                        break;
+                    }
+                }
+                let Some((vs, ve)) = found else {
+                    return Err(RawEditError::Malformed { offset: s });
+                };
+                cursor = (vs, ve);
+            }
+        }
+    }
+    // The final node must be a JSON string value.
+    let s = skip_ws(b, cursor.0);
+    if s < cursor.1 && b[s] == b'"' {
+        Ok(s)
+    } else {
+        Err(RawEditError::Malformed { offset: s })
+    }
+}
+
+/// The members of the object whose opening brace is at `open`, bounded by
+/// `limit`. Same span discipline as the top-level scanner, one level deeper.
+fn scan_object_members(
+    b: &[u8],
+    open: usize,
+    limit: usize,
+) -> Result<Vec<MemberSpan>, RawEditError> {
+    let mut members = Vec::new();
+    let mut i = open + 1;
+    loop {
+        i = skip_ws(b, i);
+        if i >= limit || b[i] == b'}' {
+            break;
+        }
+        if !members.is_empty() {
+            if b[i] == b',' {
+                i = skip_ws(b, i + 1);
+            } else if b[i] != b'}' {
+                return Err(RawEditError::Malformed { offset: i });
+            }
+        }
+        if i >= limit || b[i] == b'}' {
+            break;
+        }
+        if b[i] != b'"' {
+            return Err(RawEditError::Malformed { offset: i });
+        }
+        let key_start = i;
+        let key_end = scan_json_string(b, i)?;
+        let colon = skip_ws(b, key_end);
+        if colon >= limit || b[colon] != b':' {
+            return Err(RawEditError::Malformed { offset: colon });
+        }
+        let val_start = skip_ws(b, colon + 1);
+        let val_end = crate::prefix::scan_element_end(b, val_start, limit);
+        if val_end > limit {
+            return Err(RawEditError::Malformed { offset: val_start });
+        }
+        members.push(MemberSpan {
+            key_start,
+            key_end,
+            val_start,
+            val_end,
+        });
+        i = val_end;
+    }
+    Ok(members)
 }
 
 /// Append `value` as a JSON string literal (`"` + RFC 8259 escaping + `"`).

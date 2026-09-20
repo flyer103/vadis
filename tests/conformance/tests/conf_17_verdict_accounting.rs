@@ -22,6 +22,7 @@ fn transform(
 ) -> TransformRecord {
     TransformRecord {
         plugin: plugin.to_string(),
+        edited_paths: Vec::new(),
         added_input_tokens: 0,
         saved_input_tokens: saved_input,
         saved_output_tokens: saved_output,
@@ -115,6 +116,7 @@ fn empty_record() -> DecisionRecord {
             blocks: Vec::new(),
             continuity: None,
         },
+        transform_mode: router_core::transform::TransformMode::Passthrough,
         transforms: Vec::new(),
         usage: Usage::default(),
         usage_missing: false,
