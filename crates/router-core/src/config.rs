@@ -1279,7 +1279,12 @@ impl RouterConfig {
                 }
                 // spec §4.8: a tag is a non-empty string unique within its
                 // provider entry (it must resolve to at most one model —
-                // `plan_policy.family` matches it).
+                // `plan_policy.family` matches it). Uniqueness is checked
+                // on the EFFECTIVE tag — written, or defaulted to the
+                // entry's own id — in both orders: a later written tag
+                // against an earlier entry, and a later DEFAULTED tag
+                // against an earlier written one (the order that only
+                // appears once family tags exist at all).
                 let mpath = format!("{ppath}.models[{mi}] ({})", m.id);
                 if let Some(tag) = &m.family {
                     if tag.is_empty() {
@@ -1290,23 +1295,21 @@ impl RouterConfig {
                                 .to_string(),
                         ));
                     }
-                    // A written tag may not collide with another entry's tag
-                    // — written, or defaulted to that entry's own id: either
-                    // way `plan_policy.family` would be ambiguous (spec §4.8).
-                    let dup_written_or_default = p.models[..mi]
-                        .iter()
-                        .any(|prev| prev.family.as_deref().unwrap_or(&prev.id) == tag.as_str());
-                    if dup_written_or_default {
-                        return Err(ConfigError::new(
-                            format!("{mpath}.family"),
-                            format!(
-                                "family tag '{}' is already carried by another model entry of \
-                                 provider '{}': a tag resolves to at most one model per provider \
-                                 (spec 4.8)",
-                                tag, p.name
-                            ),
-                        ));
-                    }
+                }
+                let effective = m.family.as_deref().unwrap_or(&m.id);
+                let dup_written_or_default = p.models[..mi]
+                    .iter()
+                    .any(|prev| prev.family.as_deref().unwrap_or(&prev.id) == effective);
+                if dup_written_or_default {
+                    return Err(ConfigError::new(
+                        format!("{mpath}.family"),
+                        format!(
+                            "family tag '{effective}' is already carried by another model entry of \
+                             provider '{}': a tag resolves to at most one model per provider \
+                             (spec 4.8)",
+                            p.name
+                        ),
+                    ));
                 }
                 m.price
                     .to_price_table(p.currency)
@@ -1811,6 +1814,204 @@ mod tests {
         let mut cfg = planned();
         f(cfg.plan_policy.as_mut().expect("a policy"));
         cfg
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.8 (ADR-018): region / currency / family — the parsing
+    // rules and the load-time checks, per surface and per default.
+    // -------------------------------------------------------------
+
+    /// Replace only the `n`-th occurrence of `from` (PLANNED has two
+    /// providers serving the same model ids, so a global replace would
+    /// patch both entries at once).
+    fn replace_nth(s: &str, from: &str, to: &str, n: usize) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        let mut seen = 0;
+        while let Some(pos) = rest.find(from) {
+            out.push_str(&rest[..pos]);
+            out.push_str(if seen == n { to } else { from });
+            rest = &rest[pos + from.len()..];
+            seen += 1;
+        }
+        out.push_str(rest);
+        assert!(
+            seen > n,
+            "occurrence {n} of {from:?} not found ({seen} seen)"
+        );
+        out
+    }
+
+    /// `"id": "glm-5.3", "context"` — occurs once per provider (0 =
+    /// zai-plan, 1 = zai), the splice anchor for the model-level
+    /// `family` patches.
+    const GLM: &str = "\"id\": \"glm-5.3\", \"context\"";
+    const FLASH: &str = "\"id\": \"glm-5.3-flash\", \"context\"";
+
+    /// PLANNED with `patch` spliced into the zai provider ENTRY (the
+    /// `"name": "zai",` line — `currency`/`region` are provider keys,
+    /// §4.8), exercising the real deserializer + validate(). The anchor
+    /// cannot match `"name": "zai-plan",` (the next char differs).
+    fn zai_entry_patched(patch: &str) -> String {
+        let anchor = "\"name\": \"zai\",";
+        assert_eq!(
+            PLANNED.matches(anchor).count(),
+            1,
+            "the zai anchor is unique"
+        );
+        PLANNED.replacen(anchor, &format!("{anchor} {patch},"), 1)
+    }
+
+    /// Drop the plan_policy line (the `both_keys_stay_optional` filter),
+    /// so a provider-level check is asserted on its own message.
+    fn without_policy(s: &str) -> String {
+        s.lines()
+            .filter(|l| !l.contains("\"plan_policy\""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn currency_absent_means_usd_and_written_cny_is_per_entry() {
+        // Absent ⇒ USD (§4.8): PLANNED writes no `currency` key anywhere.
+        let cfg = planned();
+        assert!(cfg.providers.iter().all(|p| p.currency == Currency::Usd));
+
+        let cfg: RouterConfig =
+            serde_json::from_str(&zai_entry_patched("\"currency\": \"CNY\"")).expect("parses");
+        cfg.validate().expect("a CNY entry validates");
+        assert_eq!(cfg.providers[1].currency, Currency::Cny);
+        assert_eq!(
+            cfg.providers[0].currency,
+            Currency::Usd,
+            "per-entry, not global"
+        );
+        let table = cfg.providers[1].models[0]
+            .price
+            .to_price_table(cfg.providers[1].currency)
+            .unwrap();
+        assert_eq!(table.currency, Currency::Cny, "the table carries its unit");
+    }
+
+    #[test]
+    fn currency_is_exact_and_unknown_values_are_load_errors() {
+        // Not a runtime fallback to USD: the load itself refuses. The
+        // ISO-4217 code is exact — case included (§4.8).
+        for bad in ["usd", "cny", "EUR", "Usd", "", "RMB"] {
+            let err = deser_err(&zai_entry_patched(&format!("\"currency\": \"{bad}\"")));
+            assert!(
+                err.contains("unknown currency"),
+                "value {bad:?} must be refused with 'unknown currency', got: {err}"
+            );
+        }
+        // A non-string value is refused, not coerced.
+        assert!(
+            serde_json::from_str::<RouterConfig>(&zai_entry_patched("\"currency\": 4")).is_err()
+        );
+        // The message names the expected spellings (the operator's fix).
+        assert!(
+            deser_err(&zai_entry_patched("\"currency\": \"eur\"")).contains("USD or CNY"),
+            "the refusal names the legal spellings"
+        );
+    }
+
+    #[test]
+    fn region_absent_means_intl_and_cn_does_not_derive_currency() {
+        let cfg = planned();
+        assert!(cfg.providers.iter().all(|p| p.region == Region::Intl));
+
+        // cn + USD (the currency default) is legal: neither field
+        // implies the other (§4.8 / ADR-018 §1). Constructs it and
+        // proves it loads.
+        let cfg: RouterConfig =
+            serde_json::from_str(&zai_entry_patched("\"region\": \"cn\"")).expect("parses");
+        cfg.validate().expect("cn region + USD billing is legal");
+        assert_eq!(cfg.providers[1].region, Region::Cn);
+        assert_eq!(cfg.providers[1].currency, Currency::Usd);
+    }
+
+    #[test]
+    fn region_is_exact_and_unknown_values_are_load_errors() {
+        for bad in ["CN", "Intl", "eu", "usa"] {
+            let err = deser_err(&zai_entry_patched(&format!("\"region\": \"{bad}\"")));
+            assert!(
+                err.contains("unknown variant") && err.contains(bad),
+                "region {bad:?} must be refused at load, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn family_absent_means_the_models_own_id() {
+        // §4.8's default is ADR-014's rule verbatim: PLANNED writes no
+        // family key, and both routes' tags equal their model ids.
+        let cfg = planned();
+        let policy = cfg.plan_policy.as_ref().unwrap();
+        assert_eq!(cfg.family_tag_of(&policy.primary).unwrap(), "glm-5.3");
+        assert_eq!(cfg.family_tag_of(&policy.overflow).unwrap(), "glm-5.3");
+    }
+
+    #[test]
+    fn family_tag_pairs_two_routes_and_the_policy_matches_the_tag() {
+        // ADR-018 §4's motivating shape, shrunk: both entries carry tag
+        // "fam" while their ids stay the route addresses, and the policy
+        // names the tag. The quota coverage check is restated in terms
+        // of the id the primary resolves to (zai-plan's quota.models
+        // still names "glm-5.3" — and the config validates).
+        let tagged = "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"";
+        let s = replace_nth(&replace_nth(PLANNED, GLM, tagged, 0), GLM, tagged, 0);
+        let s = s.replace("\"family\": \"glm-5.3\"", "\"family\": \"fam\"");
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("tagged pair parses");
+        cfg.validate()
+            .expect("the policy matches the tag both entries carry");
+        let policy = cfg.plan_policy.as_ref().unwrap();
+        assert_eq!(cfg.family_tag_of(&policy.primary).unwrap(), "fam");
+        assert_eq!(cfg.family_tag_of(&policy.overflow).unwrap(), "fam");
+    }
+
+    #[test]
+    fn family_tags_may_not_collide_within_a_provider() {
+        // Two WRITTEN tags colliding inside zai-plan (the order
+        // 48d4341 already guarded): refused naming the key.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let s = replace_nth(
+            &s,
+            FLASH,
+            "\"id\": \"glm-5.3-flash\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(err.contains("family tag 'fam'"), "got: {err}");
+        assert!(
+            err.contains("models[1] (glm-5.3-flash).family"),
+            "the error names the second entry's key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_written_tag_may_not_shadow_a_later_entrys_defaulted_tag() {
+        // Entry 0 writes family "glm-5.3-flash"; entry 1 writes nothing,
+        // so its tag defaults to its id — the same string. The tag would
+        // resolve to TWO models: a load error (§4.8). Found unguarded
+        // while auditing 48d4341 (the check only ran for a written tag).
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"glm-5.3-flash\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family tag 'glm-5.3-flash' is already carried"),
+            "got: {err}"
+        );
     }
 
     #[test]
