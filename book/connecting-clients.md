@@ -86,7 +86,8 @@ export ROUTER_TOKEN=$(openssl rand -hex 32)
 ```
 
 ```yaml
-# 2. name the variable in the router process's config — the name, never the value
+# 2. write server.auth_token_env in the router process's config: it names the
+#    variable whose value is the expected token — the name, never the value
 server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
           auth_token_env: ROUTER_TOKEN }
 ```
@@ -109,7 +110,8 @@ uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer`.
 Four things worth knowing before you rely on this:
 
 - **`GET /health` never needs a token.** It is the liveness probe; keep it token-free so your
-  supervisor (and your own `curl`) can see whether the process is up.
+  supervisor (and your own `curl`) can see whether the process is up. Its `auth` member also tells
+  you which mode this process is in (`required`, with the variable's name, or nothing required).
 - **A wrong or missing token is `401 unauthorized`**, in the same error shape as every other refusal
   ([`docs/spec.md` §8](../docs/spec.md)). Nothing was sent upstream, so a `401` tells you about your
   client's setup and never about a provider.
