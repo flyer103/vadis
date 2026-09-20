@@ -348,6 +348,12 @@ two rows).
 | the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
 | the month's metered spend has reached `overflow_monthly_cap_usd` | `cost_cap_exceeded` (403, §8) | the family and the cap |
 
+The `block` refusal is a property of the **state**, not only of the spill trigger: any request inside a family
+whose account state is `overflow` — including a request of a session that was already in flight when the
+family spilled — is refused while `on_primary_exhausted: block` (the operator's mode is "fail rather than
+spend"; serving a session's next turn from the metered account would defeat it exactly as a fresh request
+would).
+
 Nothing else in §4.6 is an error: a `spill` is served (that is the point of the mode), and an `overflow` that fails
 too walks on into §4.2's chain, whose own exhaustion is §8's `upstream_error` / `upstream_timeout`.
 

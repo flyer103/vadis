@@ -1455,12 +1455,11 @@ always carries an id.
 reason; mutation (b) is the native path's form of that rule. The native path is asserted by CONF-27
 (§12.8).
 
-#### 12.10.8 Plan-first routing (ADR-014; lands in R3)
+#### 12.10.8 Plan-first routing (ADR-014; implemented in R4 on branch `round/4-plan-first`)
 
 Spec §4.6 is the contract and ADR-014 is the why; this section is the landing — where the rule sits, what state
-it reads and writes, and where its trace and event fields come from. **Nothing here is implemented by this
-round**: the keys and the parser land together (GAP-Q15), and it adds no pipeline stage, no `error.type` and no
-spec §6 field group.
+it reads and writes, and where its trace and event fields come from. The keys and the parser landed in R4-1
+(GAP-Q15); the behaviour landed in R4-2. It adds no pipeline stage, no `error.type` and no spec §6 field group.
 
 **The Guard rule form.** The policy is one rule of the resident quota guard (`builtin/quota_guard`, the
 `router-plugins` fiber the loader always keeps), evaluated **before** the allowance rule, and it answers with
@@ -1507,6 +1506,11 @@ CREATE TABLE plan_state (
   `to_account` is the current account, its `ts_us` is `since_us`, its `event_id` is `last_event`, and
   `until_us` is `since_us + cooldown` while the account is `overflow` (otherwise NULL). `cooldown` comes from
   the *current* config: a knob change moves a future deadline, not history, and event rows are never rewritten.
+  **Where `until_us` is derived (implementation ruling, from ADR-014 item 10's mid-flight clause): the stored
+  column is informational; the probe gate the serving path compares against is recomputed at read time as
+  `since_us + <the current config's cooldown>`, so a `cooldown` change takes effect on the next request
+  without rewriting anything. `until_us` is written as `since_us +` the then-current cooldown for operators
+  inspecting the table.**
 - **It is not a second `provider_cooldown`** (§12.10.4). That projection is ADR-011's per-provider
   *availability*, re-derived per request with a TTL from the provider's own clock; this one is the family's
   *routing intent*, which outlives that cooldown and is cleared only by evidence — a successful probe, or the
@@ -1520,9 +1524,9 @@ CREATE TABLE plan_state (
 displaced without a transition (the family is already spilled; a session is pulled back after another session's
 probe) and a transition can happen on a request that never completes.
 
-**Config.** §12.5's parsing rows and §12.10.2's validation rows are the checks. The keys themselves and
-`config.example.yaml` land **together** in R3 (GAP-Q15): `deny_unknown_fields` means an example that carries a
-key the parser does not know is an unservable file, so neither may get ahead of the other.
+**Config.** §12.5's parsing rows and §12.10.2's validation rows are the checks. The keys and the parser landed
+in R4-1 together with `config.example.yaml` (GAP-Q15 closed): `deny_unknown_fields` means an example that
+carries a key the parser does not know is an unservable file, so neither may get ahead of the other.
 
 **Surfaces.** `/health` reports the family's account state and its probe deadline, and `router stats` counts the
 switches with their verified cost — for ADR-011 item 4's reason, restated: a state nobody can see is
