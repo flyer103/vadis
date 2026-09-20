@@ -205,8 +205,38 @@ pub struct ResultRec {
     /// `"<provider>/<model>"` when the request switched away from a failed
     /// route (spec §6 `failover_from`).
     pub failover_from: Option<String>,
+    /// spec §6 `plan_switch` (ADR-014): present-and-null whenever the plan
+    /// policy did not displace this request's account — the same stance
+    /// as `prefix.continuity`, never omitted. It is **not** a second name
+    /// for `failover_from`: a failure-class fact sets that field, the
+    /// plan policy's account state sets this one (spec §6's own table).
+    pub plan_switch: Option<PlanSwitchRec>,
     pub overhead_ms: u32,
     pub upstream_ms: Option<u32>,
+}
+
+/// spec §6 `result.plan_switch` (ADR-014 / DESIGN §12.10.8): the plan
+/// policy moved this request's account. `from` / `to` are
+/// `"<provider>/<model>"` strings, the same wire form `failover_from`
+/// uses; `reason` is the stable word; `probe` says whether the move was
+/// an admitted probe's return trip. The two figures are the switch's
+/// cache price under spec §7's convention (`inferred` at decision time).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PlanSwitchRec {
+    pub from: String,
+    pub to: String,
+    /// `primary_exhausted` / `primary_cooling_down` / `primary_recovered`.
+    pub reason: &'static str,
+    pub probe: bool,
+    /// The session's prefix token count (the §6 block-token attribution,
+    /// GAP-Q14) — an `inferred` figure; `None` when no session/ledger
+    /// exists (serialized as null, spec §6).
+    pub reprefill_tokens: Option<u64>,
+    /// `reprefill_tokens × p_miss(destination account)`, integer NanoUsd;
+    /// an in-plan destination's marginal price is 0, so the return trip
+    /// records the work and a money cost of 0.
+    pub switch_cost_nano: Option<u64>,
 }
 
 /// spec §6 "failure details": the internal failure record — several
@@ -368,6 +398,7 @@ mod tests {
                 status: 200,
                 upstream_status: Some(200),
                 failover_from: None,
+                plan_switch: None,
                 overhead_ms: 1,
                 upstream_ms: Some(2),
             },

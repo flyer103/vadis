@@ -23,8 +23,8 @@ use router_core::prefix::PrefixBlock;
 use router_core::quota::{charge, window_start_for, OverQuota, QuotaPlan, QuotaState, QuotaWindow};
 use router_core::store::{EventId, EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
 use router_core::trace::{
-    CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixBlockRec, PrefixRec, ProtocolRec,
-    QuotaAfter, ResultRec, StateRec, TraceError, TraceWriter, TRACE_SCHEMA_VERSION,
+    CostRec, DecisionRec, DecisionRecord, IdentityRec, PlanSwitchRec, PrefixBlockRec, PrefixRec,
+    ProtocolRec, QuotaAfter, ResultRec, StateRec, TraceError, TraceWriter, TRACE_SCHEMA_VERSION,
 };
 use router_core::Usage;
 use serde_json::json;
@@ -95,6 +95,10 @@ pub struct AccountCtx<'a> {
     pub decision_ms: u32,
     pub started: Instant,
     pub now_epoch_s: u64,
+    /// spec §6 `result.plan_switch`: set by the forwarding path when the
+    /// plan policy displaced this request's account (ADR-014); `None` on
+    /// every other request (present-and-null on the wire).
+    pub plan_switch: Option<PlanSwitchRec>,
 }
 
 /// The per-request accounting outcome the caller reports.
@@ -463,6 +467,7 @@ impl<'a> Accountant<'a> {
                 status,
                 upstream_status,
                 failover_from,
+                plan_switch: ctx.plan_switch.clone(),
                 overhead_ms,
                 upstream_ms,
             },

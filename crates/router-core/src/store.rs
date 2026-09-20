@@ -53,6 +53,11 @@ pub enum EventKind {
     /// A restart marker for `unknown_outcome` accounting (ADR-010 item 4).
     /// FULL: it must survive the very crash it records.
     RestartMarked,
+    /// The family's account state moved (ADR-014 item 8). FULL: it
+    /// changes the route of every subsequent request in the family, and
+    /// the 403 that caused it is never persisted — the loss is not
+    /// recomputable from anything else.
+    PlanSwitched,
 }
 
 impl EventKind {
@@ -73,6 +78,7 @@ impl EventKind {
             Self::PluginUnloaded => "plugin.unloaded",
             Self::ConfigApplied => "config.applied",
             Self::RestartMarked => "restart.marked",
+            Self::PlanSwitched => "plan.switched",
         }
     }
 
@@ -94,6 +100,7 @@ impl EventKind {
             "plugin.unloaded" => Self::PluginUnloaded,
             "config.applied" => Self::ConfigApplied,
             "restart.marked" => Self::RestartMarked,
+            "plan.switched" => Self::PlanSwitched,
             _ => return None,
         })
     }
@@ -113,6 +120,7 @@ impl EventKind {
                 | Self::QuotaCharged
                 | Self::ConfigApplied
                 | Self::RestartMarked
+                | Self::PlanSwitched
         )
     }
 }
@@ -166,14 +174,17 @@ pub struct StoredEvent {
     pub trace_ref: Option<String>,
 }
 
-/// Which projections a `rebuild` or `query` addresses. `All` exists for the
-/// correctness oracle (CONF-21) and startup repair.
+/// Which projections a `rebuild` or `query` addresses. `All` exists for
+/// the correctness oracle (CONF-21) and startup repair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Projection {
     Sessions,
     CacheLedger,
     QuotaCounters,
     ProviderCooldown,
+    /// The plan families' account state (ADR-014, DESIGN §12.10.8; store
+    /// DDL version 2).
+    PlanState,
     All,
 }
 
@@ -225,6 +236,17 @@ pub enum ProjectionWrite<'a> {
         reason: &'a str,
         last_event: EventId,
     },
+    /// Upsert the family's account state from a `plan.switched` event
+    /// (ADR-014 item 8 / DESIGN §12.10.8). `since_us` is that event
+    /// row's own `ts_us` — the store reads it from `last_event`, so the
+    /// incremental path and the rebuild compute identical values
+    /// (CONF-21's rule) and no write depends on a second clock read.
+    PlanSwitched {
+        family: &'a str,
+        /// 'primary' | 'overflow' (the `to_account` of the event).
+        account: &'a str,
+        last_event: EventId,
+    },
 }
 
 /// The serving path's reads (DESIGN §12.10.4 `query`).
@@ -251,6 +273,18 @@ pub enum Query<'a> {
     /// projection, block order) — what the *next* request's continuity
     /// is measured against (spec §6, §12.10.6).
     CacheLedgerBlocks { session_key: &'a str },
+    /// The family's current account state (the `plan_state` projection,
+    /// ADR-014). Absent row ⇒ the family has never switched: it is on
+    /// its `primary`.
+    PlanState { family: &'a str },
+    /// The family's metered spend in the current UTC calendar month: the
+    /// sum of measured `cost.computed` totals over the family's overflow
+    /// route (DESIGN §12.10.8 — "no new counter exists to disagree with
+    /// the log"). `month_start_us` is the UTC month boundary.
+    OverflowSpend {
+        family_route: &'a str,
+        month_start_us: i64,
+    },
     /// The full event log in `event_id` order (bounded use: conformance and
     /// rebuild; the serving path never scans the log).
     AllEvents,
@@ -283,6 +317,21 @@ pub struct LedgerBlock {
     pub hash: String,
 }
 
+/// The `plan_state` projection row (ADR-014, DESIGN §12.10.8): the
+/// family's routing intent. `until_us` is the stored informational
+/// deadline (`since_us +` the cooldown that was current at the write);
+/// the probe gate the serving path compares against is recomputed from
+/// the *current* config (ADR-014 item 10's mid-flight clause).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStateProjRow {
+    pub family: String,
+    /// 'primary' | 'overflow'.
+    pub account: String,
+    pub since_us: i64,
+    pub until_us: Option<i64>,
+    pub last_event: i64,
+}
+
 /// The answer to a `Query`.
 #[derive(Debug, Clone)]
 pub enum QueryRow {
@@ -290,6 +339,7 @@ pub enum QueryRow {
     Count(i64),
     Cooldown(Option<CooldownRow>),
     CacheLedger(Vec<LedgerBlock>),
+    PlanState(Option<PlanStateProjRow>),
     Events(Vec<StoredEvent>),
 }
 
@@ -300,6 +350,7 @@ pub struct RebuildStats {
     pub cache_ledger: usize,
     pub quota_counters: usize,
     pub provider_cooldown: usize,
+    pub plan_state: usize,
     pub events_scanned: usize,
 }
 
@@ -494,6 +545,7 @@ mod tests {
             EventKind::PluginUnloaded,
             EventKind::ConfigApplied,
             EventKind::RestartMarked,
+            EventKind::PlanSwitched,
         ];
         for k in all {
             assert_eq!(EventKind::from_str_lossy(k.as_str()), Some(k));
@@ -516,6 +568,7 @@ mod tests {
                 "quota.charged",
                 "config.applied",
                 "restart.marked",
+                "plan.switched",
             ]
         );
         // Unknown kinds stay readable-but-unknown (ADR-009 item 7).
