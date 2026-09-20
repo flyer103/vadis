@@ -433,9 +433,21 @@ the two answer different questions and are set by different facts:
 | what moved the request | `failover_from` | `plan_switch` |
 |---|---|---|
 | a failed attempt in this request (§4.2's walk) | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
-| ADR-011's cooldown refusing the resolved route **before** any attempt | set (ADR-011 item 4) | set, `reason: primary_cooling_down` |
+| ADR-011's cooldown refusing the resolved route **before** any attempt | set — the route the skip abandoned (ADR-011 item 4) | set, `reason: primary_cooling_down`, **when the abandoned route was the family's `primary`**; `null` when it was not (the cooldown displaced the client's own choice, not the family's account) |
 | the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason: primary_exhausted` |
 | the family's account state returning to `primary` | `null` | set, `reason: primary_recovered` |
+
+**Each of the three `reason` values has a producing path.** A documented value no implementation can emit is a
+defect, not a reserved word, so the producers are named here and witnessed by conformance cases (DESIGN §12.8):
+
+| `reason` | Produced when | The state write |
+|---|---|---|
+| `primary_exhausted` | (i) an attempt on the family's `primary` failed with an upstream `403 quota_exhausted` — the one signal that may move the account (§4.6 rule 3); (ii) the family's account state was already `overflow` and the policy displaced the request (`spill`) | (i) writes the `plan.switched` event (the family's account moves); (ii) writes nothing — the state already is the one the request is moved to |
+| `primary_cooling_down` | ADR-011's cooldown projection refused the family's `primary` route **before any attempt**, so the request was served by the family's `overflow` route while the account state stayed `primary` | writes **nothing**, and does **not** move the account: a cooldown is route availability, not a verdict on the plan (§4.6 rule 3 — only an upstream `403 quota_exhausted` may move it). The next request is decided by the state as usual, so once the cooldown expires the primary serves again with no probe needed |
+| `primary_recovered` | an admitted probe on the primary succeeded (a probe, or another session's probe pulling a spilled session back) | writes the `plan.switched` event back to `primary` |
+
+A **displacement** and a **state transition** are therefore not the same thing (DESIGN §12.10.8): the
+`primary_cooling_down` row is the pair that shows it — a `plan_switch` with no `plan.switched` behind it.
 
 `reprefill_tokens` is the session's prefix token count (the §6 block-token attribution, so it is `inferred`);
 `switch_cost_nano = reprefill_tokens × p_miss(destination account)`, in integer NanoUsd (ADR-006), where an
@@ -489,6 +501,12 @@ each improvise):
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
 - `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
 - `overhead_ms_p99` = router's own overhead (excluding upstream)
+- `unknown_outcome_requests` = the number of `upstream.submitted` events in the window with no
+  `upstream.responded` for the same `request_id` — an intent with no response is a **known unknown**
+  (ADR-010 item 4). It is counted and reported, and it is never priced: there is no `usage` to read and the
+  accounting convention (§7) forbids inventing one
+
+The surfaces that print these (the invocation, each figure's provenance and its §7 label) are §9.
 
 ## 7. Accounting convention (must not be ambiguous)
 
@@ -543,3 +561,188 @@ Behavior clauses:
   left to the operator against the provider's bill (§4.5; ADR-010 is normative).
 - unknown fields: **must be passed through verbatim** (friendly to protocol evolution), and must not be
   silently dropped.
+
+## 9. Reporting surfaces (the operator's read-out)
+
+Two surfaces read the records of §4.5 and §6 back out: the `plan` section of `GET /health`, and the `router
+stats` subcommand. Both are **read-only**; neither is a second source of truth, and neither prices, estimates
+or extrapolates anything. The metric *formulas* stay in §6 ("Metric definitions"); this section says what is
+printed, from which record, and under which §7 label — it defines no new metric and no new gate.
+
+### 9.1 `GET /health`'s `plan` section
+
+`/health` reports what this process loaded (§4.5, `store`). When the loaded config declares a `plan_policy`
+(§4.6), the response carries one additional member:
+
+```json
+"plan": {
+  "configured": true,
+  "family": "glm-5.3",
+  "primary": "zai-plan/glm-5.3",
+  "overflow": "zai/glm-5.3",
+  "recover": "probe",
+  "account": "primary",
+  "since": null,
+  "probe": null
+}
+```
+
+and while the family is on the metered account:
+
+```json
+"plan": {
+  "configured": true,
+  "family": "glm-5.3",
+  "primary": "zai-plan/glm-5.3",
+  "overflow": "zai/glm-5.3",
+  "recover": "probe",
+  "account": "overflow",
+  "since": "2026-09-20T08:14:02.113Z",
+  "probe": { "deadline": "2026-09-20T08:29:02.113Z", "admitted": false, "blocked_by": "window_not_reset" }
+}
+```
+
+| Key | Type | Semantics |
+|---|---|---|
+| `configured` | bool | whether the loaded config declares a `plan_policy` at all. `false` ⇒ **no other key is present** (`"plan": {"configured": false}`): with no policy there is no family to name, and inventing one would be the "a state nobody can see" error in reverse |
+| `family` | string | the policy's `family` (the model id both routes carry) |
+| `primary` / `overflow` | string | the policy's two routes, verbatim, in the `provider/model` wire form `failover_from` and `plan_switch` use |
+| `recover` | `probe` \| `none` | the policy's value. Printed because it decides whether a probe exists at all (§4.6) |
+| `account` | `primary` \| `overflow` | the family's current account state. Read from the `plan_state` projection; **an absent row means `primary`** (a family that has never switched, §4.6) |
+| `since` | string \| null | the last transition's instant (RFC3339 UTC, millisecond precision) — the `ts` of the `plan.switched` row that produced the current state. `null` for a family that never switched |
+| `probe` | object \| null | **`null` unless `account` is `overflow`**: a family on its primary has nothing to probe back to (§4.6 rule 2 — the probe *is* the way back from `overflow`) |
+| `probe.deadline` | string | `since + cooldown`, with `cooldown` from the **currently loaded config** — the same recomputation the serving path does (ADR-014 item 10's mid-flight clause), so a knob change moves a future deadline rather than rewriting history. It is not the stored informational column, which a rebuild may have derived from a cooldown that has since changed. **Always computable when `probe` is present** |
+| `probe.admitted` | bool | whether a probe would be admitted **right now, given the current state and config** — judged for a session boundary, the only place a probe is admitted |
+| `probe.blocked_by` | string \| null | the **first** failing condition, in the guard's own evaluation order with the two request-shaped arms left out (§4.6 rule 2), one stable word: `recovery_disabled` → `cooldown` → `primary_cooling_down` → `window_not_reset`; `null` when `admitted` is true |
+
+The situations in which a probe is **not** admitted, and where each appears in the response:
+
+| Situation | In the response |
+|---|---|
+| the config declares no `plan_policy` | `"plan": {"configured": false}` — no family, no account, no deadline |
+| `recover: none` (no automatic probe, ever) | `probe.blocked_by: "recovery_disabled"` |
+| `now < deadline` | `probe.blocked_by: "cooldown"` |
+| ADR-011's cooldown refuses the primary route | `probe.blocked_by: "primary_cooling_down"` |
+| the plan's declared window has not reset (the local counter's only influence, §4.6 rule 3) | `probe.blocked_by: "window_not_reset"` |
+| the request has **no session**, or is not a session's first request | **nothing.** `/health` reports state; "this request carries no session" is a property of a request that does not exist yet, so the response carries no word for it and must not imply that a sessionless request would probe — for every such request the claim would be false (§4.6 rule 2) |
+
+**No figure in this section is an estimate** (AGENTS constraint 5): every key is a read (the config, the
+`plan_state` row) or an arithmetic on two known instants (`since + cooldown`). There is no case in which
+`deadline` is unknown, and no inferred number is printed here.
+
+### 9.2 `router stats`
+
+```
+router stats --config <config path> --window <duration> [--json]
+```
+
+- **`--config`** resolves `trace.dir` by §4.1's rule (a relative path is resolved against the config file's
+  directory). There is no way to point the command at a trace directory that the config does not describe.
+  When the loaded config declares a `plan_policy`, it also names the family the report's `plan family` section
+  describes; with no policy the report has **no** plan section — a family nobody configured is not reported,
+  never fabricated.
+- **`--window`** is **required** and uses the config duration grammar (`300ms`, `90s`, `15m`, `1h30m`; there is
+  no `d` unit — a day is `24h`). A default would let a report be printed without stating the window it covers,
+  which is exactly what §7's reporting requirement forbids.
+- The window is `[now - window, now]` in UTC. A trace file is read when its hourly range (§4.1) intersects the
+  window; a record is counted when **its own `ts`** falls inside it — never by which file it happens to be in.
+- **Read-only by construction.** `stats` never writes and never migrates: it reads the trace files directly and
+  opens the state store **read-only** (so it cannot create a state file, and it does not take the writer role
+  that `serve` holds — a read-only connection is not the exclusive writer, §4.5). When the store cannot be opened
+  read-only (no state directory yet, an unreadable file, a schema newer than this binary), the one figure that
+  only the log holds — `unknown outcome requests` — is **omitted** with a one-line note on stderr, and the rest
+  of the report is printed unchanged.
+- **Exit codes**: `0` a report was produced; `2` the invocation itself is unusable (unreadable or invalid
+  config, an unparsable window, a trace directory that does not exist). A partial report is never presented as
+  a complete one.
+
+stdout, exact shape (the values are illustrative; every figure carries its §7 label):
+
+```
+window:      24h (2026-09-19T12:00:00.000Z .. 2026-09-20T12:00:00.000Z)
+trace:       /home/u/router/state/traces (5 files, 61 records)
+
+requests                         61
+  succeeded                      58
+  failed                          3   (upstream_error 2, upstream_timeout 1)
+  usage missing                   2   (excluded from every rate and every sum below — never read as 0)
+
+cost (verified)            184000 nano
+  input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
+
+cache
+  hit rate (verified)        0.9898   (17536 / 17716 input tokens)
+  continuity p50 (inferred)   1.000   (a predictor, not a measurement of what the provider did)
+
+transforms
+  verified savings tokens         0
+  inferred savings tokens         0   (labeled; never counted with the line above)
+
+plan family 'glm-5.3'
+  switches                        1   (requests whose result.plan_switch is present)
+  switch cost (verified)     184000 nano
+  switch re-prefill (inferred)  10000 tokens | 20000 nano
+  switches without usage          0   (they keep the inferred label and say so)
+
+state
+  stateful inbound rate       0.0000   (always 0 in v0.1 — gap G-F; printed so the constant is visible)
+  unknown outcome requests         0   (event log)
+overhead p99                     6 ms
+```
+
+Provenance of every figure:
+
+| Line in the report | Value | Source (which record) | §7 label | Excluded |
+|---|---|---|---|---|
+| `requests` | count | one per trace line whose `ts` is in the window | count | — |
+| `succeeded` / `failed` | count by `result.status` (2xx / non-2xx), split by `errors[].kind` | trace `result.status`, `errors[]` | count | — |
+| `usage missing` | count of records with `usage_missing: true` | trace `usage_missing` | count | those records contribute to nothing else in the report |
+| `cost` and its four tiers | Σ per tier | trace `cost.*` — computed by the serving path from measured `usage` priced by the config table | **verified** | records with `usage_missing: true`; an uncomputed cost is never 0 |
+| `hit rate` | §6's `cache_hit_rate` | trace `usage` | **verified** | records with `usage_missing: true` |
+| `continuity p50` | §6's `prefix_continuity_p50` | trace `prefix.continuity` | **inferred** | records whose `continuity` is null (a session's first request — an absent measurement is absent, not 1.0) |
+| `verified savings tokens` | §6's `verified_savings_tokens` | trace `transforms[]` where `verdict == verified` | **verified** | every `inferred` record |
+| `inferred savings tokens` | Σ saved tokens over `verdict == inferred` | trace `transforms[]` | **inferred** | never added to the line above |
+| `switches` | count of records with `result.plan_switch` present | trace `result.plan_switch` | count | — |
+| `switch cost (verified)` | Σ, over those records, of the **record's own `cost.total`** | the trace, as above | **verified** | records with `usage_missing: true`, counted on the next line instead |
+| `switch re-prefill (inferred)` | Σ `reprefill_tokens` and Σ `switch_cost_nano` | trace `result.plan_switch.reprefill_tokens` / `.switch_cost_nano` | **inferred** | never added into `switch cost (verified)` — see below |
+| `switches without usage` | count of displaced records excluded from `switch cost (verified)` | trace | count | — |
+| `stateful inbound rate` | §6's `stateful_inbound_rate` | trace `state.stateful_inbound` | count | always 0 in v0.1 (gap G-F), which is why it is printed at all |
+| `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
+| `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` | measured | `upstream_ms` (ADR-009's latency budget is router's own work) |
+
+Three conventions this report obeys, each of which has bitten someone:
+
+- **`switch_cost_nano` is the *inferred* column, never the verified one.** §6 fixes what verifies a switch: the
+  switched request's own measured usage and `cost.*`, whose measured `cost.total` **is** the switch's verified
+  cost (the destination account's re-prefill is inside it). Adding the decision-time `switch_cost_nano` on top
+  would count the same money twice — once as an estimate, once as a measurement. A switch whose destination is
+  in-plan verifies at 0 by the same rule (§4.6 rule 4: an in-plan destination's marginal price is 0), so one sum
+  over the displaced records' `cost.total` is right in both directions.
+- **What is not counted.** In-plan requests are 0 in every cost bucket (§4.6 rule 4) and therefore contribute 0:
+  the difference between "the plan's marginal price" and "the metered account's real price" shows up as the plan
+  section's two lines, not as a correction to the total. A `usage_missing` record contributes to nothing — an
+  absent measurement is never read as 0 (§6, §7). An `unknown_outcome` request is counted and never priced
+  (ADR-010 item 4).
+- **A figure that cannot be computed is omitted, with a note — never estimated** (AGENTS constraints 4 and 5).
+  The only figure that can be unavailable is `unknown outcome requests` (the read-only store open above); every
+  other figure is a sum or a count over records that exist.
+
+### 9.3 Surfaces that are **not** served in v0.1
+
+`router replay --trace … --config …` (DESIGN §9's same-code-path replay), `router trace tail`, and
+`GET /metrics` (Prometheus) are **planned, not served**:
+
+- `router replay` and `router trace tail` are not subcommands of this binary: the CLI accepts `serve` and
+  `stats`, and any other subcommand is refused by the argument parser with a usage error and a **non-zero
+  exit** — never a silently ignored flag.
+- `GET /metrics` is not registered: the route answers a bare `404` (an unrouted path does not go through
+  §8's error body), and its metric names, labels and units are frozen by the change that implements it
+  (NanoUsd figures are integers there too — a Prometheus surface must not invent decimals).
+
+The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
+the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect
+as a documented `plan_switch` reason no code can produce (DESIGN §12.8's case registry, R4-G2). Until they land,
+the trace record of §6 **is** the interface: append-only JSONL, one decision record per request, readable with
+any JSON tool. `router replay` in particular is the autowork harness's prerequisite (DESIGN §9, ADR-005 item 3)
+and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
+promise, and no round has yet taken it.

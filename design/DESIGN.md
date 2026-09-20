@@ -220,6 +220,11 @@ a cost/cache/latency report contrasted against `prefix_continuity`.
 This is the foundation of autowork: a policy cannot be re-implemented in Python without producing skew
 (the lesson of the old project), so policy simulation is always a subcommand of the product.
 
+**Not implemented in v0.1** and taken by no round yet: there is no `replay` subcommand and no simulation seam
+in the serving path, so the shape above is design intent, not a served surface — spec §9.3 says the same thing
+at the user-facing boundary, together with `router trace tail` and `GET /metrics`. Until it lands, the trace
+record (spec §6) is the interface, and a figure that cannot be replayed must not be claimed.
+
 ## 10. Test strategy
 
 | Layer | Contents |
@@ -713,19 +718,19 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
 | `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
 | `upstream_timeout` | 504 | an upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | the v0.1 stubs of the three protocol endpoints (R1-2) |
+| `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build: today the cross-protocol **translation** cells (native passthrough of all three protocols is implemented, so the cell's message names what is missing, spec §8) |
 | `internal` | 500 | everything else (beyond the degradation path of a trace write failure) |
 
 Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-30`)
+### 12.8 conformance case table (`CONF-01…CONF-42`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
-`tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path must carry
-`#[ignore = "CONF-NN: depends on <implementation item>"]`** (explicitly visible, rather than simply not
-written).
+`tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
+must carry `#[ignore = "CONF-NN: depends on <implementation item>"]`** (explicitly visible, rather than simply
+not written).
 
 | ID | Covers §10 | Assertion | Depends on implementation item |
 |---|---|---|---|
@@ -760,6 +765,17 @@ written).
 | CONF-29 | §8·error behaviour | **a connection failure is not a timeout**: with the upstream pointed at a closed local port (connect refused, nothing written), `error.classified` carries `reason = "connect_failure"` and `action = "fallback_provider"` — never the `timeout` + `abort` pair the flattened no-status arm produced — and the client's terminal failure names the same class | `classify_upstream_error`'s no-status arm (§12.10.1's `transport_cause`, ADR-011 item 6 row 1) |
 | CONF-30 | §6 + §7·streaming observation | **the streaming path keeps the same books as the buffered path**: over a mock SSE upstream returning usage, a streamed request leaves one `DecisionRecord` with `session` resolved from `prompt_cache_key`, `cost.computed` written, and `session.bound` in the event log; the same session's second streaming turn records `prefix.continuity == 1.0` (a first-message swap drops it below 1.0); a stream whose usage never arrived keeps `usage_missing: true` and an absent cost. Pre-relay connect failure classifies `connect_failure` with `transport_cause` evidence, same as the buffered path | the stream relay's terminal accounting (`Accountant::finish_stream`, §12.10.5 note R3) |
 | CONF-31 | §6·prefix metric | **blocks are enumerated in the provider template order**: with a codex-shaped fixture (`input` serialized before `tools`, turn 2 appending items at the `input` tail), the trace's `prefix.blocks[]` kinds run `tools…, input_item…` and a pure append measures `prefix.continuity == 1.0`; mutating turn 1's first `input` item drops the ratio **below** 1.0 (the metric is bidirectionally movable, not a constant) | `extract_prefix_blocks`'s enumeration order (§12.10.6; the 2026-09-20 Plan A decision) |
+| CONF-32 | §4.6 / ADR-014 items 4–5·plan-first priority and the priced spill | while the account state is `primary` a family request is served by the primary route's own `base_url`; an upstream `403 quota_exhausted` spills it to the overflow route, the move is one `plan.switched` event (FULL), the trace carries `result.plan_switch` priced at the destination account's miss price, and `failover_from` names the route the failure moved the request off | plan-first routing (R4-2: the guard, the chain's family candidate, the `plan_state` projection) |
+| CONF-33 | §4.6 hard rule 2 / ADR-014 item 3·the probe lives at the session boundary | both directions against each other: a session already on `overflow` does **not** probe mid-session (`turn_index == 2`, with `cooldown: 0s` so the cooldown cannot be the explanation); after the cooldown **and** the ADR-011 demotion have passed, a **new** session's first request is admitted as a probe on the primary, its success flips the family back (`plan.switched { reason: primary_recovered, probe: true }`) and pulls the already-spilled session back with it | same as CONF-32 |
+| CONF-34 | §4.6 / ADR-014 item 3·a sessionless request never probes | it has no boundary to be admitted at and probing per request is the flip item 1 forbids: it follows the current account state in both directions, and only the upstream moves the family back (`cooldown: 0s` throughout, so a cooldown cannot explain the negative) | same as CONF-32 |
+| CONF-35 | §4.6 hard rule 3 / ADR-014 item 2 (GAP-Q16)·the local counter is a warning | with a plan of exactly one request's chargeable tokens and `over_quota: block` — the most aggressive local verdict available — one served request makes the counter read exhausted while the mock upstream keeps answering 200s: the counter neither refuses a request nor forces a spill, and its one honest effect is deferring a probe to the plan's window boundary | same as CONF-32 |
+| CONF-36 | §4.6 / ADR-014 item 7·`on_primary_exhausted: block` | the identical `403` exchange as CONF-32's spill, with only the mode changed: the request is refused with the spec §8 `quota_exceeded` body (429) naming the family — never a silent 200 from the metered account, never a quietly downgraded request | same as CONF-32 |
+| CONF-37 | §4.6 / ADR-014 item 5·the switch path charges once | a turn that `403`s on the primary and is served by the overflow account walks the whole candidate chain, but `quota.charged` appears at most once for the primary's window and the overflow spend counts the single served response, not one per attempt. Asserted through the event-log rows `router stats` reads, not an internal builder | same as CONF-32 |
+| CONF-38 | §4.6 / ADR-014 item 7·`overflow_monthly_cap_usd` | the cap is compared against measured usage priced by the config table (the UTC month's overflow `cost.computed` rows) before the attempt: the request that crosses the cap is served, the next is refused with `cost_cap_exceeded` (403). Fixture: one served overflow response costs 184000 nano, so a cap of 0.000184 USD admits the first and refuses the second | same as CONF-32 |
+| CONF-39 | §4.6 / ADR-014 item 10's testability clause·the cooldown knob is usable | a `100ms` cooldown, end-to-end on the live path: while the window is open the boundary does **not** probe (the request is still served by the overflow account), and once it has passed the very same kind of boundary probes and wins — both halves, so neither can pass vacuously | `parse_duration`'s `ms` segment (config.rs) + the probe gate |
+| CONF-40 | §4.6 rule 4 / ADR-014 item 6·the account decides the books | an in-plan request (serving provider `account: coding_plan`) is 0 in every cost bucket and `total`, with `quota_after` still recorded when the provider declares a plan; an overflow request is priced at the model's real five-tier price. Both in one session, and again on a quota-less rig (a plan whose allowance is not published is still a plan), so a bug that zeroed everything or priced everything cannot pass | the in-plan accounting branch (`RouteAccounting.in_plan`, R4-6) |
+| CONF-41 | §9 (reporting surfaces)·`/health`'s plan section + `router stats` provenance | (a) a run whose config declares a `plan_policy` reports the family with `probe.deadline == since + cooldown`, and a run with no `plan_policy` has **no** fabricated plan section; (b) `router stats`' figures equal the sums computed independently from the trace rows and the event log in the case itself | `router stats` + `/health`'s plan section (R5-2) |
+| CONF-42 | §6 `plan_switch.reason: primary_cooling_down`·the third value's producing path | a request whose resolution lands on the family's `primary` while that provider is inside ADR-011's cooldown is served by the overflow route with `result.plan_switch { from: <primary>, to: <the route actually attempted>, reason: primary_cooling_down }` and `failover_from` naming the abandoned primary — and with **no** `plan.switched` event and the account state still `primary` (a cooldown may not move the account, §4.6 rule 3); the negative half: a healthy primary produces no such value | the pre-attempt cooldown displacement record (R5-4) |
 
 **Allocation of CONF-20…25 (R2-2a).** These six IDs are allocated by the owner's R2-2a
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -799,24 +815,33 @@ path classifies `connect_failure` from `transport_cause` evidence, never `timeou
 decision, not a loop outcome — ADR-012):
 
 - **CONF-26** was allocated by the operator's TLS fix (`fix/https-tls-backend`) and landed with it as
-  `tests/conf_26_https_capable_http_client.rs`; its row above is added retroactively, because a case that
-  exists in `tests/conformance/` and not in this table is exactly the drift the "case IDs are a contract"
-  rule below forbids.
-- **CONF-27** is allocated by the owner's R2G1 ruling (the outbound `model` is the provider-native id).
-  Its file lands with R2G1's contract commit, **`#[ignore]`d behind R2G3** (the wiring that makes it
-  true), and R2G3 un-ignores it. The same commit rewrote CONF-01/02/03's expected upstream body, so those
-  three are parked the same way until R2G3 lands: an expectation that encodes the new contract must not be
-  left asserting the old one, and it cannot pass before the implementation exists.
+  `tests/conformance/tests/conf_26_https_capable_http_client.rs`; its row above is added retroactively, because a
+  case that exists in `tests/conformance/` and not in this table is exactly the drift the "case IDs are a
+  contract" rule below forbids.
+- **CONF-27** was allocated by the owner's R2G1 ruling (the outbound `model` is the provider-native id). Its file
+  landed with R2G1's contract commit `#[ignore]`d behind R2G3 (the wiring that makes it true), and **R2G3 closed
+  that ignore**: CONF-27 executes, and so do CONF-01/02/03, whose expected upstream body the same commit rewrote
+  to the native id. Both rows above therefore describe cases that run, and no case file is parked any more.
 
-**Allocation owed by ADR-014 (plan-first routing).** ADR-014 adds behavior to spec §4.6 / §6 — a policy that
-moves a request's account, and a trace field that records it — and implements it in R3, so **that round
-allocates the IDs** (the next free ones, landed together with the case files). The allocation is a human
-decision (§12.8's own precedent for CONF-20…25), while the obligation to have a witness is not: this paragraph
-exists so the spec change cannot go unwitnessed silently. ADR-014 names the candidate coverage — a session
-displaced mid-flight keeps its account and does not probe; a new session after the cooldown probes and records
-`plan.switched`; a probe deferred by the window boundary; `block` refusing with a readable reason while `spill`
-continues; the overflow cap refusing with `cost_cap_exceeded`; and `plan_switch`'s presence/absence against
-`failover_from`.
+**Allocation of CONF-32…40 (ADR-014's plan-first routing) — satisfied by R4.** ADR-014 allocates no ID itself
+("the implementing round allocates the conformance cases"), and it says nothing about which round implements the
+policy; the implementing round was **R4**, so R4 allocated the next free IDs with the case files: **CONF-32…39**
+by R4-3 (ten ADR-014 hard rules, red-then-green on the live serve path) and **CONF-40** by R4-6 (the in-plan-cost
+deviation closed). The allocation is a human decision (§12.8's own precedent for CONF-20…25), while the
+obligation to have a witness is not — which is what this paragraph is for, now discharged row by row above. The
+candidate coverage ADR-014 named is witnessed one-to-one: a session displaced mid-flight keeps its account and
+does not probe (CONF-33 first half, CONF-34); a new session after the cooldown probes and records
+`plan.switched` (CONF-33 second half, CONF-39); a probe deferred by the window boundary (CONF-35); `block`
+refusing with a readable reason while `spill` continues (CONF-36 against CONF-32); the overflow cap refusing
+with `cost_cap_exceeded` (CONF-38); and `plan_switch`'s presence/absence against `failover_from` (CONF-32,
+CONF-34).
+
+**Allocation of CONF-41 and CONF-42 (R5's reporting round).** Allocated by the orchestrator's R5 cards, and
+recorded here in the same commit class as the contract they witness (R5-1, which writes spec §9 and §6's
+`plan_switch` producer table): **CONF-41** (`conf_41_*.rs`, R5-2 — the reporting surfaces of spec §9) and
+**CONF-42** (`conf_42_primary_cooling_down.rs`, R5-4 — the third `plan_switch` reason's producing path). Their
+files land with those cards on the same round branch; until a file exists its row above is the allocation
+record, exactly as CONF-27's was while it was parked behind its implementation.
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -1528,9 +1553,30 @@ probe) and a transition can happen on a request that never completes.
 in R4-1 together with `config.example.yaml` (GAP-Q15 closed): `deny_unknown_fields` means an example that
 carries a key the parser does not know is an unservable file, so neither may get ahead of the other.
 
-**Surfaces.** `/health` reports the family's account state and its probe deadline, and `router stats` counts the
-switches with their verified cost — for ADR-011 item 4's reason, restated: a state nobody can see is
-indistinguishable from "the metered account is now the configuration".
+**Surfaces.** `/health`'s `plan` section and `router stats` are **spec §9**: the first reports the family's
+account state and its probe deadline, the second counts the switches with their verified cost — for ADR-011
+item 4's reason, restated: a state nobody can see is indistinguishable from "the metered account is now the
+configuration". Both read what is already recorded and neither prices anything:
+
+- the plan section derives `probe.deadline` as `since_us + <the current config's cooldown>` — never the stored
+  informational `until_us` (a rebuild may have derived that from a cooldown that has since changed) — and reads
+  `Query::PlanState` for `account` / `since`, treating an absent row as `primary`. Its `blocked_by` vocabulary is
+  the probe predicate's own order with the two request-shaped arms left out (`recovery_disabled` → `cooldown` →
+  `primary_cooling_down` → `window_not_reset`), so the surface and the guard cannot disagree about *why*;
+- `router stats` sums the trace's own `cost.*`, `usage`, `transforms[]` and `plan_switch` fields under spec §6's
+  metric definitions, and reads the event log **read-only** for the one figure only the log holds
+  (`unknown_outcome_requests`, ADR-010 item 4). Its `switch cost (verified)` is one sum over the displaced
+  records' measured `cost.total` — `switch_cost_nano` stays the `inferred` column, or the same money would be
+  counted twice (spec §9.2).
+
+**Each of the three `plan_switch` reasons has a producer** (spec §6's producer table). `primary_exhausted` and
+`primary_recovered` sit on the two account-moving paths above; `primary_cooling_down` is the **pre-attempt
+cooldown skip** — the candidate loop's `provider_in_cooldown` `continue` — and it records the displacement **in
+the trace row only**. A cooldown is route availability, not a verdict on the plan, so that path must not write a
+`plan.switched` event and must not move `plan_state` (spec §4.6 rule 3: only an upstream `403 quota_exhausted`
+may move the account); it pairs with `failover_from` set to the abandoned primary, which is what makes the
+metered spend attributable at all. Both the trace record and that pairing are witnessed by `CONF-42` (§12.8),
+and the buffered and streaming paths are expected to carry it (writes: `forward.rs`, `stream_forward.rs`).
 
 **What this clause does not touch.** The pipeline (§3), the selector (§12.3), the classifier (§12.10.1,
 ADR-011), the byte boundary (§12.3.1, §12.10.7), the sticky binding's TTL and the meaning of `state.sticky_hit`
