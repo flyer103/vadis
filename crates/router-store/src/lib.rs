@@ -734,7 +734,7 @@ impl Store for SqliteStore {
             Query::SessionBinding { session_key } => {
                 let row = conn
                     .query_row(
-                        "SELECT session_key, provider, model, requests_seen, expires_at_us\
+                        "SELECT session_key, provider, model, requests_seen, expires_at_us \
                          FROM sessions WHERE session_key = ?1 AND expires_at_us > ?2",
                         params![session_key, now_us()],
                         |r| {
