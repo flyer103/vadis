@@ -11,9 +11,11 @@ record; a round that fails its gates leaves documentation and no broken code.
 - **Where the project stands right now**: the data plane is real — requests are forwarded to
   upstreams with byte-faithful native passthrough, the streaming path relays the SSE stream
   event byte-for-byte, usage is normalized, upstream failures are classified and can fail over,
-  and every terminal outcome lands in the trace. Cross-protocol translation is still to come, and
-  so is the reporting surface (`router stats` / `router replay` / `router trace tail`) that reads
-  those traces back out. See the state document rather than this page.
+  and every terminal outcome lands in the trace. Cross-protocol translation is still to come; the
+  reporting surface that reads those traces back out has started landing — `router stats` and
+  `/health`'s plan section are served, while `router replay` and `router trace tail` are planned
+  and not served ([`docs/spec.md` §9](../docs/spec.md)). See the state document rather than this
+  page.
 - **The next step**: cross-protocol translation and the trace/observation wiring, which is what
   turns the cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a
   passing round means only the parts that were measurable passed.

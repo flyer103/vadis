@@ -39,7 +39,8 @@ The three protocol endpoints are equivalent: same decision pipeline, same accoun
 each mirrors its own protocol's upstream semantics. Which one you use is your client's
 choice — codex speaks `responses`, most other tools speak `chat`, and an Anthropic-shaped
 client speaks `messages`. `GET /metrics` appears in the README's endpoint table and is a
-planned surface, not a served one today.
+planned surface, not a served one today: [`docs/spec.md` §9.3](../docs/spec.md) is the list of
+what is served and what is not.
 
 ## Per-client setup
 
@@ -119,9 +120,9 @@ not. Backup, inspection and what the store does when it cannot be opened are in
    the report names the plugins, the providers whose keys are present, and the resolved
    state path you expect.
 3. Run **one full session**, not a single request: an agent's first turn misses the cache
-   and the following turns should hit it. Watch the session in the trace (or in `router
-   stats` once the reporting commands land) and confirm the first turn is priced as a miss
-   and the later turns are not.
+   and the following turns should hit it. Watch the session in the trace, or run
+   `router stats --config config.yaml --window 1h` over it, and confirm the first turn is
+   priced as a miss and the later turns are not.
 4. Confirm the identity fields line up: the trace's session equals the client's cache key,
    and `turn_index` increases within the session.
 5. If anything looks wrong, check prefix continuity between turns first — that number, not

@@ -13,7 +13,7 @@ records every decision and every cent into a replayable trace.
 
 | | |
 |---|---|
-| Phase | **v0.1 data plane landed**: `serve` is config-driven, and the three protocol endpoints forward **natively** to a real provider — byte-faithful (the client's own bytes, minus router-owned top-level keys, with the resolved provider-native `model` id), never parsed and reserialized. The streaming path relays the SSE stream event byte-for-byte. Every terminal outcome — success, upstream 4xx/5xx, connect refusal, timeout, stream — leaves one trace record with measured usage, integer-NanoUsd cost, the quota snapshot and prefix continuity; the local store holds the event log and its projections. **Not implemented in v0.1**: the six cross-protocol translation cells (each answers `501 not_implemented`), `GET /metrics`, the `stats` / `replay` / `trace` reporting subcommands, the `router_meta` response block, tier-B (out-of-process) plugins, and automatic model selection. Current state, round by round: `autowork/STATE.md` |
+| Phase | **v0.1 data plane landed**: `serve` is config-driven, and the three protocol endpoints forward **natively** to a real provider — byte-faithful (the client's own bytes, minus router-owned top-level keys, with the resolved provider-native `model` id), never parsed and reserialized. The streaming path relays the SSE stream event byte-for-byte. Every terminal outcome — success, upstream 4xx/5xx, connect refusal, timeout, stream — leaves one trace record with measured usage, integer-NanoUsd cost, the quota snapshot and prefix continuity; the local store holds the event log and its projections. `router stats` reads those traces back out (cost, cache, the plan family's switches and their verified cost) and `/health` reports what the process loaded, including a configured plan family's account and probe deadline. **Not implemented in v0.1**: the six cross-protocol translation cells (each answers `501 not_implemented`), `GET /metrics`, the `replay` / `trace tail` subcommands, the `router_meta` response block, tier-B (out-of-process) plugins, and automatic model selection. Current state, round by round: `autowork/STATE.md` |
 | Model choice | **Explicit** (provider, model) or an alias; automatic selection is a plugin slot, not enabled in v0.1 |
 | Protocols | Inbound and outbound native passthrough for OpenAI chat completions / OpenAI responses / Anthropic messages |
 | Cost | P0 cache fidelity → P1 input-side payload compression → P2 output-side discipline → P3 provider arbitrage |
@@ -52,13 +52,17 @@ env_key  = "ROUTER_TOKEN"
 
 ```bash
 router serve      --config config.yaml          # start the gateway
+router stats      --config config.yaml --window 24h   # read the traces back out
 ```
 
-`serve` is the only subcommand the binary has today. The reporting surface below is **planned design
-intent, not a served command**: `router stats --window 24h` (cost / cache hits / stateful share /
-measured gain per transform), `router replay --trace traces/x.jsonl --config config.yaml` (offline
-replay: cost computed on the same real code path) and `router trace tail` (follow the decisions and
-the accounting stream). Today the trace record is where a decision and its accounting are read from.
+`serve` and `stats` are the two subcommands the binary has. `stats` reads the traces in the window and
+prints the cost and cache report, the plan family's switches and their verified cost, and the requests
+whose outcome is unknown; every figure carries its `verified` / `inferred` label, `--window` is required
+(a saving that does not state its window cannot be checked), and `--json` prints the same report for a
+script. Two further reporting surfaces are **planned design intent, not served commands**:
+`router replay --trace traces/x.jsonl --config config.yaml` (offline replay: cost computed on the same
+real code path) and `router trace tail` (follow the decisions and the accounting stream). Today the trace
+record is where a decision and its accounting are read from.
 
 ## API
 
@@ -69,7 +73,7 @@ Inbound endpoints (the three are equivalent and mirror the upstream semantics pe
 | POST | `/v1/chat/completions` | OpenAI chat completions |
 | POST | `/v1/responses` | OpenAI responses |
 | POST | `/v1/messages` | Anthropic messages |
-| GET | `/health` | liveness + the plugins/services loaded |
+| GET | `/health` | liveness, plus what this process actually loaded (and, when a `plan_policy` is configured, that family's account and probe deadline) |
 
 `GET /metrics` (Prometheus) is planned, not served: it is not registered in v0.1.
 
@@ -94,7 +98,7 @@ crates/router-providers   provider adapters (wire_api capability, auth, error cl
 crates/router-runtime     the Cordis-semantics runtime (effect / coeffect / fiber / declarative loader) — scaffold in v0.1
 crates/router-plugins     built-in tier-A plugins — scaffold in v0.1, not invoked from the serving path
 crates/router-proxy       data plane (axum), byte-faithful forwarding
-crates/router-cli         `serve` — the only subcommand in v0.1
+crates/router-cli         `serve` and `stats` — the two subcommands in v0.1
 crates/router-plugin-sdk  out-of-process tier-B plugin protocol — scaffold in v0.1
 crates/router-store       SQLite/WAL store: event log + projections, and the JSONL trace sink (ADR-009)
 tests/conformance         protocol fidelity, prefix stability, the accounting convention
@@ -114,7 +118,7 @@ autowork/                 the iteration loop side (Python orchestration; replay 
 - No server-side session state: session identity is the client's own key (`prompt_cache_key`, then the configured headers, spec §4), never `store` / `previous_response_id`. v0.1 does not inspect those two fields — they are forwarded byte-for-byte like every other client field and take no part in routing, so `state.stateful_inbound` in the trace is `false` on every request. Detecting inbound state and marking the trace record is planned, not implemented (known gap G-F).
 - Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005) and no request or response body is stored.
 - Cache is the first-order cost lever: every rewrite must be **content-deterministic** (same content → same upstream bytes).
-- Metrics are described by the observation contract in `docs/spec.md`; offline replay is the only authoritative way to compute money.
+- Metrics are described by the observation contract in `docs/spec.md`; the trace is the authoritative record of what each request cost, and `router stats` reads it back (`router replay`, the offline same-code-path recomputation, is planned — `docs/spec.md` §9.3).
 
 ## License
 

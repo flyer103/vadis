@@ -17,8 +17,10 @@ cache, and records every decision and every cent into a replayable trace.
   missed, makes requests never arrive at all.
 - **How it saves money**: prefix stability first, payload discipline second, provider
   arbitrage third.
-- **How to read the reports**: `router stats`, `router replay`, and the difference
-  between a measured (`verified`) and an estimated (`inferred`) saving.
+- **How to read the reports**: the `plan` section of `GET /health` and `router stats` (both
+  served), and the difference between a measured (`verified`) and an estimated (`inferred`)
+  saving. `router replay` and `router trace tail` are planned, not served — the list is
+  `docs/spec.md` §9.
 - **How to extend it** with plugins and rule files, and what is stable enough to rely on.
 - **What is coming next** and where the authoritative current state lives.
 

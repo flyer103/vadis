@@ -1,8 +1,8 @@
 # Cost and caching
 
-Status: partly written. The plan-first section below is written for v0.1; the rest of the
-chapter is still an outline. This chapter explains the levers and how to verify them. It does
-**not** contain price numbers or type sketches: prices live in `config.example.yaml`
+Status: written for v0.1 — the plan-first section and the reporting notes are written; the
+remaining bullets below are still an outline. This chapter explains the levers and how to verify
+them. It does **not** contain price numbers or type sketches: prices live in `config.example.yaml`
 (each entry with its `source` URL and capture date), the accounting definitions live in
 `docs/spec.md` §7.
 
@@ -31,8 +31,11 @@ stable**, and choosing a cheaper model is second-order.
   reversible, declarative and individually accounted.
 - **Verified versus inferred**: only a measured usage difference counts as a saving; a
   local tokenizer estimate is labelled as such and can never be reported as measured.
-- **How to check the claim**: `router stats` to read the cost and cache report,
-  `router replay` to recompute money over a fixed trace with the same code path.
+- **How to check the claim**: `router stats --config config.yaml --window 24h` to read the
+  cost and cache report (the window is required, because a saving that does not state its window
+  cannot be checked), and its `plan family` section for what the switches cost. `router replay`,
+  which will recompute money over a fixed trace with the same code path, is planned and **not
+  served** in v0.1 ([`docs/spec.md` §9.3](../docs/spec.md)).
 
 ## Two cache numbers: a predictor and a fact
 
@@ -114,9 +117,11 @@ names is a legal roster entry — it is simply not routed specially yet.
 `403`. Everything else about the design is about *not* spilling early: the plan's token
 allowance may not be published at all (a plan page often publishes a monthly price and no
 token count), so the local allowance counter that router keeps is a **warning**, not a verdict.
-You will see it in the trace (`cost.quota_after`) and in `/health`, and it can hold a probe
-back until the plan's own reset has passed — but it will never refuse a request, and it will
-never move you to the metered account on its own.
+You will see it in the trace (`cost.quota_after`), and the state it describes is visible in
+`GET /health`'s plan section ([`docs/spec.md` §9.1](../docs/spec.md)): the account the family is on,
+its probe deadline, and why a probe would not be admitted yet. It can hold a probe back until the
+plan's own reset has passed, but it will never refuse a request, and it will never move you to the
+metered account on its own.
 
 **It sticks per session.** A session stays on one account. Leaving the plan is forced (the plan
 is gone); coming back is a *probe*, and a probe only ever happens at the **start** of a session
@@ -149,8 +154,10 @@ no policy at all.
 `from` → `to`, why (`primary_exhausted`, `primary_cooling_down`, `primary_recovered`), whether
 it was a probe, the re-prefill size and its price. That price starts as an *inferred* figure
 (it is computed from the prefix, not from a bill); it becomes *verified* in the shadow of the
-switched request's own measured usage. `/health` shows the current account and the probe
-deadline, and `router stats` counts the switches and their verified cost.
+switched request's own measured usage. `GET /health` shows the current account and the probe
+deadline, and `router stats` counts the switches and their verified cost — the two surfaces,
+their fields and the rule that decides which of the two numbers a claim may rest on are
+[`docs/spec.md` §9](../docs/spec.md).
 
 **What router will not do.** It will not guess your plan's allowance, and it will not "fix" a
 provider's quota. It reacts to what the provider says and comes back when the provider allows
@@ -166,6 +173,8 @@ it; the allowance itself stays the provider's business.
   `inferred`, and the reporting requirements for any savings claim.
 - [`docs/spec.md` §6](../docs/spec.md) — cache metrics exposed to the user
   (`cache_hit_rate`, `prefix_continuity` percentiles).
+- [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `router stats`' report, each
+  figure's provenance and its `verified` / `inferred` label, and what is not served yet.
 - [`design/DESIGN.md` §5](../design/DESIGN.md) and [§6](../design/DESIGN.md) — the cost
   engine and the cache policy.
 - [`docs/spec.md` §4.6](../docs/spec.md) — `account` and `plan_policy`: the per-key

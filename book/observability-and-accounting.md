@@ -57,8 +57,10 @@ Read it in this order; each group answers a different question.
    teeing. The verdict is the accounting question (below).
 7. **Usage and cost** — the normalized usage (total input, cached input, cache write,
    output, reasoning) and the five-tier cost breakdown with the total, plus the plan state
-   after the charge where a plan applies. Cost is computed by the same code path that
-   `router replay` uses, so any figure here can be recomputed from the record.
+   after the charge where a plan applies. Cost is computed by the code path the product's
+   cost engine uses everywhere — the same one `router replay` will use when it lands
+   ([`docs/spec.md` §9.3](../docs/spec.md)) — so any figure here can be recomputed from the
+   record.
 8. **Result** — the status returned to the client, the upstream status, the failover origin
    if the route was switched, router's own overhead, the upstream latency, and whether the
    upstream reported usage at all.
@@ -118,18 +120,36 @@ question.
 
 ## Reading the reports
 
-- **`router stats --window …`** — cost, cache hit rate, the share of requests that carry
-  server-side state, measured savings per transform (verified only), and the reason mix of
-  upstream failures. It also reports the requests whose outcome is unknown (see
-  [Operations](operations.md)), so an ambiguity is visible instead of absorbed into a total.
-- **`router trace tail`** — follow the live decision stream while an agent runs.
-- **`router replay --trace … --config …`** — recompute cost and cache over a fixed trace
-  through the same code path that served it. This is why any savings claim must be
-  reproducible from a trace: if it cannot be replayed, it cannot be claimed.
+Two surfaces read the records back out, and both are **read-only** — neither is a second source of
+truth, and neither prices anything you cannot already find in a record:
 
-Those reporting commands read the trace; they land with the trace itself (see
-[Roadmap](roadmap.md)). Until then the record shape above is the contract, and the file is
-already there to read.
+- **`GET /health`** answers with what this process actually loaded, and when a `plan_policy` is
+  configured it also carries a **plan section**: the family, its two routes, which account the
+  family is on right now, when it moved there, and — while it is on the metered account — the
+  instant at which the plan may be probed again, plus why a probe would not be admitted yet
+  (the cooldown, the plan's own window, a provider cooldown). It reports state; it can also say
+  that no family is configured, and it never invents one.
+- **`router stats --config config.yaml --window 24h`** reads the traces in that window and prints
+  the cost and cache report, the measured savings per transform, the plan family's switches and
+  what they cost, and how many requests in the window have an outcome router cannot verify (see
+  [Operations](operations.md)). The window is **required** — a saving that does not state its
+  window cannot be checked — and `--json` prints the same figures for a script.
+
+The point of the report is the **label on every figure**, `verified` or `inferred` (the two
+conventions are the table above): you can tell a measured number from an estimate while you read
+the report, not afterwards. The field-by-field shape, each figure's provenance and which record
+it comes from are [`docs/spec.md` §9](../docs/spec.md).
+
+Three things are deliberately **not** served in v0.1: **`router replay`** (recompute cost and
+cache over a fixed trace through the same code path that served it), **`router trace tail`**
+(follow the live decision stream) and **`GET /metrics`**. They are planned; the report above does
+not depend on them. Until they land, the trace file itself is the interface — one decision record
+per request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
+reason a surface's shape is frozen only by the change that implements it is the rule in
+[`docs/spec.md` §9.3](../docs/spec.md).
+
+`router stats` reads the trace files directly and opens the local store read-only, so it runs
+while `serve` holds that state directory (see [Operations](operations.md)).
 
 ## When cost goes up, look in this order
 
@@ -146,6 +166,8 @@ already there to read.
 
 - [`docs/spec.md` §6](../docs/spec.md) — the observation contract: field groups, the
   definition of prefix blocks and their hashes, and the metric definitions.
+- [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
+  `router stats` report with each figure's provenance and label, and what is not served yet.
 - [`docs/spec.md` §7](../docs/spec.md) — accounting: `verified` versus `inferred`.
 - [`docs/spec.md` §4.1](../docs/spec.md) — trace output parameters (directory, rollover).
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: event log (state truth)

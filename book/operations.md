@@ -56,7 +56,9 @@ relative to the config file's directory, so the state can live outside the repos
   startup** with a stated reason, rather than becoming a second writer on one file.
 - **Consequence for inspection:** you cannot casually open the file with a SQLite tool while
   the gateway is running (and you will get a busy error rather than a corrupt read). Stop
-  `serve` first, inspect, then start it again. A dedicated `router state`-style surface is a
+  `serve` first, inspect, then start it again. Two read-only surfaces do run against a live
+  gateway: `GET /health` and `router stats`, which opens the store read-only on purpose (see
+  [Observability](observability-and-accounting.md)). A dedicated `router state`-style surface is a
   separate change, not part of v0.1.
 - **The store is a startup prerequisite** (see the table above). An unreadable file is a
   permissions problem to fix, not a mode to run in.
@@ -88,7 +90,8 @@ write. The body may have been billed. Router does not guess:
 - the quota is **not charged again** (a conservative local re-charge would silently eat your
   plan, which is worse than a visible undercount), and no cost is invented for it;
 - reconciliation is **yours**, against the provider's own bill;
-- `router stats` reports how many requests in the window are in this state, so the ambiguity
+- `router stats --config config.yaml --window <duration>` reports how many requests in the window
+  are in this state (its `unknown outcome requests` line), so the ambiguity
   shows up as a number instead of being absorbed into a total.
 
 Read the honest boundary with it too: v0.1 does not verify that an upstream honours an
@@ -117,7 +120,11 @@ your conversations" surface at all.
   marks the whole provider unavailable for a cooldown, so requests stop being spent
   rediscovering a dead route one request at a time. A rate limit cools the route instead.
   The cooldown is state: it survives a restart, is reported by `/health` and counted by
-  `router stats`.
+  `router stats`. It is **not** the plan's probe deadline: a provider cooldown is route
+  availability, while the probe deadline is the family's own cooldown, and `/health`'s plan
+  section reports them separately — a cooling provider makes a probe wait without moving the
+  family's account, and the trace records why
+  ([`docs/spec.md` §9](../docs/spec.md)).
 - **Retry discipline**: a retry happens only where the evidence says the attempt was not
   billed. A failure after the request bytes were fully written is never retried by the
   gateway — see the unknown-outcome section.
@@ -156,6 +163,8 @@ wrong (ADR-012, ADR-013).
 - [`docs/spec.md` §4.2](../docs/spec.md) — the failover chain as configured.
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: the event-log / trace
   split, the join key, durability tiers and the failure behaviour.
+- [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
+  `router stats` report, and what is not served yet.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the store's DDL, the writer lock, the
