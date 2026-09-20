@@ -108,7 +108,10 @@ fn plan_section_value(state: &AppState) -> Value {
 
 /// Read the projections the section reports (spec §9.1's per-key semantics):
 /// the `plan_state` row (absent ⇒ `primary`, §4.6), ADR-011's cooldown for
-/// the primary provider, and the quota counter's window verdict.
+/// the primary provider, and the quota counter's window verdict. The last
+/// two are `availability`'s single-owner reads (ADR-016 §13.3 L1c/L1d,
+/// fixed R10) — this surface consumes them, it does not re-derive them —
+/// both evaluated against the section's one clock read below.
 fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInputs {
     let now = now_us();
     let (account, since_us) = match state.store.as_ref().map(|s| {
@@ -130,8 +133,17 @@ fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInp
         account,
         since_us,
         now_us: now,
-        primary_allowed: !provider_in_cooldown(state, &policy.primary.provider, now),
-        deferred_by_window: probe_deferred_by_window(state, policy, now),
+        primary_allowed: !crate::availability::provider_in_cooldown(
+            state.store.as_ref(),
+            &policy.primary.provider,
+            now,
+        ),
+        deferred_by_window: crate::availability::probe_deferred_by_window(
+            state.store.as_ref(),
+            &state.config,
+            policy,
+            (now.max(0) as u64) / 1_000_000,
+        ),
     }
 }
 
@@ -266,72 +278,12 @@ fn rfc3339_millis(us: i64) -> Option<String> {
     ))
 }
 
-// The two projection reads below mirror `Forwarder`'s private helpers
-// (`forward.rs` keeps those helpers private). CONF-41 witnesses the surface
-// and the guard agree on the live path; a future change that touches both
-// files keeps them in step through that case.
-
-/// ADR-011's route-availability answer for the provider: a live cooldown
-/// row that has not expired refuses it right now.
-fn provider_in_cooldown(state: &AppState, provider: &str, now: i64) -> bool {
-    let Some(store) = &state.store else {
-        return false;
-    };
-    matches!(
-        store.query(Query::Cooldown {
-            provider,
-            model: None,
-        }),
-        Ok(QueryRow::Cooldown(Some(row))) if row.until_us > now
-    )
-}
-
-/// The local counter's window verdict (spec §4.6 rule 3, GAP-Q1): true when
-/// the primary provider declares a quota plan covering the family, that
-/// plan's current window has reached its allowance, and the plan's own
-/// window boundary has not passed yet — the probe waits for the boundary.
-fn probe_deferred_by_window(state: &AppState, policy: &PlanPolicyCfg, now: i64) -> bool {
-    let Some(store) = &state.store else {
-        return false;
-    };
-    let Some(provider) = state
-        .config
-        .providers
-        .iter()
-        .find(|p| p.name == policy.primary.provider)
-    else {
-        return false;
-    };
-    let Some(plans) = provider.quota.as_deref() else {
-        return false;
-    };
-    let now_s = (now.max(0) as u64) / 1_000_000;
-    for (plan_idx, q) in plans
-        .iter()
-        .enumerate()
-        .filter(|(_, q)| q.models.iter().any(|m| m == &policy.family))
-    {
-        let qp = crate::accounting::quota_plan_from_cfg(q);
-        let router_core::quota::QuotaWindow::Monthly { reset_day } = qp.window;
-        let window_start_s = router_core::quota::window_start_for(now_s, reset_day);
-        let next_boundary_s = router_core::quota::next_reset(window_start_s, reset_day);
-        if now_s >= next_boundary_s {
-            continue;
-        }
-        let used = match store.query(Query::QuotaUsed {
-            provider: &provider.name,
-            plan_idx: plan_idx as u32,
-            window_start_us: (window_start_s as i64) * 1_000_000,
-        }) {
-            Ok(QueryRow::Count(n)) => n.max(0) as u64,
-            _ => 0,
-        };
-        if used >= qp.tokens {
-            return true;
-        }
-    }
-    false
-}
+// ADR-016 §13.3 L1c/L1d, fixed R10: the route-availability read and the
+// local counter's window verdict each had a second copy here, mirroring
+// `Forwarder`'s private helpers. Both are deleted — the section (and the
+// request path's `plan_guard`) calls `availability`'s single-owner
+// functions; CONF-75..78 witness the two consumers agreeing on the live
+// path.
 
 pub(crate) fn not_implemented_body(
     request_id: String,
