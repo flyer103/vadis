@@ -560,8 +560,8 @@ pub struct RouterConfig { pub server: ServerCfg, pub session: SessionCfg, pub ca
 pub struct PlanPolicyCfg { pub family: String, pub primary: RouteSpec, pub overflow: RouteSpec,
     pub on_primary_exhausted: OnPrimaryExhausted,   // Spill (default) | Block
     pub recover: RecoveryMode,                      // Probe (default) | None
-    pub cooldown: Duration,                         // default 15m
-    pub overflow_monthly_cap_usd: Option<f64> }     // absent = no cap
+    pub cooldown: DurationVal,                      // default 15m
+    pub overflow_monthly_cap_usd: Option<CapUsdVal> }  // absent = no cap; `to_nano()` is the one rounding
 
 /// spec §4.1; `Rollover::Hourly` is the only value in v0.1 → the file `<dir>/YYYY-MM-DDTHH.jsonl` (UTC).
 pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
