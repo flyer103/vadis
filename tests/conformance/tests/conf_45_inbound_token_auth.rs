@@ -81,11 +81,11 @@ async fn conf_45_inbound_token_auth_guard() {
     let config_path = dir.join("config.yaml");
     std::fs::write(
         &config_path,
-        config_yaml(upstream.addr.port(), listen_port, ", auth_token_env: CONF45_ROUTER_TOKEN"),
+        config_yaml(upstream.addr.port(), listen_port, ", auth_token_env: CONF45_GUARD_TOKEN"),
     )
     .unwrap();
     std::env::set_var("CONF45_MOCK_KEY", "sk-conf45");
-    std::env::set_var("CONF45_ROUTER_TOKEN", "tok-conf45-secret");
+    std::env::set_var("CONF45_GUARD_TOKEN", "tok-conf45-secret");
 
     let cfg = config_path.to_string_lossy().into_owned();
     let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
@@ -164,15 +164,17 @@ async fn conf_45_inbound_token_auth_guard() {
     let b2: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
     let client: serde_json::Value = serde_json::from_str(CLIENT_BODY).unwrap();
     assert_eq!(b1["messages"], client["messages"]);
-    assert_eq!(b1["model"], client["model"]);
     assert_eq!(b2["messages"], client["messages"]);
+    // The one permitted body mutation: the resolved route's native id
+    // (CONF-27) — the guard adds nothing on top of it.
+    assert_eq!(b1["model"], "glm");
 
     // ④ GET /health with no token → 200 (the structural exemption).
     let (status, body) = http_get(&listen_addr, "/health");
     assert_eq!(status, 200, "/health never needs a token");
     let v: serde_json::Value = serde_json::from_str(body.trim()).expect("health json");
     assert_eq!(v["auth"]["required"], true);
-    assert_eq!(v["auth"]["env"], "CONF45_ROUTER_TOKEN");
+    assert_eq!(v["auth"]["env"], "CONF45_GUARD_TOKEN");
 
     serve_task.abort();
     let _ = serve_task.await;

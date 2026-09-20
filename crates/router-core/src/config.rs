@@ -564,6 +564,14 @@ pub struct ServerCfg {
     pub addr: String,
     pub upstream_attempt_timeout: DurationVal,
     pub request_timeout: DurationVal,
+    /// Spec §4.7: the **name** of the env var whose value this process
+    /// expects as the inbound token. Absent ⇒ no inbound auth (today's
+    /// behaviour; the backward-compatibility clause). A plain string the
+    /// parser carries through — the startup refusal on a missing/empty
+    /// value is router-cli's (§12.10.2's split: router-core never reads
+    /// the environment), never this parser's.
+    #[serde(default)]
+    pub auth_token_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

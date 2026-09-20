@@ -61,6 +61,12 @@ pub fn health_json(state: &AppState) -> Value {
         "providers": providers,
         "trace_dir": state.trace_dir,
         "state_db": state.state_db,
+        // Spec §9.1 / §4.7: `{"required": true, "env": "<name>"}` when the
+        // key is written, `{"required": false}` — and no other key — when
+        // it is not. Derived from the loaded config (the one source; no
+        // second copy of the resolution logic to drift). The variable's
+        // NAME may be reported; its value is printed nowhere, ever.
+        "auth": auth_member(&state.config.server),
         // The store is a startup prerequisite: if it could not open, serve
         // would have exited non-zero (CONF-23), so a running process reports
         // "open" — the refusal reason never reaches /health.
@@ -207,6 +213,14 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
 
 fn route_str(r: &router_core::config::RouteSpec) -> String {
     format!("{}/{}", r.provider, r.model)
+}
+
+/// `/health`'s `auth` member (spec §9.1, DESIGN §12.11).
+fn auth_member(server: &router_core::config::ServerCfg) -> Value {
+    match server.auth_token_env.as_deref() {
+        Some(name) => json!({ "required": true, "env": name }),
+        None => json!({ "required": false }),
+    }
 }
 
 /// `DurationVal` is milliseconds (§12.5); µs = ms × 1_000 — the same
@@ -511,6 +525,7 @@ mod tests {
                 addr: "127.0.0.1:0".into(),
                 upstream_attempt_timeout: DurationVal(60_000),
                 request_timeout: DurationVal(600_000),
+                auth_token_env: None,
             },
             session: SessionCfg {
                 key_sources: vec!["prompt_cache_key".into()],

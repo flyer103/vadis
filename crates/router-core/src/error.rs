@@ -15,6 +15,7 @@ pub enum ErrorCode {
     CostCapExceeded,
     QuotaExceeded,
     StatefulUnsupported,
+    Unauthorized,
     UpstreamError,
     UpstreamTimeout,
     NotImplemented,
@@ -32,6 +33,7 @@ impl ErrorCode {
             Self::CostCapExceeded => "cost_cap_exceeded",
             Self::QuotaExceeded => "quota_exceeded",
             Self::StatefulUnsupported => "stateful_unsupported",
+            Self::Unauthorized => "unauthorized",
             Self::UpstreamError => "upstream_error",
             Self::UpstreamTimeout => "upstream_timeout",
             Self::NotImplemented => "not_implemented",
@@ -46,6 +48,7 @@ impl ErrorCode {
             | Self::AutoNotSupported
             | Self::CapabilityUnsupported
             | Self::StatefulUnsupported => 400,
+            Self::Unauthorized => 401,
             Self::UnknownProvider | Self::UnknownModel => 404,
             Self::CostCapExceeded => 403,
             Self::QuotaExceeded => 429,

@@ -71,6 +71,32 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     };
 
+    // Spec §4.7's startup resolution: the key names an env var whose
+    // value is the inbound token, read **once** here and never re-read
+    // (rotating it means restarting the process). A missing or empty
+    // value refuses the start — exit 4, §12.10.2's class for an
+    // unsatisfiable environment prerequisite — because a token-less
+    // start would silently serve unauthenticated. No key ⇒ no gate at
+    // all (CONF-45 ⑤).
+    let auth_token: Option<String> = match &rc.router.server.auth_token_env {
+        Some(name) => match std::env::var(name) {
+            Ok(v) if !v.is_empty() => Some(v),
+            other => {
+                let state = match other {
+                    Ok(_) => "empty",
+                    Err(_) => "unset",
+                };
+                eprintln!(
+                    "router: config file {config_path}: server.auth_token_env names {name}, \
+                     which is {state}: refusing to start \
+                     (a token-less start would serve unauthenticated)"
+                );
+                return 4;
+            }
+        },
+        None => None,
+    };
+
     // The store is a startup prerequisite (ADR-009 item 6/8): open and
     // migrate it before anything else runs. Failure exits non-zero with
     // the distinguishable reason — there is no in-memory degraded mode, and
@@ -185,7 +211,7 @@ pub async fn serve(config_path: &str) -> i32 {
         transports,
         api_keys,
         store: Some(store_dyn.clone()),
-        trace: Some(trace_writer),
+        trace: Some(trace_writer.clone()),
         session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
     });
 
@@ -277,57 +303,176 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     }
 
-    let app = axum::Router::new()
-        .route(
-            "/health",
-            get({
-                let state = state.clone();
-                move || {
-                    let body = router_proxy::health_json(&state);
-                    async move { (StatusCode::OK, Json(body)).into_response() }
-                }
+    // The wiring (§12.11): each protocol route is its own router so it
+    // can carry its own guard layer with its own `proto_in` — the gate
+    // never guesses a protocol from a path string, and a fourth route
+    // added later cannot silently inherit a wrong one. `/health` is
+    // registered outside the guarded set: its exemption is structural
+    // (spec §4.7), not a path comparison inside the guard. When no key
+    // was written, no layer is installed at all — the assembly is the
+    // one v0.1 had before this key existed (CONF-45 ⑤).
+    let health_router = axum::Router::new().route(
+        "/health",
+        get({
+            let state = state.clone();
+            move || {
+                let body = router_proxy::health_json(&state);
+                async move { (StatusCode::OK, Json(body)).into_response() }
+            }
+        }),
+    );
+
+    fn protocol_route(
+        forwarder: std::sync::Arc<Forwarder>,
+        proto_in: WireApi,
+        path: &'static str,
+    ) -> axum::Router {
+        axum::Router::new().route(
+            path,
+            post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let hs: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+                proxy_endpoint(forwarder, proto_in, hs, body)
             }),
         )
-        .route(
-            "/v1/chat/completions",
-            post({
-                let forwarder = forwarder.clone();
-                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
-                    let hs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                        .collect();
-                    proxy_endpoint(forwarder, WireApi::Chat, hs, body)
-                }
-            }),
+    }
+
+    fn guarded_protocol_route(
+        forwarder: std::sync::Arc<Forwarder>,
+        gate: router_proxy::AuthGate,
+        trace: std::sync::Arc<dyn router_core::TraceWriter>,
+        proto_in: WireApi,
+        path: &'static str,
+    ) -> axum::Router {
+        protocol_route(forwarder, proto_in, path).route_layer(
+            axum::middleware::from_fn_with_state(
+                GuardState {
+                    gate,
+                    trace,
+                    proto_in,
+                },
+                guard_mw,
+            ),
         )
-        .route(
-            "/v1/responses",
-            post({
-                let forwarder = forwarder.clone();
-                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
-                    let hs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                        .collect();
-                    proxy_endpoint(forwarder, WireApi::Responses, hs, body)
+    }
+
+    /// What the guard runs with: the startup token's gate, the same
+    /// `Arc<dyn TraceWriter>` the `Forwarder` holds (a refused request
+    /// and a served one land in the same file, same format), and this
+    /// route's own protocol.
+    #[derive(Clone)]
+    struct GuardState {
+        gate: router_proxy::AuthGate,
+        trace: std::sync::Arc<dyn router_core::TraceWriter>,
+        proto_in: WireApi,
+    }
+
+    /// One boundary guard pass: read the headers, decide, and on a
+    /// refusal write the record **then** answer — the same order the
+    /// end-of-request path uses (the observation exists before the
+    /// client is told). A trace write failure here is §8's non-blocking
+    /// case and does not change the response.
+    async fn guard_mw(
+        axum::extract::State(st): axum::extract::State<GuardState>,
+        req: axum::http::Request<axum::body::Body>,
+        next: axum::middleware::Next,
+    ) -> Response {
+        let headers: Vec<(String, String)> = req
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        match st.gate.admits(&headers) {
+            router_proxy::AuthVerdict::Admitted => next.run(req).await,
+            verdict @ router_proxy::AuthVerdict::Refused { .. } => {
+                let request_id = request_id();
+                let started = std::time::Instant::now();
+                let now_epoch_s = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let record = router_proxy::refused_record(
+                    &request_id,
+                    st.proto_in,
+                    &verdict,
+                    now_epoch_s,
+                    started.elapsed().as_millis() as u32,
+                );
+                // Write, then answer — and either way the client is told
+                // 401 (§8's non-blocking case).
+                let _ = st.trace.write(&record);
+                let mut body = ErrorBody::new(
+                    router_core::error::ErrorCode::Unauthorized,
+                    router_proxy::refused_message(&verdict),
+                    request_id,
+                );
+                body.error.details = Some(serde_json::json!({
+                    "header": match verdict {
+                        router_proxy::AuthVerdict::Refused { header } => header,
+                        _ => None,
+                    },
+                }));
+                let mut resp = (
+                    StatusCode::from_u16(router_core::error::ErrorCode::Unauthorized.http_status())
+                        .expect("401 maps"),
+                    Json(body),
+                )
+                    .into_response();
+                if let Ok(v) = record.identity.request_id.parse() {
+                    resp.headers_mut().insert("x-router-request-id", v);
                 }
-            }),
-        )
-        .route(
-            "/v1/messages",
-            post({
-                let forwarder = forwarder.clone();
-                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
-                    let hs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                        .collect();
-                    proxy_endpoint(forwarder, WireApi::Anthropic, hs, body)
-                }
-            }),
-        )
-        .with_state(());
+                resp
+            }
+        }
+    }
+
+    let app = match &auth_token {
+        Some(token) => {
+            // One gate per route (each carries its own `proto_in`), all
+            // cloned from the single startup read.
+            let chat = guarded_protocol_route(
+                forwarder.clone(),
+                router_proxy::AuthGate::new(token.clone()),
+                trace_writer.clone(),
+                WireApi::Chat,
+                "/v1/chat/completions",
+            );
+            let responses = guarded_protocol_route(
+                forwarder.clone(),
+                router_proxy::AuthGate::new(token.clone()),
+                trace_writer.clone(),
+                WireApi::Responses,
+                "/v1/responses",
+            );
+            let anthropic = guarded_protocol_route(
+                forwarder.clone(),
+                router_proxy::AuthGate::new(token.clone()),
+                trace_writer.clone(),
+                WireApi::Anthropic,
+                "/v1/messages",
+            );
+            health_router.merge(chat).merge(responses).merge(anthropic)
+        }
+        None => health_router
+            .merge(protocol_route(
+                forwarder.clone(),
+                WireApi::Chat,
+                "/v1/chat/completions",
+            ))
+            .merge(protocol_route(
+                forwarder.clone(),
+                WireApi::Responses,
+                "/v1/responses",
+            ))
+            .merge(protocol_route(
+                forwarder.clone(),
+                WireApi::Anthropic,
+                "/v1/messages",
+            )),
+    }
+    .with_state(());
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -337,10 +482,13 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     };
     eprintln!(
-        "router listening on {addr} (config dir: {}, trace: {}, state: {} [store open])",
+        "router listening on {addr} (config dir: {}, trace: {}, state: {} [store open], auth: {})",
         rc.config_dir.display(),
         state.trace_dir,
-        state.state_db
+        state.state_db,
+        // §9.1's vocabulary; the variable's name is not printed here
+        // (/health carries it), the value nowhere, ever.
+        if auth_token.is_some() { "required" } else { "none" }
     );
     match axum::serve(listener, app).await {
         Ok(()) => 0,

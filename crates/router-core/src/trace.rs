@@ -271,6 +271,7 @@ impl TraceError {
             | ErrorCode::StatefulUnsupported
             | ErrorCode::UnknownProvider
             | ErrorCode::UnknownModel => "transform_error",
+            ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::CostCapExceeded => "upstream_error",
             ErrorCode::Internal => "internal",
         }
@@ -338,6 +339,11 @@ mod tests {
         assert_eq!(
             TraceError::kind_for_code(ErrorCode::InvalidRequest),
             "transform_error"
+        );
+        // §4.7's guard: the boundary refusal has a kind of its own.
+        assert_eq!(
+            TraceError::kind_for_code(ErrorCode::Unauthorized),
+            "unauthorized"
         );
     }
 

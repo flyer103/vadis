@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod accounting;
+mod auth;
 mod forward;
 mod health;
 mod stream_forward;
@@ -12,6 +13,7 @@ pub use accounting::{
     quota_plan_from_cfg, route_accounting, trace_error_for_failure, AccountCtx, AccountResult,
     Accountant, RouteAccounting,
 };
+pub use auth::{refused_message, refused_record, AuthGate, AuthVerdict};
 pub use forward::{
     BoxedAttempt, ForwardFailure, ForwardOutcome, ForwardSuccess, Forwarder, ProviderSend,
     ProviderTransport,
