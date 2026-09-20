@@ -587,8 +587,8 @@ each improvise):
   the provider's template places tools before the conversation, so a client's tail append in
   template order is a true tail append upstream and must measure `prefix_continuity == 1.0`. This
   enumeration order is a **measurement-definition change by user decision on 2026-09-20 (Plan A)**
-  under AGENTS constraint 9 / ADR-012; the decision and its evidence are recorded in the round 3
-  round file under `autowork/progress/`. The block **domain** is unchanged by it.
+  under AGENTS constraint 9 / ADR-012; the decision and its evidence are recorded under
+  `autowork/progress/` (2026-09-20). The block **domain** is unchanged by it.
 - The on-disk path / rollover is specified by `trace` in §4.1; a write failure does not block the request
   (§8), and records `errors[].kind = trace_write_failed`.
 

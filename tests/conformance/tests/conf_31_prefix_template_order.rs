@@ -13,8 +13,8 @@
 //! The historical numbers (0.250 byte-order / 0.690 raw byte prefix /
 //! 0.991 verified / 1.000 template-order recomputation) are preserved in
 //! the harness guard `autowork/harness/prefix_continuity_order_guard.py`;
-//! the decision and evidence are in the round 3 round file under
-//! `autowork/progress/`.
+//! the decision and evidence are recorded under `autowork/progress/`
+//! (2026-09-20).
 //!
 //! Assertions, over the real `router_cli::serve` assembly on loopback
 //! HTTP with a mock upstream speaking the responses wire shape:

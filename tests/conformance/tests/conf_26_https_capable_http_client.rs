@@ -4,7 +4,7 @@
 //! Every real provider is `https://`; an http-only `reqwest` fails every
 //! upstream call, while every offline conformance mock is plain `http://` and
 //! therefore passes. That is exactly how an http-only client shipped unnoticed
-//! (live client smoke, round 2). The invariant asserted here is "the client can
+//! (a 2026-09-20 live client smoke). The invariant asserted here is "the client can
 //! speak TLS", expressed against the one place that decides it: the workspace
 //! dependency's feature set.
 

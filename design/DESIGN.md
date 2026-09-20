@@ -1435,7 +1435,7 @@ row 5 of §12.10.5 is written (`upstream.submitted.body_hash` hashes exactly tho
   enumeration a pure tail append in template order (a cache hit upstream: 99.1% verified on the
   real pair) registered as a mid-sequence insertion and reported 0.250 (a ~4× under-report).
   Enumerating in template order closes that gap: the same traffic reports 1.000. The decision
-  and its evidence live in the round 3 round file (`autowork/progress/`); CONF-31 pins the
+  and its evidence are recorded under `autowork/progress/` (2026-09-20); CONF-31 pins the
   order, and the harness guard `prefix_continuity_order_guard.py` records the history.
 - **`tokens` per block (GAP-Q14).** The dependency allowlist has no tokenizer, and putting an
   unverifiable one in the money path would be worse than estimating: block `tokens` is a

@@ -209,7 +209,7 @@ async fn conf_25_config_driven_serve() {
         TcpStream::connect_timeout(&default_addr.parse().unwrap(), Duration::from_millis(300))
             .is_err()
             || *default_addr == *addr,
-        "the R1-2 hardcoded default listen address must not be serving"
+        "the old hardcoded default listen address must not be serving"
     );
 
     serve_task.abort();
