@@ -243,6 +243,18 @@ pub async fn serve(config_path: &str) -> i32 {
         let transform_mode = match router_proxy::resolve_transform_mode(&headers) {
             Ok(m) => m,
             Err(f) => {
+                // Write, then answer — the same order the auth guard uses
+                // (the observation exists before the client is told); a
+                // trace write failure is §8's non-blocking case.
+                let now_epoch_s = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let record =
+                    router_proxy::mode_refused_record(&request_id, proto_in, &f, now_epoch_s, 0);
+                if let Some(t) = forwarder.trace.as_ref() {
+                    let _ = t.write(&record);
+                }
                 let mut eb = ErrorBody::new(f.code, f.message, &request_id);
                 eb.error.details = f.details;
                 let mut resp =

@@ -110,7 +110,94 @@ impl ForwardFailure {
     }
 }
 
-/// The forwarding engine: one transport per provider, the api keys read at
+/// The unusable-`X-Router-Transform` refusal's record (DESIGN §12.12's
+/// failure table: "the pre-pipeline record class of spec §6"): the same
+/// field-by-field class as the auth guard's `refused_record` — decided
+/// before the body is read, so nothing was parsed, planned or attempted,
+/// `transform_mode` is `passthrough` (the chain never ran) and the error
+/// is `transform_error` (the §8 vocabulary's word for `invalid_request`).
+pub fn mode_refused_record(
+    request_id: &str,
+    proto_in: WireApi,
+    failure: &ForwardFailure,
+    now_epoch_s: u64,
+    overhead_ms: u32,
+) -> router_core::trace::DecisionRecord {
+    use router_core::trace::{
+        CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec,
+        StateRec, TraceError, TRACE_SCHEMA_VERSION,
+    };
+    use router_core::NanoUsd;
+
+    DecisionRecord {
+        schema_version: TRACE_SCHEMA_VERSION,
+        ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        identity: IdentityRec {
+            request_id: request_id.to_string(),
+            // The mode is decided before §12.10.5's row 1: the same `0`
+            // sentinel every pre-pipeline refusal writes.
+            event_id: 0,
+            client: "other",
+            session: None,
+            thread_id: None,
+            turn_index: 0,
+        },
+        protocol: ProtocolRec {
+            protocol_in: proto_in.as_str().to_string(),
+            protocol_out: None,
+            translated: false,
+            lossy: Vec::new(),
+        },
+        decision: DecisionRec {
+            provider: String::new(),
+            model: String::new(),
+            requested_model: None,
+            selection_source: "explicit".to_string(),
+            plugin_chain: Vec::new(),
+            decision_ms: 0,
+        },
+        state: StateRec {
+            stateful_inbound: false,
+            sticky_hit: false,
+            cache_control_breaks: 0,
+        },
+        prefix: PrefixRec {
+            blocks: Vec::new(),
+            continuity: None,
+        },
+        // The chain never ran: the mode word is `passthrough` and nothing
+        // is claimed (spec §6's pre-pipeline row).
+        transform_mode: TransformMode::Passthrough,
+        transforms: Vec::new(),
+        usage: router_core::Usage::default(),
+        usage_missing: true,
+        cost: CostRec {
+            input_miss: NanoUsd(0),
+            input_hit: NanoUsd(0),
+            cache_write: NanoUsd(0),
+            output: NanoUsd(0),
+            peak_applied_pct: 100,
+            total: NanoUsd(0),
+            quota_after: None,
+        },
+        result: ResultRec {
+            status: failure.status,
+            upstream_status: None,
+            failover_from: None,
+            plan_switch: None,
+            overhead_ms,
+            upstream_ms: None,
+        },
+        errors: vec![TraceError {
+            kind: router_core::trace::TraceError::kind_for_code(failure.code).to_string(),
+            message: failure.message.clone(),
+            plugin: None,
+            details: failure.details.clone(),
+        }],
+    }
+}
+
+/// What the forwarding engine holds: one transport per provider, the api keys read at
 /// startup, and (optionally) the store and trace sink. `store: None` only
 /// in tests without state.
 pub struct Forwarder {
