@@ -86,6 +86,29 @@ impl Nano {
 /// not expressible, and the one adder returns the mismatch instead of a
 /// value, so a future code path that wants to mix units has to name
 /// them — it cannot do it by accident.
+///
+/// The no-mix guarantee is enforced by the compiler and guarded by
+/// compile-fail doctests: `+` and `sum()` on mixed currencies do not
+/// compile (CONF-52's type-level half; ADR-018 §2).
+///
+/// ```compile_fail
+/// // CONF-52 (ADR-018 §2): mixed arithmetic does not compile — there
+/// // is no `impl Add<Money> for Money`, so `+` is a type error.
+/// let usd = router_core::Money { nano: router_core::Nano(1), currency: router_core::Currency::Usd };
+/// let cny = router_core::Money { nano: router_core::Nano(2), currency: router_core::Currency::Cny };
+/// let _ = usd + cny; // E0369: cannot add `Money` to `Money`
+/// ```
+///
+/// ```compile_fail
+/// // CONF-52 (ADR-018 §2): aggregation is spelled as a per-currency
+/// // map, never a `Sum` — `sum()` over mixed currencies does not
+/// // compile (no `impl Sum<Money> for Money` exists at all).
+/// let amounts = vec![
+///     router_core::Money { nano: router_core::Nano(1), currency: router_core::Currency::Usd },
+///     router_core::Money { nano: router_core::Nano(2), currency: router_core::Currency::Cny },
+/// ];
+/// let _total: router_core::Money = amounts.into_iter().sum(); // no Sum impl
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Money {
     pub nano: Nano,
@@ -387,5 +410,95 @@ mod tests {
                 reasoning: 0,
             }
         }
+    }
+
+    // -------------------------------------------------------------
+    // CONF-52's runtime half (ADR-018 §2): the type-level no-mix is
+    // proven by the compile_fail doctests on `Money`; these assert the
+    // one adder that does exist and the shape aggregation must take.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn money_checked_add_refuses_a_mismatch_and_names_both_currencies() {
+        let usd = Money {
+            nano: Nano(1),
+            currency: Currency::Usd,
+        };
+        let cny = Money {
+            nano: Nano(2),
+            currency: Currency::Cny,
+        };
+        // The one adder: a mismatch is an error naming BOTH operands'
+        // currencies — never a value, never a silent conversion.
+        let (left, right) = usd.checked_add(cny).expect_err("USD + CNY is refused");
+        assert_eq!(
+            (left, right),
+            (
+                CurrencyMismatch::Left(Currency::Usd),
+                CurrencyMismatch::Right(Currency::Cny)
+            )
+        );
+        // Both orders refuse (the error is not directional).
+        assert!(cny.checked_add(usd).is_err());
+        // Same-currency adds are fine and saturate (ADR-006 unchanged).
+        assert_eq!(
+            usd.checked_add(Money {
+                nano: Nano(u64::MAX),
+                currency: Currency::Usd
+            })
+            .unwrap()
+            .nano,
+            Nano(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn aggregation_is_a_per_currency_map_never_a_bare_sum() {
+        // ADR-018 §2's spelling for the one legal aggregate: a
+        // BTreeMap<Currency, Money>. Asserted as the running example —
+        // each currency's line sums only its own amounts, and the two
+        // lines coexist without any combined total existing to read.
+        let amounts = [
+            Money {
+                nano: Nano(1),
+                currency: Currency::Usd,
+            },
+            Money {
+                nano: Nano(2),
+                currency: Currency::Usd,
+            },
+            Money {
+                nano: Nano(5),
+                currency: Currency::Cny,
+            },
+        ];
+        let mut per_currency: std::collections::BTreeMap<Currency, Money> =
+            std::collections::BTreeMap::new();
+        for m in amounts {
+            let slot = per_currency.entry(m.currency).or_insert(Money {
+                nano: Nano::ZERO,
+                currency: m.currency,
+            });
+            *slot = slot.checked_add(m).expect("same currency by construction");
+        }
+        assert_eq!(per_currency[&Currency::Usd].nano, Nano(3));
+        assert_eq!(per_currency[&Currency::Cny].nano, Nano(5));
+        assert_eq!(per_currency.len(), 2, "two currencies, two lines, no total");
+    }
+
+    #[test]
+    fn currency_codes_round_trip_exactly_and_refuse_everything_else() {
+        assert_eq!(Currency::Usd.as_code(), "USD");
+        assert_eq!(Currency::Cny.as_code(), "CNY");
+        assert_eq!(Currency::from_code("USD"), Some(Currency::Usd));
+        assert_eq!(Currency::from_code("CNY"), Some(Currency::Cny));
+        // The code is exact — case, whitespace, other ISO codes.
+        for bad in ["usd", "Usd", "cny", " CNY", "CNY ", "EUR", "CNH", "", "us"] {
+            assert_eq!(Currency::from_code(bad), None, "{bad:?} must not parse");
+        }
+        // Serialize says the same code (the trace / /health / report
+        // spelling, §4.8).
+        assert_eq!(serde_json::to_value(Currency::Cny).unwrap(), "CNY");
+        assert_eq!(serde_json::to_value(Currency::Usd).unwrap(), "USD");
     }
 }
