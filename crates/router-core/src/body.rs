@@ -96,7 +96,7 @@ impl RawBody {
         // succeeding member. Commas inside the run disappear together with the
         // run's bytes, while the comma between the run's head and the previous
         // retained member is left to the latter — exactly where adjacent
-        // deletions used to leave a dangling comma (R1-2c). A run consisting of
+        // deletions used to leave a dangling comma. A run consisting of
         // a single first member has no preceding comma to rely on, so it
         // swallows its trailing comma instead.
         let mut dels: Vec<(usize, usize)> = Vec::new();
@@ -765,7 +765,7 @@ mod tests {
     }
 
     // 19. Deletion position matrix: adjacent deletions must not leave dangling
-    //     commas (R1-2c regression; 5 probe-table cases + extras). `keys` is
+    //     commas (the historical regression; 5 probe-table cases + extras). `keys` is
     //     passed directly as a parameter (the two-key shape simulates the
     //     future whitelist in spec §2) without changing the ROUTER_OWNED
     //     constant.
@@ -947,7 +947,7 @@ mod tests {
         assert!(v.get("router_meta").is_none());
     }
 
-    // === set_top_level_string (R2G2, DESIGN §12.3.1 mutation (b)) ===
+    // === set_top_level_string (DESIGN §12.3.1 mutation (b)) ===
 
     /// Shortcut: replace and assert byte-equality against the expected
     /// output, then run the generic invariants (valid JSON, diff-set empty

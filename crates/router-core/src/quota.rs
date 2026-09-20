@@ -122,7 +122,7 @@ pub fn charge(
         st.window_start_epoch_s = start;
         st.tokens_used = 0;
     }
-    let _ = next_reset(start, reset_day); // reset-point derivation is already covered by window_start_for; kept for R2's early warning
+    let _ = next_reset(start, reset_day); // reset-point derivation is already covered by window_start_for
     let charged = chargeable(usage);
     let remaining = plan.tokens.saturating_sub(st.tokens_used);
     let verdict = if st.tokens_used >= plan.tokens {

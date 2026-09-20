@@ -24,11 +24,11 @@ pub struct AppState {
     pub store: Option<std::sync::Arc<dyn Store>>,
 }
 
-/// `/health` reports what was actually loaded (the R2-2b/2c contract,
-/// DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
+/// `/health` reports what was actually loaded (DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
 /// provider's key presence, the resolved trace/state paths, and the store
-/// status — honestly `pending` until R2-2c lands the store (then `open` or
-/// the refusal reason, CONF-23). Spec §9.1 adds the `plan` member.
+/// status — `open` (the store is a startup prerequisite: a process that
+/// could not open it refuses to serve, CONF-23). Spec §9.1 adds the `plan`
+/// member.
 pub fn health_json(state: &AppState) -> Value {
     let mut plugins = Vec::new();
     for p in &state.config.plugins {
@@ -253,7 +253,7 @@ fn rfc3339_millis(us: i64) -> Option<String> {
 }
 
 // The two projection reads below mirror `Forwarder`'s private helpers
-// (`forward.rs` is outside R5-2's write-set). CONF-41 witnesses the surface
+// (`forward.rs` keeps those helpers private). CONF-41 witnesses the surface
 // and the guard agree on the live path; a future change that touches both
 // files keeps them in step through that case.
 

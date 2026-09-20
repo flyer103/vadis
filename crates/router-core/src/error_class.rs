@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(parse_retry_after("garbage"), None);
     }
 
-    /// The no-status split (R2G5): a transport cause of `Connect` is
+    /// The no-status split: a transport cause of `Connect` is
     /// `connect_failure` and fails over; `Timeout` (and a caller with no
     /// transport evidence) keep the `timeout` verdict and its abort
     /// semantics — a connection failure must never wear the timeout's

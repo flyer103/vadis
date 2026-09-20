@@ -1,25 +1,26 @@
-//! The streaming forwarding engine (R2-2e): byte-faithful SSE
+//! The streaming forwarding engine: byte-faithful SSE
 //! passthrough per DESIGN §12.10.3 R1–R11, with the same closing stages
-//! as the buffered path (R2G8).
+//! as the buffered path.
 //!
 //! The relay is a byte-level operation: the bytes that reach the client
-//! are the bytes the upstream sent, in arrival order (R1); each read is
-//! written as soon as it is available (R2); the head goes first and is
-//! never given an invented `content-length` (R3); an idle gap past
-//! `upstream_attempt_timeout` ends the relay (R4); dropping the response
-//! future drops the upstream stream, closing the connection (R5); a
+//! are the bytes the upstream sent, in arrival order (§12.10.3 R1); each
+//! read is written as soon as it is available (§12.10.3 R2); the head goes
+//! first and is never given an invented `content-length` (§12.10.3 R3); an
+//! idle gap past `upstream_attempt_timeout` ends the relay (§12.10.3 R4);
+//! dropping the response future drops the upstream stream, closing the
+//! connection (§12.10.3 R5); a
 //! mid-stream failure **after the first relayed byte** truncates —
 //! recorded, never retried, never masked with a fabricated terminal
 //! event (R6); the usage tap reads a copy of the relayed bytes off the
 //! relay path (R7, R8); usage no carrier delivered is
 //! `usage_missing: true`, zero usage, nothing charged (spec §8).
 //!
-//! R2G8 — the same books (§12.10.5 note R3): the pre-flight runs the
+//! The same books (§12.10.5 note R3): the pre-flight runs the
 //! buffered path's rules (parse → session resolution → route →
 //! capability → outbound bytes → the same event vocabulary), and the
 //! relay's end runs the buffered path's closing stages — the
 //! `upstream.responded` event (the stream-specific observations
-//! `stream_completed` / `bytes_relayed` ride on it), then note R2's
+//! `stream_completed` / `bytes_relayed` ride on it), then §12.10.5 note R2's
 //! order: normalize usage → cost → the `DecisionRecord` trace line →
 //! `cost.computed` + `quota.charged` → the ledger put that makes the
 //! *next* request's `prefix_continuity` computable. A stream that died
@@ -35,7 +36,7 @@
 //! no retry of any kind happens.
 //!
 //! Pre-relay connect failures classify through `transport_cause` evidence
-//! exactly like the buffered path (R2G5/R2G8): a connection failure is
+//! exactly like the buffered path: a connection failure is
 //! `connect_failure`, never `timeout`.
 
 use std::collections::HashMap;
@@ -93,7 +94,7 @@ struct Candidate {
 
 /// The relay's own context, fully owned (`'static`): what the stream
 /// needs to account, classify and fail over after the handler returned.
-/// R2G8: it carries the request's accounting facts (the `AccountCtx`
+/// It carries the request's accounting facts (the `AccountCtx`
 /// inputs) and the route-resolved price/quota tables, so the relay's end
 /// can run the buffered path's closing stages without borrowing the
 /// engine.
@@ -164,9 +165,9 @@ fn now_us() -> i64 {
 impl Forwarder {
     /// Forwards one streaming request. On success the caller receives the
     /// head plus the byte relay; the relay owns the single open upstream
-    /// connection and closes it when dropped (R5). Every terminal
+    /// connection and closes it when dropped (§12.10.3 R5). Every terminal
     /// failure writes its `DecisionRecord` before the outcome leaves the
-    /// engine (R2G4/R2G8) — the same `finish_failure` seam as the
+    /// engine — the same `finish_failure` seam as the
     /// buffered path.
     pub async fn forward_stream(
         &self,
@@ -257,7 +258,7 @@ impl Forwarder {
             Err(f) => return StreamOutcome::Failure(f),
         };
         facts.selection_source = selection_source;
-        // Session resolution — the shared helper (R2G8), moved ahead of
+        // Session resolution — the shared helper, moved ahead of
         // the plan guard (which reads `turn_index` from the sticky
         // projection, ADR-014 item 3).
         let session = resolve_session_key(&self.config, &parsed, headers);
@@ -427,7 +428,7 @@ impl Forwarder {
             session.as_deref(),
         );
         // Row 4 — session.bound through the accountant's one writer, the
-        // same call the buffered path makes (R2G8).
+        // same call the buffered path makes.
         if session.is_some() {
             crate::accounting::Accountant {
                 store: self.store.as_deref(),
@@ -608,7 +609,7 @@ impl Forwarder {
             // Row 5 — the intent, FULL, committed before the wire
             // (CONF-20). The payload carries the session's prefix blocks
             // (the ledger rebuild reads them, §12.10.6); `body_hash` is
-            // this attempt's byte-final bytes (note R4).
+            // this attempt's byte-final bytes (§12.10.5 note R4).
             let intent = NewEvent {
                 kind: EventKind::UpstreamSubmitted,
                 request_id: Some(request_id),
@@ -865,7 +866,7 @@ impl Forwarder {
                     // transport kind is the classification evidence —
                     // the same inputs the buffered path feeds the
                     // classifier, so a connect failure is
-                    // `connect_failure` on both paths (R2G5/R2G8). No
+                    // `connect_failure` on both paths. No
                     // upstream.responded row: the attempt never reached
                     // the upstream.
                     let evidence = ErrorEvidence {
@@ -1029,7 +1030,7 @@ fn provider_cfg(
 enum OpenHead {
     Head(router_providers::stream::StreamHead),
     /// No request bytes went out: the transport kind is the
-    /// classification evidence (R2G5/R2G8).
+    /// classification evidence.
     NotSent(router_providers::TransportKind, ErrorCode, String),
     /// Full write, no head — `unknown_outcome` (ADR-011 item 6 row 3).
     UnknownOutcome(String),
@@ -1057,7 +1058,7 @@ async fn open_head(
     }
 }
 
-/// The byte relay (R1/R2) with the accounting tap and R6's truncation
+/// The byte relay (§12.10.3 R1/R2) with the accounting tap and
 /// wired in. One item per upstream chunk, verbatim; the stream ends when
 /// the upstream ends, and ends without any fabricated terminal marker
 /// when it fails after the first relayed byte. `cleaned` is the
@@ -1073,8 +1074,8 @@ fn relay_stream(
             match router_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
                 router_providers::stream::StreamRead::Chunk(b) => {
                     if !b.is_empty() {
-                        // R2 write-through: this chunk is the item; the
-                        // tap reads a copy (R7).
+                        // §12.10.3 R2 write-through: this chunk is the item; the
+                        // tap reads a copy (§12.10.3 R7).
                         st.tap.feed(&b);
                         st.relayed = true;
                         return Some((b, (ctx, st, cleaned)));
@@ -1244,9 +1245,9 @@ fn record_classified(ctx: &RelayCtx, attempt_index: u32, reason: &str) {
 }
 
 /// The terminal `upstream.responded` (R8/R11) **and** the buffered
-/// path's closing stages (R2G8): usage from the tap or
-/// `usage_missing: true`; then note R2's order — cost, the trace line,
-/// `cost.computed` + `quota.charged`, the ledger put (§12.10.5 R3: the
+/// path's closing stages: usage from the tap or
+/// `usage_missing: true`; then §12.10.5 note R2's order — cost, the trace line,
+/// `cost.computed` + `quota.charged`, the ledger put (§12.10.5 note R3: the
 /// accounting rows commit at stream end, before the last byte is
 /// written through). A truncation rides in `errors[]`, never presented
 /// as completeness; nothing is charged twice.

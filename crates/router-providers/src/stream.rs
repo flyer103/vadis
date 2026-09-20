@@ -1,11 +1,12 @@
-//! The streaming upstream attempt (R2-2e): one `open` call yields the
+//! The streaming upstream attempt: one `open` call yields the
 //! response head first, then `read_chunk` yields the upstream's body bytes
 //! as they arrive. This layer still **makes no decisions** — it surfaces
 //! the head-vs-bytes boundary the proxy's R6 semantics turn on.
 //!
 //! Byte rules (DESIGN §12.10.3): no `accept-encoding` is offered and no
-//! transparent decompression happens (R9); redirects are not followed
-//! (R10); the body bytes are the upstream's own, never re-framed (R1).
+//! transparent decompression happens (§12.10.3 R9); redirects are not
+//! followed (§12.10.3 R10); the body bytes are the upstream's own, never
+//! re-framed (§12.10.3 R1).
 
 use std::time::Duration;
 
@@ -45,8 +46,8 @@ pub enum StreamRead {
     Chunk(Bytes),
     /// The upstream closed the body: the stream ended on its own terms.
     Ended,
-    /// The body failed mid-stream (read error or the R4 idle bound).
-    /// `timed_out` distinguishes the R4 idle case for the trace.
+    /// The body failed mid-stream (read error or the §12.10.3 R4 idle bound).
+    /// `timed_out` distinguishes the §12.10.3 R4 idle case for the trace.
     Failed { message: String, timed_out: bool },
 }
 
@@ -55,7 +56,7 @@ pub enum StreamRead {
 pub enum StreamOpen {
     Head(StreamHead),
     /// No request bytes went out. The transport kind is the
-    /// classification evidence (R2G5/R2G8: the buffered and streaming
+    /// classification evidence (the buffered and streaming
     /// paths feed the classifier the same inputs, so a connect failure is
     /// `connect_failure` on both).
     NotSent(crate::TransportKind, router_core::error::ErrorCode, String),
@@ -65,7 +66,7 @@ pub enum StreamOpen {
 /// instance per provider, built at startup like the buffered client.
 pub struct ReqwestStreamClient {
     client: reqwest::Client,
-    /// R4's bound: no upstream bytes for this long (after the head, or
+    /// §12.10.3 R4's bound: no upstream bytes for this long (after the head, or
     /// before it) is a failed relay. `server.upstream_attempt_timeout`.
     pub idle_timeout: Duration,
 }
@@ -153,7 +154,7 @@ impl ReqwestStreamClient {
     }
 }
 
-/// Reads the next upstream body chunk under R4's idle bound. The bound
+/// Reads the next upstream body chunk under §12.10.3 R4's idle bound. The bound
 /// maps to `StreamRead::Failed { timed_out: true }` — the relay ends, it
 /// never hangs.
 pub async fn read_chunk(head: &mut StreamHead, idle_timeout: Duration) -> StreamRead {

@@ -26,5 +26,5 @@ serde_json = { workspace = true }
 # to router-core, so the domain crate's dependency set stays within bounds.
 serde_yaml = "0.9"
 # futures: the serve endpoint maps the SSE relay stream into axum's body
-# (R2-2e); allowlisted alongside router-providers/router-proxy.
+# (the SSE relay); allowlisted alongside router-providers/router-proxy.
 futures = { workspace = true }

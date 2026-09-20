@@ -1,6 +1,6 @@
 //! `router serve` / `stats` / `replay` / `trace` (DESIGN §12.1).
 //!
-//! R2-2b: `serve` is fully config-driven (CONF-25) — the listen address,
+//! `serve` is fully config-driven (CONF-25) — the listen address,
 //! the plugin set and the roster come from `--config`; no hardcoded default
 //! survives in the serving path. The assembly lives in the library target
 //! so conformance cases can exercise the same code path.

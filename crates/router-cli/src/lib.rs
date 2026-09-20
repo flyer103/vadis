@@ -191,7 +191,7 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     }
 
-    // The trace sink (R2-2f): one DecisionRecord per request under
+    // The trace sink: one DecisionRecord per request under
     // `trace.dir`, rolled hourly. A startup failure is a refusal — a
     // router that cannot write its analysis truth must not serve (same
     // line as CONF-23a; per-request failures are the non-blocking §8
@@ -217,7 +217,7 @@ pub async fn serve(config_path: &str) -> i32 {
 
     /// One POST through the forwarding engine: body bytes in, the engine's
     /// outcome mapped to an HTTP response. `stream: true` bodies take the
-    /// SSE relay (R2-2e); both paths forward the body verbatim (minus
+    /// SSE relay; both paths forward the body verbatim (minus
     /// router-owned keys) — never parsed and reserialized.
     async fn proxy_endpoint(
         forwarder: std::sync::Arc<Forwarder>,
@@ -253,7 +253,7 @@ pub async fn serve(config_path: &str) -> i32 {
                                 .insert(axum::http::header::CONTENT_TYPE, v);
                         }
                     }
-                    // R3: the three §8 headers go out with the head, before
+                    // The three §8 headers go out with the head, before
                     // the first event byte.
                     if let Ok(v) = request_id.parse() {
                         resp.headers_mut().insert("x-router-request-id", v);
@@ -504,7 +504,7 @@ pub async fn serve(config_path: &str) -> i32 {
 }
 
 fn request_id() -> String {
-    // R2's data plane switches to uuid; a process-local increment is enough
+    // A process-local increment is enough
     // for the stub endpoints — no new dependency.
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);

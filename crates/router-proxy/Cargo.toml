@@ -17,5 +17,5 @@ serde_json = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
 # futures: DESIGN §12.1's allowlist row for the providers/proxy seam —
-# the SSE relay's unfold stream (R2-2e).
+# the SSE relay's unfold stream.
 futures = { workspace = true }

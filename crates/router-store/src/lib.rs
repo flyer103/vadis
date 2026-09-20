@@ -1411,7 +1411,7 @@ mod tests {
 
     // (7) class guard: every Query variant's SQL actually executes on a
     //     migrated database. This bug class has now struck three times
-    //     (R2's provider_cooldownWHERE, R4's sessions/quota_counters
+    //     (the cooldown query's lost space, then the sessions/quota_counters
     //     reads): a backslash continuation whose next line starts with
     //     whitespace silently loses that whitespace, the SQL becomes a
     //     syntax error, and the serving path swallows it via .ok(). A
@@ -1583,7 +1583,7 @@ mod tests {
                 panic!("Query::{name} returned Err — its SQL does not execute");
             };
             // Cooldown reads for a provider with a live row must find it;
-            // this pins the read the R2 fix made reachable.
+            // this pins the read the SQL-space fix made reachable.
             if name == "Cooldown" {
                 assert!(
                     matches!(row, QueryRow::Cooldown(Some(_))),
@@ -1592,7 +1592,7 @@ mod tests {
             }
         }
 
-        // The two R4 fixes, pinned by content so a regression cannot hide
+        // The two projection-read fixes, pinned by content so a regression cannot hide
         // behind "no Err": the seeded rows are actually visible.
         let QueryRow::SessionBinding(Some(bind)) = s
             .query(Query::SessionBinding {

@@ -1,4 +1,4 @@
-//! The buffered forwarding engine (R2-2d): native passthrough with byte
+//! The buffered forwarding engine: native passthrough with byte
 //! fidelity, usage normalization, ADR-011 error classification, the
 //! fallback chain with provider-level exclusion, and the §12.10.5 event
 //! sequence (`upstream.submitted` → `upstream.responded` →
@@ -120,7 +120,7 @@ pub struct Forwarder {
     /// (DESIGN §12.10.1's auth rule).
     pub api_keys: HashMap<String, String>,
     pub store: Option<Arc<dyn Store>>,
-    /// The trace sink (R2-2f): one DecisionRecord per request. `None`
+    /// The trace sink: one DecisionRecord per request. `None`
     /// only in tests without a trace dir.
     pub trace: Option<Arc<dyn router_core::TraceWriter>>,
     /// Inbound headers per request (the session key sources live there;
@@ -235,8 +235,8 @@ pub(crate) fn rewrite_outbound_model<'a>(
 /// in microseconds — ONE read, two projections of it (AGENTS
 /// constraint 2): the guard must judge the same instant `/health`
 /// reports (spec §9.1), so the µs truncation of the seconds word may
-/// not reach `PlanRequest::now_us` (R5-5 F3: the up-to-1s disagreement
-/// was the flake factory). Shared with the streaming path (R2G8): both
+/// not reach `PlanRequest::now_us` (the up-to-1s clock disagreement
+/// was the flake factory). Shared with the streaming path: both
 /// paths' failures record through the same facts shape.
 pub(crate) struct RequestFacts<'a> {
     pub(crate) request_id: &'a str,
@@ -260,10 +260,10 @@ pub(crate) struct RequestFacts<'a> {
     /// `result.upstream_ms`); `None` until an attempt answered.
     pub(crate) upstream_ms: Option<u32>,
     /// The last route actually attempted (the failure record's
-    /// `decision.provider`/`model` — "which provider died", R2G8).
+    /// `decision.provider`/`model` — "which provider died").
     pub(crate) attempted_route: Option<RouteSpec>,
     /// The last upstream status that arrived, when one did (mirrored into
-    /// `result.upstream_status` on the failure record, R2G8).
+    /// `result.upstream_status` on the failure record).
     pub(crate) last_upstream_status: Option<u16>,
     /// spec §6 `result.plan_switch`: set when the plan policy displaced
     /// this request's account (ADR-014) — at the guard (state-driven
@@ -281,7 +281,7 @@ impl Forwarder {
     /// present (spec §4 key_sources order).
     ///
     /// Every terminal failure records its `DecisionRecord` before the
-    /// outcome leaves the engine (R2G4) — one shared call into
+    /// outcome leaves the engine — one shared call into
     /// `Accountant::finish_failure`, never a second inlined copy.
     pub async fn forward(
         &self,
@@ -328,7 +328,7 @@ impl Forwarder {
     /// shape cannot drift from it. Missing facts stay missing — an
     /// unparsable body has no `session` and no `blocks`, and the record
     /// says so by leaving them empty rather than inventing values.
-    /// Shared by both forwarding paths (R2G8).
+    /// Shared by both forwarding paths.
     pub(crate) fn record_failure_trace(&self, facts: &RequestFacts<'_>, f: &ForwardFailure) {
         crate::accounting::Accountant {
             store: self.store.as_deref(),
@@ -522,7 +522,7 @@ impl Forwarder {
         // router-owned top-level keys — mutation (a), once per request. The
         // `model` rewrite (mutation (b)) is per attempt, below, because the
         // fallback chain walks routes whose native ids differ (§12.10.5
-        // note R4: this base is the router-visible inbound the row-1 hash
+        // §12.10.5 note R4: this base is the router-visible inbound the row-1 hash
         // names, and it does not depend on the route taken).
         let cleaned =
             match RawBody::new(body.to_vec()).remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS) {
@@ -572,7 +572,7 @@ impl Forwarder {
         );
         // Row 2 — the transform chain point is kept even when the chain is
         // empty (this round's chain is passthrough; the wiring point lands
-        // with the transform chain itself, R2-3).
+        // with the transform chain itself).
         self.append_event(
             EventKind::TransformApplied,
             request_id,
@@ -745,7 +745,7 @@ impl Forwarder {
             // payload carries the session's `prefix_blocks` — the encoder
             // computed them from exactly these bytes, which is what the
             // cache_ledger rebuild reads (§12.10.6, CONF-21). `body_hash`
-            // is that attempt's byte-final bytes (note R4): the rewrite is
+            // is that attempt's byte-final bytes (§12.10.5 note R4): the rewrite is
             // done, so the hash names exactly what goes to the wire.
             // Cloned (not taken): a failed attempt continues to the next
             // candidate, which re-reads the same cleaned-body blocks.
@@ -865,7 +865,7 @@ impl Forwarder {
                             trace: self.trace.as_deref(),
                             accounting: route_acc.as_ref(),
                         };
-                        // Note R2's order: trace line, then cost/quota rows.
+                        // §12.10.5 note R2's order: trace line, then cost/quota rows.
                         // The continuity measurement inside `finish` reads
                         // the session's PREVIOUS block set, so the ledger
                         // put (replacing it with this request's blocks for
@@ -1020,7 +1020,7 @@ impl Forwarder {
                     // reqwest error (`is_connect()` / `is_timeout()`) is
                     // the classification evidence: a connect failure is
                     // `connect_failure` and walks the chain, a connect
-                    // timeout keeps the `timeout` verdict (R2G5).
+                    // timeout keeps the `timeout` verdict.
                     let evidence = ErrorEvidence {
                         status: None,
                         retry_after: None,
@@ -1116,7 +1116,7 @@ impl Forwarder {
     /// allowance rule): for a request inside the family, where does it
     /// go? `Ok(None)` when the config has no `plan_policy` or the route
     /// is outside the family — the caller proceeds untouched. Shared by
-    /// both forwarding paths (R2G8's rule: the same request, the same
+    /// both forwarding paths (the same request, the same
     /// guard, whichever medium carries it).
     pub(crate) fn plan_guard(
         &self,
@@ -1157,7 +1157,7 @@ impl Forwarder {
             turn_index,
             state,
             // The µs word of the same read `/health` clocks itself with
-            // (R5-5 F3): deriving it back from the truncated seconds
+            // Deriving it back from the truncated seconds
             // word made the guard refuse for up to ~1s after the
             // surface already said `admitted: true`.
             now_us,
@@ -1321,7 +1321,7 @@ impl Forwarder {
     /// `error.classified` (NORMAL) — §12.10.5 row 7, ADR-011 item 8. Every
     /// classification writes one event, even when the action is abort.
     /// Returns the event id the demotion projection rides on. Shared by
-    /// both forwarding paths (R2G8): the same failure gets the same row
+    /// both forwarding paths: the same failure gets the same row
     /// whichever medium carried it.
     pub(crate) fn record_classification(
         &self,
@@ -1570,7 +1570,7 @@ impl Forwarder {
     }
 
     /// `failover.triggered` (FULL), before the next intent (§12.10.5 row 8).
-    /// Shared by both forwarding paths (R2G8).
+    /// Shared by both forwarding paths.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_failover(
         &self,

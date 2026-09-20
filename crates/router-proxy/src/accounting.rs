@@ -1,4 +1,4 @@
-//! End-of-request accounting (R2-2f): build the `DecisionRecord` from the
+//! End-of-request accounting: build the `DecisionRecord` from the
 //! forwarding outcome, append it to the trace, then commit the accounting
 //! events with `trace_ref` naming that line — DESIGN §12.10.5 note R2's
 //! order: normalize usage → compute cost (and the pure quota `charge`) →
@@ -271,7 +271,7 @@ impl<'a> Accountant<'a> {
         )
     }
 
-    /// The **shared terminal-failure record** (R2G4): one call site per
+    /// The **shared terminal-failure record**: one call site per
     /// forwarding path — upstream 4xx/5xx exhausted, connect failure,
     /// timeout / unknown_outcome, parse/route/capability rejections —
     /// landing one `DecisionRecord` with `errors[0]` naming the
@@ -283,7 +283,7 @@ impl<'a> Accountant<'a> {
     /// `attempted_route` names the route that actually failed (the
     /// failure-analysis first question — "which provider died") and
     /// `upstream_status` mirrors the upstream's own status into
-    /// `result.upstream_status` alongside `errors[].details` (R2G8's
+    /// `result.upstream_status` alongside `errors[].details` (the
     /// field completion: both paths, both fields, no blanks).
     #[allow(clippy::too_many_arguments)]
     pub fn finish_failure(
@@ -322,7 +322,7 @@ impl<'a> Accountant<'a> {
         )
     }
 
-    /// The stream path's entry (the relay owns its facts): same R2 order,
+    /// The stream path's entry (the relay owns its facts): same §12.10.5 note R2 order,
     /// same events. `extra_errors` carries any truncation record.
     #[allow(clippy::too_many_arguments)]
     pub fn finish_stream(
@@ -353,7 +353,7 @@ impl<'a> Accountant<'a> {
         )
     }
 
-    /// The shared end-of-request commit (note R2's order).
+    /// The shared end-of-request commit (§12.10.5 note R2's order).
     #[allow(clippy::too_many_arguments)]
     fn commit(
         &self,
@@ -503,7 +503,7 @@ impl<'a> Accountant<'a> {
             errors,
         };
 
-        // The trace line (note R2: it precedes the accounting rows). One
+        // The trace line (§12.10.5 note R2: it precedes the accounting rows). One
         // write; the pointer feeds both accounting events.
         let trace_ref = match self.trace.map(|t| t.write(&record)) {
             Some(Ok(p)) => p,
