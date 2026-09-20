@@ -241,16 +241,18 @@ pub enum ProjectionWrite<'a> {
     /// row's own `ts_us` — the store reads it from `last_event`, so the
     /// incremental path and the rebuild compute identical values
     /// (CONF-21's rule) and no write depends on a second clock read.
-    /// `until_us` (`since_us +` the then-current cooldown, informational
-    /// only — the serving path recomputes the gate from the current
-    /// config) comes from the event payload, so the log alone determines
-    /// the row.
+    /// `cooldown_us` (0 on 'primary') yields the informational
+    /// `until_us = since_us + cooldown_us`; the serving path recomputes
+    /// the probe gate from the *current* config against `since_us`
+    /// (ADR-014 item 10's mid-flight clause), so a knob change moves a
+    /// future deadline without rewriting anything.
     PlanSwitched {
         family: &'a str,
         /// 'primary' | 'overflow' (the `to_account` of the event).
         account: &'a str,
-        /// Informational probe deadline; NULL on 'primary'.
-        until_us: Option<i64>,
+        /// The cooldown that was current at the write; 0 ⇒ `until_us`
+        /// NULL (a family on its primary has no probe deadline).
+        cooldown_us: i64,
         last_event: EventId,
     },
 }
@@ -260,6 +262,10 @@ pub enum ProjectionWrite<'a> {
 pub enum Query<'a> {
     /// The sticky binding for a session, if present and unexpired.
     SessionBinding { session_key: &'a str },
+    /// Every unexpired binding on one route — the plan policy's
+    /// account-move handoff (ADR-014 items 1/3: the sessions a family
+    /// spill or recovery must take with it). Bounded by the sticky TTL.
+    SessionBindingsFor { provider: &'a str, model: &'a str },
     /// `requests_seen` for a session (0 = no session yet); `turn_index` is
     /// this value + 1 (DESIGN §12.10.5).
     SessionRequestsSeen { session_key: &'a str },
@@ -342,6 +348,7 @@ pub struct PlanStateProjRow {
 #[derive(Debug, Clone)]
 pub enum QueryRow {
     SessionBinding(Option<SessionBindingRow>),
+    SessionBindings(Vec<SessionBindingRow>),
     Count(i64),
     Cooldown(Option<CooldownRow>),
     CacheLedger(Vec<LedgerBlock>),

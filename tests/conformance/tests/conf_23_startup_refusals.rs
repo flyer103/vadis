@@ -108,10 +108,21 @@ fn conf_23a_schema_too_new_is_refused() {
         .unwrap();
     }
     match router_store::SqliteStore::open(&db) {
-        Err(router_core::StoreError::SchemaTooNew {
-            found: 99,
-            supported: 1,
-        }) => {}
-        other => panic!("expected SchemaTooNew{{found:99,supported:1}}, got {other:?}"),
+        // `supported` is the binary's max DDL version (2 since the
+        // `plan_state` migration, DESIGN §12.10.8) — asserted as a
+        // relation, not a snapshot (AGENTS constraint 6).
+        Err(router_core::StoreError::SchemaTooNew { found: 99, supported }) => {
+            assert_eq!(supported, s_max_supported())
+        }
+        other => panic!("expected SchemaTooNew, got {other:?}"),
     }
+}
+
+/// The binary's own maximum DDL version, read from a fresh store rather
+/// than hardcoded.
+fn s_max_supported() -> u32 {
+    use router_core::store::Store as _;
+    let dir = router_conformance::testkit::tempdir("conf23-max");
+    let s = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    s.schema_version().unwrap()
 }

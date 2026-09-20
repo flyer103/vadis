@@ -92,8 +92,9 @@ pub fn window_start_for(now_epoch_s: u64, reset_day: u8) -> u64 {
     utc_midnight_epoch(wy, wm, rd.min(days_in_month(wy, wm)))
 }
 
-/// The next reset point after `window_start`.
-fn next_reset(window_start: u64, reset_day: u8) -> u64 {
+/// The next reset point after `window_start` (public: the plan policy's
+/// probe-deferral rule reads it — spec §4.6 rule 3).
+pub fn next_reset(window_start: u64, reset_day: u8) -> u64 {
     let (y, m, d, _, _) = crate::peak::timestamp_parts(window_start, crate::peak::Tz::Utc);
     let rd = reset_day as u32;
     debug_assert_eq!(d, rd.min(days_in_month(y, m)));
@@ -122,7 +123,6 @@ pub fn charge(
         st.tokens_used = 0;
     }
     let _ = next_reset(start, reset_day); // reset-point derivation is already covered by window_start_for; kept for R2's early warning
-
     let charged = chargeable(usage);
     let remaining = plan.tokens.saturating_sub(st.tokens_used);
     let verdict = if st.tokens_used >= plan.tokens {

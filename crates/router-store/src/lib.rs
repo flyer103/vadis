@@ -541,10 +541,11 @@ impl SqliteStore {
     /// DESIGN §12.10.8's rebuild rule: scan `plan.switched` in `event_id`
     /// order, per family — the last row's `to_account` is the current
     /// account, its `ts_us` is `since_us`, its `event_id` is
-    /// `last_event`, and `until_us` comes from the payload (written as
-    /// `since_us +` the then-current cooldown, so the log alone
-    /// determines the row; the serving path recomputes the probe gate
-    /// from the *current* config against `since_us`).
+    /// `last_event`, and `until_us = since_us + cooldown_ms × 1000`
+    /// while the account is `overflow` (the payload carries the
+    /// then-current cooldown, so the log alone determines the row; the
+    /// serving path recomputes the probe gate from the *current* config
+    /// against `since_us`).
     fn rebuild_plan_state(
         &self,
         conn: &Connection,
@@ -567,7 +568,17 @@ impl SqliteStore {
                 .get("to_account")
                 .and_then(|v| v.as_str())
                 .unwrap_or("primary");
-            let until_us = ev.payload.get("probe_eligible_us").and_then(|v| v.as_i64());
+            let cooldown_us = ev
+                .payload
+                .get("cooldown_ms")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .saturating_mul(1_000);
+            let until_us = if account == "overflow" && cooldown_us > 0 {
+                Some(ev.ts_us.saturating_add(cooldown_us))
+            } else {
+                None
+            };
             conn.execute(
                 "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
                 params![family, account, ev.ts_us, until_us, ev.event_id.0],
@@ -688,7 +699,7 @@ impl Store for SqliteStore {
             ProjectionWrite::PlanSwitched {
                 family,
                 account,
-                until_us,
+                cooldown_us,
                 last_event,
             } => {
                 // since_us anchors on the event row's own ts_us (never a
@@ -701,6 +712,11 @@ impl Store for SqliteStore {
                         |r| r.get(0),
                     )
                     .map_err(|e| map_err(false, e))?;
+                let until_us = if account == "overflow" && cooldown_us > 0 {
+                    Some(since_us.saturating_add(cooldown_us))
+                } else {
+                    None
+                };
                 tx.execute(
                     "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
                     params![family, account, since_us, until_us, last_event.0],
@@ -742,6 +758,28 @@ impl Store for SqliteStore {
                     Err(rusqlite::Error::QueryReturnedNoRows) => None,
                     Err(e) => return Err(map_err(false, e)),
                 })
+            }
+            Query::SessionBindingsFor { provider, model } => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT session_key, provider, model, requests_seen, expires_at_us \
+                         FROM sessions WHERE provider = ?1 AND model = ?2 AND expires_at_us > ?3",
+                    )
+                    .map_err(|e| map_err(false, e))?;
+                let rows = stmt
+                    .query_map(params![provider, model, now_us()], |r| {
+                        Ok(SessionBindingRow {
+                            session_key: r.get(0)?,
+                            provider: r.get(1)?,
+                            model: r.get(2)?,
+                            requests_seen: r.get(3)?,
+                            expires_at_us: r.get(4)?,
+                        })
+                    })
+                    .map_err(|e| map_err(false, e))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| map_err(false, e))?;
+                QueryRow::SessionBindings(rows)
             }
             Query::SessionRequestsSeen { session_key } => {
                 let n: i64 = conn
@@ -1259,14 +1297,14 @@ mod tests {
                 "to_account": "overflow",
                 "reason": "primary_exhausted",
                 "probe": false,
-                "probe_eligible_us": 1_789_900_000_000_000i64,
+                "cooldown_ms": 900_000i64,
             }),
         };
         let ev = s.append(switched()).unwrap();
         s.project(ProjectionWrite::PlanSwitched {
             family: "glm-5.3",
             account: "overflow",
-            until_us: Some(1_789_900_000_000_000),
+            cooldown_us: 900_000 * 1_000,
             last_event: ev,
         })
         .unwrap();
@@ -1277,7 +1315,6 @@ mod tests {
         };
         let inc = row.expect("the family switched");
         assert_eq!(inc.account, "overflow");
-        assert_eq!(inc.until_us, Some(1_789_900_000_000_000));
         assert_eq!(inc.last_event, ev.0);
         // since_us is the event row's own ts_us, read back directly.
         let ts_us: i64 = s
@@ -1291,6 +1328,11 @@ mod tests {
         assert_eq!(
             inc.since_us, ts_us,
             "since_us anchors on the event's own ts_us"
+        );
+        assert_eq!(
+            inc.until_us,
+            Some(ts_us + 900_000 * 1_000),
+            "until_us = since_us + the written cooldown"
         );
 
         // A family that never switched has no row (⇒ primary).

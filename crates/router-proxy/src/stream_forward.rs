@@ -58,6 +58,10 @@ use crate::forward::{
     resolve_session_key, rewrite_outbound_model, turn_index_for, ForwardFailure, Forwarder,
     RequestFacts,
 };
+use router_core::plan::{
+    route_in_family, PlanAccount, REASON_PRIMARY_EXHAUSTED, REASON_PRIMARY_RECOVERED,
+};
+use router_core::trace::PlanSwitchRec;
 
 /// The streaming answer: the head already decided (status + content
 /// type) and a body stream of the upstream's bytes, verbatim.
@@ -116,6 +120,9 @@ struct RelayCtx {
     blocks: Vec<PrefixBlock>,
     /// chat only: the client asked for `stream_options.include_usage`.
     client_requested_usage: bool,
+    /// spec §6 `result.plan_switch` (ADR-014): the displacement the
+    /// pre-flight recorded, carried to the relay's terminal record.
+    plan_switch: Option<router_core::trace::PlanSwitchRec>,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -182,6 +189,7 @@ impl Forwarder {
             upstream_ms: None,
             attempted_route: None,
             last_upstream_status: None,
+            plan_switch: None,
         };
         let outcome = self
             .forward_stream_inner(&mut facts, proto_in, body, request_id, headers)
@@ -238,11 +246,43 @@ impl Forwarder {
                 details: None,
             });
         }
-        let (primary, selection_source) = match resolve_route(&self.config, model) {
+        let (mut primary, selection_source) = match resolve_route(&self.config, model) {
             Ok(r) => r,
             Err(f) => return StreamOutcome::Failure(f),
         };
         facts.selection_source = selection_source;
+        // Session resolution — the shared helper (R2G8), moved ahead of
+        // the plan guard (which reads `turn_index` from the sticky
+        // projection, ADR-014 item 3).
+        let session = resolve_session_key(&self.config, &parsed, headers);
+        let turn_index = turn_index_for(&self.store, session.as_deref());
+        facts.session = session.clone();
+        facts.turn_index = turn_index;
+        // The plan policy's Guard stage (spec §4.6) — the same rule the
+        // buffered path runs, before any attempt.
+        let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
+        match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s) {
+            Ok(None) => {}
+            Ok(Some(g)) => {
+                if g.route != primary {
+                    facts.plan_switch = Some(PlanSwitchRec {
+                        from: primary.to_string(),
+                        to: g.route.to_string(),
+                        reason: if g.state_before.account == PlanAccount::Overflow {
+                            REASON_PRIMARY_RECOVERED
+                        } else {
+                            REASON_PRIMARY_EXHAUSTED
+                        },
+                        probe: g.probe,
+                        reprefill_tokens: None,
+                        switch_cost_nano: None,
+                    });
+                }
+                primary = g.route.clone();
+                plan_guard_out = Some(g);
+            }
+            Err(f) => return StreamOutcome::Failure(f),
+        }
         let Some(provider) = provider_cfg(&self.config, &primary) else {
             return StreamOutcome::Failure(ForwardFailure {
                 status: 404,
@@ -300,13 +340,6 @@ impl Forwarder {
         };
         let outbound_hash = router_core::prefix::body_sha16(cleaned.as_bytes());
         facts.blocks = extract_prefix_blocks(&cleaned).unwrap_or_default();
-
-        // Session resolution — the shared helper (R2G8): the streamed
-        // request is the same request, resolved by the same key sources.
-        let session = resolve_session_key(&self.config, &parsed, headers);
-        let turn_index = turn_index_for(&self.store, session.as_deref());
-        facts.session = session.clone();
-        facts.turn_index = turn_index;
 
         // Rows 1 + 3 of the §12.10.5 wiring (FULL + NORMAL), same payload
         // shape as the buffered path plus the stream marker.
@@ -377,6 +410,7 @@ impl Forwarder {
                     decision_ms,
                     started,
                     now_epoch_s,
+                    plan_switch: facts.plan_switch.clone(),
                 },
                 &primary.provider,
                 &primary.model,
@@ -387,25 +421,38 @@ impl Forwarder {
         }
 
         // The primary candidate plus the fallback chain (spec §4.2),
-        // filtered to native routes with a key present at startup.
+        // filtered to native routes with a key present at startup. For a
+        // request inside a plan family the family's `overflow` route is
+        // the first candidate after primary (spec §4.2 refined by §4.6).
         let mut candidates: Vec<Candidate> = Vec::new();
-        for route in std::iter::once(primary.clone()).chain(self.config.fallback.iter().cloned()) {
-            if candidates.iter().any(|c| c.route == route) {
-                continue;
+        {
+            let mut routes: Vec<RouteSpec> = vec![primary.clone()];
+            if let Some(policy) = &self.config.plan_policy {
+                if route_in_family(policy, &primary) && !routes.contains(&policy.overflow) {
+                    routes.insert(1, policy.overflow.clone());
+                }
             }
-            if let Some(cfg) = self
-                .config
-                .providers
-                .iter()
-                .find(|p| p.name == route.provider)
+            for route in routes
+                .into_iter()
+                .chain(self.config.fallback.iter().cloned())
             {
-                if cfg.wire_api == proto_in && self.api_keys.contains_key(&cfg.name) {
-                    candidates.push(Candidate {
-                        route: route.clone(),
-                        wire: cfg.wire_api,
-                        base_url: cfg.base_url.clone(),
-                        api_key: self.api_keys[&cfg.name].clone(),
-                    });
+                if candidates.iter().any(|c| c.route == route) {
+                    continue;
+                }
+                if let Some(cfg) = self
+                    .config
+                    .providers
+                    .iter()
+                    .find(|p| p.name == route.provider)
+                {
+                    if cfg.wire_api == proto_in && self.api_keys.contains_key(&cfg.name) {
+                        candidates.push(Candidate {
+                            route: route.clone(),
+                            wire: cfg.wire_api,
+                            base_url: cfg.base_url.clone(),
+                            api_key: self.api_keys[&cfg.name].clone(),
+                        });
+                    }
                 }
             }
         }
@@ -525,6 +572,14 @@ impl Forwarder {
                     last_upstream_status = Some(head.status);
                     facts.last_upstream_status = Some(head.status);
                     if (200..300).contains(&head.status) {
+                        // A probe succeeded (ADR-014 item 3): a 2xx head on
+                        // the primary while the family was on overflow
+                        // flips the family back and records it.
+                        if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
+                            if let Some(policy) = self.config.plan_policy.as_ref() {
+                                self.plan_probe_succeeded(request_id, policy, session.as_deref());
+                            }
+                        }
                         // The relay takes it from here: the head is 2xx,
                         // the accounting facts travel with the stream.
                         let content_type = head.content_type.clone();
@@ -550,6 +605,7 @@ impl Forwarder {
                             received_event: facts.received_event,
                             blocks: facts.blocks.clone(),
                             client_requested_usage,
+                            plan_switch: facts.plan_switch.clone(),
                         };
                         let state = RelayState {
                             tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -592,6 +648,58 @@ impl Forwarder {
                     let classified_id =
                         self.record_classification(request_id, attempt_index, Some(status), &cls);
                     self.apply_demotion(&cand.route.provider, &cls, classified_id);
+                    // The plan policy's only account-moving signal
+                    // (ADR-014 item 2): 403 `quota_exhausted` on the
+                    // family's primary flips the family to overflow and
+                    // records `plan.switched` before the next intent.
+                    if cls.class.demotes_provider() {
+                        if let Some(policy) = self.config.plan_policy.as_ref() {
+                            if cand.route == policy.primary {
+                                self.record_plan_switch(
+                                    request_id,
+                                    policy,
+                                    &PlanAccount::Primary,
+                                    &PlanAccount::Overflow,
+                                    REASON_PRIMARY_EXHAUSTED,
+                                    false,
+                                    session.as_deref(),
+                                );
+                                if policy.on_primary_exhausted
+                                    == router_core::config::OnPrimaryExhausted::Block
+                                {
+                                    return StreamOutcome::Failure(ForwardFailure {
+                                        status: 429,
+                                        code: ErrorCode::QuotaExceeded,
+                                        message: format!(
+                                            "plan family '{}' is exhausted and \
+                                             on_primary_exhausted is 'block': the request is \
+                                             refused rather than served from the metered \
+                                             account (spec 4.6)",
+                                            policy.family
+                                        ),
+                                        details: Some(json!({
+                                            "family": policy.family,
+                                            "account_state": "overflow",
+                                            "reason": "quota_exhausted",
+                                            "stream": true,
+                                        })),
+                                    });
+                                }
+                                if facts.plan_switch.is_none() {
+                                    let (reprefill, cost_nano) =
+                                        self.failover_cost(session.as_deref(), &policy.overflow);
+                                    facts.plan_switch = Some(PlanSwitchRec {
+                                        from: policy.primary.to_string(),
+                                        to: policy.overflow.to_string(),
+                                        reason: REASON_PRIMARY_EXHAUSTED,
+                                        probe: false,
+                                        reprefill_tokens: reprefill,
+                                        switch_cost_nano: cost_nano,
+                                    });
+                                }
+                            }
+                        }
+                    }
                     self.append_event(
                         EventKind::UpstreamResponded,
                         request_id,
@@ -1109,6 +1217,7 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
         decision_ms: ctx.decision_ms,
         started: ctx.started,
         now_epoch_s: ctx.now_epoch_s,
+        plan_switch: ctx.plan_switch.clone(),
     };
     let failover_from = st
         .failover_from

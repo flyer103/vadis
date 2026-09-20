@@ -505,6 +505,12 @@ impl<'a> Accountant<'a> {
                     body_hash: None,
                     trace_ref: ptr,
                     payload: json!({
+                        // `route` names the provider/model this cost was
+                        // priced at — the plan policy's overflow-cap spend
+                        // query sums on it (DESIGN §12.10.8: measured
+                        // usage priced by the config table, no second
+                        // counter).
+                        "route": format!("{}/{}", provider, model),
                         "input_miss_nano": breakdown.input_miss.0,
                         "input_hit_nano": breakdown.input_hit.0,
                         "cache_write_nano": breakdown.cache_write.0,
