@@ -30,23 +30,161 @@ records every decision and every cent into a replayable trace.
 ```bash
 cp config.example.yaml config.yaml     # edit the roster: provider / model / price / quota
 set -a && source .env && set +a        # provider keys are read from env only, never written into yaml
-cargo run -p router-cli -- serve --config config.yaml
+cargo run --locked -p router-cli -- serve --config config.yaml
 ```
 
-Client onboarding (**must** be done first, or the macOS system proxy intercepts requests going to localhost):
+The three numbered steps below are the client side. Every command and output shape quoted here
+was run against this branch's binary with a real provider round-trip.
+
+### 1. Turn on inbound auth (optional, recommended)
+
+The example config ships `auth_token_env` commented out so the first copy starts before you have
+chosen a token. To require one, generate it and name the variable in the config — the name only,
+never the value:
+
+```bash
+export ROUTER_TOKEN=$(openssl rand -hex 32)
+```
+
+```yaml
+server:
+  auth_token_env: ROUTER_TOKEN
+```
+
+If the key is set but the variable is unset or empty, `router serve` refuses to start (exit code
+4) rather than serving unauthenticated:
+
+```
+router: config file config.yaml: server.auth_token_env names ROUTER_TOKEN, which is unset: refusing to start (a token-less start would serve unauthenticated)
+```
+
+### 2. macOS prerequisite: let localhost bypass the system proxy
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost     # both codex (reqwest) and hermes (httpx) read this variable
 ```
 
-On the codex side:
+With a system proxy configured, clients send requests to a locally bound router into the proxy
+instead; router receives no connection and the client reports `503 Service Unavailable`. Export
+the variable in the shell that starts the client — see `docs/spec.md` §5 for the recorded
+incident.
+
+### 3. Probe liveness
+
+```bash
+curl -s http://127.0.0.1:8790/health
+```
+
+`/health` never requires a token. With auth on, its `auth` member reads
+`"auth":{"required":true,"env":"ROUTER_TOKEN"}`; the token value itself never appears in any
+response.
+
+### 4. First request with curl
+
+The example roster's native protocols differ per provider: the `deepseek` entry (which the
+`coding-fast` alias points at) speaks `responses`; `zai` and `moonshot` speak `chat`. v0.1
+serves a request **natively only** when the inbound protocol equals the provider's `wire_api`;
+anything else would need cross-protocol translation and answers `501 not_implemented`. So the
+curl example against the stock roster uses the responses endpoint:
+
+```bash
+curl -s http://127.0.0.1:8790/v1/responses \
+  -H "Authorization: Bearer $ROUTER_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"model":"coding-fast","input":"Reply with the single word: pong","max_output_tokens":64}'
+```
+
+Either accepted header form works; `x-api-key: $ROUTER_TOKEN` is equivalent. A successful call
+returns the upstream response verbatim: `"model":"deepseek-v4-pro"` (the resolved native id,
+not the alias you sent), the answer text in `output`, and `usage.total_tokens` greater than
+zero.
+
+Without a token the same request is refused locally — nothing reaches the upstream:
+
+```
+HTTP/1.1 401 Unauthorized
+x-router-request-id: req-1
+
+{"error":{"type":"unauthorized","message":"inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')","request_id":"req-1","details":{"header":null}}}
+```
+
+`details.header` names the header that was read and rejected: `"authorization"` for a wrong or
+malformed `Authorization` value, `null` when no token was presented at all. A refused request
+still leaves exactly one trace record (pre-pipeline, cost 0).
+
+To exercise the chat endpoint instead, send the same shape to a **chat-native** provider from
+your roster (`POST /v1/chat/completions` with a `messages` body, e.g. `zai/glm-5.3` from the
+example file) — or add a `wire_api: chat` provider to the roster first.
+
+### 5. codex
+
+codex needs a provider entry, the token in the environment, and the localhost-proxy bypass.
+In `~/.codex/config.toml`:
 
 ```toml
+model_provider = "router"
+model = "coding-fast"                   # a route: provider/model or an alias from your config
+model_catalog_json = "~/.codex/models.json"
+
 [model_providers.router]
+name = "router"
 base_url = "http://127.0.0.1:8790/v1"
-wire_api = "responses"                  # or "chat"
-env_key  = "ROUTER_TOKEN"
+wire_api = "responses"                  # must equal the route's native protocol (see step 4)
+env_key  = "ROUTER_TOKEN"               # codex reads this variable and sends it as the auth header
 ```
+
+Give codex a catalog entry for the slug (below; verified against codex-cli 0.137.0). A one-shot
+`codex exec` also runs without one, but then codex has no context-window or capability metadata
+for your route — the entry is the tested shape:
+
+```json
+{
+  "models": [
+    {
+      "slug": "coding-fast",
+      "display_name": "coding-fast (via router)",
+      "description": "router alias -> deepseek/deepseek-v4-pro",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "supported_reasoning_levels": [],
+      "visibility": "list",
+      "shell_type": "shell_command",
+      "supported_in_api": true,
+      "priority": 1,
+      "base_instructions": "You are a helpful assistant.",
+      "supports_reasoning_summaries": false,
+      "support_verbosity": false,
+      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "supports_parallel_tool_calls": true,
+      "experimental_supported_tools": []
+    }
+  ]
+}
+```
+
+Smoke it:
+
+```bash
+export NO_PROXY=127.0.0.1,localhost
+codex exec --skip-git-repo-check -C /tmp "Reply with the single word: pong" < /dev/null
+```
+
+Expected: the banner names `provider: router` and `model: coding-fast`, the reply is `pong`,
+and the router's trace records the session (codex sends a stable `prompt_cache_key`).
+
+Why the non-obvious parts are there:
+
+- `--skip-git-repo-check` — codex refuses to run outside a trusted git directory without it:
+  `Not inside a trusted directory and --skip-git-repo-check was not specified.`
+- `< /dev/null` — `codex exec` reads stdin for additional input (`Reading additional input from
+  stdin...`); pointing it at `/dev/null` gives that read an immediate EOF when you drive it
+  from a script or CI.
+- `NO_PROXY` — step 2; reqwest does not honour the system proxy's exclusion list for
+  `127.0.0.1`.
+- `wire_api = "responses"` — step 4; a chat wire against the `deepseek` entry would answer
+  `501 not_implemented`.
+- `env_key = "ROUTER_TOKEN"` — the token a client sends router is router's own inbound token,
+  not a provider credential; provider keys live only in the router process's environment.
 
 ## CLI
 
