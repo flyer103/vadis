@@ -93,7 +93,9 @@ that route's id too (§2).
 ## 4. Config schema (the contract of `config.example.yaml`)
 
 ```yaml
-server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m }
+server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
+            auth_token_env: ROUTER_TOKEN }   # optional (§4.7): name of the env var whose value every
+                                             # inbound request must present; absent ⇒ no inbound auth
 session:  { key_sources: ["prompt_cache_key", "header:session-id", "header:thread-id"], ttl: 12h }
 cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
 trace:    { dir: "./state/traces", rollover: hourly }
@@ -374,6 +376,60 @@ cap → account state**. §3's sentence is unchanged ("on a guard hit it acts pe
 explain why, or downgrade to the `fallback` chain"); for a request inside a family, the family's `overflow` route
 is simply the first route the downgrade considers.
 
+### 4.7 `server.auth_token_env` (inbound token auth)
+
+| Key | Type | Semantics |
+|---|---|---|
+| `server.auth_token_env` | string \| absent | The **name of an environment variable of the router process** whose value is the token this process expects from every inbound request to the three protocol endpoints (its value is never written here — §4's secrets rule, and a token is a secret) |
+
+- **The key absent ⇒ no inbound auth.** That is not a gap: "no key" *is* the local, single-user mode
+  this document has always described, which is also what makes the key backward compatible — a config
+  written before the key existed behaves exactly as it did.
+- **The key present, and the environment variable unset *or empty* ⇒ the process refuses to start**
+  (non-zero exit; the reason names the variable and the config path). A missing secret must **not** be
+  read as "so no auth is required": that reading silently drops the operator's only access control,
+  while the strict reading costs one start-up. **This is a requirement, not a recommendation**, and it
+  has no override — there is no "auth off" switch to fall back to.
+- The token is read **once at startup** and is never re-read: rotating it means restarting the process
+  (v0.1 has no config-reload path for it).
+- The token value is a secret of the same class as `api_key_env`: it is never printed by `/health`,
+  never logged, and never written into a trace record or an event payload. Only the **variable's name**
+  may be reported (§9's `auth` member of `/health`).
+
+**Accepted header forms.** A request presents the token in exactly one of two headers:
+
+| Header | Form | Note |
+|---|---|---|
+| `Authorization` | `Bearer <token>` | what an OpenAI- or Anthropic-shaped client sends by default |
+| `x-api-key` | `<token>` | what a client speaking the Anthropic convention sends |
+
+Either one is enough. When both are present, **a match on either admits the request**: a client that
+sets both to the same value is the normal case, and a mismatch between the two is not worth a code of
+its own. A malformed `Authorization` (no `Bearer ` prefix, or an empty credential) presents nothing.
+
+**Comparison is constant time.** The comparison must not return early on the first differing byte and
+must not branch on secret bytes: this is a requirement on the implementation, not advice. v0.1
+hand-rolls it — `subtle` is not on §12.1's dependency allowlist and this is not worth a new dependency
+for a byte loop. Comparing the two lengths first is accepted and documented here, exactly as
+`subtle`'s slice comparison does.
+
+**Exemption.** `GET /health` **always** answers without a token: it is the liveness probe, and a probe
+that needs a credential cannot be used by whatever supervises the process. Nothing else is exempt, and
+the exemption is **structural** — the guard is applied to the three protocol endpoints' routes only,
+never to `/health` — not a path comparison inside the guard that a later edit could get wrong.
+
+**A refusal is not an upstream failure.**
+
+| Fact | Value |
+|---|---|
+| Response | `401` with §8's unified error body, `error.type = "unauthorized"`; `details.header` names the header the guard read (`"authorization"` / `"x-api-key"`, or `null` when neither was present) |
+| `X-Router-Request-Id` | present — §8's "always" has no exception, and a refusal is the case an operator most needs to correlate |
+| Fallback / retry | **never**: §4.2's chain and ADR-011's re-attempt rules are statements about *upstream attempts*, and a request the boundary refused makes none |
+| Upstream | never contacted — no provider request bytes exist for it |
+| State store | **no row**: the guard runs before §4.5's `request.received` event, so the request does not enter the pipeline and unauthenticated traffic cannot write to the store |
+| Trace | **one record**, from the same sink as every other record (§6's one-record-per-request contract — every terminal outcome leaves a line — applies unchanged, and "am I being scanned?" is answerable only from the trace). Its fields are §6's **pre-pipeline** class and it carries `errors[].kind = "unauthorized"` |
+| `router stats` | the record lands in `failed`, split out as `unauthorized`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows already say so — this key introduces **no new figure**) |
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -386,6 +442,15 @@ Measured (2026-09-19): the macOS system proxy is configured as `127.0.0.1:8080` 
 exception list, but `reqwest` (codex) does not honor the exception list, so localhost requests are sent
 into the proxy all the same and the client finally reports `503 Service Unavailable`. The same holds for
 `httpx` (hermes).
+
+### 5.1 The token, when inbound auth is on
+
+`server.auth_token_env` (§4.7) is off unless the operator writes it. When it is written, **every
+request to the three protocol endpoints must carry the token**, in `Authorization: Bearer <token>` or
+`x-api-key: <token>`; `GET /health` never does. A client whose token is missing or does not match gets
+`401 unauthorized` — which, unlike every other failure in §8, is not a symptom of anything upstream:
+nothing was sent anywhere. It is the same class of prerequisite as the proxy line above (the client is
+set up wrong, not router), which is why it is stated here as well as in §5's neighbourhood.
 
 ## 6. Observation contract (one DecisionRecord per request)
 
@@ -404,7 +469,13 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
-| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal}` (§8) |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard) |
+
+**`usage_missing: true` means "no usage was measured for this request"** — it is not only "the upstream
+answered without a `usage` member". A request that never reached an upstream is in the same class: a
+pre-route rejection, a connect failure, and a request the inbound auth guard refused (§4.7). The flag
+is what keeps such a record out of every rate, every sum and every gate — `router stats` counts it on
+its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
 
 **`state` is written as a constant in v0.1** (known gap G-F): a record has one writer
 (`Accountant::commit`) and it writes `stateful_inbound: false`, `sticky_hit: false`,
@@ -414,6 +485,31 @@ client's own bytes, §2), and the sticky-binding read that would give `sticky_hi
 whether a `session.bound` event is written (§4.5). A reader must therefore not take `false` as "the client
 sent no server-side state" or "no binding was found", and the `stateful_unsupported` row of §8 cannot fire.
 ADR-004 item 3 is the ruling this group lands.
+
+**A request refused by the inbound auth guard** (§4.7) is in a class of its own: it never entered the
+pipeline, so its record carries what is observable at the boundary and invents nothing.
+
+| Field | Value | Why |
+|---|---|---|
+| `identity.request_id` | allocated, from the same counter as every request | §8's error body and `X-Router-Request-Id` carry it |
+| `identity.event_id` | **`0`** | no `request.received` row exists: the guard runs before §4.5's row 1, which is *"once per request that entered the pipeline"*. `0` is never a real id (`events.event_id` starts at 1), and it is the same sentinel the parse / route / capability rejections already write |
+| `identity.session` / `thread_id` / `turn_index` | `null` / `null` / `0` | session resolution reads the body and the sticky projection; a refused request has neither, and its body is **never parsed** |
+| `protocol.protocol_in` | the endpoint's own protocol | the route is known before the body is read |
+| `protocol.protocol_out` / `translated` / `lossy` | `null` / `false` / `[]` (omitted on the wire when empty, as on every record) | no route was selected |
+| `decision.provider` / `model` | `""` / `""` | no route was attempted — the empty-string convention the pre-route failure path already uses |
+| `decision.requested_model` | `null` | nothing was read from the body, so the client's own string is unknown rather than invented |
+| `decision.selection_source` | `"explicit"` | the field is non-optional and this is the default word the pre-route path writes. **It names no act**: nothing was selected, and a reader must take the class from `errors[].kind` / `result.status`, never from this field |
+| `decision.plugin_chain` / `decision_ms` | `[]` / `0` | no chain ran, no decision was made |
+| `state.*` | `false`, `false`, `0` | v0.1's constants (above) |
+| `prefix.blocks` / `continuity` | `[]` / `null` | no prefix was read or measured |
+| `transforms` | `[]` (omitted on the wire) | the chain never ran |
+| `usage` | zeroed | an absent measurement is absent, never 0-with-a-meaning |
+| `usage_missing` | **`true`** | the definition above; this is what keeps the record out of every rate, sum and gate while still counting it |
+| `cost.*` (four tiers, `total`) / `quota_after` | `0` / `null` | nothing was priced and no quota was charged |
+| `result.status` | `401` | the client-visible status |
+| `result.upstream_status` / `failover_from` / `plan_switch` | `null` / `null` / `null` | no upstream, no abandoned attempt (fallback is about *attempts*, §4.7), and `plan_switch` stays present-and-null as always |
+| `result.overhead_ms` / `upstream_ms` | measured / `null` | router's own work against no upstream latency |
+| `errors[]` | one entry: `kind: "unauthorized"`, `details.header = "authorization"` \| `"x-api-key"` \| `null` | the vocabulary above; `null` means the request presented neither header |
 
 **`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
 `model` is the id the request was actually billed under at the upstream — the resolved roster entry's own
@@ -534,6 +630,7 @@ rely on each upstream's own error shape):
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
+| `unauthorized` | 401 | the request carried no token, or a token that does not match the one `server.auth_token_env` names (§4.7). Decided at the boundary: no upstream is contacted, so it is **not** the start of a failover walk |
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
@@ -548,6 +645,9 @@ been sent before the first event.
 
 Behavior clauses:
 
+- inbound auth failure → `401 unauthorized` (§4.7), decided **before** the pipeline: it never enters the
+  fallback chain, is never retried, never reaches an upstream and writes no state-store row — and it
+  **does** write its trace line (§6). It is the one failure a client can fix without looking at a provider.
 - transform failure → **fall back to the original** (fail-safe), the trace records
   `errors[].kind = transform_error`, and the request is forwarded as usual.
 - upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
@@ -569,10 +669,32 @@ stats` subcommand. Both are **read-only**; neither is a second source of truth, 
 or extrapolates anything. The metric *formulas* stay in §6 ("Metric definitions"); this section says what is
 printed, from which record, and under which §7 label — it defines no new metric and no new gate.
 
-### 9.1 `GET /health`'s `plan` section
+### 9.1 `GET /health`'s `auth` and `plan` members
 
-`/health` reports what this process loaded (§4.5, `store`). When the loaded config declares a `plan_policy`
-(§4.6), the response carries one additional member:
+`/health` reports what this process loaded (§4.5, `store`). Two of its members carry what an operator
+reasons about most: **`auth`** (always present, §4.7) and **`plan`** (present when the loaded config
+declares a `plan_policy`, §4.6).
+
+**`auth`** — whether the process demands a token, and which environment variable holds it. The token
+value itself is a secret and is never here:
+
+```json
+"auth": { "required": true, "env": "ROUTER_TOKEN" }
+```
+
+| Key | Type | Semantics |
+|---|---|---|
+| `required` | bool | whether `server.auth_token_env` is set (§4.7). `false` ⇒ inbound auth is off and the three protocol endpoints accept requests with no token at all |
+| `env` | string | **present only when `required` is true** — the *name* of the environment variable holding the expected token, never its value (§4.7) |
+
+`required: false` ⇒ **no other key is present** (`"auth": { "required": false }`): the same stance as
+`plan.configured: false` below — with no key configured there is no variable to name, and naming one would
+be the invented-state error in reverse. The member is **not** a record of what happened (a `401` is
+observable in the trace, §6): it is part of "/health reports what was loaded", and it changes only when the
+config does.
+
+**`plan`** — when the loaded config declares a `plan_policy` (§4.6), the response carries one further
+member:
 
 ```json
 "plan": {
