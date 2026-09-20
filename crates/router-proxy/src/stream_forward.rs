@@ -49,7 +49,7 @@ use router_core::config::{ProviderCfg, RouteSpec, WireApi};
 use router_core::error::ErrorCode;
 use router_core::error_class::{classify_upstream_error, ErrorEvidence, TransportCause};
 use router_core::prefix::{attribute_tokens, extract_prefix_blocks, PrefixBlock};
-use router_core::store::{EventId, EventKind, NewEvent, Query, QueryRow, Store};
+use router_core::store::{EventId, EventKind, NewEvent, Store};
 use router_core::trace::TraceError;
 use router_protocol::sse::{SseUsageExtractor, SseUsageOutcome};
 use serde_json::{json, Value};
@@ -1253,17 +1253,11 @@ fn st_route_spec(label: &str) -> RouteSpec {
     }
 }
 
+/// The pre-relay walk's cooldown skip delegates to `availability`'s
+/// single owner (ADR-016 §13.3 L1c) — the buffered walk's skip and the
+/// probe gate read the same projection through the same function.
 fn in_cooldown(ctx: &RelayCtx, provider: &str) -> bool {
-    let Some(store) = &ctx.store else {
-        return false;
-    };
-    matches!(
-        store.query(Query::Cooldown {
-            provider,
-            model: None,
-        }),
-        Ok(QueryRow::Cooldown(Some(row))) if row.until_us > now_us()
-    )
+    crate::availability::provider_in_cooldown(ctx.store.as_ref(), provider, now_us())
 }
 
 fn record_classified(ctx: &RelayCtx, attempt_index: u32, reason: &str) {
