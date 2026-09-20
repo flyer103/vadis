@@ -15,8 +15,11 @@ pub struct EventId(pub i64);
 
 /// The event vocabulary's own version, stamped per row (`events.schema_version`)
 /// because the log is the truth: old rows are never rewritten and readers
-/// upcast (ADR-009 item 7).
-pub const EVENT_SCHEMA_VERSION: i64 = 1;
+/// upcast (ADR-009 item 7). Version **2** (ADR-018, DESIGN §12.10.5): the two
+/// money-bearing payloads (`cost.computed`, `plan.switched`) gain a
+/// `"currency"` field — a reader that knows only v1 can refuse a v2 row
+/// rather than add a CNY row into a USD sum.
+pub const EVENT_SCHEMA_VERSION: i64 = 2;
 
 /// The closed event-kind set (ADR-010 item 2, plus `error.classified` from
 /// ADR-011 and `restart.marked` from ADR-010 item 4). Enforced in code, not

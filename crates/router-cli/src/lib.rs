@@ -128,24 +128,25 @@ pub async fn serve(config_path: &str) -> i32 {
 
     // Key presence is probed once at startup; the values themselves are
     // never read here (the provider client holds them, §12.10.1) and never
-    // reported — only their presence travels to /health.
-    let provider_keys: Vec<(String, String, bool)> = rc
+    // reported — only their presence travels to /health, beside each
+    // entry's declared region and currency (spec §4.8).
+    let provider_keys: Vec<router_proxy::ProviderKeyFacts> = rc
         .router
         .providers
         .iter()
-        .map(|p| {
-            (
-                p.name.clone(),
-                p.api_key_env.clone(),
-                std::env::var_os(&p.api_key_env).is_some(),
-            )
+        .map(|p| router_proxy::ProviderKeyFacts {
+            name: p.name.clone(),
+            api_key_env: p.api_key_env.clone(),
+            present: std::env::var_os(&p.api_key_env).is_some(),
+            region: p.region,
+            currency: p.currency,
         })
         .collect();
 
     let unavailable: Vec<&str> = provider_keys
         .iter()
-        .filter(|(_, _, present)| !present)
-        .map(|(name, _, _)| name.as_str())
+        .filter(|f| !f.present)
+        .map(|f| f.name.as_str())
         .collect();
     if !unavailable.is_empty() {
         // Not a startup failure (§12.5): reported per provider via /health.

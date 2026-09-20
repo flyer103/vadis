@@ -26,11 +26,18 @@ pub struct TraceFigures {
     pub failure_kinds: BTreeMap<String, u64>,
     pub usage_missing: u64,
     /// Sums over records with usage present (an absent measurement is
-    /// never read as 0).
-    pub input_miss_nano: u64,
-    pub input_hit_nano: u64,
-    pub cache_write_nano: u64,
-    pub output_nano: u64,
+    /// never read as 0) — **per currency** (spec §4.8/§9.2): a currency's
+    /// figures never enter another currency's line, and no combined
+    /// total exists. The map key is the ISO code (`"USD"` / `"CNY""),
+    /// sorted by it (BTreeMap); a record whose `cost.currency` is absent
+    /// is a v1 record and is USD by definition (spec §6).
+    pub input_miss_nano: BTreeMap<String, u64>,
+    pub input_hit_nano: BTreeMap<String, u64>,
+    pub cache_write_nano: BTreeMap<String, u64>,
+    pub output_nano: BTreeMap<String, u64>,
+    /// The window's currency set (the report's `currencies:` header is
+    /// printed from this; also decides the --json shape).
+    pub currencies: BTreeMap<String, ()>,
     pub input_cached_tokens: u64,
     pub input_total_tokens: u64,
     /// Non-null `prefix.continuity` values, for the p50.
@@ -42,14 +49,16 @@ pub struct TraceFigures {
     // plan family (present only when the config declares a policy)
     pub switches: u64,
     /// Σ the displaced records' own `cost.total` — the verified switch
-    /// cost; excludes `usage_missing` records (counted in
-    /// `switches_without_usage` instead).
-    pub switch_cost_verified_nano: u64,
+    /// cost, **per currency**; excludes `usage_missing` records (counted
+    /// in `switches_without_usage` instead).
+    pub switch_cost_verified_nano: BTreeMap<String, u64>,
     pub switches_without_usage: u64,
     /// Σ `reprefill_tokens` / Σ `switch_cost_nano` over the switch records
-    /// (the inferred columns; never added into the verified sum).
+    /// (the inferred columns; never added into the verified sum). The
+    /// token sum is currency-free; the cost sum is grouped by
+    /// `plan_switch.cost_currency` (spec §9.2's provenance row).
     pub reprefill_tokens: u64,
-    pub reprefill_cost_nano: u64,
+    pub reprefill_cost_nano: BTreeMap<String, u64>,
 }
 
 /// The one figure only the event log holds (ADR-010 item 4):
@@ -92,10 +101,20 @@ pub fn aggregate(records: &[Value]) -> TraceFigures {
             continue;
         }
         if let Some(cost) = r.get("cost") {
-            f.input_miss_nano += cost_nano(cost, "input_miss");
-            f.input_hit_nano += cost_nano(cost, "input_hit");
-            f.cache_write_nano += cost_nano(cost, "cache_write");
-            f.output_nano += cost_nano(cost, "output");
+            // §4.8: every money figure is grouped by the record's own
+            // `cost.currency`; an absent field is a v1 record and is USD
+            // by definition (spec §6 — an old file and a new one can sit
+            // in one window).
+            let cur = cost
+                .get("currency")
+                .and_then(Value::as_str)
+                .unwrap_or("USD")
+                .to_string();
+            f.currencies.insert(cur.clone(), ());
+            *f.input_miss_nano.entry(cur.clone()).or_insert(0) += cost_nano(cost, "input_miss");
+            *f.input_hit_nano.entry(cur.clone()).or_insert(0) += cost_nano(cost, "input_hit");
+            *f.cache_write_nano.entry(cur.clone()).or_insert(0) += cost_nano(cost, "cache_write");
+            *f.output_nano.entry(cur.clone()).or_insert(0) += cost_nano(cost, "output");
         }
         if let Some(u) = r.get("usage") {
             f.input_total_tokens += u.get("input_total").and_then(Value::as_u64).unwrap_or(0);
@@ -146,24 +165,40 @@ pub fn aggregate(records: &[Value]) -> TraceFigures {
             .is_some_and(|p| !p.is_null());
         if switched {
             f.switches += 1;
+            let sw = &r["result"]["plan_switch"];
+            // The inferred figures are grouped by the switch's own unit
+            // (§9.2): `plan_switch.cost_currency`, USD when absent (v1).
+            let sw_cur = sw
+                .get("cost_currency")
+                .and_then(Value::as_str)
+                .unwrap_or("USD")
+                .to_string();
             if usage_missing {
                 f.switches_without_usage += 1;
             } else {
                 // The switched request's own measured total IS the switch's
                 // verified cost (the destination's re-prefill is inside it);
                 // an in-plan destination verifies at 0 by the same rule.
-                f.switch_cost_verified_nano +=
+                // Grouped by the record's `cost.currency` — the record, not
+                // the switch, is what was measured.
+                let cur = r
+                    .get("cost")
+                    .and_then(|c| c.get("currency"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("USD")
+                    .to_string();
+                *f.switch_cost_verified_nano.entry(cur).or_insert(0) +=
                     r.get("cost").map(|c| cost_nano(c, "total")).unwrap_or(0);
             }
-            let sw = &r["result"]["plan_switch"];
             f.reprefill_tokens += sw
                 .get("reprefill_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            f.reprefill_cost_nano += sw
+            let cost = sw
                 .get("switch_cost_nano")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            *f.reprefill_cost_nano.entry(sw_cur).or_insert(0) += cost;
         }
     }
     f
@@ -302,17 +337,10 @@ pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
     };
 
     if json {
-        print_json(
-            &ReportCtx {
-                rc: &rc,
-                window,
-                start_ms: rep.start_ms,
-                now_ms: rep.now_ms,
-                files_read: rep.files_read,
-                unknown_note: &unknown_note,
-            },
-            &rep.figures,
-            &rep.events,
+        let v = report_json(&rc, window, &rep, &unknown_note);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&v).expect("figures are JSON")
         );
     } else {
         print_text(
@@ -465,6 +493,36 @@ fn p99(xs: &mut [u64]) -> Option<u64> {
     Some(xs[rank.saturating_sub(1).min(xs.len() - 1)])
 }
 
+/// The `--json` `cost` member (spec §9.2's omission rule): with exactly
+/// one currency present the scalar keys are kept and a `"currency"`
+/// string is added; with several the scalar keys are **absent** and the
+/// figures appear under a per-currency map, so a consumer that assumes
+/// one total fails loudly instead of summing silently.
+fn cost_json(f: &TraceFigures) -> serde_json::Value {
+    let cs: Vec<&str> = f.currencies.keys().map(String::as_str).collect();
+    if cs.len() == 1 {
+        let cur = cs[0];
+        serde_json::json!({
+            "label": "verified",
+            "currency": cur,
+            "input_miss_nano": f.input_miss_nano.get(cur).copied().unwrap_or(0),
+            "input_hit_nano": f.input_hit_nano.get(cur).copied().unwrap_or(0),
+            "cache_write_nano": f.cache_write_nano.get(cur).copied().unwrap_or(0),
+            "output_nano": f.output_nano.get(cur).copied().unwrap_or(0),
+        })
+    } else {
+        serde_json::json!({
+            "label": "verified",
+            "by_currency": {
+                "input_miss_nano": &f.input_miss_nano,
+                "input_hit_nano": &f.input_hit_nano,
+                "cache_write_nano": &f.cache_write_nano,
+                "output_nano": &f.output_nano,
+            },
+        })
+    }
+}
+
 /// The stdout shape is spec §9.2's frozen example: the same lines, in the
 /// same order, with each figure's §7 label inline. Spacing matches the
 /// example's columns (label, value, then a three-space note).
@@ -513,16 +571,37 @@ fn print_text(
         f.usage_missing
     );
     let _ = writeln!(w);
+    // §9.2: the header names the currencies the window holds; money is
+    // reported per currency and never summed across them (§4.8).
+    let currencies: Vec<&str> = f.currencies.keys().map(String::as_str).collect();
     let _ = writeln!(
         w,
-        "cost (verified)            {} nano",
-        f.input_miss_nano + f.input_hit_nano + f.cache_write_nano + f.output_nano
+        "currencies:  {}{}",
+        currencies.join(", "),
+        if currencies.len() > 1 {
+            "             (money is reported per currency and never summed across them)"
+        } else {
+            "                  (money is reported per currency and never summed across them)"
+        }
     );
-    let _ = writeln!(
-        w,
-        "  input_miss {} | input_hit {} | cache_write {} | output {}",
-        f.input_miss_nano, f.input_hit_nano, f.cache_write_nano, f.output_nano
-    );
+    // One labelled money block per currency present — counts above stay
+    // single because they are not money (spec §9.2).
+    for cur in &currencies {
+        let cur: &str = cur;
+        let miss = f.input_miss_nano.get(cur).copied().unwrap_or(0);
+        let hit = f.input_hit_nano.get(cur).copied().unwrap_or(0);
+        let write = f.cache_write_nano.get(cur).copied().unwrap_or(0);
+        let out = f.output_nano.get(cur).copied().unwrap_or(0);
+        let _ = writeln!(
+            w,
+            "cost (verified, {cur})       {} nano",
+            miss + hit + write + out
+        );
+        let _ = writeln!(
+            w,
+            "  input_miss {miss} | input_hit {hit} | cache_write {write} | output {out}"
+        );
+    }
     let _ = writeln!(w);
     let _ = writeln!(w, "cache");
     let rate = if f.input_total_tokens == 0 {
@@ -567,16 +646,25 @@ fn print_text(
             "  switches                        {}   (requests whose result.plan_switch is present)",
             f.switches
         );
+        for cur in f.currencies.keys() {
+            let _ = writeln!(
+                w,
+                "  switch cost (verified, {cur})     {} nano",
+                f.switch_cost_verified_nano.get(cur).copied().unwrap_or(0)
+            );
+        }
         let _ = writeln!(
             w,
-            "  switch cost (verified)     {} nano",
-            f.switch_cost_verified_nano
+            "  switch re-prefill (inferred)  {} tokens",
+            f.reprefill_tokens
         );
-        let _ = writeln!(
-            w,
-            "  switch re-prefill (inferred)  {} tokens | {} nano",
-            f.reprefill_tokens, f.reprefill_cost_nano
-        );
+        for cur in f.currencies.keys() {
+            let _ = writeln!(
+                w,
+                "    re-prefill cost (inferred, {cur})  {} nano",
+                f.reprefill_cost_nano.get(cur).copied().unwrap_or(0)
+            );
+        }
         let _ = writeln!(
             w,
             "  switches without usage          {}   (they keep the inferred label and say so)",
@@ -616,25 +704,18 @@ fn e_unknown(e: &EventFigures) -> Option<u64> {
     }
 }
 
-/// Everything `print_json` needs, bundled to keep its argument list short.
-struct ReportCtx<'a> {
-    rc: &'a crate::config_load::ResolvedConfig,
-    window: &'a str,
-    start_ms: i64,
-    now_ms: i64,
-    files_read: usize,
-    unknown_note: &'a Option<String>,
-}
-
-fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
-    let (rc, window, start_ms, now_ms, files_read, unknown_note) = (
-        ctx.rc,
-        ctx.window,
-        ctx.start_ms,
-        ctx.now_ms,
-        ctx.files_read,
-        ctx.unknown_note,
-    );
+/// The `--json` document (spec §9.2), as a value: pure, so conformance
+/// (CONF-56) can assert the omission rule's two shapes directly against
+/// the same builder the printer uses — the same standing as `report()`
+/// for the figures (CONF-41). Exposed for that reason and no other.
+pub fn report_json(
+    rc: &crate::config_load::ResolvedConfig,
+    window: &str,
+    rep: &Report,
+    unknown_note: &Option<String>,
+) -> serde_json::Value {
+    let (f, e) = (&rep.figures, &rep.events);
+    let (start_ms, now_ms, files_read) = (rep.start_ms, rep.now_ms, rep.files_read);
     let mut v = serde_json::json!({
         "window": {
             "arg": window,
@@ -653,13 +734,7 @@ fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
             "failure_kinds": f.failure_kinds,
             "usage_missing": f.usage_missing,
         },
-        "cost": {
-            "label": "verified",
-            "input_miss_nano": f.input_miss_nano,
-            "input_hit_nano": f.input_hit_nano,
-            "cache_write_nano": f.cache_write_nano,
-            "output_nano": f.output_nano,
-        },
+        "cost": cost_json(f),
         "cache": {
             "hit_rate": {
                 "label": "verified",
@@ -689,14 +764,31 @@ fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
         "overhead_ms_p99": p99(&mut f.overhead_ms.clone()),
     });
     if let Some(policy) = &rc.router.plan_policy {
-        v["plan_family"] = serde_json::json!({
+        let mut pf = serde_json::json!({
             "family": policy.family,
             "switches": f.switches,
-            "switch_cost_verified_nano": f.switch_cost_verified_nano,
             "reprefill_tokens_inferred": f.reprefill_tokens,
-            "reprefill_cost_nano_inferred": f.reprefill_cost_nano,
             "switches_without_usage": f.switches_without_usage,
         });
+        // §9.2's omission rule, the same one `cost` obeys: with one
+        // currency the scalar key stays and gains `"currency"`; with
+        // several the scalar is absent and the figures live under a
+        // per-currency map — a consumer that assumes one total fails
+        // loudly instead of adding silently.
+        let cs: Vec<&str> = f.currencies.keys().map(String::as_str).collect();
+        if cs.len() == 1 {
+            pf["switch_cost_verified_nano"] =
+                serde_json::json!(f.switch_cost_verified_nano.get(cs[0]).copied().unwrap_or(0));
+            pf["switch_cost_currency"] = serde_json::json!(cs[0]);
+            pf["reprefill_cost_nano_inferred"] =
+                serde_json::json!(f.reprefill_cost_nano.get(cs[0]).copied().unwrap_or(0));
+        } else {
+            pf["switch_cost_verified_nano_by_currency"] =
+                serde_json::to_value(&f.switch_cost_verified_nano).unwrap_or_default();
+            pf["reprefill_cost_nano_inferred_by_currency"] =
+                serde_json::to_value(&f.reprefill_cost_nano).unwrap_or_default();
+        }
+        v["plan_family"] = pf;
     }
     if e.log_was_read {
         v["unknown_outcome_requests"] = serde_json::json!(e.unknown_outcome_requests);
@@ -704,8 +796,5 @@ fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
     if let Some(note) = unknown_note {
         v["notes"] = serde_json::json!([note]);
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&v).expect("figures are JSON")
-    );
+    v
 }

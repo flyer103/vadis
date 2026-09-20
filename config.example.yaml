@@ -23,9 +23,10 @@
 #     with underscores are not supported.
 #   - context: `<integer>` or `<integer>k|m` (k=1024, m=1024×1024); `1m` =
 #     1,048,576.
-#   - price: USD / 1K tokens (spec §4 basis). Official pages mostly publish
-#     USD / 1M; this file transcribes the /1M value ÷1000 and notes the
-#     official /1M value at end of line for manual cross-checking.
+#   - price: the entry's `currency` / 1K tokens (spec §4 basis). Official
+#     pages mostly publish per 1M; this file transcribes the /1M value ÷1000
+#     and notes the official /1M value at end of line for manual cross-checking.
+#     A CNY page is transcribed as CNY — never FX-converted (spec §4.0/§4.8).
 #   - provider paths: base_url must already contain the version segment
 #     (`/v1`, `/v4`, `/anthropic`); the router only appends
 #     `chat → /chat/completions`, `responses → /responses`,
@@ -82,8 +83,8 @@ providers:
   # must handle the spec §2 lossy list item by item.
 
   - name: deepseek
-    # Region: the cited prices come from the platform's international docs
-    # (api-docs.deepseek.com, USD); no CN-mainland endpoint is configured here.
+    region: intl                            # §4.8: the cited prices come from the platform's international
+    currency: USD                           #   docs (api-docs.deepseek.com); no CN-mainland endpoint is configured
     base_url: https://api.deepseek.com            # official OpenAI-Format BASE URL
                                                   #   actual endpoints: /chat/completions, /responses
                                                   #   official Anthropic-Format BASE: https://api.deepseek.com/anthropic
@@ -126,16 +127,8 @@ providers:
   # model id appears once per account and the two entries differ in base_url,
   # wire_api and key. `plan_policy` at the end of this file names the pair.
   - name: zai-plan
-    # Region: international — api.z.ai; prices in USD from docs.z.ai.
-    # CN mainland (comment only; entries land with the currency round):
-    #   general endpoint:      https://open.bigmodel.cn/api/paas/v4
-    #   Coding Plan endpoint: https://open.bigmodel.cn/api/coding/paas/v4
-    #     (the official docs are explicit: the Coding Plan must use the
-    #     dedicated coding endpoint, not the general one)
-    #   CN price page: https://open.bigmodel.cn/pricing (table in CNY)
-    #   TODO: the CN entries' price tables land with the currency (CNY) round —
-    #   CNY prices are never FX-converted into this file's USD basis
-    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
+    region: intl                           # §4.8: api.z.ai, prices in USD from docs.z.ai
+    currency: USD
     base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page: a coding plan may hand out
                                                   #   its own base URL instead of the metered entry's
@@ -173,9 +166,8 @@ providers:
         #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
 
   - name: zai
-    # Region: international — api.z.ai. The provider's CN-mainland endpoints
-    # and price page: see the comment block on zai-plan above (same provider,
-    # two regions; the active entry here is the international one).
+    region: intl                           # §4.8: api.z.ai. The same vendor's CN-mainland entries
+    currency: USD                          #   (zai-cn / zai-cn-plan) sit below — two regions, two currencies
     base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
                                                   #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
     api_key_env: ZAI_API_KEY
@@ -217,16 +209,14 @@ providers:
     # account above (spec §4.6 `account`), and the metered route is the family's
     # `overflow` in `plan_policy` at the end of this file.
 
-  - name: moonshot
-    # Region: international — api.moonshot.ai; prices in USD from
-    # platform.moonshot.ai. CN mainland (comment only; entries land with the
-    # currency round):
-    #   pay-as-you-go endpoint: https://api.moonshot.cn/v1
-    #   CN price page: https://platform.moonshot.cn/docs/pricing/chat
-    #     (table in CNY)
-    #   TODO: the CN entries' price tables land with the currency (CNY) round —
-    #   CNY prices are never FX-converted into this file's USD basis
-    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
+  - name: kimi
+    # Renamed from `moonshot` (ADR-018 §3's one-time correction): a provider
+    # name that disagrees with its own `api_key_env` (KIMI_*) is the mismatch
+    # an operator sees on the first /health read. The naming convention is
+    # documentation, not a load rule.
+    region: intl                           # §4.8: api.moonshot.ai; prices in USD from platform.moonshot.ai
+    currency: USD                          #   (the platform's pages answer on the kimi.ai host family today —
+                                           #    a 301 measured in R6; the endpoint host is unchanged)
     base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
     api_key_env: KIMI_API_KEY                      # Kimi's official quickstart examples use MOONSHOT_API_KEY;
                                                   #   this repo names it KIMI_* per owner naming, so it is never
@@ -240,6 +230,8 @@ providers:
           input_miss: 0.003                       # official $3.00 /1M (Input Price, Cache Miss)
           input_hit: 0.0003                       # official $0.30 /1M (Input Price, Cache Hit)
           cache_write: 0.0                        # official page lists no cache-write billing item → record 0, keep the TODO
+                                                  #   (finding, ADR-018's honest-boundaries section: the page read for that
+                                                  #   ADR does price K3 cache writes per TTL tier — re-read owed by the owner)
           output: 0.015                           # official $15.00 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
@@ -258,26 +250,21 @@ providers:
   # The second subscription account, configured exactly like zai-plan above —
   # with one difference that is the point of spec §4.6: v0.1 carries **at most
   # one** `plan_policy`, so this plan account is a legal roster entry that no
-  # policy routes yet. Point `plan_policy` at it (family: the model id below)
-  # to make it the preferred account instead of zai-plan.
-  - name: moonshot-plan
-    # Region: international — api.moonshot.ai. CN mainland (comment only;
-    # entries land with the currency round):
-    #   coding subscription endpoint: https://api.kimi.com/coding/v1
-    #     (Anthropic form: https://api.kimi.com/coding/)
-    #   CN price page: https://platform.moonshot.cn/docs/pricing/chat
-    #     (table in CNY)
-    #   TODO: the CN entry's price table lands with the currency (CNY) round —
-    #   CNY prices are never FX-converted into this file's USD basis
-    #   (AGENTS constraint 5: no fabricated prices, no estimated rates).
+  # policy routes yet. Point `plan_policy` at it (family: the tag below) to
+  # make it the preferred account instead of zai-plan.
+  - name: kimi-plan
+    region: intl                           # §4.8: api.moonshot.ai
+    currency: USD
     # Kimi model ids differ per platform: the coding endpoint serves
     # k3 / k3-256k / kimi-for-coding, the platform endpoint serves
-    # kimi-k3 / kimi-k2.7-code. Pairing one family across the two platforms
-    # therefore needs an id mapping (a spec change, another round) — which is
-    # why this round configures no plan_policy for Kimi.
+    # kimi-k3 / kimi-k2.7-code. The pair below the CN entries
+    # (kimi-cn-plan/k3 + kimi-cn/kimi-k3) demonstrates the §4.8 family tag
+    # that pairs two different native ids; this intl pair shares one id, so
+    # its tag defaults to the id and nothing is written. No plan_policy is
+    # pointed at Kimi here because the one v0.1 policy belongs to zai above.
     base_url: https://api.moonshot.ai/anthropic   # the Anthropic-compatible BASE; the router appends /v1/messages
                                                   #   TODO verify against the plan's own page (the metered entry above uses /v1)
-    api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered moonshot entry above
+    api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered kimi entry above
     wire_api: anthropic
     supports: [anthropic]
     account: coding_plan
@@ -304,13 +291,155 @@ providers:
         #      (DESIGN §12.9). The price source above is the *pricing* page the
         #      metered entry cites; it is not a plan page.
 
+  # -- CN mainland (spec §4.8): two vendors, two regions, two currencies -------
+  # Everything below is transcribed from each vendor's CN pages in CNY and
+  # stays CNY — no exchange rate is ever applied (spec §4.0/§4.8, AGENTS
+  # constraint 5). Prices are ¥ / 1K tokens (= the page's ¥/1M ÷1000); the
+  # official ¥/1M value sits at end of line for manual cross-checking.
+
+  - name: zai-cn
+    region: cn                              # §4.8: open.bigmodel.cn — the mainland deployment of the zai vendor
+    currency: CNY                           # the CN price page publishes ¥; this entry's table is ¥ end to end
+    base_url: https://open.bigmodel.cn/api/paas/v4      # the CN general endpoint (OpenAI form; /chat/completions)
+    api_key_env: ZAI_CN_API_KEY
+    wire_api: chat
+    supports: [chat]                        # TODO verify against official source: whether the CN endpoint also serves
+                                           #      the Anthropic / responses forms (only the chat form is documented)
+    models:
+      - id: glm-5.3
+        context: 1m                         # official CN page: context length 1M
+        price:                              # ¥ / 1K tokens (= official ¥/1M ÷1000), never converted
+          input_miss: 0.008                 # official ¥8 /1M
+          input_hit: 0.002                  # official ¥2 /1M (cache hit)
+          cache_write: 0.0                  # official page: cache storage "限时免费" (limited-time free) → record 0 and keep the TODO
+          output: 0.028                     # official ¥28 /1M
+          peak: { multiplier: 1.0, windows: [] }  # the CN page publishes no peak/off-peak → same price at all times
+        source: "https://open.bigmodel.cn/pricing @2026-09-21"
+        # TODO verify against official source (including the rules after the cache-storage "limited-time free" period ends)
+      - id: glm-5.3-flash
+        context: 1m
+        price:
+          input_miss: 0.0008                # official ¥0.8 /1M (a limited-time 50 % promotion lists ¥0.4 /1M)
+          input_hit: 0.00023                # official ¥0.23 /1M
+          cache_write: 0.0
+          output: 0.0028                    # official ¥2.8 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://open.bigmodel.cn/pricing @2026-09-21"
+        # TODO verify against official source
+    # no `quota:` on the metered entry: an allowance belongs to the
+    # subscription account below (spec §4.6 `account`).
+
+  - name: zai-cn-plan
+    region: cn                              # §4.8: the mainland deployment's Coding Plan account
+    currency: CNY
+    # The plan's own documented base URLs (quick-start page): Anthropic
+    # https://open.bigmodel.cn/api/anthropic, OpenAI chat
+    # https://open.bigmodel.cn/api/coding/paas/v4, OpenAI responses
+    # https://open.bigmodel.cn/api/v1. The Anthropic form is wired here
+    # (the Claude Code shape); the official docs are explicit that the plan
+    # must use its dedicated endpoints, not the general one.
+    base_url: https://open.bigmodel.cn/api/anthropic
+    api_key_env: ZAI_CN_CODING_API_KEY      # a separate env var, because it is a separate account
+    wire_api: anthropic
+    supports: [anthropic]
+    account: coding_plan
+    models:
+      - id: glm-5.3                         # the same id as the CN metered entry → the family tag defaults to the
+                                            #   id (§4.8), which is what a zai-cn plan_policy would name
+        context: 1m
+        price:                              # the same model's CN list price as zai-cn above (inside the plan the
+          input_miss: 0.008                 #   marginal price is accounted 0, spec §4.6 rule 4; the table must
+          input_hit: 0.002                  #   still be non-zero, spec §4.0)
+          cache_write: 0.0
+          output: 0.028
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://open.bigmodel.cn/pricing @2026-09-21"
+        # TODO verify against official source
+    # no `quota:` — the CN plan's allowance is **credits**, not a token count:
+    # Lite 2,000 / 5 h + 10,000 / week, Pro 12,000 / 60,000, Max 28,000 /
+    # 140,000, with a published deduction formula (GLM-5.3: input 6.9,
+    # cached 1.7, output 24 per 10,000 credits; peak Mon–Fri 14:00–18:00
+    # UTC+8 at 1×, off-peak 0.5×). v0.1's `quota` is a token count on a
+    # monthly window; writing a token number the page never published would
+    # be fabrication, so the block is absent and the upstream remains the
+    # only authority (spec §4.6 rule 3; GAP-Q17, DESIGN §12.9; ADR-018 §7).
+    # Sources: https://docs.bigmodel.cn/cn/coding-plan/overview @2026-09-21
+    #          https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21
+    # Subscription prices, for the operator's own math (not a price tier):
+    # Lite ¥94.4/month (list ¥118), Pro ¥430.4 (¥538), Max ¥862.4 (¥1078);
+    # quarterly ×0.8, yearly ×0.7 — https://open.bigmodel.cn/glm-coding @2026-09-21
+    # Terms note (a recorded fact, not a recommendation): the plan's own docs
+    # say it is usable only "在官方支持的指定工具与产品环境中使用" and that calls
+    # from self-built applications do not consume the allowance — an operator
+    # pointing this key at a gateway must check the vendor's terms first
+    # (ADR-018's honest-boundaries section).
+
+  - name: kimi-cn
+    region: cn                              # §4.8: the mainland deployment of the kimi vendor
+    currency: CNY
+    base_url: https://api.moonshot.cn/v1    # the CN pay-as-you-go endpoint (the docs pages reached from
+                                            #   platform.moonshot.cn answer on the kimi.com host family today —
+                                            #   a 301 measured in R6; the endpoint host is unchanged)
+    api_key_env: KIMI_CN_API_KEY
+    wire_api: chat
+    supports: [chat]
+    models:
+      - id: kimi-k3
+        family: kimi-k3                     # §4.8: the tag that pairs this route with the coding endpoint's `k3`
+                                            #   below — two different native ids, one family. A client never
+                                            #   writes the tag; it is not an address.
+        context: 1m                         # official: 1,048,576 tokens
+        price:                              # ¥ / 1K tokens (= official ¥/1M ÷1000), never converted
+          input_miss: 0.02                  # official ¥20.00 /1M
+          input_hit: 0.002                  # official ¥2.00 /1M (cached input)
+          cache_write: 0.02                 # official ¥20.00 /1M at the 5-minute TTL tier (the page's default when
+                                            #   a request carries no explicit TTL; the 1-hour tier is ¥40.00 /1M)
+          output: 0.1                       # official ¥100.00 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
+        # TODO verify against official source
+    # no `quota:`: the metered entry carries no allowance (spec §4.6).
+
+  - name: kimi-cn-plan
+    region: cn                              # §4.8: the mainland deployment's Kimi Code (coding plan) account
+    currency: CNY
+    base_url: https://api.kimi.com/coding/v1        # the CN coding endpoint's OpenAI form (its Anthropic form:
+                                                    #   https://api.kimi.com/coding/)
+    api_key_env: KIMI_CN_CODING_API_KEY
+    wire_api: chat
+    supports: [chat]
+    account: coding_plan
+    models:
+      - id: k3                              # the coding endpoint's own native id (its catalogue: k3, k3-256k,
+        family: kimi-k3                     #   kimi-for-coding, kimi-for-coding-highspeed). The tag matches
+                                            #   kimi-cn/kimi-k3 above: one family across two platforms (§4.8).
+        context: 1m                         # TODO verify against official source: the coding docs state no context
+                                            #   limit for k3; the platform's kimi-k3 page says 1,048,576 and the
+                                            #   same limit is assumed here pending the re-read
+        price:                              # ¥ / 1K tokens; the platform's list price for the same model (inside
+          input_miss: 0.02                  #   the plan the marginal price is accounted 0, spec §4.6 rule 4;
+          input_hit: 0.002                  #   the table must still be non-zero, spec §4.0)
+          cache_write: 0.02                 # ¥20.00 /1M at the 5-minute TTL tier (1-hour tier ¥40.00 /1M)
+          output: 0.1
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
+        # TODO verify against official source (the coding endpoint's own price
+        #      basis, not only the platform page's)
+    # no `quota:` — Kimi Code publishes usage windows (a 5-hour rolling window
+    # plus a monthly total), not a token allowance; a token count here would
+    # be fabricated, so the block is absent (GAP-Q17; ADR-018 §7). The vendor
+    # states the coding API and the open-platform API are separate services
+    # (https://platform.kimi.com/docs/guide/product-plans.md @2026-09-21) and
+    # documents handing the subscription's key to third-party tools
+    # (https://www.kimi.com/code/docs/ @2026-09-21) — both recorded as facts.
+
 aliases:
   # alias → one route in the roster (`provider/model`). An alias only resolves a
   # name; the outbound `model` is replaced by the resolved roster id whichever
   # form the client used (spec §2), so an alias and the direct `provider/model`
   # produce byte-identical bytes upstream.
   coding-fast: deepseek/deepseek-v4-pro
-  coding-bulk: moonshot/kimi-k2.7-code
+  coding-bulk: kimi/kimi-k2.7-code
   chat-fast: zai/glm-5.3-flash
   # Aliases pointing to `auto` or carrying parameter overrides (max_tokens
   # etc.) are undefined in v0.1 → GAP-Q13 (DESIGN §12.9)
@@ -358,7 +487,7 @@ fallback:
   # Chain exhausted → 502 upstream_error (upstream attempt timeout → 504
   # upstream_timeout); error body per spec §8.
   - deepseek/deepseek-v4-pro
-  - moonshot/kimi-k3
+  - kimi/kimi-k3
   - zai/glm-5.3
 
 plan_policy:

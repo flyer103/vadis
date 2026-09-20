@@ -102,6 +102,12 @@ trace:    { dir: "./state/traces", rollover: hourly }
 
 providers:
   - name: deepseek
+    region: intl                       # cn | intl (absent ⇒ intl, §4.8): the regional deployment this entry's
+                                       #   endpoint and key belong to. Display/audit only — it routes nothing
+                                       #   and it does not choose a currency
+    currency: USD                      # USD | CNY (absent ⇒ USD, §4.8): the unit of every `price` below.
+                                       #   Never converted: a CNY page is transcribed as CNY, no rate is ever
+                                       #   applied, and two currencies are never added (AGENTS constraint 5)
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only
     wire_api: chat                     # chat | responses | anthropic
@@ -109,22 +115,30 @@ providers:
     account: api                       # coding_plan | api (absent ⇒ api): the metered account (§4.6)
     models:
       - id: <unique model id within the provider>   # the provider-native id; this is what goes upstream (§2)
+        family: <family tag>           # optional (§4.8); absent ⇒ the id itself. This is the tag
+                                       #   plan_policy.family (§4.6) matches, so two routes whose native ids
+                                       #   differ can still be one family
         context: <context limit>
-        price:                         # five-tier price, USD / 1K token: this file fixes only the **schema and convention**, it copies no values
+        price:                         # five-tier price, 1K token **in this entry's currency**: this file fixes only the **schema and convention**, it copies no values
           input_miss: <base price: cache miss>
           input_hit: <cache-hit price>
           cache_write: <cache-write price; 0 = upstream does not charge separately>
           output: <output price>
           peak: { multiplier: 2.0, windows: [{ days: [mon,tue,wed,thu,fri], start: "01:00", end: "04:00", tz: UTC }] }
         source: "<official pricing page URL> @<fetch date>"   # required, traceable (see "Price convention" below)
-  - name: coding-plan                # a second entry for the same family: the **subscription** account
+  - name: deepseek-plan              # a second entry for the same vendor, the **subscription** account;
+                                     # names follow the §4.8 convention `<vendor>[-<region>][-<account>]`,
+                                     # with `<vendor>` matching the product name its api_key_env uses
+    region: intl                       # §4.8
+    currency: USD                      # §4.8
     base_url: <the plan endpoint>
     api_key_env: CODING_PLAN_KEY
     wire_api: anthropic                # chat | responses | anthropic
     supports: [chat, responses, anthropic]
     account: coding_plan               # coding_plan | api (absent ⇒ api): the subscription account (§4.6)
     models:
-      - id: <the model id this account serves; it must equal plan_policy.family>
+      - id: <the model id this account serves>
+        family: <the tag plan_policy.family matches; equal to the id above when the two routes' ids agree (§4.8)>
         context: <context limit>
         price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 2.0, windows: [<…>] } }
         source: "<official pricing page URL> @<fetch date>"
@@ -132,6 +146,37 @@ providers:
       - { models: ["<this provider's model id>"], window: monthly, tokens: <plan allowance>,
           reset_day: 1, over_quota: block }   # quota may only reference **its own provider's** models
                                               # under §4.6 the local counter is a warning, never the authority
+
+  - name: kimi-cn-plan               # the same vendor, the other region, the subscription account (§4.8)
+    region: cn                         # this entry's endpoint and price page are the CN ones
+    currency: CNY                      # its price table is published in CNY and stays in CNY
+    base_url: https://api.kimi.com/coding/v1
+    api_key_env: KIMI_CN_CODING_API_KEY
+    wire_api: chat
+    supports: [chat]
+    account: coding_plan
+    models:
+      - id: k3                         # the coding endpoint's own native id …
+        family: kimi-k3                # … and the tag that pairs it with the metered route below (§4.8)
+        context: 1m
+        price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 1.0, windows: [] } }
+        source: "<the CN region's official pricing page> @<fetch date>"
+    # no `quota:` — a plan whose allowance the vendor does not publish as tokens is still a plan (§4.6);
+    # a credit- or window-shaped allowance is not written as a token count (GAP-Q17, DESIGN §12.9)
+
+  - name: kimi-cn                     # the CN metered account of the same vendor — the family's `overflow`
+    region: cn
+    currency: CNY
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: KIMI_CN_API_KEY
+    wire_api: chat
+    supports: [chat]
+    models:
+      - id: kimi-k3
+        family: kimi-k3                # the same tag: two different native ids, one family (§4.8)
+        context: 1m
+        price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 1.0, windows: [] } }
+        source: "<the CN region's official pricing page> @<fetch date>"
 
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
 
@@ -150,12 +195,14 @@ plugins:
     intercept: { sample: 0.05, shadow: true }
     disabled: true
 
-fallback: [deepseek/deepseek-v4-pro, moonshot/kimi-k3]   # ordered route list, global granularity (§8)
+fallback: [deepseek/deepseek-v4-pro, kimi/kimi-k3]   # ordered route list, global granularity (§8)
 
 plan_policy:                          # optional; §4.6 — the subscription first, the metered account as the spill
-  family: <the model id both routes carry>
-  primary: <provider>/<model>         # required; its provider must be `account: coding_plan`
-  overflow: <provider>/<model>        # required; its provider must be `account: api`
+  family: <the family tag both routes' model entries carry>   # §4.8; equal to the model id when the two
+                                                              # routes' native ids agree
+  primary: <provider>/<model>         # required; its provider must be `account: coding_plan`, and the model
+                                      # entry it resolves to must carry `family`
+  overflow: <provider>/<model>        # required; its provider must be `account: api`, and likewise
   on_primary_exhausted: spill          # spill | block   (default spill)
   recover: probe                       # probe | none    (default probe)
   cooldown: 15m                        # default 15m
@@ -165,8 +212,10 @@ plan_policy:                          # optional; §4.6 — the subscription fir
 **The account belongs to the provider entry; the plan policy is one top-level section.** `account` says whether
 a provider entry is a subscription (`coding_plan`) or the pay-per-token API (`api`, the default when the key is
 absent): the key, the endpoint and the allowance belong to the account and not to a model (ADR-011 item 4), so
-the flag sits on the provider. `plan_policy` names one **family** — the model id that two routes (one per
-account) both serve — and is optional; its semantics, its defaults and its hard rules are §4.6.
+the flag sits on the provider. `region` and `currency` are provider-entry properties for the same reason (the
+deployment and the unit belong to the endpoint and the account), and `models[].family` is a **model**-entry tag
+— §4.8 for all three. `plan_policy` names one **family** — the tag two routes (one per account) both carry —
+and is optional; its semantics, its defaults and its hard rules are §4.6.
 
 **Roster ids are provider-native.** `models[].id` is the exact string that provider's API expects, and it
 is what the outbound request carries (§2). A client never needs to know it: it writes a `provider/model`
@@ -182,16 +231,33 @@ This file defines only the schema and the convention:
 
 - The four price tiers are **base prices**; the periods matched by `peak.windows` are **multiplied** by
   `peak.multiplier` (peak/off-peak is expressed by multiplication, not by writing two sets of prices).
+- **The unit is the entry's `currency`** (§4.8), and it is uniformly **the currency unit / 1K token**.
+  Converting the official page's "per 1M" to 1K means **dividing by 1000**, in whatever currency the page
+  publishes: a CNY table is transcribed as CNY, and **no exchange rate is ever applied** (an "equivalent"
+  USD figure computed from a rate is a number nobody published, and it is also the reason this file's
+  numbers can be recomputed byte for byte).
+- **`currency` is never inferred from `region`**: a CN-region entry whose page prices in USD, or the reverse,
+  is written as it is.
+- `source` is the **entry's own region's** official page (URL + fetch date): a `cn` entry cites the CN page
+  and an `intl` entry the international one. One region's price table is never the evidence for another
+  region's figure.
+- Where the official page prices **cache writes per TTL tier** (e.g. a 5-minute and a 1-hour tier), `cache_write`
+  records the tier this router's requests fall into — the page's own stated default when a request carries no
+  explicit TTL — and the model entry's comment names the other tier with its price. The schema has one
+  `cache_write` tier; recording a tier the router's requests never enter would overprice them, and recording
+  neither would underprice them.
 - `cache_write: 0` means the upstream does not charge separately for cache writes (e.g. DeepSeek only
   distinguishes hit / miss).
-- Currency is uniformly **USD / 1K token**; converting the official page's "per 1M" to 1K means
-  **dividing by 1000** (an exchange-rate approximation must not stand in for the official USD price).
 - Reference instance (@2026-09-19 official page): DeepSeek's peak periods are **UTC 01:00–04:00 and
   06:00–10:00 (Monday to Friday, excluding Chinese public holidays)**, off-peak is half the peak price
   ⇒ the base price takes the **off-peak price**, `peak.multiplier: 2.0`. Holidays are not modeled
   (GAP-Q6; known deviation: holidays are billed at `peak`, which is on the high side).
 - A plan's `quota` **may only reference models of its own provider**: a cross-provider reference would
   have unclear semantics when that provider is unavailable.
+- `quota` states a **token** allowance on a monthly window, and nothing else. A plan whose vendor publishes
+  a different shape — a credit allowance, a per-5-hour or weekly window, a usage-based limit — carries **no**
+  `quota` block: §4.6's rules are reachable without one (§4.6: "a plan whose token allowance is not published
+  is still a plan"), and writing a token count the vendor never published is fabrication (GAP-Q17, DESIGN §12.9).
 
 Config-change semantics (aligned with Cordis's keyed diff, see ADR-002): a `config` change → handed to
 the plugin to diff by itself and reload (the process is not rebuilt); `disabled: true` → unload that
@@ -285,7 +351,10 @@ One request leaves two records, and they have different jobs:
 **What it is.** A subscription account and a metered account can serve the same model. `plan_policy` names that
 pair and makes the router prefer the subscription: while the plan is usable the family is routed to `primary`;
 when the upstream declares the plan exhausted the family continues on `overflow` (a real, metered spend) and
-comes back when the upstream allows it again (ADR-014).
+comes back when the upstream allows it again (ADR-014). The pair is named by a **family tag** (§4.8), not by a
+model id: the two routes' provider-native ids may differ (a coding endpoint's `k3-256k` and the metered
+platform's `kimi-k2.7-code` are one family when their model entries say so), and when they are equal the tag
+defaults to that id, which is the behaviour every config written before §4.8 has.
 
 **`account` (a provider-entry property).** `coding_plan` | `api`; **absent ⇒ `api`**. It states what the
 provider entry *is* — the account its key, endpoint and allowance belong to. A provider that declares
@@ -298,13 +367,13 @@ future key (the `state:` / `retention` precedent), never a reshaped section.
 
 | Key | Type | Default | Semantics |
 |---|---|---|---|
-| `family` | string | required | The model id both routes carry — and the key of the state: the account state, the probe deadline and the switch records are per family. Load error unless both routes' model id equals it. |
-| `primary` | `provider/model` | required | The subscription route. Load error unless it is a roster route whose provider is `account: coding_plan`, and — when that provider declares a `quota` — unless the family's model is covered by `quota.models` (§4.0's own-provider rule). |
-| `overflow` | `provider/model` | required | The metered route. Load error unless it is a roster route, distinct from `primary`, whose provider is `account: api`, carrying the same model id. It need not appear in `fallback`: for a request inside a family it is the first candidate after `primary` (§4.2). |
+| `family` | string | required | The **family tag** both routes' model entries carry (§4.8) — and the key of the state: the account state, the probe deadline and the switch records are per family. Load error unless a model entry of `primary`'s provider and a model entry of `overflow`'s provider both carry that tag. A model entry with no `family` key carries its own `id` as its tag, so a policy written when the two routes shared one model id keeps working unchanged. |
+| `primary` | `provider/model` | required | The subscription route. Load error unless it is a roster route whose provider is `account: coding_plan`, and — when that provider declares a `quota` — unless **the model id the route resolves to** is covered by `quota.models` (§4.0's own-provider rule; `quota.models` names ids, never tags). |
+| `overflow` | `provider/model` | required | The metered route. Load error unless it is a roster route, distinct from `primary`, whose provider is `account: api`, whose model entry carries the same family tag (its native `id` may differ from `primary`'s — that is what the tag is for, §4.8). It need not appear in `fallback`: for a request inside a family it is the first candidate after `primary` (§4.2). |
 | `on_primary_exhausted` | `spill` \| `block` | `spill` | `spill`: the family continues on `overflow` at its real price. `block`: the request is refused with a **readable** reason (§8 `quota_exceeded`, 429) instead of being served from the metered account — the mode for an operator who would rather fail than spend. |
 | `recover` | `probe` \| `none` | `probe` | `probe`: after `cooldown`, the next session's first request is admitted as a probe on `primary`; success switches the family back and is recorded. `none`: no automatic probe — the family returns at the plan's own window boundary when one is declared, and otherwise only by an operator action. |
 | `cooldown` | duration | `15m` | The minimum interval between the move away from `primary` and the first admitted probe. A floor, not a schedule: ADR-011's cooldown for that provider must also allow the attempt, and rule 3 below may defer the probe further. |
-| `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative value is a load error. |
+| `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative or non-finite value is a load error, and so is setting it on a family whose `overflow` route's provider is of a currency other than USD: the cap is denominated in **USD** (its own name), and comparing a USD ceiling with a spend in another currency is the silent mixing §4.8 forbids — so the policy refuses to load instead (message names `plan_policy.overflow_monthly_cap_usd` and the currency it found). |
 
 **Hard rules** (the parts an implementation may not improvise; ADR-014 items 1–11 are normative):
 
@@ -351,9 +420,11 @@ two rows).
 | `primary` and `overflow` are the same route | load error | `plan_policy.overflow` |
 | `primary`'s provider is `account: api` | load error | `plan_policy.primary` |
 | `overflow`'s provider is `account: coding_plan` | load error | `plan_policy.overflow` |
-| `family` ≠ the model id of `primary` (or of `overflow`) | load error | `plan_policy.family` |
-| the primary provider declares a `quota` and `family` ∉ its `quota.models` | load error | `plan_policy.family` |
+| no model entry of `primary`'s provider carries `plan_policy.family` as its family tag — or none of `overflow`'s | load error | `plan_policy.family` |
+| two model entries of one provider entry carry the same family tag | load error | `providers[i].models[j].family` |
+| the primary provider declares a `quota` and the model id `primary` resolves to ∉ that `quota.models` | load error | `plan_policy.family` |
 | `overflow_monthly_cap_usd` is negative or not finite | load error | `plan_policy.overflow_monthly_cap_usd` |
+| `overflow_monthly_cap_usd` is set and `overflow`'s provider's `currency` (§4.8) is not `USD` | load error | `plan_policy.overflow_monthly_cap_usd` |
 | `cooldown` is not a duration (`15m`, `1h30m`) | load error | `plan_policy.cooldown` |
 | any key inside `plan_policy` that §4.6 does not define | load error | `plan_policy` |
 | the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
@@ -435,6 +506,88 @@ never to `/health` — not a path comparison inside the guard that a later edit 
 | Trace | **one record**, from the same sink as every other record (§6's one-record-per-request contract — every terminal outcome leaves a line — applies unchanged, and "am I being scanned?" is answerable only from the trace). Its fields are §6's **pre-pipeline** class and it carries `errors[].kind = "unauthorized"` |
 | `router stats` | the record lands in `failed`, split out as `unauthorized`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows already say so — this key introduces **no new figure**) |
 
+### 4.8 `region`, `currency` and the route family tag (one vendor, two regions, two currencies)
+
+Three keys, one subject: a vendor is reachable through more than one regional deployment, those deployments
+publish their prices in their own currency, and they do not always serve the same model **id**. Each key sits
+on the entry that owns the fact — a provider entry for the first two, a model entry for the third — and none
+of them is a routing dimension.
+
+**`currency` (a provider-entry property).** `USD` | `CNY`; **absent ⇒ `USD`**. It is the unit of every `price`
+tier in that entry's model table, and of nothing else.
+
+- **Why the entry, and not the model or the tier.** The four tiers of one model are one invoice line from one
+  account, so they cannot disagree: a per-tier unit would be a field whose only legal value is the one its
+  siblings carry. And the price list belongs to the **account** — the same argument that already puts
+  `account`, `base_url`, `wire_api` and `api_key_env` on the provider entry (§4.6): the same model id can be
+  billed in CNY through one deployment and in USD through another, and only the entry knows which.
+- **No conversion, ever.** router applies no exchange rate, stores no rate and never converts one currency's
+  figure into another's (§4.0). A CNY price page is transcribed **as CNY**; a request served by a CNY entry is
+  accounted and reported in CNY. An estimated rate is a number nobody published — the same defect class as an
+  estimated price (AGENTS constraint 5) — and it would also make a report depend on when the rate was read.
+- **Not derived from `region`.** A CN-region entry billed in USD is a legal configuration; deriving one key
+  from the other would manufacture a fact the vendor's pages do not state.
+- **The ISO code is exact**: `USD` / `CNY`, uppercase. Any other value — including a lowercase spelling — is a
+  load error naming `providers[i].currency`.
+- **The region decides which page is evidence**: an entry whose `region` is `cn` cites the CN official page in
+  its `source`, an `intl` entry cites the international one (§4.0).
+
+**`region` (a provider-entry property).** `cn` | `intl`; **absent ⇒ `intl`**. It declares which regional
+deployment of the vendor the entry's endpoint and key belong to — the fact an operator needs when two entries
+of one vendor sit in one roster.
+
+- **Not a routing dimension.** A client still writes `provider/model`, the entry's own name is what resolves,
+  and the deployment behind it is invisible (and irrelevant) to the request. Two deployments are two provider
+  entries under two operator-chosen names.
+- **Not an accounting dimension either.** The unit comes from `currency` above.
+- **Surfaced.** `/health`'s provider list carries each entry's `region` and `currency` beside its name, its key
+  variable and its availability (§9.1's neighbourhood; DESIGN §12.10.2), so "which deployment am I actually
+  spending on" is answerable from a reporting surface rather than from a comment.
+- **It is a field, not a name suffix.** The provider name is the client-facing route grammar and the trace's
+  `decision.provider`; encoding a facet into it would invalidate existing route strings, aliases, `fallback`
+  entries and the meaning of already-written records, and would force a reader to parse a name to recover a
+  fact the file can simply state. The naming *convention* over operator-chosen names is documentation
+  (ADR-018): `<vendor>[-<region>][-<account>]`, with `<vendor>` matching the key variable's product name.
+- **The router does not check `region` against the host in `base_url`.** Vendors own their host lists, a
+  built-in table of them would rot, and a wrong-yet-declared region is a documentation error, not a routing
+  one. The check that matters is the `source` rule above.
+
+**The route family tag (`models[].family`, a model-entry property).** Optional non-empty string;
+**absent ⇒ the model's own `id`**, which is ADR-014's rule unchanged and therefore moves no existing config.
+`plan_policy.family` (§4.6) matches this tag — that is what lets two routes with **different provider-native
+ids** be one family.
+
+- **A name, not an address.** A client never writes a tag: it writes `provider/model` or an alias (§3), and a
+  bare tag resolves to nothing (`404 unknown_model`). The tag is never on the wire and never reaches a provider.
+- **§2's two mutations are unchanged.** The outbound `model` is still the resolved route's own native id, and
+  `decision.requested_model` is still the client's own string verbatim. The tag moves neither; it exists so a
+  policy can name a pair the ids cannot.
+- **The equivalence is asserted, not verified.** Nothing checks that two tagged routes really serve one model —
+  the router cannot know and the operator can. It is deliberately explicit for that reason: **no rule infers a
+  family from ids that look alike** (prefix, suffix, substring, case), because an inferred equivalence would be
+  a claim about a provider's catalogue that no page makes.
+- **A tag resolves at most once per provider entry** (a duplicate within one entry is a load error naming
+  `providers[i].models[j].family`), so a tag unambiguously names a model within a provider.
+- **A tagged entry no policy names is legal and inert** — the same standing as a plan account no policy routes.
+- **A family may span two currencies** (a CN plan with an international metered spill, or the reverse). Nothing
+  breaks: each request is priced by one table, so each record states one currency, and money is never added
+  across currencies (§6, §9.2). The one exception is a scalar comparison — `plan_policy.overflow_monthly_cap_usd`
+  — which is why that key carries a currency rule (§4.6).
+
+**One amount, one currency (the invariant behind all three keys).**
+
+- A request is priced by **one** entry's table, so a record has **one** currency: `cost.currency` is the
+  currency of `decision.provider`'s entry (§6).
+- A record written before this key existed is **USD by definition** (no non-USD route could be configured), so
+  the trace version moves once and a window holding both vintages stays unambiguous (§6, DESIGN §12.6).
+- **Money is never summed, compared or printed across currencies.** Counts (`requests`, `switches`, records)
+  and ratios (cache hit rate) are currency-free and may aggregate over a mixed window; every money figure is
+  reported once per currency present, each labelled (§9.2). A mixed window states **no** combined money total:
+  the figures are complete, the one thing that would be a lie is their sum.
+- **Two amounts in different currencies are never equal, greater or lesser** either: a comparison that would
+  silently pick a unit is refused at load time where the config can express it (the cap, §4.6) and does not
+  exist anywhere else.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -472,9 +625,18 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | per step: `plugin`, `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1) |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
-| cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
+| cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard) |
+
+**A record's money is in one currency, and the record says which** (§4.8). One request is priced by one
+route's price table, so the whole `cost` group is denominated in that entry's `currency`, and `cost.currency`
+states it — a trace field that said only `184000 nano` would be ambiguous the moment a CNY route exists, and
+the trace is read without the config (ADR-005). The rule is exact: `cost.currency` equals the `currency` of
+the provider entry `decision.provider` names. A record **without** the field is a v1 record and is **USD by
+definition** (no non-USD route was configurable when the format had no place to say so); this field's
+introduction is what moved `DecisionRecord.schema_version` to **2** (DESIGN §12.6), and a window may hold both
+vintages without ambiguity.
 
 **`usage_missing: true` means "no usage was measured for this request"** — it is not only "the upstream
 answered without a `usage` member". A request that never reached an upstream is in the same class: a
@@ -525,10 +687,15 @@ first is read from the route, the second from the inbound bytes.
 
 **`result.plan_switch`** (an object, or `null` when the plan policy of §4.6 did not displace the request's
 account — the field is always present). Shape:
-`{ from, to, reason, probe, reprefill_tokens, switch_cost_nano }`: `from` / `to` are `provider/model` routes;
-`reason ∈ {primary_exhausted, primary_cooling_down, primary_recovered}`; `probe` is a boolean (this switch was
-the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the switch's cache price
-under §7's convention. It is the plan policy's own record and is **not** a second name for `failover_from` —
+`{ from, to, reason, probe, reprefill_tokens, switch_cost_nano, cost_currency }`: `from` / `to` are
+`provider/model` routes; `reason ∈ {primary_exhausted, primary_cooling_down, primary_recovered}`; `probe` is a
+boolean (this switch was the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the
+switch's cache price under §7's convention, and `cost_currency` is the unit `switch_cost_nano` is denominated in
+— the **destination** route's currency (§4.8), present whenever `plan_switch` is not null. The two money
+figures of one record are therefore each self-describing, and this is why `switch_cost_nano` needs its own key
+rather than borrowing `cost.currency`: a family may span two currencies, and when the destination's attempt
+fails and the chain serves a route of another currency, the switch's price and the record's own cost are in
+different units. It is the plan policy's own record and is **not** a second name for `failover_from` —
 the two answer different questions and are set by different facts:
 
 | what moved the request | `failover_from` | `plan_switch` |
@@ -551,7 +718,8 @@ A **displacement** and a **state transition** are therefore not the same thing (
 `primary_cooling_down` row is the pair that shows it — a `plan_switch` with no `plan.switched` behind it.
 
 `reprefill_tokens` is the session's prefix token count (the §6 block-token attribution, so it is `inferred`);
-`switch_cost_nano = reprefill_tokens × p_miss(destination account)`, in integer NanoUsd (ADR-006), where an
+`switch_cost_nano = reprefill_tokens × p_miss(destination account)`, in the integer fixed-point unit of the
+**destination** entry's currency (ADR-006 + ADR-018; `plan_switch.cost_currency` states which, §4.8), where an
 **in-plan** destination's marginal miss price is 0 (spec §4.6 rule 4, DESIGN §5) — so a return trip records the
 work in `reprefill_tokens` and a money cost of 0, by the same price table the whole accounting uses. Both
 figures become `verified` through the switched request's own measured usage and `cost.*` fields (the in-plan
@@ -732,7 +900,7 @@ and while the family is on the metered account:
 | Key | Type | Semantics |
 |---|---|---|
 | `configured` | bool | whether the loaded config declares a `plan_policy` at all. `false` ⇒ **no other key is present** (`"plan": {"configured": false}`): with no policy there is no family to name, and inventing one would be the "a state nobody can see" error in reverse |
-| `family` | string | the policy's `family` (the model id both routes carry) |
+| `family` | string | the policy's `family` — the family tag both routes' model entries carry (§4.8; for a same-id pair it is that id) |
 | `primary` / `overflow` | string | the policy's two routes, verbatim, in the `provider/model` wire form `failover_from` and `plan_switch` use |
 | `recover` | `probe` \| `none` | the policy's value. Printed because it decides whether a probe exists at all (§4.6) |
 | `account` | `primary` \| `overflow` | the family's current account state. Read from the `plan_state` projection; **an absent row means `primary`** (a family that has never switched, §4.6) |
@@ -783,18 +951,20 @@ router stats --config <config path> --window <duration> [--json]
   config, an unparsable window, a trace directory that does not exist). A partial report is never presented as
   a complete one.
 
-stdout, exact shape (the values are illustrative; every figure carries its §7 label):
+stdout, exact shape (the values are illustrative; every figure carries its §7 label, and every **money** figure
+carries its currency — §4.8):
 
 ```
 window:      24h (2026-09-19T12:00:00.000Z .. 2026-09-20T12:00:00.000Z)
 trace:       /home/u/router/state/traces (5 files, 61 records)
+currencies:  USD                  (money is reported per currency and never summed across them)
 
 requests                         61
   succeeded                      58
   failed                          3   (upstream_error 2, upstream_timeout 1)
   usage missing                   2   (excluded from every rate and every sum below — never read as 0)
 
-cost (verified)            184000 nano
+cost (verified, USD)       184000 nano
   input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
 
 cache
@@ -807,8 +977,8 @@ transforms
 
 plan family 'glm-5.3'
   switches                        1   (requests whose result.plan_switch is present)
-  switch cost (verified)     184000 nano
-  switch re-prefill (inferred)  10000 tokens | 20000 nano
+  switch cost (verified, USD)     184000 nano
+  switch re-prefill (inferred)  10000 tokens | 20000 nano | USD
   switches without usage          0   (they keep the inferred label and say so)
 
 state
@@ -817,6 +987,23 @@ state
 overhead p99                     6 ms
 ```
 
+When the window holds more than one currency, the same lines appear once per currency, each labelled, and the
+header names both — the report states every figure it has and deliberately states no combined money total:
+
+```
+currencies:  USD, CNY             (money is reported per currency and never summed across them)
+...
+cost (verified, USD)       184000 nano
+  input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
+cost (verified, CNY)         8400 nano
+  input_miss 8000 | input_hit 400 | cache_write 0 | output 0
+```
+
+The counts stay single (`requests`, `switches`, `usage missing`) because they are not money: a request is a
+request whichever account served it. A mixed-currency window is **not** an error — exit code `0`, a report was
+produced — and `--json` marks the case by **omitting** the single-currency scalar keys rather than adding them
+up (below).
+
 Provenance of every figure:
 
 | Line in the report | Value | Source (which record) | §7 label | Excluded |
@@ -824,20 +1011,31 @@ Provenance of every figure:
 | `requests` | count | one per trace line whose `ts` is in the window | count | — |
 | `succeeded` / `failed` | count by `result.status` (2xx / non-2xx), split by `errors[].kind` | trace `result.status`, `errors[]` | count | — |
 | `usage missing` | count of records with `usage_missing: true` | trace `usage_missing` | count | those records contribute to nothing else in the report |
-| `cost` and its four tiers | Σ per tier | trace `cost.*` — computed by the serving path from measured `usage` priced by the config table | **verified** | records with `usage_missing: true`; an uncomputed cost is never 0 |
+| `cost` and its four tiers | Σ per tier, **per currency** | trace `cost.*`, **grouped by `cost.currency`** (§4.8) — computed by the serving path from measured `usage` priced by the config table | **verified** | records with `usage_missing: true`; an uncomputed cost is never 0; a currency's figures never enter another currency's line |
 | `hit rate` | §6's `cache_hit_rate` | trace `usage` | **verified** | records with `usage_missing: true` |
 | `continuity p50` | §6's `prefix_continuity_p50` | trace `prefix.continuity` | **inferred** | records whose `continuity` is null (a session's first request — an absent measurement is absent, not 1.0) |
 | `verified savings tokens` | §6's `verified_savings_tokens` | trace `transforms[]` where `verdict == verified` | **verified** | every `inferred` record |
 | `inferred savings tokens` | Σ saved tokens over `verdict == inferred` | trace `transforms[]` | **inferred** | never added to the line above |
 | `switches` | count of records with `result.plan_switch` present | trace `result.plan_switch` | count | — |
-| `switch cost (verified)` | Σ, over those records, of the **record's own `cost.total`** | the trace, as above | **verified** | records with `usage_missing: true`, counted on the next line instead |
-| `switch re-prefill (inferred)` | Σ `reprefill_tokens` and Σ `switch_cost_nano` | trace `result.plan_switch.reprefill_tokens` / `.switch_cost_nano` | **inferred** | never added into `switch cost (verified)` — see below |
+| `switch cost (verified, <currency>)` | Σ, over those records, of the **record's own `cost.total`**, per currency | the trace, as above | **verified** | records with `usage_missing: true`, counted on the next line instead |
+| `switch re-prefill (inferred)` | Σ `reprefill_tokens` and Σ `switch_cost_nano` per currency | trace `result.plan_switch.reprefill_tokens` / `.switch_cost_nano`, grouped by `.cost_currency` | **inferred** | never added into `switch cost (verified)` — see below; a currency's figures never enter another's line |
 | `switches without usage` | count of displaced records excluded from `switch cost (verified)` | trace | count | — |
 | `stateful inbound rate` | §6's `stateful_inbound_rate` | trace `state.stateful_inbound` | count | always 0 in v0.1 (gap G-F), which is why it is printed at all |
 | `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
 | `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` | measured | `upstream_ms` (ADR-009's latency budget is router's own work) |
 
-Three conventions this report obeys, each of which has bitten someone:
+Four conventions this report obeys, each of which has bitten someone:
+
+- **A money line is printed once per currency, and never summed across them** (§4.8). The four tiers, the total,
+  the plan section's two money lines: each is reported per currency present in the window, the header names the
+  currencies it saw, and there is no combined figure — not even when a reader would find one convenient. Counts
+  (`requests`, `switches`, `usage missing`, `switches without usage`, `unknown outcome requests`, `stateful
+  inbound rate`) and ratios (`hit rate`, `continuity p50`) are currency-free and stay single. In `--json` the
+  same rule is expressed by **omission**: with one currency present the report carries today's scalar keys plus a
+  `"currency"` string; with several, the scalar keys are **absent** and the figures live under a per-currency
+  map, so a consumer that assumes one total fails loudly instead of adding silently. A record whose
+  `cost.currency` is absent is a v1 record and is USD (§6), which is why an old trace file and a new one can sit
+  in one window.
 
 - **`switch_cost_nano` is the *inferred* column, never the verified one.** §6 fixes what verifies a switch: the
   switched request's own measured usage and `cost.*`, whose measured `cost.total` **is** the switch's verified
@@ -864,7 +1062,9 @@ Three conventions this report obeys, each of which has bitten someone:
   exit** — never a silently ignored flag.
 - `GET /metrics` is not registered: the route answers a bare `404` (an unrouted path does not go through
   §8's error body), and its metric names, labels and units are frozen by the change that implements it
-  (NanoUsd figures are integers there too — a Prometheus surface must not invent decimals).
+  (the figures are integer fixed-point nano amounts there too — a Prometheus surface must not invent
+  decimals, and a window holding two currencies would need the currency as a label on every money series,
+  §4.8; that is the implementing change's ruling to make, not this section's).
 
 The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect

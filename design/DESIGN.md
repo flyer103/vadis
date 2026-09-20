@@ -205,7 +205,8 @@ existing `errors[]` element (`kind = upstream_error`, `details.*`), so no spec �
   a wait longer than `server.request_timeout` is carried across requests by the cooldown rather than held
   open inside one.
 - **A failover prices the cache it breaks**: `failover.triggered` carries the prefix tokens and the switch
-  cost in integer NanoUsd (§5, §12.4, ADR-006) as an **inferred** figure at decision time, and the measured
+  cost in integer fixed-point nano amounts of the attempt's own price table (ADR-006 + ADR-018, §5, §12.4) as
+  an **inferred** figure at decision time, and the measured
   figure — the miss-priced tokens actually billed on the first post-switch turn, against the origin route's
   `input_hit` price — once that attempt's `usage` lands. The `verified/inferred` convention (spec §7) thus
   applies to failover exactly as it applies to transforms.
@@ -465,9 +466,11 @@ impl RawBody {
 ### 12.4 Cost / quota / breakeven pure functions (the implementation target of the 2026-09-19 bootstrap)
 
 ```rust
-/// Money is fixed-point: 1 nano-USD = 1e-9 USD. No f64 appears in the decision path or the trace.
-pub struct NanoUsd(pub u64);
-/// Unit price: nano-USD / 1K token (the same shape as the config's USD/1K, only integerized).
+/// Money is fixed-point: 1e-9 of the amount's own currency. No f64 appears in the decision path or
+/// the trace. ADR-018 (spec §4.8) renamed `NanoUsd` to `Nano` and paired it with `Money`; that block
+/// sits below this sketch, and nothing else in this section's shapes changes.
+pub struct Nano(pub u64);
+/// Unit price: nano-currency / 1K token (the same shape as the config's price, only integerized).
 pub struct Price(pub u64);
 pub struct PriceTable { pub input_miss: Price, pub input_hit: Price, pub cache_write: Price,
                         pub output: Price, pub peak: PeakTable }
@@ -478,8 +481,9 @@ pub struct Usage { pub input_total: u64, pub input_cached: u64, pub cache_write:
                    pub output: u64, pub reasoning: u64 }
 impl Usage { pub fn uncached(&self) -> u64;  pub fn cache_hit_rate(&self) -> f32; }
 
-pub struct CostBreakdown { pub input_miss: NanoUsd, pub input_hit: NanoUsd, pub cache_write: NanoUsd,
-                           pub output: NanoUsd, pub peak_applied_pct: u32, pub total: NanoUsd }
+pub struct CostBreakdown { pub input_miss: Nano, pub input_hit: Nano, pub cache_write: Nano,
+                           pub output: Nano, pub peak_applied_pct: u32, pub total: Nano,
+                           pub currency: Currency }   // §4.8 — added by the currency-tagged block below
 
 /// Pure function: cost(miss, hit, write, out, price, at) -> CostBreakdown
 /// cost_nano = Σ_tier ( tokens_tier × price_tier_nano_per_1k ) / 1000   (integer; only the final division rounds down)
@@ -487,6 +491,48 @@ pub struct CostBreakdown { pub input_miss: NanoUsd, pub input_hit: NanoUsd, pub 
 /// The input_miss tier uses usage.uncached(); the output tier includes reasoning (most upstreams count reasoning into output).
 pub fn cost(usage: &Usage, price: &PriceTable, at: Timestamp, tz: Tz) -> CostBreakdown;
 ```
+
+**Currency-tagged amounts (ADR-018, spec §4.8).** The fixed-point representation of ADR-006 stands; what the
+currency round adds is that the **unit travels with the value**. One request is priced by one entry's table, so
+a record has one currency, and no consumer ever has to be told what a set of `nano` figures means:
+
+```rust
+/// spec §4.8. Two values in v0.1; the serialized form is the ISO-4217 code
+/// ("USD" / "CNY") in the trace, `/health` and the report, and the config
+/// spelling is the same code, exact (a lowercase spelling is a load error).
+pub enum Currency { Usd, Cny }
+
+/// The raw fixed-point amount: 1e-9 of **the currency carried beside it**.
+/// ADR-018 renamed this type from `NanoUsd` — the name may not assert a unit the
+/// value does not hold. It is the integer inside `Money`, never an aggregate
+/// by itself.
+pub struct Nano(pub u64);
+
+/// An amount **and** its unit. Every money value that crosses a container
+/// boundary — an aggregate, a cap, a plan state, a trace field, a report figure
+/// — is a `Money`. There is **no** `impl Add for Money` across currencies and
+/// **no** `Sum`, so "add two currencies" is not expressible; the one adder
+/// returns the mismatch instead of a value.
+pub struct Money { pub nano: Nano, pub currency: Currency }
+pub enum CurrencyMismatch { Left(Currency), Right(Currency) }
+impl Money { pub fn checked_add(self, rhs: Money) -> Result<Money, CurrencyMismatch>; }
+
+/// `PriceTable` gains the unit (one table, one currency — the table belongs to
+/// the provider entry, §4.8) and `CostBreakdown` copies it, so the pure cost
+/// function's output is self-describing.
+pub struct PriceTable { pub currency: Currency, pub input_miss: Price, /* …unchanged… */ }
+pub struct CostBreakdown { pub currency: Currency, /* …unchanged… */ }
+```
+
+- **Aggregation is keyed by currency.** The plan's month spend and the report's figures are
+  `BTreeMap<Currency, Money>`; `router-cli`'s `TraceFigures` gains a per-currency map, and keeps its scalar
+  fields only for the single-currency case — the same rule (and the same reasoning) as spec §9.2's `--json`
+  shape, so the text and the JSON cannot drift apart.
+- **No `f64` appears anywhere new.** The currency is an enum, not a number: ADR-006 item 3's crate-level
+  `deny(clippy::float_arithmetic)` holds, and nothing on the money path converts between currencies at all.
+- **The cap stays a single scalar by construction** (spec §4.6): `plan_policy.overflow_monthly_cap_usd` is USD,
+  and a policy that sets it over a non-USD overflow route is a load error, so the one comparison that could mix
+  units is refused before the process serves.
 
 Quota (spec §4 `quota`, DESIGN §5):
 
@@ -528,8 +574,8 @@ pub struct SwitchCandidate {
     pub p_new_miss: Price,       // the new model's input_miss (switching necessarily misses the whole prefix)
 }
 pub enum StayReason { Disabled, RemainingTurnsZero, BelowMinRemainingTurns, NotPaying }
-pub enum SwitchVerdict { Switch { gain: NanoUsd, cost: NanoUsd },
-                         Stay { reason: StayReason, gain: NanoUsd, cost: NanoUsd } }
+pub enum SwitchVerdict { Switch { gain: Money, cost: Money },
+                         Stay { reason: StayReason, gain: Money, cost: Money } }
 /// gain = remaining_turns × tokens_per_turn × (p_stay_hit − p_new_miss) / 1000   (an i128 intermediate)
 /// cost = prefix_tokens × p_new_miss / 1000
 /// Switch ⟺ gain × 100 > safety_factor_pct × cost      (strictly greater; cross-multiplied, so no precision is lost to division)
@@ -568,6 +614,17 @@ pub struct PlanPolicyCfg { pub family: String, pub primary: RouteSpec, pub overf
     pub cooldown: DurationVal,                      // default 15m
     pub overflow_monthly_cap_usd: Option<CapUsdVal> }  // absent = no cap; `to_nano()` is the one rounding
 
+/// spec §4.8 (ADR-018): `region` and `currency` are **provider-entry** properties with the
+/// backward-compatible defaults (`intl` / `USD`), and the family tag is a **model-entry** property whose
+/// default is the model's own `id`. `PlanPolicyCfg.family` above matches the tag (not an id), which is
+/// what lets two routes with different native ids be one family.
+pub struct ProviderCfg { pub region: Region, pub currency: Currency, /* …unchanged… */ }
+pub enum Region { Cn, Intl }        // absent ⇒ Intl; display/audit only — it routes nothing and it
+                                    //   does not choose a currency
+pub enum Currency { Usd, Cny }      // absent ⇒ Usd; serialized "USD" / "CNY"; the unit of this entry's
+                                    //   `price` table and of every amount computed from it (§12.4)
+pub struct ModelCfg { pub id: String, pub family: Option<String>, /* …unchanged… */ }
+
 /// spec §4.1; `Rollover::Hourly` is the only value in v0.1 → the file `<dir>/YYYY-MM-DDTHH.jsonl` (UTC).
 pub struct TraceCfg { pub dir: PathBuf, pub rollover: Rollover }
 
@@ -583,11 +640,14 @@ pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationV
 |---|---|
 | duration | `<integer><ms\|s\|m\|h>`, concatenable (`1h30m`); invalid → a load error (with the field path) |
 | context | `<integer>` or `<integer>k\|m` (k=1024, m=1048576); used by the guard's capability check |
-| price | read as f64 (USD/1K), converted **at load time** to `Price((v * 1e9).round() as u64)`; `v < 0`, or 0 after `round` → a load error |
+| price | read as f64 (1K tokens **in the entry's `currency`**, §4.8), converted **at load time** to `Price((v * 1e9).round() as u64)`; `v < 0`, or 0 after `round` → a load error. The unit is carried into `PriceTable.currency` (§12.4); no conversion between currencies exists in this parser or anywhere else |
 | peak.multiplier | converted to `multiplier_pct = (v*100).round()`; only two decimal places are supported, otherwise a load error |
 | `account` (spec §4.6) | `coding_plan` \| `api`; **absent ⇒ `api`**; any other value is a load error (`deny_unknown_fields` polices keys, not enum values) |
+| `currency` (spec §4.8) | `USD` \| `CNY`, the ISO-4217 code exact (a lowercase spelling is a load error, and so is any other code); **absent ⇒ `USD`**. The value is carried into `PriceTable.currency` (§12.4) — the parser never converts anything |
+| `region` (spec §4.8) | `cn` \| `intl`; **absent ⇒ `intl`**; any other value is a load error naming `providers[i].region`. Informational: it routes nothing, it chooses no unit, and the router does not check it against `base_url`'s host (ADR-018). Surfaced by `/health` (§12.10.2) |
+| `models[].family` (spec §4.8) | optional non-empty string; **absent ⇒ the model's own `id`**. At most one model entry of a provider entry may carry a given tag; a duplicate or an empty string is a load error naming `providers[i].models[j].family`. This is the value `plan_policy.family` matches (§4.6). It is never a route: nothing resolves a client's string to a tag, and no rule infers a tag from ids that look alike |
 | `plan_policy` (spec §4.6) | at most one section in v0.1; a second family is an additive future key, never a reshaped section. Its cross-field checks are §12.10.2's table (they are routing rules, not syntax) |
-| `overflow_monthly_cap_usd` (spec §4.6) | read as a `CapUsdVal` (f64 USD) and converted **at load time** by `CapUsdVal::to_nano()` to `NanoUsd((v * 1e9).round())` — one rounding, the same shape as `price` (§12.4); a negative or non-finite value is a load error; absent means no cap. Every later comparison is integer |
+| `overflow_monthly_cap_usd` (spec §4.6) | read as a `CapUsdVal` (f64 USD) and converted **at load time** by `CapUsdVal::to_nano()` to `Nano((v * 1e9).round())` — one rounding, the same shape as `price` (§12.4); a negative or non-finite value is a load error, and so is setting it when `overflow`'s provider is of a currency other than USD (the cap is USD by name; spec §4.8/§4.6 — the message names the key and the currency found); absent means no cap. Every later comparison is integer and single-currency |
 | base_url | must already contain the version segment; router only appends `chat → /chat/completions`, `responses → /responses`, `anthropic → /v1/messages` |
 | `rules_file` | resolved relative to **the directory containing this config file** (not the CWD); `trace.dir` follows the same rule (spec §4.1) |
 | `trace.rollover` | only `hourly` is accepted (any other value = a load error); retention is **not** a config key (v0.1 does no automatic cleanup) |
@@ -602,7 +662,7 @@ pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationV
 
 ```rust
 pub struct DecisionRecord {
-    pub schema_version: u16,            // trace version; the autowork side uses it for compatibility (ADR-005)
+    pub schema_version: u16,            // trace version (2 since ADR-018: `cost.currency` / `plan_switch.cost_currency`); the autowork side uses it for compatibility (ADR-005)
     pub ts: String,                     // RFC3339 UTC, milliseconds
     pub identity: IdentityRec,          // identity
     pub protocol: ProtocolRec,          // protocol
@@ -630,8 +690,11 @@ pub struct PrefixBlock { pub kind: BlockKind, pub index: u16, pub tokens: u64, p
 pub struct TransformRecord { pub plugin: String, pub added_input_tokens: i64, pub saved_input_tokens: i64,
     pub saved_output_tokens: i64, pub cache_impact: CacheImpact, pub verdict: Verdict,
     pub tee_id: Option<String>, pub error: Option<String> }
-pub struct CostRec { pub input_miss: NanoUsd, pub input_hit: NanoUsd, pub cache_write: NanoUsd,
-    pub output: NanoUsd, pub peak_applied_pct: u32, pub total: NanoUsd, pub quota_after: Option<QuotaAfter> }
+pub struct CostRec { pub input_miss: Nano, pub input_hit: Nano, pub cache_write: Nano,
+    pub output: Nano, pub peak_applied_pct: u32, pub total: Nano,
+    /// spec §4.8 (ADR-018): the unit every amount in this record is denominated in — the currency of the
+    /// provider entry `decision.provider` names. Always written (a v1 record without it is USD by definition).
+    pub currency: Currency, pub quota_after: Option<QuotaAfter> }
 pub struct QuotaAfter { pub provider: String, pub plan_idx: usize, pub tokens_used: u64, pub tokens_limit: u64,
     pub over_quota: OverQuota, pub verdict: &'static str }
 pub struct ResultRec { pub status: u16, pub upstream_status: Option<u16>, pub failover_from: Option<RouteSpec>,
@@ -643,9 +706,11 @@ pub struct ResultRec { pub status: u16, pub upstream_status: Option<u16>, pub fa
 /// spec §6 `plan_switch` (ADR-014 §12.10.8): the plan policy moved this request's account. `from` / `to` are
 /// `"<provider>/<model>"` strings, the same wire form `failover_from` uses; `reason` is the stable word
 /// (`primary_exhausted` / `primary_cooling_down` / `primary_recovered`) and `probe` says whether the move was
-/// an admitted probe's return trip. The two figures are the switch's cache price under spec §7's convention.
+/// an admitted probe's return trip. The two figures are the switch's cache price under spec §7's convention,
+/// and `cost_currency` (spec §4.8, ADR-018) denominates `switch_cost_nano` — the **destination** route's
+/// currency, which a family spanning two currencies may make different from `cost.currency`.
 pub struct PlanSwitchRec { pub from: String, pub to: String, pub reason: &'static str,
-    pub probe: bool, pub reprefill_tokens: u64, pub switch_cost_nano: NanoUsd }
+    pub probe: bool, pub reprefill_tokens: u64, pub switch_cost_nano: Nano, pub cost_currency: Currency }
 
 /// The landing of spec §6 "failure details": the **internal** failure details (possibly several), which are
 /// not the same thing as the single error response given to the client in §12.7; the two share the kind vocabulary.
@@ -688,6 +753,14 @@ spec §6 field groups → Rust paths (auditable line by line):
   request and records `errors[].kind = trace_write_failed`.
 - `schema_version` only increments on a **breaking** change; adding an optional field does not change the
   version (the autowork side tolerates unknown fields).
+- **It moved to 2 with ADR-018** (spec §6/§4.8): the cost group gains `cost.currency` and `plan_switch`
+  gains `cost_currency`. Neither is an *optional* addition in the sense above — their absence is not a value
+  (`requested_model: null` and `plan_switch: null` are), and a consumer that ignores `cost.currency` will sum
+  a CNY figure into a USD one. That is exactly the class the version exists to signal, so the version moves
+  once and a reader that knows only v1 can refuse a v2 record instead of misreading it. The older vintage
+  stays unambiguous in the other direction: **a record without `cost.currency` is USD by definition**, because
+  no non-USD route was configurable when the format had nowhere to say so — which is why one window may hold
+  both vintages (spec §9.2 reads them together).
 - `decision.requested_model` is such an addition (contract ruled 2026-09-19 (`3074957`), implemented the same day (`233e05e`)): `null` when the
   request carried no parsable `model` (the field is present-and-null rather than omitted, the same stance
   as `prefix.continuity` — an absent value is written as absent, never as a plausible substitute).
@@ -749,7 +822,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-47`)
+### 12.8 conformance case table (`CONF-01…CONF-56`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -805,6 +878,13 @@ not written).
 | CONF-45 | spec §4.7 + §8·inbound token auth | **the boundary guard, six ways**: ① no token → `401` (`unauthorized`, §8's body verbatim); ② a wrong token → `401`; ③ the right token, once as `Authorization: Bearer` and once as `x-api-key` → forwarded normally, with the upstream-visible bytes unchanged (the guard adds nothing to the body); ④ `GET /health` with no token → `200`; ⑤ **no `server.auth_token_env` ⇒ behaviour identical to before the key existed** (no auth anywhere); ⑥ the key written but its environment variable missing/empty ⇒ the process does not start (non-zero exit, the variable named on stderr). A 401's trace line — one record, `errors[].kind == "unauthorized"`, `usage_missing: true`, priced nowhere — is asserted with them | the start-up resolution (router-cli) + the guard (`router-proxy::auth`) + §12.11's record |
 | CONF-46 | spec §9.3·`GET /metrics` not served | **a bare 404, both layers**: against the real `serve` assembly over loopback (with a `/health` 200 liveness control on the same run), `GET /metrics` answers status `404` — never `200` (a served surface) and never `501` (a registered-but-unimplemented route), because an unregistered path has no handler to choose either — and the response carries no §8 error body: no JSON `error` member and no `X-Router-Request-Id` header (an unrouted path does not go through §8's formatter) | the `serve` route registration (router-cli), asserted without touching it |
 | CONF-47 | spec §9.3·unserved subcommands | **the parser's refusal, real exit code and wording**: `router replay --trace … --config …`, `router trace tail`, and the bare `router replay` / `router trace` are each refused by the same `Cli` parser `main` dispatches on — a usage error naming the subcommand (`unrecognized subcommand`, plus a usage line; checked by substring, not a frozen string), mapping to a non-zero process exit (clap's usage error → exit 2, never a silently ignored flag); a liveness control shows the same argv prefix with a served subcommand parses, proving the refusal is the subcommand itself | the CLI argument parser (`router_cli::Cli`, clap derive) |
+| CONF-52 | spec §4.8 / ADR-018 §2·money never mixes at the type level | **`compile_fail` doctests on `Money` + the money unit tests in `router-core`'s `cost.rs`**: mixed-currency arithmetic does not compile and aggregation is spelled per-currency — the witness lives in `router-core` (not a `tests/conformance/` file), the class CONF-27's parking rule uses for a non-serve-path invariant | `Money` + `Currency` (§12.4) |
+| CONF-53 | spec §4.8 / ADR-018 §1·the currency and region keys parse exactly, default exactly, refuse at load | through the real `config_load::load` (YAML bytes → validated config) and the illegal-currency half through the real `router_cli::serve` exit: (a) an omitted `currency` loads as USD, an omitted `region` as `intl` — per-entry defaults, never global; (b) `currency: CNY` and `region: cn` load, and **cn + USD loads too** (neither field derives the other); (c) an illegal `currency` (wrong case, unknown code, non-string) is a load error naming `providers[i].currency` with the legal spellings, `serve` exits 2; (d) an illegal `region` refuses the same way | the config parser's currency/region keys + load-time validation (§12.10.2) |
+| CONF-54 | spec §4.8/§6/§9.2 + ADR-018 §2/§5·a request served by a CNY entry is priced, recorded and reported in CNY | the CONF-41 plan rig with the overflow entry switched to `currency: CNY`: (a) every trace record is v2 (`schema_version: 2`) and carries `cost.currency` equal to **its own** serving entry's currency (CNY for the family's records, USD for a plain side-by-side request); (b) the CNY-priced spill's `cost.computed` store row states `"currency": "CNY"` in its payload; (c) a mixed `router stats` window holds per-currency figures exactly {USD, CNY}, disjoint (a CNY tier never entered the USD line and vice versa), no combined total; (d) `/health`'s provider list carries each entry's `region` and `currency`, defaults shown without the keys written | `Currency` on the money path (§12.4), the v2 trace record (§12.6), per-currency aggregation in `router-cli` |
+| CONF-55 | spec §3/§4.8/§6 + ADR-018 §3/§4·the family tag pairs two native ids and is a name, not an address | the CONF-32 plan shape with the family split across different native ids (`p-plan` serves `k3`, `p-api` serves `kimi-k3`, the metered entry tagged `fam`): (a) the tag routes the plan family across the two ids; (b) F3 unchanged — each mock receives **its own** native id while both records' `requested_model` is the client's string verbatim; (c) the bare tag `fam` and `p-api/fam` are both refused `404 unknown_model`; (d) no byte of any upstream request contains the tag; (e) `region: cn` is displayed on `/health` beside the `intl` default with no routing consequence | the family tag (§12.5); the `model` rewrite (§12.10.7) unchanged, which is the point |
+| CONF-56 | spec §9.2 + ADR-018 §6·`router stats --json` keeps its scalars with one currency and omits them when two are present | through the public surface the CLI's own print path calls (`stats::report` + `report_json`): (a) a single-currency window keeps every scalar cost key, adds `"currency"`, grows no `by_currency` member, the plan section's `switch_cost_currency` names the unit; (b) a mixed window (CONF-54's rig) omits the scalar cost keys and `currency`, presents the tiers only under per-currency maps holding exactly the currencies seen, the plan section's scalar switch keys absent and its `*_by_currency` maps present — while the currency-free figures (`requests`, `switches`, hit rate) stay single and unchanged, and the report exits 0 | the `--json` report builder (`router-cli` `stats::report_json`) |
+
+**Integration note (2026-09-21, `intern/merge-r6-r9`).** ADR-018's row set allocated `CONF-46…49`; 46/47 were burned by the parallel R6 branch (the two rows above) and the cases that landed with the implementation are **CONF-52…56** — the renumbering paragraphs below record the mapping. One row of the original allocation never landed a case file: **the USD cap over a non-USD overflow refused at load** (written as CONF-49's). Its load-time validation exists (`config.rs`'s `validate_plan_policy`, the `overflow_monthly_cap_usd` × `Currency::Usd` check) but no conformance case asserts it; recorded here rather than given a number — the row is re-allocated when a case lands, per the occupancy notes below.
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -886,6 +966,63 @@ contract and a case file that exists without a row is exactly the drift this sec
   written by that round's contract card). Until the file exists, this row is the allocation record, the
   parking rule CONF-27 and CONF-41/42 already used, and its ID is spent: not renumbered, not reused.
 
+**Allocation of CONF-46, CONF-47, CONF-48 and CONF-49 (the currency / region / family-tag round, ADR-018).**
+Allocated by this change in the same class as CONF-27 / CONF-41 / CONF-42: the rows **are** the allocation
+record, and each case file lands with the implementation its row names — parked `#[ignore = "CONF-NN: depends
+on <item>"]` until then, the rule at the top of this section. The IDs are spent: not renumbered, not reused.
+**Occupancy at allocation time, recorded because a later round has to know**: `CONF-01…CONF-45` were taken
+(CONF-45's file landed with spec §4.7), `CONF-46…CONF-49` are taken by this row set, and the next free ID is
+**`CONF-50`**. A round that greps this table for a free number gets `50`; one that assumes `46` is free is
+reading a stale snapshot of it.
+
+**Renumbering of the ADR-018 row set and allocation of CONF-52…CONF-54 (the implementing round, 2026-09-21).**
+The split that landed ADR-018's implementation assigned the row set fresh numbers: 46/47's files exist on the
+R6 branch (`round/6-auth-and-regions`) and were therefore **burned**; 48–51 were reserved for the parallel R8
+cards (region/family in R8-2b, reports and the CN price roster in R8-2c). The currency-round cases that landed
+with the implementation are therefore **CONF-52**, **CONF-53** and **CONF-54** — not 46–49 as the rows above
+say. The mapping, so a reader of the rows is not misled:
+
+| This round's case | Implements the row numbered |
+|---|---|
+| `CONF-52` — the type-level no-mix (`compile_fail` doctests on `Money` + the money unit tests in `router-core` `cost.rs`) | the currency-is-data row's type half (was written as CONF-46's) |
+| `CONF-53` — `conf_53_currency_region_load.rs`: defaults, exactness, load-refusals, cn+USD legality, serve exit 2 | the parsing/load half of the currency and region rows (CONF-46/48's) |
+| `CONF-54` — `conf_54_cny_money_carries_currency.rs`: the CNY end-to-end (v2 records, `cost.computed` unit, mixed window, `/health`) | the reporting half of the currency row (CONF-46's) + the `/health` display of CONF-48's |
+
+The region-inert and family-tag/F3 rows (written as 47/48) belong to R8-2b and land there; the report-provenance
+row with R8-2c. **Occupancy now**: `CONF-01…CONF-45` on main's line, 46/47 burned by the R6 branch,
+48–51 reserved for the parallel R8 cards, 52–54 spent here; the next free ID is **`CONF-55`** (R8-2b starts
+there if it lands after this card; an R9 round greps this paragraph, not the rows above).
+
+**Allocation of CONF-55 (R8-2b, 2026-09-21).** `CONF-55` —
+`conf_55_family_tag_and_region.rs` — implements the family-tag/F3 row (written as CONF-47's):
+one tag (`fam`) pairing `p-plan/k3` with `p-api/kimi-k3`, the spill routing through both, F3
+unchanged (each mock receives its own native id, `requested_model` stays the client's verbatim
+string), the bare tag and the provider/tag form refused `404 unknown_model`, the tag absent from
+every upstream byte and trace decision value, and `region: cn` displayed on `/health` beside the
+`intl` default with no routing consequence. It also carries the load-rule half of the region row
+(CONF-48's) at the e2e boundary — a `cn` entry loading and serving — while the refusal half of
+both keys stays CONF-53's. **Occupancy now**: 55 spent; 48–51 stay reserved for R8-2b/2c's
+remaining rows (the region-display consequence is covered, the report-provenance row is still
+R8-2c's); the next free ID is **`CONF-56`**.
+
+**Allocation of CONF-56 (R8-2c, 2026-09-21).** `CONF-56` —
+`conf_56_stats_json_omission_rule.rs` — implements the report-provenance row's `--json` half
+(the row written as CONF-46's third assertion; the figures-level half landed as CONF-54's):
+through the same public surface the CLI's own print path calls (`stats::report` + the
+`report_json` builder extracted from the former private `print_json` for exactly this
+purpose, the `report()` precedent of CONF-41), a single-currency window keeps every scalar
+cost key, adds `"currency"` and grows no `by_currency` member, while the plan section keeps
+`switch_cost_currency` beside its scalar; a mixed window (the CONF-54 rig: CNY zeros, a CNY
+spill, a plain USD record) omits the scalar cost keys, the `currency` string and the plan
+section's scalar switch keys, presents the tiers only under per-currency maps holding
+exactly the currencies seen (never a folded entry), and keeps the currency-free figures
+(`requests`, `switches`, `hit rate`) single and unchanged — with the report itself
+succeeding, because a mixed window is not an error. **Occupancy now**: 55–56 spent by the
+R8-2b/2c pair; 48–51 stay reserved (the region row is covered, the currency row is covered,
+no unallocated ADR-018 row remains for them — an R9 round that wants a number greps this
+paragraph, takes `CONF-57`, and records why 48–51 were left); the next free ID is
+**`CONF-57`**.
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -902,7 +1039,7 @@ rewrote their expected upstream body to the native id and parked all three `#[ig
 which un-ignores them. The IDs, the files and the shape of the assertions are unchanged — the expected
 value moved with spec §2, which is the only thing that legitimately moves it.
 
-### 12.9 Gaps and pending rulings (GAP-Q1…Q13)
+### 12.9 Gaps and pending rulings (GAP-Q1…Q17)
 
 **This section changes no existing clause, it only registers.** Each entry gives the default this blueprint
 adopts and its blast radius. (From the 2026-09-19 write-back on, the "write-back record" below the table governs: settled
@@ -926,6 +1063,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q14 | how `prefix_blocks[].tokens` is counted (spec §6 requires a per-block token count; the dependency allowlist has no tokenizer) | proportional attribution of the measured `usage.input_total` over the prefix region by block byte length; every figure derived from it (`prefix_tokens`, `reprefill_tokens`, `switch_cost_nano`) is therefore `inferred` (spec §7), while `prefix_continuity` — the fidelity metric — uses only block hashes and is unaffected | cache-metric comparability; the inferred/verified split (§12.10.6) |
 | Q15 | ADR-014's `account:` / `plan_policy:` are in spec §4 / §4.6 but not in `config.example.yaml` or the parser, and the example is the file an implementation reads directly (spec §4) | land both in the **same round** that implements ADR-014; until then the example is exactly spec §4 minus these two keys (there is no drift in the other direction — it carries nothing the spec does not define) | `deny_unknown_fields` makes a key and its parser inseparable: an example ahead of the parser is an unservable file |
 | Q16 | which signal may `Reject` on a plan's allowance: today `over_quota: block` acts on the **local** counter, whose `tokens` may be a placeholder (Q1) | ADR-014 item 2 / §12.4's refinement: the local verdict warns and never gates, and the `Reject` follows upstream evidence | one refusal point moves behind upstream evidence; the local verdict stays visible in `cost.quota_after.verdict` |
+| Q17 | the CN coding plans' published allowance is **not** a token count: `GLM Coding Plan` publishes credits (Lite 2,000/5 h + 10,000/week, Pro 12,000/60,000, Max 28,000/140,000) with a published deduction formula (GLM-5.3: input 6.9, cached 1.7, output 24 per 10,000, halved off-peak) and `Kimi Code` publishes usage windows (a 5-hour rolling window plus a monthly total). v0.1's `quota` is `{models, window: monthly, tokens, reset_day, over_quota}` — the figures here are quoted, not adopted, from `https://docs.bigmodel.cn/cn/coding-plan/overview` (`/glm-coding`) and `https://www.kimi.com/code/docs/`, both read **2026-09-21** (ADR-018 carries the source table; no config value is derived from them) | the CN plan entries carry **no** `quota`: §4.6 already rules that a plan whose allowance is not published is still a plan, and turning a credit allowance into a token figure would be fabrication. The allowance, the coefficients and the windows live in the entries' comments with their source URL and read date (ADR-018) | the local counter is absent for those plans (the upstream stays the only authority, §4.6 rule 3). A future round that wants credit accounting must model the coefficients, the two window kinds and the plan's peak multiplier explicitly — a config shape, not a convenience |
 
 ADR disposition (2026-09-19): the three originally proposed ADRs have been written as the orchestrator ruled —
 `ADR-006` "integer NanoUsd fixed-point accounting", `ADR-007` "span-faithful forwarding (no
@@ -1064,7 +1202,9 @@ pub struct ResolvedConfig {
   | `fallback` entries are `provider/model` roster routes (aliases do not take part, spec §4.2) | an alias or an unknown route in the chain |
   | no duplicate provider `name`; no duplicate model `id` within a provider | an ambiguous roster |
   | the §12.5 parsing rules for duration / context / price / peak multiplier | the §12.5 error verbatim, with the field path |
-  | spec §4.6's `account` and `plan_policy` (ADR-014): `account` ∈ {`coding_plan`, `api`}; `primary` and `overflow` are distinct roster routes whose model id equals `family`; `primary`'s provider is `coding_plan` and `overflow`'s is `api`; the family's model is covered by the plan's `quota.models` when the primary provider declares a plan; at most one policy, one per family | an unknown `account` value; a `primary` on a metered provider; `primary == overflow`; a family that is not both routes' model id; a plan that does not cover the family — each named with the field path |
+  | spec §4.6's `account` and `plan_policy` (ADR-014, generalized by ADR-018): `account` ∈ {`coding_plan`, `api`}; `primary` and `overflow` are distinct roster routes whose model entries **both carry `family` as their family tag** (their provider-native ids may differ — that is the tag's job, §4.8); `primary`'s provider is `coding_plan` and `overflow`'s is `api`; the model id `primary` resolves to is covered by `quota.models` when the primary provider declares a plan; at most one policy, one per family | an unknown `account` value; a `primary` on a metered provider; `primary == overflow`; a tag no model entry of one of the two providers carries; two model entries of one provider entry sharing a tag; a plan that does not cover the resolved id — each named with the field path |
+  | `currency`, `region` and `models[].family` (spec §4.8): the enum values are exact (`USD`/`CNY`, `cn`/`intl`), a tag is a non-empty string unique within its provider entry, and **no field is ever converted from another** | `providers[i].currency: usd` (a lowercase ISO code), `providers[i].region: global`, an empty or duplicated `providers[i].models[j].family` — each named with the field path and the value found |
+  | the cap's denomination (spec §4.6 + §4.8): `overflow_monthly_cap_usd` written while `overflow`'s provider's `currency` is not `USD` | the key plus the currency found — the one comparison that could mix units is refused before the process serves (CONF-49) |
   | no unknown key — **including a `state:` section** | the message states that the state path is fixed in v0.1 (spec §4.5) and that a `state:` section is an additive future key |
   | `server.auth_token_env` (spec §4.7): when the key is written, the environment variable it names must be **present and non-empty** | `router: config file <path>: server.auth_token_env names ROUTER_TOKEN, which is unset: refusing to start (a token-less start would serve unauthenticated)` — exit code **4**, the code the other unsatisfiable-environment prerequisites use (store, trace dir), not 2 (a config that cannot be parsed) |
 
@@ -1082,7 +1222,10 @@ pub struct ResolvedConfig {
   no requests, so a missing token variable leaves it working (the refusal belongs to the serving
   process, which is the only thing the token protects).
 - **`/health` reports what was actually loaded** (the config-driven contract): the plugin set
-  (with `disabled` entries shown as disabled), each provider's key presence, **whether inbound
+  (with `disabled` entries shown as disabled), each provider's key presence **and the entry's `region` and
+  `currency`** (`providers[].region` / `.currency`, spec §4.8 — the two facts an operator needs when one
+  vendor appears in the roster twice; they are reads of the loaded config, never inferences, and the region
+  is displayed rather than used), **whether inbound
   auth is required and which variable holds the token (`auth: {required, env?}`, spec §9.1 —
   the name only, never the value)**, the resolved `trace_dir` and `state_db`, and the store's
   status. Before the store landing, the store's status is reported honestly as `pending` (the path is
@@ -1330,12 +1473,21 @@ follows ADR-009 item 4's single question (*may this fact be recomputed?*).
 | 7 | classifier (a failure, `router-providers` → `router-core`) | `error.classified` | after `classify_upstream_error` returns, before the action's effect (ADR-011 item 8) | NORMAL | status, `reason`, `action`, matched table entry, `retry_after_s?`, `demotion?` |
 | 8 | failover: a route switch | `failover.triggered` | after the classification chose `FallbackProvider`, before the next `upstream.submitted` | FULL | reason, from → to, `reprefill_tokens` (inferred), `switch_cost_nano` (inferred) |
 | 9 | usage normalization | — | **no event**: usage lands in the trace; an upstream that reported none sets `usage_missing` and nothing is charged | — | — |
-| 10 | cost | `cost.computed` | once usage is known, **after** the trace line was appended (note R2) | FULL | the five-tier cost, `trace_ref` |
+| 10 | cost | `cost.computed` | once usage is known, **after** the trace line was appended (note R2) | FULL | the five-tier cost **and the `currency` its amounts are in** (§4.8), `trace_ref` |
 | 11 | quota | `quota.charged` | with `cost.computed`, before a buffered response is released | FULL | provider, plan, tokens charged, remaining, `trace_ref` |
 | 12 | loader (not a request step) | `plugin.loaded` / `plugin.unloaded` | at each load/unload edge | NORMAL | plugin id, kind, tier, effective config digest |
 | 13 | loader (not a request step) | `config.applied` | at startup after validation, and on every accepted config diff | FULL | config digest, changed keys (keyed diff, ADR-002) |
 | 14 | startup (not a request step) | `restart.marked` | at process start, before the store serves reads | FULL | the marker `unknown_outcome` accounting reconciles against (ADR-010 item 4: intents left unpaired by the previous process are found by pairing, never by fabricated closure events) |
-| 15 | the family's account state (ADR-014; written from the guard at a session boundary, or right after the classification that declares the primary exhausted) | `plan.switched` | after the evidence that moved the family (`error.classified` at row 7, or a successful probe) and **before** the next `upstream.submitted` — the position rows 5 and 8 already occupy (note R5) | **FULL** | `family`, `from_account` / `to_account`, `from_route` / `to_route`, `reason` (`primary_exhausted` / `primary_recovered`), `probe`, `reprefill_tokens` + `switch_cost_nano` (both inferred), the `session` that carried the evidence (null when it was a sessionless request) |
+| 15 | the family's account state (ADR-014; written from the guard at a session boundary, or right after the classification that declares the primary exhausted) | `plan.switched` | after the evidence that moved the family (`error.classified` at row 7, or a successful probe) and **before** the next `upstream.submitted` — the position rows 5 and 8 already occupy (note R5) | **FULL** | `family`, `from_account` / `to_account`, `from_route` / `to_route`, `reason` (`primary_exhausted` / `primary_recovered`), `probe`, `reprefill_tokens` + `switch_cost_nano` (both inferred) **and the `currency` that denominates `switch_cost_nano`** (§4.8), the `session` that carried the evidence (null when it was a sessionless request) |
+
+**Both money-bearing rows carry their unit** (§4.8). A `cost.computed` payload is a set of `*_nano` integers and a
+`plan.switched` payload is a `switch_cost_nano`; a row that states an amount without its currency is the
+ambiguity ADR-018 removes from the trace, one store away from it — and the store is read on its own (the
+`OverflowSpend` projection sums `total_nano` over one route, §12.10.8). So both payloads gain a
+`"currency"` field (`"USD"` / `"CNY"`), and `EVENT_SCHEMA_VERSION` (`router-core/src/store.rs`) moves 1 → 2
+with the trace version of §12.6: a reader that knows only v1 can refuse a v2 row rather than add a CNY row
+into a USD sum. The rest of the event vocabulary is untouched, and the lossy kind parsing of ADR-009 item 7
+is unaffected (the kind is unchanged; only the payload is wider).
 
 **The invariant to review at every state-changing call site** (ADR-010's consequence): *does
 the intent row precede the effect?* Row 5 is the one that carries money — it commits before
@@ -1560,7 +1712,8 @@ pub enum PlanMove { Pass(RouteSpec), Downgrade(RouteSpec), Reject { code: ErrorC
 impl PlanFirstRule {
     pub fn decide(&self, route: RouteSpec, session: Option<&SessionId>, turn_index: u32,
                   st: &PlanStateRow, now: Timestamp, primary_allowed: bool,
-                  overflow_spend: NanoUsd) -> PlanMove;
+                  overflow_spend: Nano) -> PlanMove;   // USD: §4.6's load rule guarantees a capped overflow
+                                                       // route is USD-priced, so both sides are USD (§12.10.8)
 }
 ```
 
@@ -1601,7 +1754,12 @@ CREATE TABLE plan_state (
   plan's own window boundary.
 - **The overflow cap's spend is not stored here.** It is the month's sum of measured `cost.total` over the
   family's overflow requests (`cost.computed` rows — a query over `events`), and the cap itself is config; no
-  new counter exists to disagree with the log.
+  new counter exists to disagree with the log. **That sum is single-currency by construction** (§4.8): it is
+  scoped to one route (`OverflowSpend.family_route`), so every row it adds was priced by that one entry's
+  table; and where a cap is actually set, spec §4.6's load rule already guarantees that entry is
+  USD-denominated, so the comparison is USD against USD with no conversion in it. A row whose payload carries
+  no currency is a v1 row and is USD (§12.10.5's note) — which is the same rule the trace's `cost.currency`
+  follows, so the projection does not need a second one.
 
 **Trace and events.** `result.plan_switch` (§12.6; spec §6) is the per-request record and `plan.switched`
 (§12.10.5 row 15, note R5) is the state transition. Neither is derived from the other: a request can be
@@ -1810,7 +1968,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → autowork channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
 | P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving | ADR-003; ADR-008; spec §4.4, §6, §7; §6, §12.3 | **none** (`router-plugins/src/lib.rs:1-4` is a stub; `transforms: Vec::new()` at `accounting.rs:483`, `auth.rs:170`) | **contract-only** |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
-| P8 | `accounting` | integer NanoUsd on the five tiers (+ peak); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; spec §7, §4.0; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
+| P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
 | P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; §4, §12.2 | **none** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` are stubs; `inject`/`isolate`/`intercept` parse at `config.rs:816-840`, validate at `config.rs:1232-1261`, are consumed by nobody) | **contract-only** |
 
 ### 13.2 Module → primitive map

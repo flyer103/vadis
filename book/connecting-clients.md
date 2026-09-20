@@ -127,7 +127,7 @@ curl -s http://127.0.0.1:8790/v1/chat/completions \
 For codex and hermes the token goes in the same variable their `env_key` names (the snippet above
 uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer <token>`. Note the endpoint in
 these examples is the chat one: pair it with a chat-native route from your roster (the example
-file's `zai` or `moonshot` entries), or use `/v1/responses` for a responses-native route like
+file's `zai` or `kimi` entries), or use `/v1/responses` for a responses-native route like
 `coding-fast` — v0.1 refuses the cross-protocol cell with `501 not_implemented` (see
 [Protocols](protocols.md)).
 

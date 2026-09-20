@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::cost::{NanoUsd, Price};
+use crate::cost::{Nano, Price};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BreakevenParams {
@@ -43,13 +43,13 @@ pub enum StayReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwitchVerdict {
     Switch {
-        gain: NanoUsd,
-        cost: NanoUsd,
+        gain: Nano,
+        cost: Nano,
     },
     Stay {
         reason: StayReason,
-        gain: NanoUsd,
-        cost: NanoUsd,
+        gain: Nano,
+        cost: Nano,
     },
 }
 
@@ -71,22 +71,22 @@ pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict 
     if !p.enabled {
         return SwitchVerdict::Stay {
             reason: StayReason::Disabled,
-            gain: NanoUsd::ZERO,
-            cost: NanoUsd::ZERO,
+            gain: Nano::ZERO,
+            cost: Nano::ZERO,
         };
     }
-    let cost = NanoUsd(tokens_nano(c.prefix_tokens as u128, c.p_new_miss));
+    let cost = Nano(tokens_nano(c.prefix_tokens as u128, c.p_new_miss));
     if c.remaining_turns == 0 {
         return SwitchVerdict::Stay {
             reason: StayReason::RemainingTurnsZero,
-            gain: NanoUsd::ZERO,
+            gain: Nano::ZERO,
             cost,
         };
     }
     if c.remaining_turns < p.min_remaining_turns {
         return SwitchVerdict::Stay {
             reason: StayReason::BelowMinRemainingTurns,
-            gain: NanoUsd::ZERO,
+            gain: Nano::ZERO,
             cost,
         };
     }
@@ -94,11 +94,11 @@ pub fn decide_switch(p: &BreakevenParams, c: &SwitchCandidate) -> SwitchVerdict 
     if diff <= 0 {
         return SwitchVerdict::Stay {
             reason: StayReason::NotPaying,
-            gain: NanoUsd::ZERO,
+            gain: Nano::ZERO,
             cost,
         };
     }
-    let gain = NanoUsd(tokens_nano(
+    let gain = Nano(tokens_nano(
         c.remaining_turns as u128 * c.tokens_per_turn as u128 * diff as u128,
         Price(1),
     ));
@@ -145,8 +145,8 @@ mod tests {
             decide_switch(&p, &candidate()),
             SwitchVerdict::Stay {
                 reason: StayReason::Disabled,
-                gain: NanoUsd::ZERO,
-                cost: NanoUsd::ZERO
+                gain: Nano::ZERO,
+                cost: Nano::ZERO
             }
         );
     }
@@ -159,8 +159,8 @@ mod tests {
             decide_switch(&params(), &c),
             SwitchVerdict::Stay {
                 reason: StayReason::RemainingTurnsZero,
-                gain: NanoUsd::ZERO,
-                cost: NanoUsd(1_000_000)
+                gain: Nano::ZERO,
+                cost: Nano(1_000_000)
             }
         );
     }
@@ -173,8 +173,8 @@ mod tests {
             decide_switch(&params(), &c),
             SwitchVerdict::Stay {
                 reason: StayReason::BelowMinRemainingTurns,
-                gain: NanoUsd::ZERO,
-                cost: NanoUsd(1_000_000)
+                gain: Nano::ZERO,
+                cost: Nano(1_000_000)
             }
         );
     }
@@ -186,8 +186,8 @@ mod tests {
         assert_eq!(
             decide_switch(&params(), &c),
             SwitchVerdict::Switch {
-                gain: NanoUsd(1_200_000),
-                cost: NanoUsd::ZERO
+                gain: Nano(1_200_000),
+                cost: Nano::ZERO
             }
         );
     }
@@ -200,8 +200,8 @@ mod tests {
             decide_switch(&params(), &candidate()),
             SwitchVerdict::Stay {
                 reason: StayReason::NotPaying,
-                gain: NanoUsd(1_200_000),
-                cost: NanoUsd(1_000_000)
+                gain: Nano(1_200_000),
+                cost: Nano(1_000_000)
             }
         );
     }
@@ -213,8 +213,8 @@ mod tests {
         assert_eq!(
             decide_switch(&params(), &c),
             SwitchVerdict::Switch {
-                gain: NanoUsd(1_200_000),
-                cost: NanoUsd(999_900)
+                gain: Nano(1_200_000),
+                cost: Nano(999_900)
             }
         );
     }
@@ -227,8 +227,8 @@ mod tests {
             decide_switch(&params(), &c),
             SwitchVerdict::Stay {
                 reason: StayReason::NotPaying,
-                gain: NanoUsd::ZERO,
-                cost: NanoUsd(1_000_000)
+                gain: Nano::ZERO,
+                cost: Nano(1_000_000)
             }
         );
         c.p_stay_hit = Price(1);
@@ -236,8 +236,8 @@ mod tests {
             decide_switch(&params(), &c),
             SwitchVerdict::Stay {
                 reason: StayReason::NotPaying,
-                gain: NanoUsd::ZERO,
-                cost: NanoUsd(1_000_000)
+                gain: Nano::ZERO,
+                cost: Nano(1_000_000)
             }
         );
     }

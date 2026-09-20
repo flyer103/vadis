@@ -1,7 +1,7 @@
 //! Domain model and pure-function core (DESIGN §2/§12.1).
 //!
 //! Hard constraints: no dependency on any HTTP/protocol crate; money is
-//! integer NanoUsd end to end (the ADR-006 ruling — no floats appear on the
+//! integer Nano end to end (the ADR-006 ruling — no floats appear on the
 //! decision path or in traces).
 
 #![forbid(unsafe_code)]
@@ -27,7 +27,7 @@ pub use config::{
     PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, RouterConfig, TokensVal, KNOWN_BUILTIN_KINDS,
     KNOWN_SERVICE_SLOTS,
 };
-pub use cost::{cost, CostBreakdown, NanoUsd, Price, PriceTable, Usage};
+pub use cost::{cost, CostBreakdown, Currency, Money, Nano, Price, PriceTable, Usage};
 pub use error::ErrorCode;
 pub use error_class::{
     classify_upstream_error, Classification, Demotion, ErrorClass, ErrorEvidence, TransportCause,

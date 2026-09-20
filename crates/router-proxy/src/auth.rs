@@ -10,7 +10,7 @@
 //! response, the startup resolution) is router-cli's.
 
 use router_core::config::WireApi;
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::error::ErrorCode;
 use router_core::trace::{
     CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec, StateRec,
@@ -171,12 +171,16 @@ pub fn refused_record(
         usage: router_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {
-            input_miss: NanoUsd(0),
-            input_hit: NanoUsd(0),
-            cache_write: NanoUsd(0),
-            output: NanoUsd(0),
+            input_miss: Nano(0),
+            input_hit: Nano(0),
+            cache_write: Nano(0),
+            output: Nano(0),
             peak_applied_pct: 100,
-            total: NanoUsd(0),
+            total: Nano(0),
+            // §4.7's guard refuses before any route resolves, so no table
+            // priced this record: all-zero amounts under the USD default
+            // (spec §4.8 — the choice cannot mislead when nothing is priced).
+            currency: router_core::Currency::Usd,
             quota_after: None,
         },
         result: ResultRec {
@@ -342,7 +346,8 @@ mod tests {
         let v = g.admits(&hdrs(&[("authorization", "Bearer nope")]));
         let rec = refused_record("req-1", WireApi::Chat, &v, 1_789_256_462, 3);
         let j = serde_json::to_value(&rec).unwrap();
-        assert_eq!(j["schema_version"], 1);
+        assert_eq!(j["schema_version"], 2); // v2: cost.currency (ADR-018)
+        assert_eq!(j["cost"]["currency"], "USD");
         assert_eq!(j["ts"], "2026-09-12T23:41:02.000Z");
         assert_eq!(j["identity"]["request_id"], "req-1");
         assert_eq!(j["identity"]["event_id"], 0);

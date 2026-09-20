@@ -14,14 +14,28 @@ pub struct AppState {
     /// `<config dir>/state/router.db` (spec §4.5; fixed in v0.1).
     pub state_db: String,
     /// For each provider: the `api_key_env` name and whether the env var
-    /// was present at startup. Key values never travel here (§12.10.2).
-    pub provider_keys: Vec<(String, String, bool)>,
+    /// was present at startup, plus the entry's declared `region` and
+    /// `currency` (spec §4.8/§9.1 — reads of the loaded config, never
+    /// inferences). Key values never travel here (§12.10.2).
+    pub provider_keys: Vec<ProviderKeyFacts>,
     /// The store `serve` opened: spec §9.1's `plan` section reads the
     /// `plan_state` projection (and the two inputs of the probe gate that
     /// are projections) through it — read-only queries on the writer's
     /// own connection. `None` in assemblies without a store; the section
     /// then reports a family that never switched.
     pub store: Option<std::sync::Arc<dyn Store>>,
+}
+
+/// One provider entry's operator-facing facts (spec §9.1's provider list,
+/// §4.8's two new members): name, key variable, key presence, and the
+/// declared region and currency — all reads of the loaded config.
+#[derive(Clone)]
+pub struct ProviderKeyFacts {
+    pub name: String,
+    pub api_key_env: String,
+    pub present: bool,
+    pub region: router_core::config::Region,
+    pub currency: router_core::Currency,
 }
 
 /// `/health` reports what was actually loaded (DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
@@ -44,12 +58,18 @@ pub fn health_json(state: &AppState) -> Value {
     let providers: Vec<Value> = state
         .provider_keys
         .iter()
-        .map(|(name, env, present)| {
+        .map(|f| {
             json!({
-                "name": name,
-                "api_key_env": env,
-                "api_key_present": present,
-                "available": present,
+                "name": f.name,
+                "api_key_env": f.api_key_env,
+                "api_key_present": f.present,
+                "available": f.present,
+                // spec §4.8: the two facts an operator needs when one
+                // vendor appears in the roster twice — declared, read
+                // from the loaded config, never inferred from the host
+                // or from each other.
+                "region": f.region.as_str(),
+                "currency": f.currency.as_code(),
             })
         })
         .collect();

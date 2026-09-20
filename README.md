@@ -82,7 +82,7 @@ response.
 ### 4. First request with curl
 
 The example roster's native protocols differ per provider: the `deepseek` entry (which the
-`coding-fast` alias points at) speaks `responses`; `zai` and `moonshot` speak `chat`. v0.1
+`coding-fast` alias points at) speaks `responses`; `zai` and `kimi` speak `chat`. v0.1
 serves a request **natively only** when the inbound protocol equals the provider's `wire_api`;
 anything else would need cross-protocol translation and answers `501 not_implemented`. So the
 curl example against the stock roster uses the responses endpoint:

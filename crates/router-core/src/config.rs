@@ -10,7 +10,7 @@
 //!
 //! Money rule (ADR-006): floats exist only at the load boundary, inside the
 //! single conversion functions below, each gated on the result being exactly
-//! representable; everything downstream is integer `Price`/`NanoUsd`.
+//! representable; everything downstream is integer `Price`/`Nano`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 
-use crate::cost::{NanoUsd, Price, PriceTable};
+use crate::cost::{Currency, Nano, Price, PriceTable};
 use crate::peak::{PeakTable, PeakWindow, Tz, Weekdays};
 
 /// A load-time rejection with the exact key it belongs to (§12.10.2: each
@@ -421,7 +421,7 @@ impl<'de> Deserialize<'de> for MultiplierVal {
 }
 
 /// A USD amount as written (`overflow_monthly_cap_usd`), converted to integer
-/// [`NanoUsd`] only through [`CapUsdVal::to_nano`] — the same single load-time
+/// [`Nano`] only through [`CapUsdVal::to_nano`] — the same single load-time
 /// rounding `price` uses (ADR-006: integers everywhere downstream of this
 /// boundary).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -432,14 +432,14 @@ impl CapUsdVal {
     /// rather than clamped: an unreadable guardrail must not silently become
     /// "no guardrail" or "refuse everything" (spec §4.6, DESIGN §12.5).
     #[allow(clippy::float_arithmetic)]
-    pub fn to_nano(self) -> Result<NanoUsd, String> {
+    pub fn to_nano(self) -> Result<Nano, String> {
         let v = self.0;
         if !v.is_finite() || v < 0.0 {
             return Err(format!(
                 "the cap must be a finite USD amount >= 0 (got {v}); an absent key means no cap"
             ));
         }
-        Ok(NanoUsd((v * 1e9).round() as u64))
+        Ok(Nano((v * 1e9).round() as u64))
     }
 }
 
@@ -645,11 +645,69 @@ pub struct PriceCfg {
     pub peak: PeakCfg,
 }
 
+/// spec §4.8 (ADR-018): the regional deployment a provider entry's
+/// endpoint and key belong to. `cn` | `intl`, **absent ⇒ `intl`**. It is
+/// declared, displayed and inert: it routes nothing, it chooses no
+/// currency (a CN-region entry billed in USD is legal), and the router
+/// does not check it against `base_url`'s host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Region {
+    Cn,
+    #[default]
+    Intl,
+}
+
+impl Region {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cn => "cn",
+            Self::Intl => "intl",
+        }
+    }
+}
+
+impl fmt::Display for Region {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// `models[i].family` (spec §4.8): the family tag pairing routes whose
+/// provider-native ids differ. **Absent ⇒ the model's own `id`** (which
+/// is ADR-014's rule, so every pre-§4.8 config keeps its meaning);
+/// non-empty when written. The tag is a name, not an address: nothing
+/// resolves a client's string to it, and `plan_policy.family` is the
+/// only consumer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FamilyTag(pub String);
+
+impl FamilyTag {
+    /// The tag a model entry carries: its own written tag, or its id when
+    /// none was written (§4.8's default — the one place the fallback
+    /// lives).
+    pub fn or_default(id: &str) -> Self {
+        Self(id.to_string())
+    }
+}
+
+impl fmt::Display for FamilyTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCfg {
     pub id: String,
     pub context: ContextVal,
+    /// spec §4.8: optional non-empty string; absent ⇒ the model's own
+    /// `id`. At most one model entry per provider entry may carry a
+    /// given tag (a duplicate is a load error naming
+    /// `providers[i].models[j].family`).
+    #[serde(default)]
+    pub family: Option<String>,
     pub price: PriceCfg,
     pub source: String,
 }
@@ -740,6 +798,15 @@ impl<'de> Deserialize<'de> for AccountKind {
 #[serde(deny_unknown_fields)]
 pub struct ProviderCfg {
     pub name: String,
+    /// spec §4.8; absent ⇒ [`Region::Intl`]. Display/audit only — it
+    /// routes nothing and it does not choose a currency.
+    #[serde(default)]
+    pub region: Region,
+    /// spec §4.8; absent ⇒ [`Currency::Usd`]. The unit of every `price`
+    /// tier in this entry's model table, and of nothing else. Never
+    /// derived from `region`; never converted.
+    #[serde(default)]
+    pub currency: Currency,
     pub base_url: String,
     pub api_key_env: String,
     pub wire_api: WireApi,
@@ -932,8 +999,9 @@ impl PriceCfg {
     /// Convert the four tiers + peak into the integer cost-engine table.
     /// `cache_write: 0` is legal (spec §4.0: the upstream charges no separate
     /// cache-write price); a zero in any other tier is refused rather than
-    /// silently serving a free model.
-    pub fn to_price_table(&self) -> Result<PriceTable, String> {
+    /// silently serving a free model. `currency` is the provider entry's
+    /// (§4.8) — carried, never converted.
+    pub fn to_price_table(&self, currency: Currency) -> Result<PriceTable, String> {
         const TIERS: [(&str, f64, bool); 4] = [
             ("input_miss", 0.0, false),
             ("input_hit", 0.0, false),
@@ -964,6 +1032,7 @@ impl PriceCfg {
             vals[i] = nano;
         }
         Ok(PriceTable {
+            currency,
             input_miss: Price(vals[0]),
             input_hit: Price(vals[1]),
             cache_write: Price(vals[2]),
@@ -1011,12 +1080,21 @@ impl RouterConfig {
         self.providers.iter().find(|p| p.name == name)
     }
 
+    /// The family tag a route's model entry carries (§4.8): the written
+    /// tag, or the model's own id when none was written — the one place
+    /// the default lives. `None` when the route is not on the roster.
+    fn family_tag_of(&self, route: &RouteSpec) -> Option<String> {
+        let provider = self.provider(&route.provider)?;
+        let model = provider.models.iter().find(|m| m.id == route.model)?;
+        Some(model.family.clone().unwrap_or_else(|| model.id.clone()))
+    }
+
     /// The spec §4.6 checks on `plan_policy` (DESIGN §12.10.2's row). They are
     /// routing rules, not syntax, so serde cannot police them — and the order
     /// below is the order a reader gets their message in: the routes exist →
-    /// they differ → each sits on the right kind of account → the family is both
-    /// routes' model id → the primary's declared plan covers the family → the
-    /// cap is a readable amount.
+    /// they differ → each sits on the right kind of account → the family is
+    /// a tag both routes' model entries carry → the primary's declared plan
+    /// covers the family → the cap is a readable amount in a comparable unit.
     fn validate_plan_policy(&self) -> Result<(), ConfigError> {
         let Some(policy) = &self.plan_policy else {
             return Ok(());
@@ -1073,29 +1151,36 @@ impl RouterConfig {
             ));
         }
 
-        for (key, model) in [
-            ("primary", &policy.primary.model),
-            ("overflow", &policy.overflow.model),
+        for (key, tag) in [
+            ("primary", self.family_tag_of(&policy.primary)),
+            ("overflow", self.family_tag_of(&policy.overflow)),
         ] {
-            if model != &policy.family {
-                return Err(ConfigError::new(
-                    "plan_policy.family",
-                    format!(
-                        "family '{}' must equal the model id of plan_policy.{key} ('{model}'): \
-                         both routes serve the family (spec §4.6)",
-                        policy.family
-                    ),
-                ));
+            match tag {
+                Some(tag) if tag == policy.family => {}
+                Some(tag) => {
+                    return Err(ConfigError::new(
+                        "plan_policy.family",
+                        format!(
+                            "family '{}' must equal the family tag plan_policy.{key}'s model entry \
+                             carries ('{tag}'): both routes serve the family (spec §4.6/§4.8)",
+                            policy.family
+                        ),
+                    ));
+                }
+                None => unreachable!("resolve() already established the route is on the roster"),
             }
         }
 
-        // A provider that declares a plan must cover the family (spec §4.6). A
-        // provider that declares none is legal: GAP-Q1 — a plan whose allowance
-        // is not published is still a plan.
+        // A provider that declares a plan must cover the family (spec §4.6,
+        // restated by §4.8 in terms of ids): the check names **the model id
+        // the primary route resolves to** — `quota.models` names ids, and the
+        // two routes' ids may differ. A provider that declares no plan is
+        // legal: GAP-Q1 — a plan whose allowance is not published is still
+        // a plan.
         let plans = primary.quota.as_deref().unwrap_or(&[]);
         let covered = plans
             .iter()
-            .any(|q| q.models.iter().any(|m| m == &policy.family));
+            .any(|q| q.models.iter().any(|m| m == &policy.primary.model));
         if !plans.is_empty() && !covered {
             let declared: Vec<&str> = plans
                 .iter()
@@ -1104,17 +1189,34 @@ impl RouterConfig {
             return Err(ConfigError::new(
                 "plan_policy.family",
                 format!(
-                    "family '{}' is not covered by provider '{}''s quota.models {declared:?}: a \
-                     provider that declares a plan must include the family's model (spec §4.6)",
-                    policy.family, primary.name
+                    "family '{}' is not covered by provider '{}'s quota.models {declared:?}: a \
+                     provider that declares a plan must include the model id the primary route \
+                     resolves to ('{}') (spec §4.6/§4.8)",
+                    policy.family, primary.name, policy.primary.model
                 ),
             ));
         }
 
+        // The one scalar comparison that could mix units (spec §4.6/§4.8):
+        // `overflow_monthly_cap_usd` is USD by name, so writing it over an
+        // overflow route of another currency is refused before the process
+        // serves — a load error, never a silent cross-currency compare.
         if let Some(cap) = policy.overflow_monthly_cap_usd {
             cap.to_nano().map_err(|reason| {
                 ConfigError::new("plan_policy.overflow_monthly_cap_usd", reason)
             })?;
+            if overflow.currency != Currency::Usd {
+                return Err(ConfigError::new(
+                    "plan_policy.overflow_monthly_cap_usd",
+                    format!(
+                        "the cap is denominated in USD by its own name, but the overflow route \
+                         '{}''s provider '{}' is currency {}: comparing a USD ceiling with a \
+                         spend in another currency is the silent mixing spec 4.8 forbids — \
+                         remove the cap or point the overflow at a USD entry (spec 4.6/4.8)",
+                        policy.overflow, overflow.name, overflow.currency
+                    ),
+                ));
+            }
         }
 
         Ok(())
@@ -1175,9 +1277,42 @@ impl RouterConfig {
                         ),
                     ));
                 }
+                // spec §4.8: a tag is a non-empty string unique within its
+                // provider entry (it must resolve to at most one model —
+                // `plan_policy.family` matches it). Uniqueness is checked
+                // on the EFFECTIVE tag — written, or defaulted to the
+                // entry's own id — in both orders: a later written tag
+                // against an earlier entry, and a later DEFAULTED tag
+                // against an earlier written one (the order that only
+                // appears once family tags exist at all).
                 let mpath = format!("{ppath}.models[{mi}] ({})", m.id);
+                if let Some(tag) = &m.family {
+                    if tag.is_empty() {
+                        return Err(ConfigError::new(
+                            format!("{mpath}.family"),
+                            "family must be a non-empty string when written; an absent key \
+                             means the model's own id (spec 4.8)"
+                                .to_string(),
+                        ));
+                    }
+                }
+                let effective = m.family.as_deref().unwrap_or(&m.id);
+                let dup_written_or_default = p.models[..mi]
+                    .iter()
+                    .any(|prev| prev.family.as_deref().unwrap_or(&prev.id) == effective);
+                if dup_written_or_default {
+                    return Err(ConfigError::new(
+                        format!("{mpath}.family"),
+                        format!(
+                            "family tag '{effective}' is already carried by another model entry of \
+                             provider '{}': a tag resolves to at most one model per provider \
+                             (spec 4.8)",
+                            p.name
+                        ),
+                    ));
+                }
                 m.price
-                    .to_price_table()
+                    .to_price_table(p.currency)
                     .map_err(|reason| ConfigError::new(format!("{mpath}.price"), reason))?;
             }
 
@@ -1371,7 +1506,10 @@ mod tests {
     #[test]
     fn price_conversion_is_exact_at_load_time() {
         let cfg = happy();
-        let table = cfg.providers[0].models[0].price.to_price_table().unwrap();
+        let table = cfg.providers[0].models[0]
+            .price
+            .to_price_table(cfg.providers[0].currency)
+            .unwrap();
         assert_eq!(table.input_miss, Price(660_000));
         assert_eq!(table.input_hit, Price(22_000));
         assert_eq!(table.cache_write, Price(0)); // legal: no separate cache-write billing
@@ -1678,6 +1816,297 @@ mod tests {
         cfg
     }
 
+    // -------------------------------------------------------------
+    // spec §4.8 (ADR-018): region / currency / family — the parsing
+    // rules and the load-time checks, per surface and per default.
+    // -------------------------------------------------------------
+
+    /// Replace only the `n`-th occurrence of `from` (PLANNED has two
+    /// providers serving the same model ids, so a global replace would
+    /// patch both entries at once).
+    fn replace_nth(s: &str, from: &str, to: &str, n: usize) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        let mut seen = 0;
+        while let Some(pos) = rest.find(from) {
+            out.push_str(&rest[..pos]);
+            out.push_str(if seen == n { to } else { from });
+            rest = &rest[pos + from.len()..];
+            seen += 1;
+        }
+        out.push_str(rest);
+        assert!(
+            seen > n,
+            "occurrence {n} of {from:?} not found ({seen} seen)"
+        );
+        out
+    }
+
+    /// `"id": "glm-5.3", "context"` — occurs once per provider (0 =
+    /// zai-plan, 1 = zai), the splice anchor for the model-level
+    /// `family` patches.
+    const GLM: &str = "\"id\": \"glm-5.3\", \"context\"";
+    const FLASH: &str = "\"id\": \"glm-5.3-flash\", \"context\"";
+
+    /// PLANNED with `patch` spliced into the zai provider ENTRY (the
+    /// `"name": "zai",` line — `currency`/`region` are provider keys,
+    /// §4.8), exercising the real deserializer + validate(). The anchor
+    /// cannot match `"name": "zai-plan",` (the next char differs).
+    fn zai_entry_patched(patch: &str) -> String {
+        let anchor = "\"name\": \"zai\",";
+        assert_eq!(
+            PLANNED.matches(anchor).count(),
+            1,
+            "the zai anchor is unique"
+        );
+        PLANNED.replacen(anchor, &format!("{anchor} {patch},"), 1)
+    }
+
+    /// Drop the plan_policy line (the `both_keys_stay_optional` filter),
+    /// so a provider-level check is asserted on its own message.
+    fn without_policy(s: &str) -> String {
+        s.lines()
+            .filter(|l| !l.contains("\"plan_policy\""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn currency_absent_means_usd_and_written_cny_is_per_entry() {
+        // Absent ⇒ USD (§4.8): PLANNED writes no `currency` key anywhere.
+        let cfg = planned();
+        assert!(cfg.providers.iter().all(|p| p.currency == Currency::Usd));
+
+        let cfg: RouterConfig =
+            serde_json::from_str(&zai_entry_patched("\"currency\": \"CNY\"")).expect("parses");
+        cfg.validate().expect("a CNY entry validates");
+        assert_eq!(cfg.providers[1].currency, Currency::Cny);
+        assert_eq!(
+            cfg.providers[0].currency,
+            Currency::Usd,
+            "per-entry, not global"
+        );
+        let table = cfg.providers[1].models[0]
+            .price
+            .to_price_table(cfg.providers[1].currency)
+            .unwrap();
+        assert_eq!(table.currency, Currency::Cny, "the table carries its unit");
+    }
+
+    #[test]
+    fn currency_is_exact_and_unknown_values_are_load_errors() {
+        // Not a runtime fallback to USD: the load itself refuses. The
+        // ISO-4217 code is exact — case included (§4.8).
+        for bad in ["usd", "cny", "EUR", "Usd", "", "RMB"] {
+            let err = deser_err(&zai_entry_patched(&format!("\"currency\": \"{bad}\"")));
+            assert!(
+                err.contains("unknown currency"),
+                "value {bad:?} must be refused with 'unknown currency', got: {err}"
+            );
+        }
+        // A non-string value is refused, not coerced.
+        assert!(
+            serde_json::from_str::<RouterConfig>(&zai_entry_patched("\"currency\": 4")).is_err()
+        );
+        // The message names the expected spellings (the operator's fix).
+        assert!(
+            deser_err(&zai_entry_patched("\"currency\": \"eur\"")).contains("USD or CNY"),
+            "the refusal names the legal spellings"
+        );
+    }
+
+    #[test]
+    fn region_absent_means_intl_and_cn_does_not_derive_currency() {
+        let cfg = planned();
+        assert!(cfg.providers.iter().all(|p| p.region == Region::Intl));
+
+        // cn + USD (the currency default) is legal: neither field
+        // implies the other (§4.8 / ADR-018 §1). Constructs it and
+        // proves it loads.
+        let cfg: RouterConfig =
+            serde_json::from_str(&zai_entry_patched("\"region\": \"cn\"")).expect("parses");
+        cfg.validate().expect("cn region + USD billing is legal");
+        assert_eq!(cfg.providers[1].region, Region::Cn);
+        assert_eq!(cfg.providers[1].currency, Currency::Usd);
+    }
+
+    #[test]
+    fn region_is_exact_and_unknown_values_are_load_errors() {
+        for bad in ["CN", "Intl", "eu", "usa"] {
+            let err = deser_err(&zai_entry_patched(&format!("\"region\": \"{bad}\"")));
+            assert!(
+                err.contains("unknown variant") && err.contains(bad),
+                "region {bad:?} must be refused at load, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn family_absent_means_the_models_own_id() {
+        // §4.8's default is ADR-014's rule verbatim: PLANNED writes no
+        // family key, and both routes' tags equal their model ids.
+        let cfg = planned();
+        let policy = cfg.plan_policy.as_ref().unwrap();
+        assert_eq!(cfg.family_tag_of(&policy.primary).unwrap(), "glm-5.3");
+        assert_eq!(cfg.family_tag_of(&policy.overflow).unwrap(), "glm-5.3");
+    }
+
+    #[test]
+    fn family_tag_pairs_two_routes_and_the_policy_matches_the_tag() {
+        // ADR-018 §4's motivating shape, shrunk: both entries carry tag
+        // "fam" while their ids stay the route addresses, and the policy
+        // names the tag. The quota coverage check is restated in terms
+        // of the id the primary resolves to (zai-plan's quota.models
+        // still names "glm-5.3" — and the config validates).
+        let tagged = "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"";
+        let s = replace_nth(&replace_nth(PLANNED, GLM, tagged, 0), GLM, tagged, 0);
+        let s = s.replace("\"family\": \"glm-5.3\"", "\"family\": \"fam\"");
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("tagged pair parses");
+        cfg.validate()
+            .expect("the policy matches the tag both entries carry");
+        let policy = cfg.plan_policy.as_ref().unwrap();
+        assert_eq!(cfg.family_tag_of(&policy.primary).unwrap(), "fam");
+        assert_eq!(cfg.family_tag_of(&policy.overflow).unwrap(), "fam");
+    }
+
+    #[test]
+    fn family_tags_may_not_collide_within_a_provider() {
+        // Two WRITTEN tags colliding inside zai-plan (the order
+        // 48d4341 already guarded): refused naming the key.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let s = replace_nth(
+            &s,
+            FLASH,
+            "\"id\": \"glm-5.3-flash\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(err.contains("family tag 'fam'"), "got: {err}");
+        assert!(
+            err.contains("models[1] (glm-5.3-flash).family"),
+            "the error names the second entry's key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_written_tag_may_not_shadow_a_later_entrys_defaulted_tag() {
+        // Entry 0 writes family "glm-5.3-flash"; entry 1 writes nothing,
+        // so its tag defaults to its id — the same string. The tag would
+        // resolve to TWO models: a load error (§4.8). Found unguarded
+        // while auditing 48d4341 (the check only ran for a written tag).
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"glm-5.3-flash\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family tag 'glm-5.3-flash' is already carried"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_family_tag_is_a_load_error() {
+        // §4.8: the key is "optional non-empty string" — an empty tag
+        // is neither the default (an absent key is) nor a usable name,
+        // and must be refused at load naming the entry's key.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family must be a non-empty string"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("models[0] (glm-5.3).family"),
+            "the error names the entry's key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_policys_family_must_equal_the_tag_both_routes_carry() {
+        // Only the primary is tagged "fam" while the policy still names
+        // the id "glm-5.3": a half-tagged family is not a family — the
+        // load refuses (spec §4.6/§4.8) rather than route a policy
+        // between routes it cannot recognize. The quota coverage check
+        // stays in terms of the primary's model ID, so quota alone
+        // would NOT have caught this.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains(
+                "must equal the family tag plan_policy.primary's model entry carries ('fam')"
+            ),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("plan_policy.family"),
+            "the error names the policy key, got: {err}"
+        );
+
+        // And the mirror: the overflow alone tagged is the same refusal
+        // with the overflow's name in the message.
+        let s = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            1,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&s).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains(
+                "must equal the family tag plan_policy.overflow's model entry carries ('fam')"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_defaulted_tag_may_not_collide_with_a_later_written_tag() {
+        // The remaining order of §4.8's uniqueness rule: entry 0 writes
+        // nothing (tag = "glm-5.3"), entry 1 — a different model —
+        // writes family "glm-5.3". The tag resolves to two models: a
+        // load error, refused by the effective-tag comparison at the
+        // second entry (the mirror of the shadow test above).
+        let s = replace_nth(
+            PLANNED,
+            FLASH,
+            "\"id\": \"glm-5.3-flash\", \"family\": \"glm-5.3\", \"context\"",
+            0,
+        );
+        let cfg: RouterConfig = serde_json::from_str(&without_policy(&s)).expect("parses");
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("family tag 'glm-5.3' is already carried"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("models[1] (glm-5.3-flash).family"),
+            "the error names the second entry's key, got: {err}"
+        );
+    }
+
     #[test]
     fn plan_policy_parses_with_the_spec_defaults_and_the_account_flag() {
         let cfg = planned();
@@ -1712,7 +2141,7 @@ mod tests {
         assert_eq!(policy.cooldown, DurationVal(5_400_000)); // 1h30m stacks
         assert_eq!(
             policy.overflow_monthly_cap_usd.unwrap().to_nano().unwrap(),
-            NanoUsd(20_000_000_000)
+            Nano(20_000_000_000)
         );
     }
 
@@ -1885,6 +2314,6 @@ mod tests {
         // conversion is the one rounding, in nano-USD (ADR-006).
         let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0)));
         cfg.validate().expect("a zero cap is legal");
-        assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), NanoUsd(500_000_000));
+        assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), Nano(500_000_000));
     }
 }
