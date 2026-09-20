@@ -143,3 +143,117 @@ async fn conf_44_turn3_displacement_reason_is_decided_by_destination() {
     assert_eq!(turn2["result"]["plan_switch"]["reason"], "primary_exhausted");
     assert_eq!(turn2["result"]["plan_switch"]["probe"], false);
 }
+
+/// The probe's return trip is the probing request's OWN displacement
+/// record (spec §6: "the family's account state returning to `primary` |
+/// `failover_from`: null | `plan_switch`: set, `reason:
+/// primary_recovered`"; §6's `probe` field IS "this switch was the return
+/// trip of an admitted probe"). The event and the state were already
+/// written by the recovery transition; this pins that the trace — the
+/// product's only observation channel (ADR-005) and `router stats`'
+/// source (§9.2) — carries it too. The old guard only recorded a
+/// displacement when `g.route != primary`, and an admitted probe moves
+/// the request TO the primary, so the return trip never landed.
+///
+/// Coexistence is asserted both ways: exactly one `overflow → primary`
+/// `plan.switched` row (the fix must add the trace row, not delete the
+/// event), and neither the spill row nor any displacement carries
+/// `probe: true` (the negative controls; CONF-42 pins the same for
+/// `primary_cooling_down`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
+    let rig = rig("conf44-probe").await;
+    rig.plan.queue(testkit::plan_ok("t1"));
+    rig.plan.queue(testkit::plan_forbidden_403());
+    rig.plan.queue(testkit::plan_ok("probe-wins"));
+    rig.api.queue(testkit::plan_ok("spilled"));
+
+    let (s1, _b, _h) = rig.post(Some("S1"), 1);
+    assert_eq!(s1, 200);
+    let (s2, _b2, _h2) = rig.post(Some("S1"), 2);
+    assert_eq!(s2, 200, "turn 2 spills to the metered account");
+
+    // Let the 403's ADR-011 provider demotion (Retry-After: 1) expire;
+    // the family's own cooldown is already 0s (CONF-33's recipe).
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+
+    // A NEW session's first turn: the admitted probe, served by the
+    // primary — the request whose success flips the family back.
+    let (sp, _bp, _hp) = rig.post(Some("S2"), 1);
+    assert_eq!(sp, 200, "the probe is served by the primary");
+    assert_eq!(rig.plan.requests().len(), 3, "the probe reached the primary");
+
+    let dir = rig.stop();
+
+    // Exactly one recovery row in the event log (plus the spill): the
+    // trace fix must not have come from removing the event.
+    let evs = events(&dir);
+    let switches: Vec<&(String, serde_json::Value)> =
+        evs.iter().filter(|(k, _)| k == "plan.switched").collect();
+    assert_eq!(switches.len(), 2, "the spill and the recovery, nothing else");
+    let back = switches
+        .iter()
+        .find(|(_, p)| p["to_account"] == "primary")
+        .expect("the recovery row");
+    assert_eq!(back.1["from_account"], "overflow");
+    assert_eq!(back.1["reason"], "primary_recovered");
+    assert_eq!(back.1["probe"], true, "the probe's success IS the transition");
+    let spill = switches
+        .iter()
+        .find(|(_, p)| p["to_account"] == "overflow")
+        .expect("the spill row");
+    assert_eq!(
+        spill.1["probe"],
+        false,
+        "negative control: the spill row is not a probe"
+    );
+
+    // The probe request's own trace record: the return trip, labelled by
+    // direction with the probe flag set.
+    let probe_rec = trace_records(&dir)
+        .into_iter()
+        .find(|r| r["identity"]["session"] == "S2" && r["identity"]["turn_index"] == 1)
+        .expect("the probe's record");
+    assert_eq!(probe_rec["decision"]["provider"], "p-plan");
+    assert_eq!(
+        probe_rec["result"]["failover_from"],
+        serde_json::Value::Null,
+        "nothing failed in the probe request (spec §6)"
+    );
+    let ps = &probe_rec["result"]["plan_switch"];
+    assert_eq!(
+        ps["from"], "p-api/m1",
+        "the record exists: the probe displaced the state's overflow route"
+    );
+    assert_eq!(ps["to"], "p-plan/m1");
+    assert_eq!(ps["reason"], "primary_recovered");
+    assert_eq!(ps["probe"], true, "spec §6: this switch was the return trip");
+    assert_eq!(
+        ps["switch_cost_nano"],
+        0,
+        "the way back costs 0: an in-plan destination's marginal price is 0"
+    );
+
+    // The reporting surface follows (§9.2): `switches` counts requests
+    // whose `result.plan_switch` is present, so the return trip must be
+    // counted — verified against the run's own trace rows.
+    let rep = router_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
+        .expect("report computes");
+    let recs = trace_records(&dir);
+    let trace_switches = recs
+        .iter()
+        .filter(|r| {
+            !r["result"]["plan_switch"].is_null() && r["usage_missing"] != serde_json::json!(true)
+        })
+        .count() as u64;
+    assert!(
+        trace_switches >= 2,
+        "both the spill and the return trip carry a plan_switch record"
+    );
+    assert_eq!(
+        rep.figures.switches,
+        trace_switches,
+        "stats counts the probe's return trip too"
+    );
+    assert_eq!(rep.figures.switches_without_usage, 0);
+}

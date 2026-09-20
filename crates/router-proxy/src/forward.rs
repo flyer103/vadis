@@ -812,6 +812,27 @@ impl Forwarder {
                         // probe's success *is* the transition.
                         if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
                             if let Some(policy) = self.config.plan_policy.as_ref() {
+                                // The return trip's trace row (spec §6:
+                                // "the family's account state returning
+                                // to `primary` | `failover_from`: null |
+                                // `plan_switch`: set, `reason`:
+                                // `primary_recovered`"): the probing
+                                // request's own displacement record, set
+                                // HERE — only a 2xx is a recovery. The
+                                // displacement is from the STATE's route
+                                // (overflow), not from the resolution's;
+                                // the way back costs 0 (in-plan
+                                // destination).
+                                if facts.plan_switch.is_none() {
+                                    facts.plan_switch = Some(PlanSwitchRec {
+                                        from: policy.overflow.to_string(),
+                                        to: policy.primary.to_string(),
+                                        reason: REASON_PRIMARY_RECOVERED,
+                                        probe: true,
+                                        reprefill_tokens: None,
+                                        switch_cost_nano: Some(0),
+                                    });
+                                }
                                 self.plan_probe_succeeded(request_id, policy, session.as_deref());
                             }
                         }

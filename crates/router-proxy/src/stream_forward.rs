@@ -290,6 +290,21 @@ impl Forwarder {
                         reprefill_tokens: None,
                         switch_cost_nano: None,
                     });
+                } else if g.probe {
+                    // The admitted probe's return trip (spec §6): the
+                    // same record the buffered path writes — the
+                    // displacement is from the STATE's route (overflow),
+                    // the way back costs 0 (in-plan destination).
+                    if let Some(policy) = self.config.plan_policy.as_ref() {
+                        facts.plan_switch = Some(PlanSwitchRec {
+                            from: policy.overflow.to_string(),
+                            to: policy.primary.to_string(),
+                            reason: REASON_PRIMARY_RECOVERED,
+                            probe: true,
+                            reprefill_tokens: None,
+                            switch_cost_nano: Some(0),
+                        });
+                    }
                 }
                 primary = g.route.clone();
                 plan_guard_out = Some(g);
@@ -633,6 +648,21 @@ impl Forwarder {
                         // flips the family back and records it.
                         if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
                             if let Some(policy) = self.config.plan_policy.as_ref() {
+                                // The return trip's trace row (spec §6),
+                                // the buffered path's twin: set HERE —
+                                // only a 2xx head is a recovery — with
+                                // the displacement from the STATE's
+                                // route (overflow) and a 0 cost back.
+                                if facts.plan_switch.is_none() {
+                                    facts.plan_switch = Some(PlanSwitchRec {
+                                        from: policy.overflow.to_string(),
+                                        to: policy.primary.to_string(),
+                                        reason: REASON_PRIMARY_RECOVERED,
+                                        probe: true,
+                                        reprefill_tokens: None,
+                                        switch_cost_nano: Some(0),
+                                    });
+                                }
                                 self.plan_probe_succeeded(request_id, policy, session.as_deref());
                             }
                         }
