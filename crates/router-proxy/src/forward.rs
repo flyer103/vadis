@@ -31,6 +31,7 @@ use router_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, P
 use router_core::quota::window_start_for;
 use router_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
 use router_core::trace::PlanSwitchRec;
+use router_core::transform::{estimate_tokens, PayloadCtx, TransformEngine, TransformMode};
 use router_core::{RawBody, RawEditError, Usage, ROUTER_OWNED_TOP_LEVEL_KEYS};
 use router_providers::{AttemptOutcome, TransportKind, UpstreamPlan};
 use serde_json::{json, Value};
@@ -123,6 +124,14 @@ pub struct Forwarder {
     /// The trace sink: one DecisionRecord per request. `None`
     /// only in tests without a trace dir.
     pub trace: Option<Arc<dyn router_core::TraceWriter>>,
+    /// The transform rule engine (ADR-019 / spec §4.4 `builtin/
+    /// transform_rules`), loaded at startup from the configured rule file.
+    /// `None` when no rule set is configured: a request that asks for
+    /// transform mode then runs with an empty ledger ("asked, not
+    /// applied" — a countable state, spec §6). The mode is a request
+    /// fact, never a route property, so this field never decides
+    /// anything on the passthrough path (I3).
+    pub transform_engine: Option<Arc<dyn router_core::transform::TransformEngine>>,
     /// Inbound headers per request (the session key sources live there;
     /// the body's `prompt_cache_key` is checked at receive).
     pub session_ttl_us: i64,
@@ -227,6 +236,153 @@ pub(crate) fn rewrite_outbound_model<'a>(
     cleaned.set_top_level_string("model", native_id)
 }
 
+/// `X-Router-Transform` (ADR-019 §2, spec §2.1), done by
+/// `router-proxy` at the boundary — router-core never reads a header.
+/// Absent or `passthrough` ⇒ the byte path; `transform` ⇒ the declared-edit
+/// path; **any other value is a 400 `invalid_request` decided before the
+/// body is read** — a typo must not silently disable a saving the client
+/// asked for, and it must never silently enable one.
+pub fn resolve_transform_mode(
+    headers: &[(String, String)],
+) -> Result<TransformMode, ForwardFailure> {
+    let Some((_, v)) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-transform"))
+    else {
+        return Ok(TransformMode::Passthrough);
+    };
+    match v.trim() {
+        "passthrough" => Ok(TransformMode::Passthrough),
+        "transform" => Ok(TransformMode::Transform),
+        other => Err(ForwardFailure::new(
+            400,
+            ErrorCode::InvalidRequest,
+            format!(
+                "unusable X-Router-Transform value '{other}': expected 'passthrough' or 'transform' \
+                 (spec §2.1 — a client asking for a mode that does not exist is told, never \
+                 silently served the other way)"
+            ),
+        )),
+    }
+}
+
+/// The shared transform-chain composition step (DESIGN §12.12: "the same
+/// step serves both forwarding paths" — a second copy is the L2 leak
+/// pattern). One call per request: computes the plan from (the client's
+/// bytes after mutation (a), the mode, the configured rule set) and
+/// nothing else, applies its edits as value spans, and returns the
+/// outbound base plus the ledger and the applier's fail-safe entry.
+///
+/// - `passthrough` mode plans nothing, whatever is configured (I3);
+/// - no configured engine ⇒ "asked, not applied": an empty ledger, the
+///   base is the cleaned bytes unchanged;
+/// - the applier's failure is fail-safe (spec §8): the body is forwarded
+///   unedited and the degradation is declared as
+///   `errors[].kind = transform_error` with an **empty** ledger — never
+///   a partial edit and never a fake ledger entry (DESIGN §12.12's
+///   failure table).
+pub(crate) fn compose_transform_stage(
+    engine: Option<&dyn TransformEngine>,
+    mode: TransformMode,
+    cleaned: &RawBody,
+    proto: WireApi,
+) -> (
+    RawBody,
+    Vec<router_core::trace::TransformRecord>,
+    Option<router_core::trace::TraceError>,
+) {
+    let mut records = Vec::new();
+    if mode != TransformMode::Transform {
+        return (cleaned.clone(), records, None); // I3: the closed mode plans nothing.
+    }
+    let Some(engine) = engine else {
+        // No rule set loaded: "asked, not applied" is a countable state
+        // (spec §6's separate mode field), not an error.
+        return (cleaned.clone(), records, None);
+    };
+    let mut edits = Vec::new();
+    // Aggregate per (rule id, cache_impact): one ledger entry per step
+    // (rule) that changed at least one payload, carrying every node it
+    // edited.
+    for node in router_core::transform::payload_nodes(cleaned, proto) {
+        let tool = node.tool.as_deref();
+        let ctx = PayloadCtx {
+            tool,
+            kinds: router_core::transform::kinds_for_tool(tool.unwrap_or("")),
+        };
+        let bytes_in = node.text.len();
+        let Some(o) = engine.apply_node(&ctx, &node.text) else {
+            continue;
+        };
+        if o.new_text == node.text {
+            continue;
+        }
+        let idx = match records
+            .iter()
+            .position(|r| r.plugin == engine.id() && r.cache_impact == o.cache_impact)
+        {
+            Some(i) => i,
+            None => {
+                records.push(router_core::trace::TransformRecord {
+                    plugin: engine.id().to_string(),
+                    edited_paths: Vec::new(),
+                    // net = saved − added (spec §7): the added side counts
+                    // the tee marker, the re-encoding and the replaced text
+                    // — all of it is inside `bytes_out`, so the two
+                    // estimates below are the full sides of that
+                    // arithmetic, never a raw delta.
+                    added_input_tokens: 0,
+                    saved_input_tokens: 0,
+                    saved_output_tokens: 0,
+                    cache_impact: o.cache_impact,
+                    // A decision-time figure is `inferred` and says so
+                    // (spec §7: one observation measures the request,
+                    // never the saving; a verified figure needs the
+                    // on/off pair).
+                    verdict: "inferred",
+                    tee_id: None,
+                    error: None,
+                });
+                records.len() - 1
+            }
+        };
+        let rec = &mut records[idx];
+        rec.edited_paths.push(router_core::trace::EditedPath {
+            path: node.path.display(),
+            bytes_in,
+            bytes_out: o.new_text.len(),
+        });
+        rec.saved_input_tokens += estimate_tokens(bytes_in);
+        rec.added_input_tokens += estimate_tokens(o.new_text.len());
+        if o.tee_id.is_some() {
+            rec.tee_id = o.tee_id.clone();
+        }
+        edits.push(router_core::transform::PayloadEdit {
+            path: node.path,
+            rule: engine.id().to_string(),
+            bytes_out: o.new_text.len(),
+            new_text: o.new_text,
+            bytes_in,
+        });
+    }
+    match cleaned.apply_edits(&edits) {
+        Ok(b) => (RawBody::new(b.into_owned()), records, None),
+        Err(e) => (
+            cleaned.clone(),
+            Vec::new(),
+            Some(router_core::trace::TraceError {
+                kind: "transform_error".to_string(),
+                message: format!(
+                    "payload edit could not be spliced ({e:?}); the body was forwarded unedited \
+                     (fail-safe, spec §8)"
+                ),
+                plugin: Some(engine.id().to_string()),
+                details: None,
+            }),
+        ),
+    }
+}
+
 /// What the buffered path learned about a request before its terminal
 /// outcome — enough to write the failure `DecisionRecord` when the
 /// outcome is a failure (spec §6: one line per request, failures
@@ -270,6 +426,19 @@ pub(crate) struct RequestFacts<'a> {
     /// move) or when a 403 `quota_exhausted` on the family's primary
     /// spilled it mid-request.
     pub(crate) plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `transform_mode`: resolved from `X-Router-Transform` at the
+    /// boundary (ADR-019 §2). `Passthrough` is the default; a request
+    /// refused before the transform chain ran keeps it (nothing claimed).
+    pub(crate) transform_mode: TransformMode,
+    /// The transform chain's ledger entries (spec §6 `transforms[]`),
+    /// written with the plan at the chain stage; kept on a failure path —
+    /// an entry describes the plan, never a claim the bytes left the
+    /// process (DESIGN §12.12's failure table).
+    pub(crate) transform_records: Vec<router_core::trace::TransformRecord>,
+    /// The applier's fail-safe entry, when a plan's edits could not be
+    /// spliced (spec §8 / DESIGN §12.12: forwarded unedited, declared in
+    /// `errors[]` as `transform_error`, empty `transforms[]`).
+    pub(crate) transform_error: Option<router_core::trace::TraceError>,
 }
 
 impl Forwarder {
@@ -283,12 +452,18 @@ impl Forwarder {
     /// Every terminal failure records its `DecisionRecord` before the
     /// outcome leaves the engine — one shared call into
     /// `Accountant::finish_failure`, never a second inlined copy.
+    ///
+    /// `transform_mode` is the boundary-resolved mode (ADR-019 §2):
+    /// `router-proxy` resolved `X-Router-Transform` before calling in —
+    /// router-core never reads a header. `Passthrough` keeps the byte
+    /// path exactly as it was.
     pub async fn forward(
         &self,
         proto_in: WireApi,
         body: &[u8],
         request_id: &str,
         headers: &[(String, String)],
+        transform_mode: TransformMode,
     ) -> ForwardOutcome {
         // One clock read, two projections (AGENTS constraint 2): the µs
         // word feeds the plan guard (which must judge the same instant
@@ -313,6 +488,9 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            transform_mode,
+            transform_records: Vec::new(),
+            transform_error: None,
         };
         let outcome = self
             .forward_inner(&mut facts, proto_in, body, request_id, headers)
@@ -353,6 +531,9 @@ impl Forwarder {
                 now_epoch_s: facts.now_epoch_s,
                 plan_switch: facts.plan_switch.clone(),
                 sticky_hit: session_sticky_hit(&self.store, facts.session.as_deref()),
+                transform_mode: facts.transform_mode,
+                transforms: facts.transform_records.clone(),
+                transform_error: facts.transform_error.clone(),
             },
             f,
             facts
@@ -535,8 +716,21 @@ impl Forwarder {
                     ))
                 }
             };
-        let outbound_hash = body_sha16(cleaned.as_bytes());
-        facts.blocks = extract_prefix_blocks(&cleaned).unwrap_or_default();
+        // The transform chain stage (§3's order: parse → session → transform
+        // chain → selector/guard → encode → forward; DESIGN §12.12): the
+        // one shared composition step — plan, splice, ledger and fail-safe
+        // entry in a single call. In passthrough mode nothing is planned
+        // even when rules would match (I3).
+        let (base, ledger, applier_error) = compose_transform_stage(
+            self.transform_engine.as_deref(),
+            facts.transform_mode,
+            &cleaned,
+            proto_in,
+        );
+        facts.transform_records = ledger;
+        facts.transform_error = applier_error;
+        let outbound_hash = body_sha16(base.as_bytes());
+        facts.blocks = extract_prefix_blocks(&base).unwrap_or_default();
 
         // Rows 1 + 3 of the §12.10.5 wiring (FULL + NORMAL).
         facts.received_event = self.append_event(
@@ -570,17 +764,26 @@ impl Forwarder {
             }),
             session.as_deref(),
         );
-        // Row 2 — the transform chain point is kept even when the chain is
-        // empty (this round's chain is passthrough; the wiring point lands
-        // with the transform chain itself).
+        // Row 2 — the transform chain point, kept even when the chain is
+        // empty. The payload stays §12.10.5 row 2's own shape (plugin,
+        // added/saved tokens, cache_impact, verdict) — DESIGN §12.12 adds
+        // no event kind and no event-payload field; the mode and the
+        // edited paths live in the trace record, whose line is the
+        // analysis truth.
         self.append_event(
             EventKind::TransformApplied,
             request_id,
             None,
             json!({
-                "plugin": null,
-                "chain": [],
-                "changed": false,
+                "plugin": facts.transform_records.first().map(|r| r.plugin.clone()),
+                "chain": facts.transform_records.iter().map(|r| json!({
+                    "plugin": r.plugin,
+                    "added_input_tokens": r.added_input_tokens,
+                    "saved_input_tokens": r.saved_input_tokens,
+                    "cache_impact": r.cache_impact,
+                    "verdict": r.verdict,
+                })).collect::<Vec<_>>(),
+                "changed": !facts.transform_records.is_empty(),
             }),
             session.as_deref(),
         );
@@ -613,6 +816,9 @@ impl Forwarder {
                     now_epoch_s,
                     plan_switch: facts.plan_switch.clone(),
                     sticky_hit,
+                    transform_mode: facts.transform_mode,
+                    transforms: facts.transform_records.clone(),
+                    transform_error: facts.transform_error.clone(),
                 },
                 &primary.provider,
                 &primary.model,
@@ -728,7 +934,11 @@ impl Forwarder {
             // here — `model` was parsed as a string above, and mutation (a)
             // never removes it — but a failure is still answered, never
             // ignored, so no unrewritten bytes can reach a provider.
-            let rewritten = match rewrite_outbound_model(&cleaned, &candidate.model) {
+            // Mutation (b), per attempt (DESIGN §12.10.7): over `base` —
+            // the transform-mode edits are already spliced in as value
+            // spans, so the model rewrite and the payload edits compose
+            // without either disturbing the other.
+            let rewritten = match rewrite_outbound_model(&base, &candidate.model) {
                 Ok(b) => b,
                 Err(e) => {
                     return ForwardOutcome::Failure(ForwardFailure::new(
@@ -885,6 +1095,9 @@ impl Forwarder {
                             now_epoch_s,
                             plan_switch: facts.plan_switch.clone(),
                             sticky_hit,
+                            transform_mode: facts.transform_mode,
+                            transforms: facts.transform_records.clone(),
+                            transform_error: facts.transform_error.clone(),
                         };
                         let _accounted = accountant.finish(
                             &ctx,

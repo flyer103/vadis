@@ -212,6 +212,14 @@ pub async fn serve(config_path: &str) -> i32 {
         api_keys,
         store: Some(store_dyn.clone()),
         trace: Some(trace_writer.clone()),
+        // The transform rule engine (spec §4.4 `builtin/transform_rules`,
+        // ADR-019): `None` in v0.1's wiring — the engine implementation
+        // against `rules/tool_output.toml` is the next card's scope, and a
+        // request that asks for transform mode then runs with an empty
+        // ledger ("asked, not applied" — a countable state, spec §6). The
+        // mode is a request fact: this field never decides anything on the
+        // passthrough path (I3).
+        transform_engine: None,
         session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
     });
 
@@ -226,6 +234,25 @@ pub async fn serve(config_path: &str) -> i32 {
         body: axum::body::Bytes,
     ) -> Response {
         let request_id = request_id();
+        // The transform-mode opt-in, resolved at the boundary (ADR-019 §2,
+        // spec §2.1) — decided before the body is read. An unusable value
+        // is a 400 `invalid_request`: a typo must not silently disable a
+        // saving the client asked for, and it must never silently enable
+        // one. The header is not a body byte, so the opt-in cannot perturb
+        // the prefix (§2.1).
+        let transform_mode = match router_proxy::resolve_transform_mode(&headers) {
+            Ok(m) => m,
+            Err(f) => {
+                let mut eb = ErrorBody::new(f.code, f.message, &request_id);
+                eb.error.details = f.details;
+                let mut resp =
+                    (StatusCode::from_u16(f.status).expect("400 maps"), Json(eb)).into_response();
+                if let Ok(v) = request_id.parse() {
+                    resp.headers_mut().insert("x-router-request-id", v);
+                }
+                return resp;
+            }
+        };
         // The path split is decided by a shallow parse of `stream` only —
         // the same field the buffered engine refuses on, so the two paths
         // cannot both accept one request.
@@ -235,7 +262,7 @@ pub async fn serve(config_path: &str) -> i32 {
             .unwrap_or(false);
         if is_stream {
             return match forwarder
-                .forward_stream(proto_in, &body, &request_id, &headers)
+                .forward_stream(proto_in, &body, &request_id, &headers, transform_mode)
                 .await
             {
                 router_proxy::StreamOutcome::Success(s) => {
@@ -272,7 +299,7 @@ pub async fn serve(config_path: &str) -> i32 {
             };
         }
         let outcome = forwarder
-            .forward(proto_in, &body, &request_id, &headers)
+            .forward(proto_in, &body, &request_id, &headers, transform_mode)
             .await;
         match outcome {
             ForwardOutcome::Success(s) => {

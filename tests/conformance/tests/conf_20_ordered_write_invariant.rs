@@ -192,12 +192,19 @@ fallback: []
         api_keys: HashMap::from([("p1".into(), "k".into())]),
         store: Some(store as Arc<dyn router_core::store::Store>),
         trace: None,
+        transform_engine: None,
         session_ttl_us: 11 * 3600 * 1_000_000,
     };
 
     let body = br#"{"model":"p1/m1","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"sess-conf20"}"#;
     let outcome = forwarder
-        .forward(WireApi::Chat, body, "req-conf20", &[])
+        .forward(
+            WireApi::Chat,
+            body,
+            "req-conf20",
+            &[],
+            router_core::transform::TransformMode::Passthrough,
+        )
         .await;
     assert!(
         matches!(outcome, ForwardOutcome::Success(s) if s.status == 200),

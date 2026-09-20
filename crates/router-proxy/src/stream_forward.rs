@@ -127,6 +127,15 @@ struct RelayCtx {
     /// spec §6 `state.sticky_hit`: the session already had a binding row
     /// at pre-flight (the same value bind_session received).
     sticky_hit: bool,
+    /// The transform chain's ledger entries (spec §6 `transforms[]`),
+    /// written with the plan at the composition step; kept on a failure
+    /// path — an entry describes the plan, never a claim the bytes left
+    /// the process (DESIGN §12.12's failure table).
+    transform_mode: router_core::transform::TransformMode,
+    transform_records: Vec<router_core::trace::TransformRecord>,
+    /// The applier's fail-safe entry, if the plan's edits could not be
+    /// spliced (spec §8 / DESIGN §12.12).
+    transform_error: Option<router_core::trace::TraceError>,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -175,6 +184,7 @@ impl Forwarder {
         body: &[u8],
         request_id: &str,
         headers: &[(String, String)],
+        transform_mode: router_core::transform::TransformMode,
     ) -> StreamOutcome {
         // One clock read, two projections — the buffered path's twin.
         let now_us = now_us();
@@ -197,6 +207,9 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            transform_mode,
+            transform_records: Vec::new(),
+            transform_error: None,
         };
         let outcome = self
             .forward_stream_inner(&mut facts, proto_in, body, request_id, headers)
@@ -376,8 +389,20 @@ impl Forwarder {
                 })
             }
         };
-        let outbound_hash = router_core::prefix::body_sha16(cleaned.as_bytes());
-        facts.blocks = extract_prefix_blocks(&cleaned).unwrap_or_default();
+        // The transform chain stage, the buffered path's twin (DESIGN
+        // §12.12: the same request with a different relay — one shared
+        // composition step, one set of invariants, no second copy of the
+        // edit path).
+        let (base, ledger, applier_error) = crate::forward::compose_transform_stage(
+            self.transform_engine.as_deref(),
+            facts.transform_mode,
+            &cleaned,
+            proto_in,
+        );
+        facts.transform_records = ledger;
+        facts.transform_error = applier_error;
+        let outbound_hash = router_core::prefix::body_sha16(base.as_bytes());
+        facts.blocks = extract_prefix_blocks(&base).unwrap_or_default();
 
         // Rows 1 + 3 of the §12.10.5 wiring (FULL + NORMAL), same payload
         // shape as the buffered path plus the stream marker.
@@ -415,15 +440,23 @@ impl Forwarder {
             session.as_deref(),
         );
         // Row 2 — the transform chain point, kept even when the chain is
-        // empty (parity with the buffered path's event vocabulary).
+        // empty (parity with the buffered path's event vocabulary and
+        // payload shape: §12.10.5 row 2's own fields, nothing more —
+        // DESIGN §12.12 adds no event-payload field).
         self.append_event(
             EventKind::TransformApplied,
             request_id,
             None,
             json!({
-                "plugin": null,
-                "chain": [],
-                "changed": false,
+                "plugin": facts.transform_records.first().map(|r| r.plugin.clone()),
+                "chain": facts.transform_records.iter().map(|r| json!({
+                    "plugin": r.plugin,
+                    "added_input_tokens": r.added_input_tokens,
+                    "saved_input_tokens": r.saved_input_tokens,
+                    "cache_impact": r.cache_impact,
+                    "verdict": r.verdict,
+                })).collect::<Vec<_>>(),
+                "changed": !facts.transform_records.is_empty(),
             }),
             session.as_deref(),
         );
@@ -450,6 +483,9 @@ impl Forwarder {
                     now_epoch_s,
                     plan_switch: facts.plan_switch.clone(),
                     sticky_hit: crate::forward::session_sticky_hit(&self.store, session.as_deref()),
+                    transform_mode: facts.transform_mode,
+                    transforms: facts.transform_records.clone(),
+                    transform_error: facts.transform_error.clone(),
                 },
                 &primary.provider,
                 &primary.model,
@@ -591,7 +627,7 @@ impl Forwarder {
             }
 
             // Mutation (b), per attempt (§12.10.7): this route's native id.
-            let outbound = match rewrite_outbound_model(&cleaned, &cand.route.model) {
+            let outbound = match rewrite_outbound_model(&base, &cand.route.model) {
                 Ok(b) => Bytes::from(b.into_owned()),
                 Err(e) => {
                     return StreamOutcome::Failure(ForwardFailure {
@@ -706,6 +742,9 @@ impl Forwarder {
                                 &self.store,
                                 session.as_deref(),
                             ),
+                            transform_mode: facts.transform_mode,
+                            transform_records: facts.transform_records.clone(),
+                            transform_error: facts.transform_error.clone(),
                         };
                         let state = RelayState {
                             tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -720,8 +759,7 @@ impl Forwarder {
                             failover_from: failover_from.clone(),
                         };
                         facts.failover_from = failover_from.clone();
-                        let relay =
-                            relay_stream(ctx, state, Bytes::from(cleaned.as_bytes().to_vec()));
+                        let relay = relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
                         return StreamOutcome::Success(StreamSuccess {
                             status: 200,
                             content_type,
@@ -1319,6 +1357,9 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
         now_epoch_s: ctx.now_epoch_s,
         plan_switch: ctx.plan_switch.clone(),
         sticky_hit: ctx.sticky_hit,
+        transform_mode: ctx.transform_mode,
+        transforms: ctx.transform_records.clone(),
+        transform_error: ctx.transform_error.clone(),
     };
     let failover_from = st
         .failover_from
