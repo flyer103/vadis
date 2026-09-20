@@ -51,5 +51,5 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls"] }
 http = "1"
 bytes = "1"
-# futures: named in the same allowlist row (the SSE tee lands with R2-2e).
+# futures: named in the same allowlist row (the SSE relay).
 futures = "0.3"
