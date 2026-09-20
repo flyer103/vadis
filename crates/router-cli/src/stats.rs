@@ -585,7 +585,11 @@ fn print_text(
         w,
         "currencies:  {}{}",
         currencies.join(", "),
-        if currencies.len() > 1 { "             (money is reported per currency and never summed across them)" } else { "                  (money is reported per currency and never summed across them)" }
+        if currencies.len() > 1 {
+            "             (money is reported per currency and never summed across them)"
+        } else {
+            "                  (money is reported per currency and never summed across them)"
+        }
     );
     // One labelled money block per currency present — counts above stay
     // single because they are not money (spec §9.2).
@@ -595,7 +599,11 @@ fn print_text(
         let hit = f.input_hit_nano.get(cur).copied().unwrap_or(0);
         let write = f.cache_write_nano.get(cur).copied().unwrap_or(0);
         let out = f.output_nano.get(cur).copied().unwrap_or(0);
-        let _ = writeln!(w, "cost (verified, {cur})       {} nano", miss + hit + write + out);
+        let _ = writeln!(
+            w,
+            "cost (verified, {cur})       {} nano",
+            miss + hit + write + out
+        );
         let _ = writeln!(
             w,
             "  input_miss {miss} | input_hit {hit} | cache_write {write} | output {out}"
@@ -783,13 +791,11 @@ fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
         // loudly instead of adding silently.
         let cs: Vec<&str> = f.currencies.keys().map(String::as_str).collect();
         if cs.len() == 1 {
-            pf["switch_cost_verified_nano"] = serde_json::json!(
-                f.switch_cost_verified_nano.get(cs[0]).copied().unwrap_or(0)
-            );
+            pf["switch_cost_verified_nano"] =
+                serde_json::json!(f.switch_cost_verified_nano.get(cs[0]).copied().unwrap_or(0));
             pf["switch_cost_currency"] = serde_json::json!(cs[0]);
-            pf["reprefill_cost_nano_inferred"] = serde_json::json!(
-                f.reprefill_cost_nano.get(cs[0]).copied().unwrap_or(0)
-            );
+            pf["reprefill_cost_nano_inferred"] =
+                serde_json::json!(f.reprefill_cost_nano.get(cs[0]).copied().unwrap_or(0));
         } else {
             pf["switch_cost_verified_nano_by_currency"] =
                 serde_json::to_value(&f.switch_cost_verified_nano).unwrap_or_default();

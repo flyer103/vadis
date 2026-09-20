@@ -970,6 +970,24 @@ on <item>"]` until then, the rule at the top of this section. The IDs are spent:
 **`CONF-50`**. A round that greps this table for a free number gets `50`; one that assumes `46` is free is
 reading a stale snapshot of it.
 
+**Renumbering of the ADR-018 row set and allocation of CONF-52…CONF-54 (the implementing round, 2026-09-21).**
+The split that landed ADR-018's implementation assigned the row set fresh numbers: 46/47's files exist on the
+R6 branch (`round/6-auth-and-regions`) and were therefore **burned**; 48–51 were reserved for the parallel R8
+cards (region/family in R8-2b, reports and the CN price roster in R8-2c). The currency-round cases that landed
+with the implementation are therefore **CONF-52**, **CONF-53** and **CONF-54** — not 46–49 as the rows above
+say. The mapping, so a reader of the rows is not misled:
+
+| This round's case | Implements the row numbered |
+|---|---|
+| `CONF-52` — the type-level no-mix (`compile_fail` doctests on `Money` + the money unit tests in `router-core` `cost.rs`) | the currency-is-data row's type half (was written as CONF-46's) |
+| `CONF-53` — `conf_53_currency_region_load.rs`: defaults, exactness, load-refusals, cn+USD legality, serve exit 2 | the parsing/load half of the currency and region rows (CONF-46/48's) |
+| `CONF-54` — `conf_54_cny_money_carries_currency.rs`: the CNY end-to-end (v2 records, `cost.computed` unit, mixed window, `/health`) | the reporting half of the currency row (CONF-46's) + the `/health` display of CONF-48's |
+
+The region-inert and family-tag/F3 rows (written as 47/48) belong to R8-2b and land there; the report-provenance
+row with R8-2c. **Occupancy now**: `CONF-01…CONF-45` on main's line, 46/47 burned by the R6 branch,
+48–51 reserved for the parallel R8 cards, 52–54 spent here; the next free ID is **`CONF-55`** (R8-2b starts
+there if it lands after this card; an R9 round greps this paragraph, not the rows above).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
