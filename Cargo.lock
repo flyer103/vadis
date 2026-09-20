@@ -1076,6 +1076,7 @@ name = "router-conformance"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "clap",
  "http",
  "router-cli",
  "router-core",

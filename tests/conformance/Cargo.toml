@@ -26,3 +26,7 @@ router-proxy = { path = "../../crates/router-proxy" }
 router-providers = { path = "../../crates/router-providers" }
 bytes = { workspace = true }
 http = { workspace = true }
+# CONF-43 enumerates the real parser's subcommand set via
+# `router_cli::Cli::command()` (clap::CommandFactory) — deriving the set
+# from the `Command` enum instead of hardcoding it requires clap in scope.
+clap = { workspace = true }
