@@ -148,13 +148,14 @@ pub(crate) fn month_start_us(now_us: i64) -> i64 {
 /// The plan guard's answer for one request (spec §4.6 / DESIGN
 /// §12.10.8): the route the family's state sends this request to, plus
 /// what the trace needs. `probe` is true when this pass was admitted as
-/// a recovery probe on the primary (ADR-014 item 3).
+/// a recovery probe on the primary (ADR-014 item 3). The pre-request
+/// account state is deliberately NOT here: the displacement record's
+/// reason is decided by direction (the destination), never by the state
+/// the guard read (spec §6's producer table).
 #[derive(Debug, Clone)]
 pub(crate) struct PlanGuardOutcome {
     pub route: RouteSpec,
     pub probe: bool,
-    /// The state the guard read (before any effect this request causes).
-    pub state_before: PlanStateRow,
 }
 
 /// Session key resolution (spec §4 key_sources), shared by both forwarding
@@ -430,17 +431,27 @@ impl Forwarder {
         match self.plan_guard(&primary, session.as_deref(), turn_index, now_epoch_s) {
             Ok(None) => {}
             Ok(Some(g)) => {
-                // A state-driven displacement (nothing failed in this
-                // request): the record's `plan_switch`, reason by
-                // direction; `failover_from` stays null (spec §6's table).
                 if g.route != primary {
+                    // Reason by DIRECTION — the destination account
+                    // (spec §6's producer table): a move to the family's
+                    // overflow route is an exhaustion displacement, a
+                    // move to the primary is a recovery. The account
+                    // state the guard read before the request is not an
+                    // input: on the spill round itself both arms read
+                    // `primary`, and every post-spill state displacement
+                    // reads `overflow` whichever way it goes.
+                    let to_overflow = self
+                        .config
+                        .plan_policy
+                        .as_ref()
+                        .is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
                         from: primary.to_string(),
                         to: g.route.to_string(),
-                        reason: if g.state_before.account == PlanAccount::Overflow {
-                            REASON_PRIMARY_RECOVERED
-                        } else {
+                        reason: if to_overflow {
                             REASON_PRIMARY_EXHAUSTED
+                        } else {
+                            REASON_PRIMARY_RECOVERED
                         },
                         probe: g.probe,
                         reprefill_tokens: None,
@@ -1119,15 +1130,10 @@ impl Forwarder {
             overflow_spend: self.overflow_spend(&policy),
         };
         match rule.decide(&req) {
-            PlanMove::Pass { route, probe } => Ok(Some(PlanGuardOutcome {
-                route,
-                probe,
-                state_before: state,
-            })),
+            PlanMove::Pass { route, probe } => Ok(Some(PlanGuardOutcome { route, probe })),
             PlanMove::Downgrade { route } => Ok(Some(PlanGuardOutcome {
                 route,
                 probe: false,
-                state_before: state,
             })),
             PlanMove::Reject { code, message } => Err(ForwardFailure {
                 status: code.http_status(),

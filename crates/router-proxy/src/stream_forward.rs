@@ -268,13 +268,23 @@ impl Forwarder {
             Ok(None) => {}
             Ok(Some(g)) => {
                 if g.route != primary {
+                    // Reason by DIRECTION — the destination account
+                    // (spec §6's producer table; the buffered path's
+                    // twin): a move to the family's overflow route is an
+                    // exhaustion displacement, a move to the primary is
+                    // a recovery — never the pre-request account state.
+                    let to_overflow = self
+                        .config
+                        .plan_policy
+                        .as_ref()
+                        .is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
                         from: primary.to_string(),
                         to: g.route.to_string(),
-                        reason: if g.state_before.account == PlanAccount::Overflow {
-                            REASON_PRIMARY_RECOVERED
-                        } else {
+                        reason: if to_overflow {
                             REASON_PRIMARY_EXHAUSTED
+                        } else {
+                            REASON_PRIMARY_RECOVERED
                         },
                         probe: g.probe,
                         reprefill_tokens: None,
