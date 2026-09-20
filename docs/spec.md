@@ -405,7 +405,10 @@ is simply the first route the downgrade considers.
 
 Either one is enough. When both are present, **a match on either admits the request**: a client that
 sets both to the same value is the normal case, and a mismatch between the two is not worth a code of
-its own. A malformed `Authorization` (no `Bearer ` prefix, or an empty credential) presents nothing.
+its own. A malformed `Authorization` (no `Bearer ` prefix, or a `Bearer` with an empty credential)
+**offers no credential** — it cannot admit a request — but the request did carry that header, so it is
+the one named in the error body's `details.header`; that key is `null` only when the request carried
+neither header.
 
 **Comparison is constant time.** The comparison must not return early on the first differing byte and
 must not branch on secret bytes: this is a requirement on the implementation, not advice. v0.1
