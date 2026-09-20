@@ -662,6 +662,34 @@ mod tests {
         }
     }
 
+    /// A brace/bracket inside a JSON string must not open a nesting level:
+    /// the element scanner's string state is pushed AND the opening quote
+    /// is stepped past in the same move. Found by CONF-63's I2 fixture (a
+    /// grep payload containing `fn unrelated() {`): before the fix the
+    /// quote was re-read with the string state on top and popped it
+    /// immediately, so the payload's `{` corrupted the element span and
+    /// the tool message silently vanished from the locator's output.
+    #[test]
+    fn structural_chars_inside_strings_do_not_open_nesting() {
+        let body = br#"{"messages":[{"role":"tool","content":"a{b}c [d] e"},{"role":"user","content":"u"}],"x":[1,2]}"#;
+        let raw = RawBody::new(body.to_vec());
+        let spans = raw.top_level_member_spans().expect("scannable");
+        let (_, s, e) = spans.iter().find(|(k, _, _)| k == "messages").unwrap();
+        // Two message elements: the `{`/`[` inside the first element's
+        // string must not swallow the `]` that closes the messages array.
+        let els = array_elements(body, *s, *e);
+        assert_eq!(els.len(), 2, "both array elements are found");
+        assert_eq!(
+            &body[els[0].0..els[0].1],
+            br#"{"role":"tool","content":"a{b}c [d] e"}"#
+        );
+        assert_eq!(
+            &body[els[1].0..els[1].1],
+            br#"{"role":"user","content":"u"}"#,
+            "the second element is not swallowed by the first's brace"
+        );
+    }
+
     #[test]
     fn roundtrip_locate_then_edit_reaches_the_same_node() {
         // The locator's addresses are the applier's addresses: what

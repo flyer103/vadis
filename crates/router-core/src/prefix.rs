@@ -202,7 +202,16 @@ pub(crate) fn scan_element_end(b: &[u8], i: usize, limit: usize) -> usize {
                     }
                 } else {
                     match c {
-                        b'"' => stack.push(b'"'),
+                        b'"' => {
+                            stack.push(b'"');
+                            // Advance past the opening quote: re-reading it
+                            // with the string state on top would pop that
+                            // state immediately, leaving the string's
+                            // contents unprotected (a brace inside a payload
+                            // string then corrupts the element span — the
+                            // I2 fixture's grep payload found it).
+                            j += 1;
+                        }
                         b'{' | b'[' => {
                             stack.push(c);
                             j += 1;
