@@ -1785,3 +1785,126 @@ the store's schema, and every existing `/health` member. The only observable dif
 does not write `server.auth_token_env` is the new `auth: {required: false}` member and the `auth: none`
 word on the startup line: **no request's behaviour changes at all**, which is what CONF-45 ⑤ asserts and
 what makes this round backward compatible by construction.
+
+## 13. Primitive register, module map and leak register (ADR-016)
+
+The vocabulary is ADR-016's; this chapter is the enumeration. It answers three questions that §2–§12 answer
+only indirectly: **which capability does a given module implement**, **which capability has a second
+implementation somewhere else**, and **which mode or user task depends on a capability that is not written
+yet**. The rules that make the register enforceable (one implementation per invariant; workflow → mode →
+primitive, one way; a new primitive is a human decision with an ADR) are ADR-016 item 1; the decision-provider
+seam is ADR-016 item 4.
+
+**Dated artefact.** Every `file:line` below was read at `76afd81` (2026-09-21). Line numbers are provenance,
+not contract: a row is updated when the site moves, and a change that adds a second implementation of a
+primitive updates §13.3 **in its own round** — a register allowed to drift is the leak it claims to name.
+
+### 13.1 The register
+
+| id | primitive | one-line invariant | contract home | code home | state |
+|---|---|---|---|---|---|
+| P1 | `byte-fidelity` | upstream bytes == client bytes modulo ADR-015's exactly two span mutations | AGENTS 1; ADR-007; ADR-015; spec §2; §12.3.1, §12.10.7 | `router-core/src/body.rs:29,56,90,197`; `router-proxy/src/forward.rs:223,528`; `stream_forward.rs:365` | wired |
+| P2 | `inbound-admission` | one guard above the path split and the pipeline; headers only; a refusal leaves one pre-pipeline record and no store row | spec §4.7, §9.1; §12.11 | `router-proxy/src/auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:314,344-375` | wired |
+| P3 | `resolution` | exactly one route per request from the roster (explicit/alias); the native id is what the outbound body carries; `auto` → 400, undeclared capability → 400 | spec §3, §4, §8; §3, §7, §12.3 | `router-core/src/config.rs:226,746,872`; `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | wired, with L2/L3/L4 |
+| P4 | `policy-guard` | the route/refusal decision is a pure predicate over (route, projections, stable config, one clock read) with a normative order; transitions follow upstream evidence only | spec §4.2, §4.6, §8; ADR-011; ADR-014; §12.3, §12.4, §12.10.8 | `router-core/src/plan.rs:109,151,183`; `error_class.rs:226`; `quota.rs:113`; `breakeven.rs:70`; `forward.rs:1121-1200` | wired, with L1/L6 |
+| P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → autowork channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
+| P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving | ADR-003; ADR-008; spec §4.4, §6, §7; §6, §12.3 | **none** (`router-plugins/src/lib.rs:1-4` is a stub; `transforms: Vec::new()` at `accounting.rs:483`, `auth.rs:170`) | **contract-only** |
+| P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
+| P8 | `accounting` | integer NanoUsd on the five tiers (+ peak); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; spec §7, §4.0; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
+| P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; §4, §12.2 | **none** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` are stubs; `inject`/`isolate`/`intercept` parse at `config.rs:816-840`, validate at `config.rs:1232-1261`, are consumed by nobody) | **contract-only** |
+
+### 13.2 Module → primitive map
+
+| module | primitive it implements | what it must **not** become |
+|---|---|---|
+| `router-core/src/body.rs` | P1 (the primitive itself: `RawBody`, the whitelist, the span scanner) | a JSON document API — it exposes no mutable `Value` (the compile-time half of AGENTS 1) |
+| `router-core/src/prefix.rs` | P5 (`prefix_blocks[]`, `prefix_continuity`, `extract_prefix_blocks:82`, `prefix_continuity:266`) + P8 (`attribute_tokens:235` is the GAP-Q14 proportional attribution → `inferred`) | a tokenizer — the allowlist has none, which is why every derived token figure is labelled |
+| `router-core/src/config.rs` | P3 (roster, aliases `:872`, `supports :746`), P4 (`PlanPolicyCfg :795`), P9 (`PluginCfg :825`) — and the **load-time refusals** (`validate :1125`, `validate_plan_policy :1020`, the plugin rows `:1232-1261`) | a place where a mode's shape is decided at runtime: an illegal combination is refused at load, never degraded to a default |
+| `router-core/src/plan.rs` | P4 (`PlanFirstRule :109`; the full probe predicate `:151`; the normative rule order `:183`) | a second decision path for the streaming medium — both paths call the same rule |
+| `router-core/src/error_class.rs` | P4's classifier (`classify_upstream_error :226`, `classify_status :288`, `refine_by_body :359`; the pattern tables `:161,172,180,185,193` are **code** by ADR-011 item 11) | a provider-configurable taxonomy — a decision provider consumes classes, it does not contribute patterns |
+| `router-core/src/quota.rs`, `breakeven.rs` | P4 (`charge :113`, `decide_switch :70`) + P8 (the pure money arithmetic) | a second place that may `Reject` — ADR-014 item 2 keeps the local verdict a warning |
+| `router-core/src/cost.rs`, `peak.rs` | P8 | an `f64` on the decision path (`#![deny(clippy::float_arithmetic)]`, `router-core/src/lib.rs`) |
+| `router-core/src/trace.rs` | P5 (the record, the writer trait, the derived metrics `verified_savings_tokens :297`) | a state store — the record is analysis truth, the log is state truth (ADR-005/ADR-010) |
+| `router-core/src/store.rs` | P7 (the log, the projection vocabulary, `write_intent_then :442`) | a domain model — it is the persistence seam *under* the state traits (§8, §12.10.4) |
+| `router-core/src/error.rs` | P3/P5's shared error vocabulary (`ErrorCode :9`, `ErrorBody :64`); `TraceError::kind_for_code` ties the two | a second error table: §12.7 and spec §8 are the one mapping |
+| `router-protocol/src/*` | P1 (codec, `raw_json` span editing) + P5 (`Usage` normalization; `sse::SseUsageExtractor` = the streaming accounting tap) | a translation layer that decides anything about routing (§7) |
+| `router-providers/src/*` | P1 (the bytes on the wire) + P4's raw evidence — and by construction **no decisions** (`router-providers/src/lib.rs:1-3`) | a call site that branches on an upstream's prose (ADR-011 item 1) |
+| `router-proxy/src/auth.rs` | P2 | part of the pipeline: it runs before the body is parsed and writes no store row |
+| `router-proxy/src/forward.rs` | the buffered pipeline: P3 (`resolve_route :1270`), P4 (`plan_guard :1121`, `provider_in_cooldown :1308`, `probe_deferred_by_window :1201`), P1 (`rewrite_outbound_model :223`, the key deletion `:528`), P5 (the record assembly), P7 (the event sequence) | a second copy of a primitive the streaming path also needs (see L2) |
+| `router-proxy/src/stream_forward.rs` | the same pipeline over the streaming medium (the shared helpers are the point: `plan_guard`, `record_classification`, `resolve_session_key`, `turn_index_for`, `rewrite_outbound_model`) | its own resolution (`resolve_route :981`) or its own capability check (`:332-345`) |
+| `router-proxy/src/accounting.rs` | P5 (the record's single writer, `Accountant::commit :358`) + P8 (the five-tier pricing) | a second writer of the trace: `transforms: Vec::new() :483` is the current, honest shape of a chain with no steps |
+| `router-proxy/src/health.rs` | **consumer** of P4/P7 for `/health` (spec §9.1) | a second implementation of the guard (L1): it reports what the policy says, it does not re-decide |
+| `router-cli/src/lib.rs` | the `serve` assembly: P2's wiring (`:314` `/health` outside the guarded set, `:344-375` the per-route gate), the startup prerequisites | a place where a route's guard is applied by path comparison |
+| `router-cli/src/stats.rs` | **consumer** of P5/P7/P8 for `router stats` (spec §9.2; `report :188`, the read-only store open `:221`, the window scan `:366`) | a writer, or a reader that estimates what it cannot compute |
+| `router-store/src/lib.rs` | P7's SQLite/WAL implementation (migrations, the writer lock `:218`) | a second domain model |
+| `router-store/src/trace_sink.rs` | P5's on-disk sink (`TraceSink :40`, `write :73`) | a place that decides the record's content |
+| `router-plugins/`, `router-runtime/`, `router-plugin-sdk/` | P6 and P9 — **contract-only** (`*.rs:1-4` stubs) | a claim that a transform or a realm exists today |
+| `tests/conformance/` | the assertions that pin P1/P3/P5/P7 (and the ones that will pin the others; §12.8 is the table) | a place to move an invariant in order to pass (AGENTS 9; ADR-012) |
+| `autowork/` | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
+
+### 13.3 The leak register
+
+| id | primitive | what is re-derived | site A | site B | why it matters | status |
+|---|---|---|---|---|---|---|
+| **L1a** | P4 | the probe gate's evaluation order (`recovery_disabled` → `cooldown` → `primary_cooling_down` → `window_not_reset`), with the two request-shaped arms deliberately absent from the surface | `router-core/src/plan.rs:151-178` (`probe_admitted`, the authority — its arm list includes `NoSession` / `NotSessionBoundary`) | `router-proxy/src/health.rs:182-199` (the `blocked_by` chain) | the surface and the guard can disagree about *why* an attempt is blocked; spec §9.1 names the guard's order as the authority (`docs/spec.md:743`) and only that sentence plus unit tests hold the two equal today | **open** (= R5-G5, generalised); unit-tested per arm at `health.rs:437-466` |
+| **L1b** | P4 | the cooldown's ms→µs conversion (`DurationVal` is ms, `§12.5`) | `router-core/src/plan.rs:232-235` | `router-proxy/src/health.rs:228-230` | a clock-unit divergence is silent in production and loud only in a flaky test (R5-F3's class) | **open** |
+| **L1c** | P4 | ADR-011's route-availability read (`Query::Cooldown`, with a different clock: `now_us()` vs a passed-in `now`) | `router-proxy/src/forward.rs:1308-1318` | `router-proxy/src/health.rs:262-273` | two readers of one projection, one on the request path and one in the report | **open** |
+| **L1d** | P4 | the local counter's window verdict (plan lookup, window start, `next_reset`, `Query::QuotaUsed`, the `used >= tokens` comparison) — near-identical bodies | `router-proxy/src/forward.rs:1201-1243` | `router-proxy/src/health.rs:279-320` | the deferral rule that gates the probe is stated twice; a change to it must be made twice to stay true | **open** |
+| **L2a** | P3 | alias/explicit resolution, including the 404 codes and both message strings | `router-proxy/src/forward.rs:1270-1306` (a method) | `router-proxy/src/stream_forward.rs:981-1017` (a free function) | the two transports can resolve one request differently; `decision.model` and `selection_source` then depend on which medium served it | **open** |
+| **L2b** | P3 | the `supports` capability check and its 400 body | `router-proxy/src/forward.rs:491-507` | `router-proxy/src/stream_forward.rs:332-345` | spec §8's `capability_unsupported` is a contract; two renderings can drift in `details`/message | **open** |
+| **L3** | P7/P5 | the two reporting consumers read the same state by **different mechanisms** | `/health` reads through the writer's own connection (`router-proxy/src/health.rs:104-135` via `AppState::store`, `:24-28`) | `router stats` scans the trace directory and opens the store read-only (`router-cli/src/stats.rs:188-283`, `:221`, `:366`) | only one of them works while the other is true: the read-only open is refused while `serve` holds `PRAGMA locking_mode = EXCLUSIVE` (`router-store/src/lib.rs:218`, R6-G3), so the "same fact, two views" is really "two facts, one of them unavailable" | **open**; a read seam must state which figures each consumer can honestly obtain |
+| **L4** | P3 | the reserved `auto`/`Selector` slot | prose says reserved (`docs/spec.md:78-79`; `design/DESIGN.md:14,367`, §3's closing paragraph) | code has no slot: the refusal is a literal comparison (`router-proxy/src/forward.rs:403-407`), there is no `trait Selector`, and `decision.selection_source` is a `String` (`router-core/src/trace.rs:88`) whose third value is absent from spec §3's own list | the repository's own rule forbids this shape ("a documented-but-unreachable surface is a defect", spec §9.3); the honest options are to define the value or delete it — **a human decision** | **open, by design**; recorded rather than silently kept |
+| **L5** | P6, P9 | primitives whose absence is load-bearing for accepted modes | `router-plugins/src/lib.rs:1-4`, `router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` (stubs) | ADR-003 (the whole transform contract), ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9, and no saving today comes from P6 (`transforms: Vec::new()`); a plan that reads as if these existed wastes a round | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
+| **L6** | P4 | the guard's answer vocabulary: `GuardOutcome` is named as existing vocabulary (`router-core/src/plan.rs:3-5`) and sketched in `design/DESIGN.md:368-369`, but no such type exists | the code answers with a plan-specific `PlanMove` (`router-core/src/plan.rs:52-69`) | the caller is a hand-written method with its own outcome struct (`router-proxy/src/forward.rs:156,1121-1200`) | a second rule would invent a second move type, so "the guard chain" is a paragraph rather than an interface — which is exactly what a decision provider needs | **open** (becomes real when a second rule lands) |
+
+Three shapes that are **not** leaks, listed so the register is not re-litigated:
+
+- `router-proxy/src/auth.rs:121`'s `refused_record` is the documented **pre-pipeline** record class (spec §6,
+  §12.11), not a second trace writer: `Accountant::commit` (`accounting.rs:358`) remains the writer of
+  in-pipeline records, and both land in the same file in the same format.
+- The shared helpers across the two forwarding paths (`plan_guard`, `record_classification`,
+  `resolve_session_key`, `turn_index_for`, `rewrite_outbound_model`) are shared **on purpose**; L2a/L2b are the
+  sites that are not.
+- `config.rs`'s load-time refusals restating spec tables is intended: `deny_unknown_fields` makes a key and its
+  parser inseparable (§12.5, GAP-Q15), so the example, the spec row and the check land together.
+
+### 13.4 Where the decision-provider seam sits
+
+The contract is ADR-016 item 4; the placement:
+
+```
+parse → session resolution → transform chain → resolution (P3) → [ DP-1 ] → guard rules (P4) → encode → forward → record (P5)
+```
+
+- It is **not a pipeline stage**: it is consulted by the guard chain, before the rules run, exactly where
+  ADR-014 item 9 put the plan rule (no new fiber, no new stage, no new event kind, no new `error.type`).
+- It is consulted **only at a session boundary** (no session, or `turn_index == 1`) — ADR-014 item 3's admission
+  rule, reused (ADR-016 DP-1.3).
+- It may not touch P1 (no bytes), P8 (no money figures), P4's classification tables (classes are consumed, not
+  supplied), or the store (it is given projections; it writes nothing).
+- Its provenance lands in fields that already exist — `decision.plugin_chain[]` (identity, variant-suffixed),
+  `decision.decision_ms` (the wait), the existing decision/switch/error fields (the effect), `errors[]` for an
+  advisor failure. A dedicated trace field is deliberately **not** taken, and no CONF id is allocated here
+  (§12.8's rule: IDs are a human decision).
+
+### 13.5 Mode and workflow → primitive map
+
+The definitions and the reasoning are ADR-016 items 1, 5 and 6; this is the dependency map, so "can this be
+built today?" is answerable without reading a round file.
+
+| mode | primitives | state |
+|---|---|---|
+| M1 `failover` | P3, P4, P5, P7, P8 | wired (ADR-011) |
+| M2 `plan-first` (spill + session-boundary probe) | P3, P4, P5, P7, P8 | wired (ADR-014) |
+| M3 `shadow` | **P9**, **P6**, P5 | contract-only (needs L5) |
+| M4 `canary` | P4, P7, P8, **P9**, P5 | contract-only for its P9 half (loop-side L1 machinery absent) |
+| M5 `rollback` | P7, the reversed mode, P5 | contract-only (loop-side) |
+| M6 `advised-decision` (proposed) | DP-1, P4, P5, P8 | not implemented; contract frozen in ADR-016 item 4 |
+
+| workflow | primitives | modes |
+|---|---|---|
+| W1 `connect a client` | P2, P1, P3, P5, P7 (P4 when a policy is configured) | M1, M2 |
+| W2 `save tokens` | P1, P8, P3, P4 (P6 contributes nothing today) | M2, M1 |
+| W3 `read the report` | P5, P7, P8, P4 | — (and see L1/L3) |
+| W4 `keep the plan preferred` | P3, P4, P7, P8 | M2 |
+| W5 `iterate a policy` (the loop) | P5, P7 (+ the loop-side artifacts) | M3, M4, M5 (all blocked on L5) |
