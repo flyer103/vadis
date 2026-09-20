@@ -119,7 +119,6 @@ mod tests {
         TokensVal,
     };
     use router_core::store::{CooldownRow, StoreError};
-    use serde_json::json;
 
     /// A store double that answers only the two reads these functions
     /// make, from state the test chose — so the adjudication is
