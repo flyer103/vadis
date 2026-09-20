@@ -988,6 +988,18 @@ row with R8-2c. **Occupancy now**: `CONF-01…CONF-45` on main's line, 46/47 bur
 48–51 reserved for the parallel R8 cards, 52–54 spent here; the next free ID is **`CONF-55`** (R8-2b starts
 there if it lands after this card; an R9 round greps this paragraph, not the rows above).
 
+**Allocation of CONF-55 (R8-2b, 2026-09-21).** `CONF-55` —
+`conf_55_family_tag_and_region.rs` — implements the family-tag/F3 row (written as CONF-47's):
+one tag (`fam`) pairing `p-plan/k3` with `p-api/kimi-k3`, the spill routing through both, F3
+unchanged (each mock receives its own native id, `requested_model` stays the client's verbatim
+string), the bare tag and the provider/tag form refused `404 unknown_model`, the tag absent from
+every upstream byte and trace decision value, and `region: cn` displayed on `/health` beside the
+`intl` default with no routing consequence. It also carries the load-rule half of the region row
+(CONF-48's) at the e2e boundary — a `cn` entry loading and serving — while the refusal half of
+both keys stays CONF-53's. **Occupancy now**: 55 spent; 48–51 stay reserved for R8-2b/2c's
+remaining rows (the region-display consequence is covered, the report-provenance row is still
+R8-2c's); the next free ID is **`CONF-56`**.
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
