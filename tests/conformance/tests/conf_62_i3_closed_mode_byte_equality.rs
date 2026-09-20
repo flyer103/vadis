@@ -47,6 +47,7 @@ impl TransformEngine for EagerTrimmer {
             return None;
         }
         Some(TransformOutcome {
+            rule: "eager-trimmer".into(),
             new_text: kept.join("\n"),
             cache_impact: "neutral",
             tee_id: None,

@@ -404,14 +404,18 @@ pub(crate) fn compose_transform_stage(
         if o.new_text == node.text {
             continue;
         }
+        // One ledger entry per **rule** (step), aggregated across the
+        // payload nodes that rule edited: keyed by the outcome's own rule
+        // id — spec §6's `plugin` is "the rule id", so one engine carrying
+        // many rules still writes one attributable entry per rule.
         let idx = match records
             .iter()
-            .position(|r| r.plugin == engine.id() && r.cache_impact == o.cache_impact)
+            .position(|r| r.plugin == o.rule && r.cache_impact == o.cache_impact)
         {
             Some(i) => i,
             None => {
                 records.push(router_core::trace::TransformRecord {
-                    plugin: engine.id().to_string(),
+                    plugin: o.rule.clone(),
                     edited_paths: Vec::new(),
                     // net = saved − added (spec §7): the added side counts
                     // the tee marker, the re-encoding and the replaced text
@@ -446,7 +450,7 @@ pub(crate) fn compose_transform_stage(
         }
         edits.push(router_core::transform::PayloadEdit {
             path: node.path,
-            rule: engine.id().to_string(),
+            rule: o.rule.clone(),
             bytes_out: o.new_text.len(),
             new_text: o.new_text,
             bytes_in,

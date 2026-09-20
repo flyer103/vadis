@@ -121,10 +121,15 @@ pub struct PayloadCtx<'a> {
 }
 
 /// The engine's answer for one node: the new text plus what the ledger needs.
-/// `cache_impact` is the stable word `neutral` / `risky` / `broken`
-/// (§12.3's vocabulary); a per-node trim is `neutral` by construction (it
-/// depends only on the node it edits, which is I2's sufficient rule).
+/// `rule` is the **rule id that fired** for this node (the trace's `plugin`
+/// is "the rule id", spec §6 — one engine carries many rules, and the
+/// ledger is per step, i.e. per rule). `cache_impact` is the stable word
+/// `neutral` / `risky` / `broken` (§12.3's vocabulary); a per-node trim is
+/// `neutral` by construction (it depends only on the node it edits, which
+/// is I2's sufficient rule).
 pub struct TransformOutcome {
+    /// The rule id that produced this edit (the ledger entry's `plugin`).
+    pub rule: String,
     pub new_text: String,
     pub cache_impact: &'static str,
     /// The tee marker's identity (sha16 of the original payload) when the

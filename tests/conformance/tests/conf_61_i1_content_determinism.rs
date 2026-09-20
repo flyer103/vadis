@@ -45,6 +45,7 @@ impl TransformEngine for NoiseTrimmer {
             return None; // nothing changed: no edit, no ledger entry
         }
         Some(TransformOutcome {
+            rule: "noise-trimmer".into(),
             new_text: kept.join("\n"),
             cache_impact: "neutral",
             tee_id: None,
