@@ -329,13 +329,15 @@ pub async fn serve(config_path: &str) -> i32 {
     ) -> axum::Router {
         axum::Router::new().route(
             path,
-            post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
-                let hs: Vec<(String, String)> = headers
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                    .collect();
-                proxy_endpoint(forwarder, proto_in, hs, body)
-            }),
+            post(
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let hs: Vec<(String, String)> = headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect();
+                    proxy_endpoint(forwarder, proto_in, hs, body)
+                },
+            ),
         )
     }
 
@@ -346,16 +348,14 @@ pub async fn serve(config_path: &str) -> i32 {
         proto_in: WireApi,
         path: &'static str,
     ) -> axum::Router {
-        protocol_route(forwarder, proto_in, path).route_layer(
-            axum::middleware::from_fn_with_state(
-                GuardState {
-                    gate,
-                    trace,
-                    proto_in,
-                },
-                guard_mw,
-            ),
-        )
+        protocol_route(forwarder, proto_in, path).route_layer(axum::middleware::from_fn_with_state(
+            GuardState {
+                gate,
+                trace,
+                proto_in,
+            },
+            guard_mw,
+        ))
     }
 
     /// What the guard runs with: the startup token's gate, the same
@@ -488,7 +488,11 @@ pub async fn serve(config_path: &str) -> i32 {
         state.state_db,
         // §9.1's vocabulary; the variable's name is not printed here
         // (/health carries it), the value nowhere, ever.
-        if auth_token.is_some() { "required" } else { "none" }
+        if auth_token.is_some() {
+            "required"
+        } else {
+            "none"
+        }
     );
     match axum::serve(listener, app).await {
         Ok(()) => 0,

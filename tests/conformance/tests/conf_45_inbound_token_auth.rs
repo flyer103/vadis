@@ -48,8 +48,7 @@ fallback: []
     )
 }
 
-const CLIENT_BODY: &str =
-    r#"{"model":"mock/glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf45-sess"}"#;
+const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf45-sess"}"#;
 
 const UPSTREAM_OK: &str = r#"{"id":"resp-1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110}}"#;
 
@@ -81,7 +80,11 @@ async fn conf_45_inbound_token_auth_guard() {
     let config_path = dir.join("config.yaml");
     std::fs::write(
         &config_path,
-        config_yaml(upstream.addr.port(), listen_port, ", auth_token_env: CONF45_GUARD_TOKEN"),
+        config_yaml(
+            upstream.addr.port(),
+            listen_port,
+            ", auth_token_env: CONF45_GUARD_TOKEN",
+        ),
     )
     .unwrap();
     std::env::set_var("CONF45_MOCK_KEY", "sk-conf45");
@@ -134,7 +137,11 @@ async fn conf_45_inbound_token_auth_guard() {
 
     // The refused requests never reached the upstream (no wire bytes
     // exist for them, spec §4.7).
-    assert_eq!(upstream.requests().len(), 0, "no upstream contact for a 401");
+    assert_eq!(
+        upstream.requests().len(),
+        0,
+        "no upstream contact for a 401"
+    );
 
     // ③ the right token — first as Authorization: Bearer, then as
     //    x-api-key — is forwarded normally both times.
@@ -159,7 +166,11 @@ async fn conf_45_inbound_token_auth_guard() {
     // own bytes minus the router-owned member (CONF-27's class; here it
     // is what makes "auth on" byte-faithful, DESIGN §12.11).
     let requests = upstream.requests();
-    assert_eq!(requests.len(), 2, "exactly one upstream attempt per admission");
+    assert_eq!(
+        requests.len(),
+        2,
+        "exactly one upstream attempt per admission"
+    );
     let b1: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
     let b2: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
     let client: serde_json::Value = serde_json::from_str(CLIENT_BODY).unwrap();
@@ -185,8 +196,11 @@ async fn conf_45_inbound_token_auth_guard() {
     assert_eq!(records.len(), 4, "two 401s + two forwarded requests");
     let refused: Vec<&serde_json::Value> = records
         .iter()
-        .filter(|r| r["errors"].as_array().is_some_and(|e| !e.is_empty()
-            && e[0]["kind"] == "unauthorized"))
+        .filter(|r| {
+            r["errors"]
+                .as_array()
+                .is_some_and(|e| !e.is_empty() && e[0]["kind"] == "unauthorized")
+        })
         .collect();
     assert_eq!(refused.len(), 2, "one trace line per refused request");
     for rec in &refused {
@@ -204,8 +218,14 @@ async fn conf_45_inbound_token_auth_guard() {
     }
     // The first refusal carried no header at all; the second named
     // `authorization` (the diagnostic, spec §4.7).
-    assert_eq!(refused[0]["errors"][0]["details"]["header"], serde_json::Value::Null);
-    assert_eq!(refused[1]["errors"][0]["details"]["header"], "authorization");
+    assert_eq!(
+        refused[0]["errors"][0]["details"]["header"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        refused[1]["errors"][0]["details"]["header"],
+        "authorization"
+    );
 }
 
 /// ⑤ No `auth_token_env` ⇒ no auth anywhere: a tokenless request is
@@ -238,7 +258,10 @@ async fn conf_45_no_key_means_no_auth() {
         CLIENT_BODY.as_bytes(),
         &[],
     );
-    assert_eq!(status, 200, "no key ⇒ tokenless request forwarded as before");
+    assert_eq!(
+        status, 200,
+        "no key ⇒ tokenless request forwarded as before"
+    );
     assert_eq!(body, UPSTREAM_OK.as_bytes());
 
     let (status, body) = http_get(&listen_addr, "/health");

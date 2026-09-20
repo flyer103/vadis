@@ -386,10 +386,7 @@ mod tests {
         let v = g.admits(&hdrs(&[]));
         let rec = refused_record("req-2", WireApi::Anthropic, &v, 0, 0);
         let j = serde_json::to_value(&rec).unwrap();
-        assert_eq!(
-            j["errors"][0]["details"]["header"],
-            serde_json::Value::Null
-        );
+        assert_eq!(j["errors"][0]["details"]["header"], serde_json::Value::Null);
         assert_eq!(j["protocol"]["protocol_in"], "anthropic");
     }
 }
