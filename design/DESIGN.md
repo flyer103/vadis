@@ -1000,6 +1000,24 @@ both keys stays CONF-53's. **Occupancy now**: 55 spent; 48–51 stay reserved fo
 remaining rows (the region-display consequence is covered, the report-provenance row is still
 R8-2c's); the next free ID is **`CONF-56`**.
 
+**Allocation of CONF-56 (R8-2c, 2026-09-21).** `CONF-56` —
+`conf_56_stats_json_omission_rule.rs` — implements the report-provenance row's `--json` half
+(the row written as CONF-46's third assertion; the figures-level half landed as CONF-54's):
+through the same public surface the CLI's own print path calls (`stats::report` + the
+`report_json` builder extracted from the former private `print_json` for exactly this
+purpose, the `report()` precedent of CONF-41), a single-currency window keeps every scalar
+cost key, adds `"currency"` and grows no `by_currency` member, while the plan section keeps
+`switch_cost_currency` beside its scalar; a mixed window (the CONF-54 rig: CNY zeros, a CNY
+spill, a plain USD record) omits the scalar cost keys, the `currency` string and the plan
+section's scalar switch keys, presents the tiers only under per-currency maps holding
+exactly the currencies seen (never a folded entry), and keeps the currency-free figures
+(`requests`, `switches`, `hit rate`) single and unchanged — with the report itself
+succeeding, because a mixed window is not an error. **Occupancy now**: 55–56 spent by the
+R8-2b/2c pair; 48–51 stay reserved (the region row is covered, the currency row is covered,
+no unallocated ADR-018 row remains for them — an R9 round that wants a number greps this
+paragraph, takes `CONF-57`, and records why 48–51 were left); the next free ID is
+**`CONF-57`**.
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).

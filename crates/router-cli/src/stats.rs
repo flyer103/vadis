@@ -337,17 +337,10 @@ pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
     };
 
     if json {
-        print_json(
-            &ReportCtx {
-                rc: &rc,
-                window,
-                start_ms: rep.start_ms,
-                now_ms: rep.now_ms,
-                files_read: rep.files_read,
-                unknown_note: &unknown_note,
-            },
-            &rep.figures,
-            &rep.events,
+        let v = report_json(&rc, window, &rep, &unknown_note);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&v).expect("figures are JSON")
         );
     } else {
         print_text(
@@ -711,25 +704,18 @@ fn e_unknown(e: &EventFigures) -> Option<u64> {
     }
 }
 
-/// Everything `print_json` needs, bundled to keep its argument list short.
-struct ReportCtx<'a> {
-    rc: &'a crate::config_load::ResolvedConfig,
-    window: &'a str,
-    start_ms: i64,
-    now_ms: i64,
-    files_read: usize,
-    unknown_note: &'a Option<String>,
-}
-
-fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
-    let (rc, window, start_ms, now_ms, files_read, unknown_note) = (
-        ctx.rc,
-        ctx.window,
-        ctx.start_ms,
-        ctx.now_ms,
-        ctx.files_read,
-        ctx.unknown_note,
-    );
+/// The `--json` document (spec §9.2), as a value: pure, so conformance
+/// (CONF-56) can assert the omission rule's two shapes directly against
+/// the same builder the printer uses — the same standing as `report()`
+/// for the figures (CONF-41). Exposed for that reason and no other.
+pub fn report_json(
+    rc: &crate::config_load::ResolvedConfig,
+    window: &str,
+    rep: &Report,
+    unknown_note: &Option<String>,
+) -> serde_json::Value {
+    let (f, e) = (&rep.figures, &rep.events);
+    let (start_ms, now_ms, files_read) = (rep.start_ms, rep.now_ms, rep.files_read);
     let mut v = serde_json::json!({
         "window": {
             "arg": window,
@@ -810,8 +796,5 @@ fn print_json(ctx: &ReportCtx<'_>, f: &TraceFigures, e: &EventFigures) {
     if let Some(note) = unknown_note {
         v["notes"] = serde_json::json!([note]);
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&v).expect("figures are JSON")
-    );
+    v
 }
