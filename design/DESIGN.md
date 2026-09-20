@@ -902,6 +902,7 @@ not written).
 **Integration note (2026-09-21, `intern/merge-r6-r9`).** ADR-018's row set allocated `CONF-46…49`; 46/47 were burned by the parallel R6 branch (the two rows above) and the cases that landed with the implementation are **CONF-52…56** — the renumbering paragraphs below record the mapping. One row of the original allocation never landed a case file: **the USD cap over a non-USD overflow refused at load** (written as CONF-49's). Its load-time validation exists (`config.rs`'s `validate_plan_policy`, the `overflow_monthly_cap_usd` × `Currency::Usd` check) but no conformance case asserts it; recorded here rather than given a number — the row is re-allocated when a case lands, per the occupancy notes below.
 | CONF-61 | DESIGN §12.12 invariant I1 (ADR-019 item 4)·content determinism | with a fixed rule set, two runs of the composition step over identical inbound bytes produce **byte-identical upstream-visible bodies**, and the same content under a different session key produces the same output (the plan reads no session, clock, turn index or RNG); run on **both** forwarding paths (buffered via the transport seam, streaming via a mock upstream). Negative limb: the trimmed output differs from the untrimmed bytes — the edit is real, so a determinism pass cannot be vacuous | the shared composition step (`compose_transform_stage`) + the engine seam (`TransformEngine`) |
 | CONF-62 | DESIGN §12.12 invariant I3 (ADR-019 item 4)·closed-mode byte equality | with a **fully-populated engine loaded whose rule matches the fixture's payload**, a `passthrough`-mode request's upstream bytes equal the client's modulo exactly mutations (a) and (b) — the loaded, matching engine edited nothing (this is the limb that keeps CONF-01/02/03 non-vacuous now that a transform is configurable). Negative limb: the same content with mode `transform` produces the edit — different bytes, exactly the two mutations plus the one declared value-span edit | the mode check inside the composition step (§12.12) |
+| CONF-63 | DESIGN §12.12 invariant I2 (ADR-019 item 4)·prefix monotonicity, per fixed effective rule set | within one session, with the effective rule set unchanged and the inbound body growing by append, `out(N)` is a **byte prefix** of `out(N+1)` — a JSON array append replaces turn N's own `]}` tail, so the compared object is the shared region — and `prefix.continuity` stays 1.0; unlike CONF-61/62 (test-local trimmer engines) this case drives the **real** `builtin/transform_rules` engine over the repo's own `rules/tool_output.toml`, loaded by the real `serve` assembly from `plugins[].config.rules_file` — the first rule set configurable end to end. The ledger is part of the object under test (ADR-019 §5): every step reports `saved`/`added` with `net = saved − added`, the tee marker is counted on the added side, and every decision-time figure is `inferred` — no saving claimed as measured. A mid-session mode switch is not silent (ADR-019 §4's last paragraph): the mode word moves, the ledger empties and `prefix_continuity` drops for exactly that turn, the raw payload going back out (I3 on the live path). Negative limbs: a mid-history edit of an earlier payload's surviving line breaks the byte prefix and drops continuity — the assertion distinguishes a monotone rule set from a non-monotone one instead of asserting a constant (the fixture is also what found `prefix.rs`'s `scan_element_end` string-scan bug, fixed with the case) | the rule engine + its CLI wiring (`builtin/transform_rules` from `plugins[].config.rules_file`, §12.12) + the prefix-block scanner (`router-core/src/prefix.rs`, §12.10.6) |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1039,6 +1040,22 @@ R8-2b/2c pair; 48–51 stay reserved (the region row is covered, the currency ro
 no unallocated ADR-018 row remains for them — an R9 round that wants a number greps this
 paragraph, takes `CONF-57`, and records why 48–51 were left); the next free ID is
 **`CONF-57`**.
+
+**Allocation of CONF-60…63 (R9, ADR-019's transform contract) — recorded 2026-09-21 by the
+integration branch.** R9's implementing cards did not take `CONF-57…59` (the next free IDs of the
+paragraph above): the R8/R9 branches were in flight in parallel with R8's cards holding the lower
+range (48–51 reserved, 52–56 spent by R8-2b/2c), and the allocation rule of the time was "grep the
+latest allocation paragraph, not the rows" (R8-F2) — R8's close observed the R9 branch had already
+taken 60–62 for ADR-019, which is what kept the two branches collision-free. What landed:
+**CONF-60…62** by R9-2a (`abe6299` — the mode channel, I1 content determinism, I3 closed-mode byte
+equality) and **CONF-63** by R9-2b (`5f7ebb2` — I2 prefix monotonicity over the real rule set, the
+ledger, and the non-silent mode switch, with the `prefix.rs` element-scan fix). ADR-019 itself
+allocates no ID ("the implementing round allocates the conformance cases"), and the ids were
+allocated by the implementing cards against a real occupancy check — §12.8's own precedent.
+**Occupancy now**: 60–63 spent by R9; **57–59 are vacant** (R8 landed 52–56 and took none of them)
+and stay reserved for the next allocating change — a round that wants a number greps this paragraph
+and takes **`CONF-57`**. 48–51 stay reserved exactly as the paragraph above leaves them; the next
+free ID is **`CONF-57`**.
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
