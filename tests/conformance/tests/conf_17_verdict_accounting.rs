@@ -125,6 +125,7 @@ fn empty_record() -> DecisionRecord {
             output: Nano(0),
             peak_applied_pct: 100,
             total: Nano(0),
+            currency: router_core::Currency::Usd,
             quota_after: None,
         },
         result: ResultRec {

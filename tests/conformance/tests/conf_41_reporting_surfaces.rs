@@ -185,13 +185,23 @@ async fn conf_41_health_plan_section_and_stats_match_the_records() {
         rep.figures.input_cached_tokens, input_cached,
         "cached tokens"
     );
+    // ADR-018 (spec 9.2): the tiers are per currency. This rig is a
+    // single-currency (USD, all-default) window, so the relation is
+    // asserted on the USD entry — and the currency set is exactly USD
+    // (an empty set would mean no priced record was read at all).
     assert_eq!(
-        rep.figures.input_miss_nano
-            + rep.figures.input_hit_nano
-            + rep.figures.cache_write_nano
-            + rep.figures.output_nano,
+        rep.figures.currencies.keys().collect::<Vec<_>>(),
+        vec!["USD"],
+        "an all-default roster prices a USD-only window"
+    );
+    let usd = |m: &std::collections::BTreeMap<String, u64>| m.get("USD").copied().unwrap_or(0);
+    assert_eq!(
+        usd(&rep.figures.input_miss_nano)
+            + usd(&rep.figures.input_hit_nano)
+            + usd(&rep.figures.cache_write_nano)
+            + usd(&rep.figures.output_nano),
         total_nano,
-        "cost: the four tiers sum to the records' own cost.total sum"
+        "cost: the four tiers sum to the records' own cost.total sum (USD)"
     );
     assert_eq!(rep.figures.switches, switches, "switches");
     // The spilled record (turn 2) is the one switch; its own measured
@@ -204,8 +214,19 @@ async fn conf_41_health_plan_section_and_stats_match_the_records() {
         .map(|r| r["cost"]["total"].as_u64().unwrap_or(0))
         .sum();
     assert_eq!(
-        rep.figures.switch_cost_verified_nano, switch_cost,
-        "switch cost (verified) is the displaced record's own measured total"
+        usd(&rep.figures.switch_cost_verified_nano),
+        switch_cost,
+        "switch cost (verified) is the displaced record's own measured total (USD)"
+    );
+    // Every record the run wrote is v2 and states its unit: cost.currency
+    // is present and USD on all of them (spec 6 / ADR-018).
+    assert!(
+        recs.iter().all(|r| r["cost"]["currency"] == "USD"),
+        "v2 records carry cost.currency"
+    );
+    assert!(
+        recs.iter().all(|r| r["schema_version"] == 2),
+        "v2 records state schema_version 2"
     );
     assert_eq!(rep.figures.switches_without_usage, 0);
 
@@ -272,5 +293,5 @@ async fn conf_41_no_policy_is_not_fabricated() {
     // struct carries switch counts only when a policy exists is a property
     // of the printer; the case asserts the figures it may not fabricate.
     assert_eq!(rep.figures.reprefill_tokens, 0);
-    assert_eq!(rep.figures.reprefill_cost_nano, 0);
+    assert!(rep.figures.reprefill_cost_nano.is_empty());
 }
