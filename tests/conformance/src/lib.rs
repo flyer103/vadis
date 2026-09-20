@@ -543,4 +543,183 @@ pub mod testkit {
         }
         panic!("server never came up on {addr}");
     }
+
+    // -----------------------------------------------------------------
+    // The plan-first rig (CONF-32…, spec §4.6 / ADR-014): two mock
+    // upstreams — one `account: coding_plan`, one `account: api` serving
+    // the same model id — plus the real `serve` assembly, so every
+    // account-state assertion is made against the requests the mocks
+    // actually received, the store's event rows and the trace.
+    // -----------------------------------------------------------------
+
+    /// The canned 403 that moves the account: the wording contains
+    /// `insufficient_quota`, one of the classifier's QUOTA_EXHAUSTED_PATTERNS
+    /// — anything else classifies as `auth` and moves nothing. The
+    /// `Retry-After: 1` header shrinks the ADR-011 provider demotion that
+    /// follows the 403 from the 60s default to one second, so probe cases
+    /// run without sleeping a minute (the demotion is route availability,
+    /// deliberately independent of the family's own cooldown knob).
+    pub fn plan_forbidden_403() -> CannedResponse {
+        CannedResponse::json(
+            403,
+            "Forbidden",
+            br#"{"error":{"message":"You have exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+        )
+        .with_header("retry-after", "1")
+    }
+
+    /// A 200 chat completion with a fixed usage the cost/quota paths can
+    /// reason about: 100 prompt tokens (20 cached) + 5 completion.
+    pub fn plan_ok(content: &str) -> CannedResponse {
+        let body = format!(
+            r#"{{"id":"ok","choices":[{{"index":0,"message":{{"role":"assistant","content":"{content}"}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{{"cached_tokens":20}}}}}}"#
+        );
+        CannedResponse::json(200, "OK", body.as_bytes())
+    }
+
+    /// The plan-first config: family `m1` on `p-plan` (coding_plan) with
+    /// `p-api` (api) as the spill. `quota_yaml` is inserted into the
+    /// p-plan provider (pass "" for a plan whose allowance is
+    /// unpublished — GAP-Q1's legal case); `policy_yaml` replaces the
+    /// plan_policy body (family/primary/overflow are always required).
+    pub fn plan_config_yaml(
+        plan_port: u16,
+        api_port: u16,
+        listen_port: u16,
+        quota_yaml: &str,
+        policy_yaml: &str,
+    ) -> String {
+        format!(
+            r#"server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 10s, request_timeout: 30s }}
+session:  {{ key_sources: ["prompt_cache_key"], ttl: 11h }}
+cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, safety_factor: 1.1 }} }}
+trace:    {{ dir: "./state/traces", rollover: hourly }}
+
+providers:
+  - name: p-plan
+    base_url: http://127.0.0.1:{plan_port}/v1
+    api_key_env: CONF_PF_PLAN_KEY
+    wire_api: chat
+    supports: [chat]
+    account: coding_plan{quota_yaml}
+    models:
+      - id: m1
+        context: 128k
+        price:
+          input_miss: 0.001
+          input_hit: 0.0001
+          cache_write: 0.0
+          output: 0.002
+          peak: {{ multiplier: 1.0, windows: [] }}
+        source: "mock upstream (no price; test fixture)"
+  - name: p-api
+    base_url: http://127.0.0.1:{api_port}/v1
+    api_key_env: CONF_PF_API_KEY
+    wire_api: chat
+    supports: [chat]
+    account: api
+    models:
+      - id: m1
+        context: 128k
+        price:
+          input_miss: 0.002
+          input_hit: 0.0002
+          cache_write: 0.0
+          output: 0.004
+          peak: {{ multiplier: 1.0, windows: [] }}
+        source: "mock upstream (no price; test fixture)"
+
+aliases: {{}}
+plugins: []
+fallback: []
+
+plan_policy:
+{policy_yaml}
+"#
+        )
+    }
+
+    /// The default policy body: spill, probe recovery, `cooldown: 0s`.
+    /// The zero cooldown is deliberate (the operator's probe convention):
+    /// it removes "the cooldown has not elapsed" as an alternative
+    /// explanation wherever a request must NOT probe, making those
+    /// assertions decisive rather than incidental.
+    pub const PLAN_POLICY_DEFAULT: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 0s";
+
+    /// A running plan-first rig. `router_cli` is a dev-dependency (the
+    /// serve spawn stays in the test files, the CONF-25 precedent), so
+    /// this is assembled from [`plan_rig_parts`] there.
+    pub struct PlanRig {
+        pub plan: MockUpstream,
+        pub api: MockUpstream,
+        pub listen_addr: String,
+        pub dir: PathBuf,
+        pub serve_task: tokio::task::JoinHandle<i32>,
+    }
+
+    /// The parts of a plan-first rig: the two mocks, the tempdir (with
+    /// `config.yaml` written) and the free listen address. The caller
+    /// spawns the real serve assembly and builds a [`PlanRig`].
+    pub async fn plan_rig_parts(
+        tag: &str,
+        quota_yaml: &str,
+        policy_yaml: &str,
+    ) -> (
+        MockUpstream,
+        MockUpstream,
+        PathBuf,
+        String,
+    ) {
+        let dir = tempdir(tag);
+        let plan = MockUpstream::start().await.unwrap();
+        let api = MockUpstream::start().await.unwrap();
+        let listen_port = free_port();
+        let listen_addr = format!("127.0.0.1:{listen_port}");
+        let config_path = dir.join("config.yaml");
+        std::fs::write(
+            &config_path,
+            plan_config_yaml(
+                plan.addr.port(),
+                api.addr.port(),
+                listen_port,
+                quota_yaml,
+                policy_yaml,
+            ),
+        )
+        .unwrap();
+        std::env::set_var("CONF_PF_PLAN_KEY", "sk-plan");
+        std::env::set_var("CONF_PF_API_KEY", "sk-api");
+        (plan, api, dir, listen_addr)
+    }
+
+    impl PlanRig {
+        /// One buffered chat request for the family's primary route,
+        /// with or without a session key. Returns (status, body, headers).
+        pub fn post(
+            &self,
+            session: Option<&str>,
+            turn: u32,
+        ) -> (u16, Vec<u8>, Vec<(String, String)>) {
+            let key = session
+                .map(|s| format!(r#","prompt_cache_key":"{s}""#))
+                .unwrap_or_default();
+            let body = format!(
+                r#"{{"model":"p-plan/m1","messages":[{{"role":"user","content":"turn {turn}"}}]{key},"stream":false}}"#
+            );
+            http_post(
+                &self.listen_addr,
+                "/v1/chat/completions",
+                body.as_bytes(),
+                &[],
+            )
+        }
+
+        /// Aborts serve. The state directory survives for the reads.
+        pub fn stop(self) -> std::path::PathBuf {
+            let dir = self.dir.clone();
+            self.serve_task.abort();
+            drop(self.serve_task);
+            dir
+        }
+    }
 }
