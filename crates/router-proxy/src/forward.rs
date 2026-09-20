@@ -1758,7 +1758,7 @@ impl Forwarder {
                 (tok, Some(0))
             }
         };
-        let cooldown_us = (policy.cooldown.0 as i64).saturating_mul(1_000);
+        let cooldown_us = policy.cooldown_us();
         let ev = store
             .append(NewEvent {
                 kind: EventKind::PlanSwitched,

@@ -1,5 +1,6 @@
 use router_core::config::{PlanPolicyCfg, RecoveryMode, RouterConfig};
-use router_core::plan::PlanAccount;
+use router_core::cost::NanoUsd;
+use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy};
 use router_core::store::{Query, QueryRow, Store};
 use serde_json::{json, Map, Value};
 
@@ -139,6 +140,7 @@ fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInp
 /// (`since + cooldown`); no figure here is an estimate (spec §9.1's closing
 /// rule, AGENTS constraint 5).
 pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Value {
+    let rule = PlanFirstRule::new(policy.clone());
     let recover = if policy.recover == RecoveryMode::None {
         "none"
     } else {
@@ -178,25 +180,19 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
     // informational `until_us`, which a rebuild may have derived from a
     // cooldown that has since changed. Always computable when `probe` is
     // present, so no unprintable number exists here.
-    let deadline_us = i.since_us.saturating_add(cooldown_us(policy));
-    // `blocked_by` is the probe predicate's own evaluation order with the
-    // two request-shaped arms left out (§4.6 rule 2; DESIGN §12.10.8):
-    // `recovery_disabled` → `cooldown` → `primary_cooling_down` →
-    // `window_not_reset`, so the surface and the guard cannot disagree
-    // about *why*. "No session" / "not a session boundary" are properties
-    // of a request that does not exist yet and get no word here (§9.1's
-    // table: for every such request the claim would be false).
-    let blocked_by: Option<&str> = if policy.recover == RecoveryMode::None {
-        Some("recovery_disabled")
-    } else if i.now_us < deadline_us {
-        Some("cooldown")
-    } else if !i.primary_allowed {
-        Some("primary_cooling_down")
-    } else if i.deferred_by_window {
-        Some("window_not_reset")
-    } else {
-        None
-    };
+    let deadline_us = i.since_us.saturating_add(policy.cooldown_us());
+    // `blocked_by` is the guard's own answer, not a re-derivation here
+    // (ADR-016 §13.3 L1a: `PlanFirstRule::probe_admitted` is the single
+    // owner of the evaluation order). The request the section renders is
+    // the surface's reduced one: a fresh session at `turn_index == 1` —
+    // the only request shape the probe gate could still admit — so the
+    // two request-shaped arms (`NoSession`, `NotSessionBoundary`) never
+    // fire and get no word (§9.1's table), and `blocked_by_surface_word`
+    // maps every arm that does fire to the surface's vocabulary.
+    let blocked_by = rule
+        .probe_admitted(&surface_request(i))
+        .err()
+        .and_then(ProbeBlockedBy::blocked_by_surface_word);
     let probe = json!({
         "deadline": rfc3339_millis(deadline_us),
         "admitted": blocked_by.is_none(),
@@ -215,18 +211,36 @@ fn route_str(r: &router_core::config::RouteSpec) -> String {
     format!("{}/{}", r.provider, r.model)
 }
 
+/// The reduced request the section renders the guard's answer for: the
+/// surface describes a family, not a request, so the request is the
+/// shape the probe gate could still admit — a fresh session at
+/// `turn_index == 1` on the overflow account (the section's `probe`
+/// member exists only there). With that choice the two request-shaped
+/// arms of `probe_admitted` never fire, and every arm that does fire is
+/// one §9.1 names — the guard's own evaluation order, consumed, not
+/// re-derived (ADR-016 §13.3 L1a). The guard reads the cooldown through
+/// the same `PlanPolicyCfg::cooldown_us` the deadline above used (L1b).
+fn surface_request(i: &PlanHealthInputs) -> PlanRequest<'_> {
+    PlanRequest {
+        session: Some(""),
+        turn_index: 1,
+        state: PlanStateRow {
+            account: i.account,
+            since_us: i.since_us,
+        },
+        now_us: i.now_us,
+        primary_allowed: i.primary_allowed,
+        deferred_by_window: i.deferred_by_window,
+        overflow_spend: NanoUsd(0),
+    }
+}
+
 /// `/health`'s `auth` member (spec §9.1, DESIGN §12.11).
 fn auth_member(server: &router_core::config::ServerCfg) -> Value {
     match server.auth_token_env.as_deref() {
         Some(name) => json!({ "required": true, "env": name }),
         None => json!({ "required": false }),
     }
-}
-
-/// `DurationVal` is milliseconds (§12.5); µs = ms × 1_000 — the same
-/// conversion `PlanFirstRule::cooldown_us` uses.
-fn cooldown_us(policy: &PlanPolicyCfg) -> i64 {
-    (policy.cooldown.0 as i64).saturating_mul(1_000)
 }
 
 fn now_us() -> i64 {
