@@ -1,10 +1,11 @@
 # Cost and caching
 
-Status: written for v0.1 — the plan-first section and the reporting notes are written; the
-remaining bullets below are still an outline. This chapter explains the levers and how to verify
-them. It does **not** contain price numbers or type sketches: prices live in `config.example.yaml`
-(each entry with its `source` URL and capture date), the accounting definitions live in
-`docs/spec.md` §7.
+Status: partly written for v0.1 — the plan-first section, the reporting notes and the "what is not on
+today" section are written; the bullet list below is still an outline. This chapter explains the levers
+and how to verify them, and it is careful about which lever exists: **cache fidelity and plan-first
+routing are served; payload compression is not** (ADR-019, DESIGN §12.12). It does **not** contain price
+numbers or type sketches: prices live in `config.example.yaml` (each entry with its `source` URL and
+capture date), the accounting definitions live in `docs/spec.md` §7.
 
 router's cost model is built on one measured observation: on a real agent session the
 prefix cache is fast and near-total, so the first-order lever is **keeping the prefix
@@ -24,13 +25,22 @@ stable**, and choosing a cheaper model is second-order.
 - **Quotas**: subscription plans are declared per provider and can only reference that
   provider's own models; what happens when a quota runs out is a configured policy. The
   plan-first section below is the written version of this bullet.
-- **Breakeven**: sticky sessions and any cache-writing transform are judged against an
-  explicit breakeven rule rather than intuition.
+- **Breakeven**: the model-switch breakeven rule is implemented and is what prices a failover and a
+  plan spill (the `cache.breakeven` keys in your config). It does not yet judge a transform — there is
+  no transform to judge — and it will judge them by the same rule when one lands.
 - **The transform pipeline** and its priority order: cache fidelity, then input-side
-  payload reduction, then output-side discipline, then provider arbitrage. Every step is
-  reversible, declarative and individually accounted.
-- **Verified versus inferred**: only a measured usage difference counts as a saving; a
-  local tokenizer estimate is labelled as such and can never be reported as measured.
+  payload reduction, then output-side discipline, then provider arbitrage (ADR-003). Every step is
+  declarative, individually accounted and reversible. **The input-side and output-side tiers are not
+  implemented in v0.1** (DESIGN §12.12 — the whole pipeline is `contract-only`): what is served is
+  cache fidelity plus arbitrage between your own accounts. Payload reduction is designed, gated behind
+  a mode the client asks for per request, and described below under *Payload compression: the mode
+  that is not on today*. Anything that rewrites history in place — summarising, trimming by position,
+  a rolling window — is deliberately out, because it breaks the upstream prefix cache and *raises* the
+  bill (ADR-019).
+- **Verified versus inferred**: only a measured usage difference counts as a saving, and a saving is a
+  *difference between two worlds* — the request that ran and the one that did not. A local estimate is
+  labelled `inferred` and can never be reported as measured; where no comparison happened, the honest
+  figure is none at all ([`docs/spec.md` §7](../docs/spec.md)).
 - **How to check the claim**: `router stats --config config.yaml --window 24h` to read the
   cost and cache report (the window is required, because a saving that does not state its window
   cannot be checked), and its `plan family` section for what the switches cost. `router replay`,
@@ -163,6 +173,43 @@ their fields and the rule that decides which of the two numbers a claim may rest
 provider's quota. It reacts to what the provider says and comes back when the provider allows
 it; the allowance itself stays the provider's business.
 
+## Payload compression: the mode that is not on today
+
+In an agent loop, the tokens are not mostly the conversation — they are the **tool output** piling up
+inside it: build logs, `grep` results, diffs, JSON returned by MCP servers. The client resends the whole
+history on every turn, so those bytes are paid for again and again. Trimming them is the obvious lever,
+and router already has the rule *data* for it ([`rules/tool_output.toml`](../rules/tool_output.toml):
+strip noise and progress lines, truncate over-long lines, cap the total, and leave a marker line saying
+what was dropped).
+
+**None of it runs in this version** — the engine behind those rules is `contract-only` (DESIGN §12.12),
+and the reason is not a delay. A content edit is in direct tension with the promise the rest of this
+chapter rests on (the bytes reaching the provider are the bytes the client sent, apart from two
+documented substitutions), so the contract was settled before the code. What it settles:
+
+- **It is a mode the client asks for, per request** — a request header, not a setting. A request that
+  does not ask is byte-identical to what the client sent, modulo those two substitutions (router-owned
+  fields removed, the provider's own model id written into `model`). That guarantee does **not** depend
+  on your configuration: a config full of rules cannot weaken it, and no key in the file can turn the
+  mode on for a request that did not ask (ADR-019).
+- **Edits are declared, and only tool/environment payloads are touched** — never your words, never the
+  system instruction, never the tool schemas. Every edit is recorded with the path it touched and the
+  bytes before and after, so "what did router change" is a list you can read, not an investigation.
+- **Three invariants hold**: the same content always produces the same bytes (no dependence on the turn
+  number, the clock or randomness); a growing conversation *extends* the previous turn's bytes instead
+  of rewriting them, which is what keeps the prefix cache alive; and a request that did not ask for the
+  mode is unchanged even when matching rules are loaded.
+- **An edit that drops bytes can still cost money.** The cache is keyed on the prefix, so rewriting
+  something the provider had already cached is paid for once at the miss price — and that is why a rule
+  is admitted only with its inline tests green, the cache regression measured, and its net gain
+  measured rather than estimated (the D3 gate). Until such a pair of measurements exists, every
+  per-transform figure in `router stats` is an estimate and must be read as one: nothing here is a
+  reported saving yet.
+
+When the mode lands, this chapter gains the "how to turn it on" paragraph and the report gains the
+measured per-transform saving. Until then, read the rule file as a plan rather than as behaviour: it is
+real, reviewed and tested as data, and nothing in the serving path executes it.
+
 ## Authoritative sources
 
 - [`config.example.yaml`](../config.example.yaml) — the price table and the only place
@@ -187,3 +234,11 @@ it; the allowance itself stays the provider's business.
 - [`design/decisions/ADR-003-cost-pipeline.md`](../design/decisions/ADR-003-cost-pipeline.md)
   and [`ADR-006`](../design/decisions/ADR-006-integer-nanousd-accounting.md) — the pipeline
   discipline and the fixed-point money rule.
+- [`design/decisions/ADR-019-transform-mode-and-the-content-edit-contract.md`](../design/decisions/ADR-019-transform-mode-and-the-content-edit-contract.md)
+  — the ruling behind the section above: why content compression is a mode the client asks for, what the
+  byte promise degrades to inside it, and which number may be called a saving.
+- [`docs/spec.md` §2.1](../docs/spec.md) and
+  [`§4.4`](../docs/spec.md) — the mode's exact byte promise, the rule-file contract, and the one
+  capability that is explicitly **not** implemented (retrieving a tee'd original).
+- [`design/DESIGN.md` §12.12](../design/DESIGN.md) — where the pipeline lands: the shared composition
+  step, the three invariants as assertions, and the failure semantics of every step.

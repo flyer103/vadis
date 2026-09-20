@@ -52,9 +52,13 @@ Read it in this order; each group answers a different question.
    fidelity number.** A block is a structural unit (a message, a tool definition, an input
    item), each with its own token count and hash; continuity is the longest common block
    ratio. When it drops, something is breaking the upstream prefix cache.
-6. **Transform** — one entry per plugin step that changed the payload: tokens added, tokens
-   saved, the cache impact, the verdict, and the tee identifier if the rule was marked for
-   teeing. The verdict is the accounting question (below).
+6. **Transform** — the **mode** the record was served under, plus one entry per step that changed the
+   payload: the path it edited with the bytes before and after, the tokens added and saved, the cache
+   impact, the verdict, and the tee identifier if the rule was marked for teeing. The mode is a field
+   of its own because an empty step list is ambiguous — *no mode* and *mode asked for, nothing matched*
+   would otherwise look identical — and v0.1 writes `passthrough` on every request, because no
+   transform is wired yet (ADR-019; [`design/DESIGN.md` §12.12](../design/DESIGN.md)). The verdict is
+   the accounting question (below).
 7. **Usage and cost** — the normalized usage (total input, cached input, cache write,
    output, reasoning) and the five-tier cost breakdown with the total, plus the plan state
    after the charge where a plan applies. Cost is computed by the code path the product's
@@ -96,6 +100,13 @@ amounts — price figures live in exactly one place, your config.)
 | `inferred` | a local estimate, with no control | diagnose with it; label it, and never present it as measured |
 
 Two consequences that surprise people, both deliberate:
+
+- **A saving is a difference between two worlds, and the trace holds only one of them.** The request
+  that ran is measured by the provider's own usage; the request that would have run *without* the edit
+  appears nowhere. So a transform's figure is an estimate until a **pair** exists — a control turn with
+  the rule on and off over the same content, or a replay that computes the counterfactual with the same
+  code ([`docs/spec.md` §7](../docs/spec.md), and [§9.3](../docs/spec.md) for what is not served yet).
+  Where no pair exists, the report shows **no verified saving**, which is an answer, not a gap.
 
 - **A figure computed from local estimates stays `inferred` even when its inputs are
   measured.** The replay cost of a failover, for instance, is computed at decision time
@@ -153,10 +164,14 @@ while `serve` holds that state directory (see [Operations](operations.md)).
 
 ## When cost goes up, look in this order
 
-1. **Prefix continuity** between adjacent turns in the same session. If it dropped, a
-   transform (or a translation) broke the cache and everything else is downstream noise.
+1. **Prefix continuity** between adjacent turns in the same session. If it dropped, something at the
+   *front* of the conversation changed: the client's own content (a different first message, an edited
+   turn), a translation, or a configuration change. In v0.1 no transform is wired, so the number is a
+   statement about the conversation and the routing, not about compression.
 2. **The per-transform accounting** — which step claims what, and whether the claim is
-   verified or inferred.
+   verified or inferred. In v0.1 the list is empty on every request (`transform_mode` is
+   `passthrough`, `transforms` is empty), which is itself the check: a non-empty list means a mode was
+   asked for and something ran.
 3. **The failure mix** — how often the gateway switched routes, for which reason, and what
    each switch cost the cache.
 4. **The model choice** — last, not first. With prefix caching working, the model is the
@@ -169,6 +184,10 @@ while `serve` holds that state directory (see [Operations](operations.md)).
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
   `router stats` report with each figure's provenance and label, and what is not served yet.
 - [`docs/spec.md` §7](../docs/spec.md) — accounting: `verified` versus `inferred`.
+- [`docs/spec.md` §2.1](../docs/spec.md) — the transform mode: the exact byte promise when a content
+  transform is enabled, and why a saving measured there is an estimate until a pair exists
+  ([`ADR-019`](../design/decisions/ADR-019-transform-mode-and-the-content-edit-contract.md),
+  [`design/DESIGN.md` §12.12](../design/DESIGN.md)).
 - [`docs/spec.md` §4.1](../docs/spec.md) — trace output parameters (directory, rollover).
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: event log (state truth)
   versus trace (analysis truth), and their join key.

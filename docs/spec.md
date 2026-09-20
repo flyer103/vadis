@@ -69,6 +69,41 @@ List of lossy points (each must be handled one by one when translating — not "
 | Cache breakpoints | none | `prompt_cache_key` | `cache_control` breakpoints | When translating to an anthropic upstream, inject breakpoints by a stable rule (same content → same position) |
 | usage | `usage.prompt/completion_tokens` | `usage.input_tokens_details.cached_tokens` etc. | `usage.input_tokens/cache_read_input_tokens` | Normalize into the internal `Usage` (§6) |
 
+### 2.1 Transform mode — the byte promise when a content transform is enabled
+
+Everything above describes the **passthrough path**, and a request is on it **unless it asks for a
+transform**: the operator's config decides which transforms exist, the client's request decides
+whether they apply (ADR-019). No config key, plugin, alias or default can enable a content transform,
+so the §2 promise above is unconditional for every request that did not ask, and stays testable
+without a configuration in the picture.
+
+| | Passthrough (default) | `X-Router-Transform: transform` |
+|---|---|---|
+| outbound body | the client's bytes + the two mutations of §2 | the client's bytes + **a declared, ordered list of value-span edits** + the same two mutations |
+| the promise | byte equality, modulo (a) and (b) | *span* equality: every byte outside the declared value spans is the client's, byte for byte |
+| audit surface | the two-mutation table | the same table **plus** one trace ledger entry per step (rule, path, bytes and tokens in/out, label) |
+
+- **The opt-in is a request header** — `X-Router-Transform: passthrough | transform` (absent or
+  `passthrough` ⇒ the byte path). Any other value is `400 invalid_request`, decided before the body is
+  read: a typo must not silently disable a saving the client asked for, and it must never silently
+  enable one. A header is not a body byte, so asking for a transform cannot perturb the prefix.
+- **Span-faithful, never a re-encode.** An edit replaces the *value span* of one addressed node (a
+  tool/environment payload), located by the same single-pass scan as mutations (a)/(b) — a
+  parse → reserialize round trip is forbidden on this path exactly as it is on that one (§2, ADR-007).
+- **Payloads only.** Edits may target tool/environment payloads. They may **not** touch a user or
+  assistant message, the system instruction, the tool schemas or any structural member; a transform
+  that changes *what the model is asked to do* is not this mode and needs its own decision (ADR-019).
+- **Three invariants bind every transform** (ADR-019): content determinism (same inbound bytes + same
+  configured set → same outbound bytes, no clock/turn/RNG); per-set prefix monotonicity (with the set
+  unchanged, an appended conversation extends the previous turn's outbound bytes instead of rewriting
+  them); and closed-mode byte equality (a request that did not ask is byte-equal modulo (a)/(b) **even
+  when matching rules are configured**). A client that changes its request mid-session is obeyed, and
+  the change is visible: the ledger moves and `prefix.continuity` (§6) drops for that turn.
+- **Fail-safe.** A rule that cannot load, compile, pass its inline tests or apply edits nothing: the
+  payload passes through verbatim and the record carries `errors[].kind = "transform_error"` (§8).
+- **A saving measured here is `inferred` until a pair exists** (§7): the served request is one world,
+  and the untouched one is not in the trace.
+
 ## 3. Selection semantics
 
 The `model` field accepts three forms:
@@ -242,6 +277,35 @@ pipeline of ADR-003: filter stage, `match_output`, line keep/drop, truncation, `
   only `tee_id` (§6 "transform"; `null` when tee is not enabled). The implementation is a separate change
   following the P1 compression direction (D3); before it lands, do not use `tee` as a "retrievable
   original text" capability.
+- **The mode is asked for by the client, never by this file** (§2.1): a rule set is configured here,
+  and it edits nothing unless the request carries `X-Router-Transform: transform`. There is no config
+  key that enables a content transform, and that absence is the guarantee the passthrough promise
+  rests on (ADR-019) — `config.example.yaml`'s `disabled:` knob turns a rule *set* off; it cannot turn
+  it *on* for a request that did not ask.
+- **What a rule produces is a value-span edit, not a new body.** A rule consumes one addressed payload
+  node's text and returns that node's new text; the payload is re-encoded as a JSON string and spliced
+  in place of that node's value span (ADR-007's discipline, one level deeper), so every byte outside
+  the edited span — including every other message, the tool schemas and the client's whitespace —
+  survives byte for byte. A `json_compact` rule therefore compacts *the payload*, never the document.
+- **Payloads only, by declaration.** A rule selects its targets by `match_tool` / `match_kind`, never
+  by inspecting content for a guess: no rule may touch a user or assistant message, the system
+  instruction or a tool schema (ADR-003's boundary; ADR-019 item 3).
+- **Admission is a gate, not a preference.** A rule is adopted only when its inline tests are green,
+  the cache regression of §6 (`prefix_continuity` after enabling it) does not fall below the baseline,
+  and its net gain is `verified` — a paired measurement of the same content with the rule on and off,
+  read from the upstream's `usage` (§7). Every rule admitted by less than that is a rule whose saving
+  nobody has measured.
+- **`on_failure: passthrough` is the rule set's contract, not a fallback of last resort**: a rule that
+  cannot load, compile, pass its inline tests or splice its edit does not apply, the payload travels
+  verbatim and the record carries `errors[].kind = "transform_error"` (§8). Partial edits are not a
+  state this version can be in.
+- **Rule parameters are the L1 envelope's own example** (ADR-012 item 3 pre-registers
+  `plugins.<id>.config.rules_file.<rule>.max_lines` with a range): a rule's numeric knobs are what the
+  loop may tune inside that envelope, and nothing about a rule's *shape* is auto-adoptable.
+- **Open item, named so it is not improvised:** a rule's `match_kind` is a "payload category
+  declaration" (`rules/tool_output.toml`), and nothing yet says where the category comes from — no wire
+  field carries it and §4 defines no tool→kind table. `match_tool` is sufficient for the first rules;
+  the resolution of `match_kind` is registered as GAP-Q18 and is the implementing change's to settle.
 
 ### 4.5 `state` (local persistence) — contract
 
@@ -470,7 +534,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
-| transform | per step: `plugin`, `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1) |
+| transform | `transform_mode` (`passthrough` \| `transform`; always present — the mode in effect for **this request's outbound body**, §2.1), and `transforms[]`: one entry per step **that changed the payload**, each `plugin` (the rule id), `edited_paths[]` (`{ path, bytes_in, bytes_out }`, where the two byte counts are the **payload text's** length before and after the step — the length of the spliced JSON string span differs by its escaping and is not claimed here), `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1). **Every step must report its token delta**: a step that cannot is not admissible as one |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
@@ -491,6 +555,20 @@ whether a `session.bound` event is written (§4.5). A reader must therefore not 
 sent no server-side state" or "no binding was found", and the `stateful_unsupported` row of §8 cannot fire.
 ADR-004 item 3 is the ruling this group lands.
 
+**The `transform` group is a mode plus a ledger, and both are needed** (ADR-019). `transform_mode` is
+the word in effect for *this request's outbound body*: `passthrough` on every request that did not ask
+for a transform (§2.1), and on every request refused before the transform chain ran (a 401, a parse
+rejection) — no step was even planned, so nothing is claimed. `transforms[]` carries one entry **per
+step that changed the payload**, written with the step's own report (the event row of the same name,
+`transform.applied`, ADR-010), so an empty array is ambiguous between *no mode* and *mode on, nothing
+matched*; that ambiguity is the reason the mode is its own field instead of being inferred from the
+array. Each entry names the rule that fired, the payload path it touched with its byte counts, its
+token delta and that delta's label — and **an entry describes the plan, not what reached the wire**: a
+request the guard chain then refused keeps its mode word and its entries, and whether those bytes went
+upstream is `result.status`'s answer (a refusal after the chain ran is a different fact from one before
+it). A step whose delta cannot be stated is not admissible as a step: an unaccounted content edit is the
+exact failure the mode exists to make impossible.
+
 **A request refused by the inbound auth guard** (§4.7) is in a class of its own: it never entered the
 pipeline, so its record carries what is observable at the boundary and invents nothing.
 
@@ -507,7 +585,7 @@ pipeline, so its record carries what is observable at the boundary and invents n
 | `decision.plugin_chain` / `decision_ms` | `[]` / `0` | no chain ran, no decision was made |
 | `state.*` | `false`, `false`, `0` | v0.1's constants (above) |
 | `prefix.blocks` / `continuity` | `[]` / `null` | no prefix was read or measured |
-| `transforms` | `[]` (omitted on the wire) | the chain never ran |
+| `transform_mode` / `transforms` | `"passthrough"` / `[]` (the array is omitted on the wire when empty) | no body was composed, so no edit exists to claim (ADR-019) |
 | `usage` | zeroed | an absent measurement is absent, never 0-with-a-meaning |
 | `usage_missing` | **`true`** | the definition above; this is what keeps the record out of every rate, sum and gate while still counting it |
 | `cost.*` (four tiers, `total`) / `quota_after` | `0` / `null` | nothing was priced and no quota was charged |
@@ -619,6 +697,25 @@ The surfaces that print these (the invocation, each figure's provenance and its 
 Reporting requirement: any statement of "how much was saved" must state the convention, the sample size
 and the time window; mixing conventions counts as an error.
 
+**A saving is a difference between two worlds, and the trace holds one of them.** This is why the
+convention is binary rather than a confidence scale: the request that was served is measured by the
+upstream's own `usage`, but the counterfactual — the same content served *without* the edit — does not
+appear anywhere in the record. A single observation therefore measures **the request**, never the
+saving, and any figure derived from it by arithmetic on local byte lengths stays `inferred` (the
+dependency allowlist has no tokenizer, GAP-Q14). A `verified` figure needs the pair to exist: a control
+turn with the transform on and off over the same content in the same session, read from the upstream's
+`usage` — or the replay path computing the counterfactual with the same code, which is designed and
+**not served** (§9.3). Three consequences follow, and all three are rules rather than advice:
+
+- **A transform's figure starts `inferred` and stays there until a pair exists.** In a run with no
+  control turn and no replay, `verified_savings_tokens` (§6) is 0, and that is the honest reading, not
+  a gap in the report.
+- **The ledger's arithmetic is `net = saved − added`** (ADR-019): the marker line a `tee` rule appends,
+  a payload's re-encoding and any replaced text all count on the added side. A rule whose *verified*
+  net is ≤ 0 is not adopted; its `inferred` net may be positive and still tells you nothing.
+- **A label travels with the figure, and an absent measurement is not a zero.** A step whose delta was
+  never measured is `usage_missing`-class (§6): it is counted, labelled and priced nowhere.
+
 ## 8. Degradation and error behavior
 
 **Unified error body** (every non-2xx, including the stub endpoints; clients parse this and should not
@@ -631,7 +728,7 @@ rely on each upstream's own error shape):
 
 | `error.type` | HTTP | Trigger |
 |---|---|---|
-| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type |
+| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Router-Transform` value (§2.1 — a client asking for a mode that does not exist is told, never silently served the other way) |
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
