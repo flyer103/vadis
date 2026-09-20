@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config_load;
+pub mod stats;
 
 use clap::{Parser, Subcommand};
 
@@ -21,6 +22,20 @@ pub enum Command {
         /// Path to the router config file
         #[arg(long)]
         config: String,
+    },
+    /// Report the window's figures from the trace + event log (spec §9.2)
+    Stats {
+        /// Path to the router config file (resolves `trace.dir`)
+        #[arg(long)]
+        config: String,
+        /// The window, in the config duration grammar (`300ms`, `90s`,
+        /// `15m`, `1h30m`). Required: a report must state its window.
+        #[arg(long)]
+        window: String,
+        /// Emit the machine-readable form (the same figures, plus the
+        /// notes the human form prints on stderr)
+        #[arg(long)]
+        json: bool,
     },
 }
 

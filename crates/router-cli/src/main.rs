@@ -16,6 +16,11 @@ fn main() {
         Command::Serve { config } => tokio::runtime::Runtime::new()
             .expect("tokio runtime")
             .block_on(router_cli::serve(&config)),
+        Command::Stats {
+            config,
+            window,
+            json,
+        } => router_cli::stats::stats(&config, &window, json),
     };
     std::process::exit(code);
 }
