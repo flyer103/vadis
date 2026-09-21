@@ -9,8 +9,11 @@ config.yaml
 
 # autowork data (large, re-derivable)
 autowork/traces/
+autowork/captures/
 autowork/results/
-autowork/corpus/raw/
+# R12-F6: corpus bodies live at <corpus-id>/raw/... — ignore every corpus's
+# raw payloads, not just a corpus literally named "raw"
+autowork/corpus/*/raw/
 autowork/.venv/
 autowork/**/__pycache__/
 autowork/uv.lock.bak
