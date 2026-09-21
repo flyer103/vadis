@@ -361,8 +361,15 @@ holds a key and a transport for it, and its `wire_api` equals the **inbound** pr
 requires `wire_api ∈ supports`, §4, so the wire condition is the whole of it). A candidate that fails the wire
 condition is skipped in the same class as a keyless one — not attempted, no `failover_from`, no switch cost, no
 trace event — and the chain continues; a skip is **not** a refusal of the request, and it is not the `501` of a
-route the client named (§2). When no candidate at all may serve, the client gets the `502 upstream_error`
-refusal §8 freezes (`details.stage: "no_available_route"`), and the trace records the terminal failure.
+route the client named (§2). **The walk names a destination only if that candidate could serve this request**
+(the narration predicate *is* the eligibility predicate, stated once for both paths): `failover_from` and the
+`failover.triggered` event are written only when the request moves onto a candidate the walk will actually
+attempt, so an ineligible tail is neither narrated as a displacement nor priced at its own table (§6). When no
+candidate at all may serve — and **nothing was attempted** — the client gets the `502 upstream_error` refusal §8
+freezes (`details.stage: "no_available_route"`), and the trace records the terminal failure. When a candidate
+**was** attempted and the walk then had nothing left to try, the refusal is §8's attempt-exhausted shape
+instead: the walk's refusal has **two conditions, one shape each**, and both paths produce each shape
+identically (§8).
 
 ### 4.3 `inject` (plugin dependency declaration)
 
@@ -1014,7 +1021,8 @@ the two answer different questions and are set by different facts:
 
 | what moved the request | `failover_from` | `plan_switch` |
 |---|---|---|
-| a failed attempt in this request (§4.2's walk) | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
+| a failed attempt in this request (§4.2's walk) **with a candidate the walk can attempt next** | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
+| a failed attempt in this request and **no** candidate the walk can attempt after it (the attempt-exhausted condition, §4.2/§8) | `null` — nothing moved: the refusal carries that attempt's own evidence (`upstream_status` / `error_class`), and a displacement with no destination would be a fact that never happened (ADR-010) | `null` |
 | ADR-011's cooldown refusing the resolved route **before** any attempt | set — the route the skip abandoned (ADR-011 item 4) | set, `reason: primary_cooling_down`, **when the abandoned route was the family's `primary`**; `null` when it was not (the cooldown displaced the client's own choice, not the family's account) |
 | the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason: primary_exhausted` |
 | the family's account state returning to `primary` | `null` | set, `reason: primary_recovered` |
@@ -1140,7 +1148,7 @@ rely on each upstream's own error shape):
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
-| `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) — **or** nothing in the chain may serve this request at all: every candidate demoted, keyless or **not native for the inbound protocol** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
+| `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not native for the inbound protocol** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
 | `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing). It answers the cell the **client named**; it is not the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` below) |
 | `internal` | 500 | everything else |
@@ -1161,7 +1169,12 @@ Behavior clauses:
 - **no candidate may serve this request at all** (every entry of the chain demoted, keyless or not native for
   the inbound protocol, §4.2) → the same `502 upstream_error`, taken **before any upstream is contacted**: the
   record is a terminal failure (`usage_missing`, nothing charged) and the client gets the shape frozen at the
-  end of these clauses.
+  end of these clauses. What decides this branch is **whether the walk attempted anything**, not how long the
+  chain was: the moment one candidate is submitted, the request is no longer "nothing may serve", and its
+  refusal is the attempt-exhausted shape — the class-based sentence with `details.upstream_status` /
+  `details.error_class`, and neither `stage` nor `skipped[]` — on **both** forwarding paths. A client can
+  therefore read `details.stage: "no_available_route"` as a statement about its own request: *no upstream was
+  contacted*.
 - prefix discontinuity (detected by cache-guard) → handled per `strict_prefix`: default is warn +
   continue; strict mode rejects that transform.
 - trace write failure → **does not affect the request**, records `errors[].kind = trace_write_failed`
@@ -1172,9 +1185,26 @@ Behavior clauses:
 - unknown fields: **must be passed through verbatim** (friendly to protocol evolution), and must not be
   silently dropped.
 
-**The `no_available_route` shape, frozen** — one shape for both forwarding paths (the streaming path adds only
+**The walk's refusal: two conditions, one shape each, on both forwarding paths.** The walk ends with nothing
+served in exactly two conditions, and each has one body that both media produce (the streaming path adds only
 its pre-existing `"stream": true` member to `details`; nothing else differs, so a client cannot tell which
 medium produced the refusal):
+
+- **nothing was attempted** — every candidate of the chain failed eligibility (unknown provider / no key or
+  transport / wire mismatch / demoted, the resolved route included). This is the shape frozen below:
+  `details.stage: "no_available_route"` with `skipped[]`, and `upstream_status` / `error_class` both **`null`**.
+  The condition and the behaviour clause above are one condition, which is why this sentence is only ever
+  emitted over a request no upstream was contacted for;
+- **an attempt was classified and nothing served after it** — the attempt-exhausted condition, the
+  `upstream_error` row's first limb. The shape is the one the in-loop exhaustion sites already emit: the
+  class-based sentence (`upstream error ({class}) and the fallback chain is exhausted`; the deterministic
+  variant for `format_error` / `content_policy_blocked`; the connect variant when the last attempt never
+  reached the upstream), `details{upstream_status, error_class}`, and **neither `stage` nor `skipped[]`**.
+
+In both conditions the record is a terminal failure (`usage_missing`, nothing charged) and `errors[0]` carries
+the same `details` object the client received.
+
+The `no_available_route` shape, frozen:
 
 ```json
 {"error": {"type": "upstream_error",
@@ -1187,13 +1217,18 @@ medium produced the refusal):
                        "error_class": null}}}
 ```
 
-`skipped[]` lists every candidate the walk refused **without attempting** it, in the chain's own order, each
-with exactly one of `unknown_provider` / `keyless` / `wire_mismatch` / `demoted`; `upstream_status` and
-`error_class` carry the last attempt's evidence when there was an attempt and are `null` when there was none.
-The message is frozen verbatim — "unavailable" is its umbrella for the wire reason, and the machine-readable
-truth is `skipped[]`, not the sentence. A candidate skipped on the wire writes **no** `failover_from`, no
-`plan_switch`, no event row and no `errors[]` member: nothing failed and nothing moved, so no switch may be
-narrated (§6).
+`skipped[]` lists **every candidate the chain offered**, in the chain's own order, each with exactly one of
+`unknown_provider` / `keyless` / `wire_mismatch` / `demoted` — one entry per candidate, so a second model on a
+provider the walk already refused as keyless is listed with the same reason as the first, and in this shape
+`|skipped[]|` equals the number of candidates the chain offered (nothing was attempted, so "every candidate the
+walk refused without attempting" **is** "every candidate"). A candidate that *was* attempted appears in no
+`skipped[]` — such a request's refusal is the attempt-exhausted shape, and `skipped[]` is a member of this one
+only. The message is frozen verbatim — "unavailable" is its umbrella for the wire reason, and the
+machine-readable truth is `skipped[]`, not the sentence. A candidate skipped on the wire writes **no**
+`failover_from`, no `plan_switch`, no event row and no `errors[]` member: nothing failed and nothing moved, so no
+switch may be narrated (§6) — and the walk never narrates a displacement **onto** a candidate it cannot serve
+either, so `failover_from` and the `failover.triggered` event are written only when the request moves to a
+candidate the walk will actually attempt (§4.2).
 
 ## 9. Reporting surfaces (the operator's read-out)
 
