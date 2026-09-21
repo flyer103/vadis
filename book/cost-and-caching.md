@@ -19,7 +19,9 @@ stable**, and choosing a cheaper model is second-order.
 - **The five-tier price schema** (cache miss, cache hit, cache write, output, and a peak
   multiplier with time windows) — described by its shape in the config schema, never by
   numbers. Converted once at load time to fixed-point accounting, so the decision path is
-  pure integer arithmetic.
+  pure integer arithmetic. A vendor that publishes its prices in **input-length bands** is
+  recorded band for band, and each request is priced at the band it falls in — see
+  *When a price depends on how much you send* below.
 - **Where prices come from**: the provider's official pricing page, recorded per model as
   a `source` URL plus capture date. Estimated or remembered prices are not acceptable.
 - **Quotas**: subscription plans are declared per provider and can only reference that
@@ -107,6 +109,37 @@ account.
 
 The precise rules live in [`docs/spec.md` §4.8](../docs/spec.md) (what each key is and is not) and
 [§4.0](../docs/spec.md) (the price convention).
+
+## When a price depends on how much you send
+
+Some vendors do not publish one price per model. They publish one price per **band of input length**: the same
+model costs one rate while your request stays under a threshold, and another rate once it crosses it. Router
+records that as the page publishes it — band for band — and prices each request at the band that request falls
+into.
+
+What that means for you as a client:
+
+- **One band prices the whole request, not part by part.** Crossing a threshold does not add a surcharge to the
+  part that went over: it changes the rate the *entire* request is billed at, which is what the vendor's own
+  table does. A prompt that grows past a threshold can therefore cost noticeably more per token from that
+  request on — that is the vendor's published step, and router reproduces it rather than hiding it.
+- **The band follows the prompt you sent, as the provider counted it** — the whole input, cached or not. It
+  never depends on how much of your conversation the cache happened to serve, so the same conversation is
+  priced the same way whether the cache was warm or cold. (The *rate* does not move with the cache; the cache
+  still decides how much of your input is billed at the cheap hit price inside that band.)
+- **Peak hours still multiply whatever band applies.** The two are separate: the band picks the rate, the time
+  of day multiplies it. Enabling peak pricing cannot move you into another band, and a long prompt cannot move
+  you out of a peak window.
+- **A model whose page publishes no bands is written flat** — one price for every length, exactly as before.
+  That is what most of the shipped example roster does, and those entries did not have to change.
+
+Where this lives in your config: the provider entry's per-model price block, either as the flat four prices or
+as a list of bands. The full shape, the load-time refusals (a band with no ceiling, two bands claiming the same
+input, a band priced at zero, a multiplier written inside a band) and the boundary semantics are
+[`docs/spec.md` §4.10](../docs/spec.md); the figures themselves, each with the citation of the band it came
+from, are in [`config.example.yaml`](../config.example.yaml). One limitation worth knowing: if a page prices
+its bands in a unit that cannot be compared with your prompt's token count, the entry stays **flat** rather
+than guessing — a flat price you can check beats a band the router inferred.
 
 ## Plan-first routing: the subscription first, the metered account as the spill
 
@@ -210,7 +243,10 @@ no policy at all.
 `from` → `to`, why (`primary_exhausted`, `primary_cooling_down`, `primary_recovered`), whether
 it was a probe, the re-prefill size and its price. That price starts as an *inferred* figure
 (it is computed from the prefix, not from a bill); it becomes *verified* in the shadow of the
-switched request's own measured usage. `GET /health` shows the current account and the probe
+switched request's own measured usage. When the route you moved to publishes its prices in
+input-length bands, that decision-time figure is computed from the model's lowest band — it is an
+estimate made before the next request exists, and the band that request actually falls in is what
+its own cost line shows. `GET /health` shows the current account and the probe
 deadline, and `router stats` counts the switches and their verified cost — the two surfaces,
 their fields and the rule that decides which of the two numbers a claim may rest on are
 [`docs/spec.md` §9](../docs/spec.md).
@@ -270,6 +306,8 @@ numbers are shapes, not savings.
   price numbers exist, each with `source`.
 - [`docs/spec.md` §4.0](../docs/spec.md) — the price convention (why this document holds
   no numbers, how peak windows are encoded as a multiplier).
+- [`docs/spec.md` §4.10](../docs/spec.md) — banded pricing: the shape a banded entry takes,
+  which band prices a request, the load-time refusals, and the citation rule per band.
 - [`docs/spec.md` §7](../docs/spec.md) — the accounting convention: `verified` vs
   `inferred`, and the reporting requirements for any savings claim.
 - [`docs/spec.md` §6](../docs/spec.md) — cache metrics exposed to the user

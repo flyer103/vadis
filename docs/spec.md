@@ -159,7 +159,11 @@ providers:
                                        #   plan_policy.family (§4.6) matches, so two routes whose native ids
                                        #   differ can still be one family
         context: <context limit>
-        price:                         # five-tier price, 1K token **in this entry's currency**: this file fixes only the **schema and convention**, it copies no values
+        price:                         # five-tier price, 1K token **in this entry's currency**: this file fixes only the **schema and convention**, it copies no values.
+                                       #   This is the **flat shape**: one price for every input length. A vendor
+                                       #   that publishes its prices **banded by input length** writes `tiers:`
+                                       #   instead — §4.10 (rules, second example, refusals). A price block is
+                                       #   exactly one of the two shapes, never both
           input_miss: <base price: cache miss>
           input_hit: <cache-hit price>
           cache_write: <cache-write price; 0 = upstream does not charge separately>
@@ -184,6 +188,7 @@ providers:
         family: <the tag plan_policy.family matches; equal to the id above when the two routes' ids agree (§4.8)>
         context: <context limit>
         price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 2.0, windows: [<…>] } }
+        #       the flat shape (§4.10): one price for every input length
         source: "<official pricing page URL> @<fetch date>"
     quota:                             # subscription plans (coding plan etc.), optional
       - { models: ["<this provider's model id>"], window: monthly, tokens: <plan allowance>,
@@ -204,6 +209,7 @@ providers:
         family: kimi-k3                # … and the tag that pairs it with the metered route below (§4.8)
         context: 1m
         price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 1.0, windows: [] } }
+        #       the flat shape (§4.10): one price for every input length
         source: "<the CN region's official pricing page> @<fetch date>"
     # no `quota:` — a plan whose allowance the vendor does not publish as tokens is still a plan (§4.6);
     # a credit- or window-shaped allowance is not written as a token count (GAP-Q17, DESIGN §12.9)
@@ -221,6 +227,7 @@ providers:
         family: kimi-k3                # the same tag: two different native ids, one family (§4.8)
         context: 1m
         price: { input_miss: <…>, input_hit: <…>, cache_write: <…>, output: <…>, peak: { multiplier: 1.0, windows: [] } }
+        #       the flat shape (§4.10): one price for every input length
         source: "<the CN region's official pricing page> @<fetch date>"
 
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
@@ -276,6 +283,12 @@ This file defines only the schema and the convention:
 
 - The four price tiers are **base prices**; the periods matched by `peak.windows` are **multiplied** by
   `peak.multiplier` (peak/off-peak is expressed by multiplication, not by writing two sets of prices).
+- **A price table may be banded by input length.** Some vendors publish one rate while a request's input stays
+  within a threshold and another rate above it; the flat four-tier block above is that same table with **one**
+  band (its phrasing: one price for every input length). The banded form — its shape, which band prices a
+  request, the load-time refusals and the citation rule — is **§4.10**. Nothing else in this section changes:
+  the unit, the "no rates, no estimated figures" rule, the peak multiplication and the one-`cache_write`-tier
+  rule apply to a band exactly as they apply to a flat table.
 - **The unit is the entry's `currency`** (§4.8), and it is uniformly **the currency unit / 1K token**.
   Converting the official page's "per 1M" to 1K means **dividing by 1000**, in whatever currency the page
   publishes: a CNY table is transcribed as CNY, and **no exchange rate is ever applied** (an "equivalent"
@@ -692,6 +705,158 @@ path composition: the value is used verbatim — nothing is appended and nothing
   (ADR-020, "honest boundaries").
 - **The URL is not body bytes.** Nothing in this key touches the passthrough promise, the prefix hash or
   the cache ledger (§2, §7; AGENTS constraint 1).
+
+### 4.10 `price.tiers` (banded pricing: one price per input-length band)
+
+**What it is.** Some official price tables are published **banded by input length**: the same model carries one
+rate while a request's input stays within a threshold and another rate above it (occasionally a third band).
+A model entry that can record only one rate forces such a vendor to be transcribed as one of its bands —
+under-pricing a long-context request, or over-pricing a short one, and either way quoting a price the page did
+not publish *for that request*. A **tier** is one published band; `price.tiers` records the bands exactly as
+the page publishes them (ADR-021).
+
+```yaml
+        price:
+          peak: { multiplier: 1.0, windows: [] }     # one peak table per entry, **outside** the tiers (rule 3)
+          tiers:                                     # ascending; the last tier declares no ceiling (rule 1)
+            - up_to: 200000                          # this band's own ceiling, inclusive (rule 2)
+              # section: "<the page's own heading for this band>" @<fetch date>   # rule 5: this band's citation
+              input_miss: <…>
+              input_hit: <…>
+              cache_write: <…>
+              output: <…>
+            - input_miss: <…>                        # no `up_to` ⇒ no ceiling: everything above 200000.
+              input_hit: <…>                         #   It MUST be the last tier.
+              cache_write: <…>
+              output: <…>
+        source: "<the one official page carrying every band> @<fetch date>"
+```
+
+**Rule 1 — one shape, and the flat block is its degenerate case.** `price` carries either the four flat tiers
+(§4, the **flat shape**) or `tiers:` (the **banded shape**) — never both, never neither; `peak` is required by
+both. The flat shape means exactly what a one-tier list means: **one price for every input length**, i.e.
+`tiers: [<the same four prices, no ceiling>]`. The two spellings must produce **identical money** for identical
+usage, and an entry already written flat needs no migration: it is a one-band table, which is what it always
+was.
+
+**Rule 2 — the ceiling, and which band prices a request.** `up_to` is a band's **upper bound on input tokens,
+inclusive**: a request whose tier-selecting input size `n` satisfies `n <= up_to` is priced by that band.
+**The last band omits `up_to`** and has no ceiling — it covers every input above the previous band's ceiling.
+The key's absence is the only spelling of "no ceiling", and `up_to` is a plain **integer number of tokens**: no
+`k`/`m` suffix (unlike `context`, whose suffix multiplies by 1024 — a band's ceiling is compared against a
+*measured* token count, and a reader should never have to guess which of 1000 or 1024 a page's "K" meant; the
+page's own wording belongs in the citation comment, rule 5).
+
+`n` is the request's **measured total input tokens**, `usage.input_total`: the whole prompt as the upstream
+counted it, **cached tokens included** (`input_cached` is a part of `input_total`; the uncached remainder is
+the token count that the `input_miss` bucket prices, §6). It is **not** `input_total + output` (that is the
+quota convention, §4.6/GAP-Q1) and **not** the estimated prefix figure: a page's bands are about the size of
+the prompt that was sent, so the band a request falls in never depends on how much of it was cached.
+
+**The selected band prices the whole request** — a *banded* table, not a progressive one: its four prices price
+*all* of this request's tokens, exactly as the flat table's four prices price all of them today. A one-token
+change across a ceiling therefore re-prices the entire request. That discontinuity is the vendor's own, and it
+is why rule 5 exists.
+
+**Rule 3 — peak/off-peak is orthogonal to the band.** A model entry carries **one** `peak` table, at the price
+level and *outside* the tiers (`peak` inside a tier is a load error). A request inside a `peak.windows` period
+is multiplied by `peak.multiplier` **whichever band priced it**: the band chooses the four prices, the window
+multiplies their sum once — the existing arithmetic, unchanged (sum the four buckets, then apply the
+multiplier). No band can carry its own multiplier, and the multiplier is never re-read per band.
+
+**Rule 4 — banding changes no bookkeeping.** The trace's `cost` group stays four money buckets + `total` +
+`cost.currency`, computed by the same code; only *which* prices were used changed. **Which band priced a
+request is not a trace field**: it is recoverable from the record itself (`usage.input_total` against the
+priced config of that era), and the record carries the money, not the prices (ADR-021 states the trade-off and
+the trigger for revisiting it). Banding introduces **no** saving, no delta and no new figure of any kind: a band
+is a *price*, not a change to the request.
+
+**Rule 5 — every band's price must be traceable to the page's own band.** The entry keeps one `source`
+(`<URL> @<fetch date>`, §4.0), and it must be the page carrying **all** of that entry's bands. On top of it, a
+banded entry carries **one comment line per tier**, immediately above that tier's first price, naming the
+page's own heading for that band as the page words it — plus that section's own URL when the citation spans
+more than one section or page — and the fetch date:
+
+```yaml
+              # section: "输入长度 0-200K" @2026-09-21
+```
+
+The loader does not parse prose and cannot check this line; a **review** does, and the check is one click: open
+the cited page, find the band's heading, compare the four numbers. A bare URL with no band named fails that
+check — which is the entire reason this rule is written down: the numbers of two neighbouring bands sit one
+heading apart on one page and look alike.
+
+**Rule 6 — what the loader refuses.** Each of these is a start-up refusal (the process does not serve), and each
+message names the offending path `providers[i].models[j].price…`, the tier's index and the value found:
+
+| Refused | Because |
+|---|---|
+| both shapes written, or neither | a price block is exactly one shape (rule 1) |
+| an empty `tiers:` list, or more than **8** bands | a price block with no band states no price; 8 is the cap — no vendor publishes more than three bands, and a hand-written block stays reviewable |
+| a band's `up_to` is `0`, negative, fractional or not a number | a ceiling is a positive integer: `n = 0` is priced by the first band, so a ceiling below 1 covers nothing |
+| no band omits `up_to`, or more than one does | exactly one band has no ceiling (rule 2) |
+| the band that omits `up_to` is not the last one | bands ascend and the unceiled band is the top one |
+| two `up_to` values equal, or descending | the bands would overlap, so one input size would carry two prices and the request's price would depend on which one the reader meant |
+| a band missing any of its four prices | every band states all four: a band that inherits a price from another band is a number the page did not publish for it |
+| a band whose `input_miss`, `input_hit` or `output` converts to **0** | the same refusal as §4.0's flat block — a silently free band. `cache_write: 0` stays legal (the upstream charges no separate write price), stated per band |
+| a `peak` (or any unknown key) inside a band | rule 3: the multiplier lives at the price level, once |
+
+**The only zero a band may carry is `cache_write`.** §4.0 permits a zero cache-write price (the upstream charges
+no separate write price) and refuses a zero in the other three; banding inherits that rule **per band** and adds
+no exception — a page that publishes `0` for a band's `input_miss`, `input_hit` or `output` is not a table this
+schema records, exactly as the flat block refuses it today. (If a page ever really publishes such a band, reading
+it is a new decision with its own ADR, not an implementation choice.)
+
+A **hole** between bands is not refusable because it is not expressible: a band's floor is the previous band's
+ceiling + 1, so the list covers `[0, ∞)` by construction, and the only ways to break coverage are the two rows
+above (a duplicated ceiling, a missing or detached ceiling).
+
+**Rule 7 — the loader does not check the page, and the router does not guess.** A band's ceiling is a fact the
+vendor published. The router never infers bands from a model's `context` window, from a tokenizer estimate or
+from a sibling model's table, and never interpolates between bands. Where an official page publishes no bands,
+the entry keeps the flat shape: writing a banded table nobody published is fabrication (§4.0, AGENTS
+constraint 5).
+
+**Rule 7.1 — what this schema deliberately does not express** (each line is a boundary, not an oversight; the
+reasoning is in ADR-021's alternatives):
+
+| Not expressed | Because |
+|---|---|
+| bands on **output** length | the output does not exist when the request is priced, and the published tables band on input; pricing a request on its answer would make the price depend on the answer |
+| **progressive / marginal** brackets (the first N tokens at one rate, the excess at another) | no vendor publishes the bracket formula for these tables, so the arithmetic would be the router's invention and would silently disagree with the invoice |
+| a **`peak` per band** | one multiplier for the entry; N copies of one table would let a band silently lack the multiplier and under-price peak traffic |
+| a **per-band currency** | the unit belongs to the entry (§4.8/ADR-018), and the record already carries one `cost.currency` |
+| a per-band **`source`** field | the entry has one source and it must carry all of its bands; the band's section is prose, so it belongs in the citation comment (rule 5), where a human reads it |
+| **promotional / holiday calendars**, coupons, per-account rates | a calendar is a second time dimension with its own truth source; peak windows (rule 3) are the only time multiplier this schema models, the same stance as GAP-Q6 for holidays |
+| any **hit-rate-dependent or conversation-dependent** rate (`cache_hit` discounts that vary with length, volume rebates, tiered plans) | the published tables don't carry them; a rate that depends on measured history is a reporting statistic, not a price, and nothing in this schema may depend on the router's own past |
+| a **trace field naming the band** | rule 4: the band is recoverable from `usage.input_total` + the priced config of its era, and the record carries money, not prices |
+| **inferring** a ceiling from `context`, from a sibling entry or by interpolation | constraint 5: a ceiling is a published fact, and a guess here corrupts the `verified` cost that every downstream gate rests on |
+| a **new saving/session figure** of any kind | constraint 4: a band is a price, not a change to the request, so there is nothing to save and nothing to label |
+
+**Rule 8 — figures the router computes before the upstream answers.** The band is selected from **measured**
+usage, which exists only after the response. A figure the router must compute earlier — the switch's re-prefill
+cost (`result.plan_switch`, a failover) and the cache-aware breakeven's two unit prices — has no measured `n`:
+it is computed from the **first band** (the lowest ceiling's prices), the one band every entry is guaranteed to
+have and a choice that invents no estimate. Every such figure keeps its existing `inferred` label (§7) and may
+not be read as a band-faithful quote of the real cost; a band-faithful variant would need a request-size
+estimate the router does not have (GAP-Q14/Q20, DESIGN §12.9 and §12.13).
+
+**Selection semantics, worked at the boundaries** (`n` = `usage.input_total`; the figures below are *ceilings*,
+not prices — the boundary rows are the unit tests' source, DESIGN §12.13):
+
+| `price` | `n` | Band that prices the request | Why |
+|---|---|---|---|
+| flat (one price for every length) | `0` | the single band | there is only one, and it has no ceiling |
+| flat | `200000` | the single band | same |
+| flat | `10000000` | the single band | same — a flat table never changes band |
+| `tiers: [{up_to: 200000}, {no ceiling}]` | `0` | 1st (ceiling 200000) | the first band starts at 0 |
+| `tiers: [{up_to: 200000}, {no ceiling}]` | `200000` | 1st | the boundary belongs to the band that declares it |
+| `tiers: [{up_to: 200000}, {no ceiling}]` | `200001` | 2nd (no ceiling) | one token above the ceiling |
+| `tiers: [{up_to: 200000}, {no ceiling}]` | `10000000` | 2nd | beyond every declared ceiling ⇒ the unceiled band, which is always last |
+| `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `200000` | 1st | boundary, inclusive |
+| `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `200001` | 2nd | |
+| `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000000` | 2nd | boundary, inclusive |
+| `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000001` | 3rd | |
 
 ## 5. Onboarding prerequisite (mandatory)
 

@@ -1127,6 +1127,7 @@ items are written into the spec, unsettled ones stay registered.)
 
 | Q18 | a rule's `match_kind` is declared as a "payload category declaration" (`rules/tool_output.toml`), but nothing says where the category comes from: no wire field carries it and spec §4 defines no tool→kind table | the first rules select on `match_tool` alone, which is sufficient; `match_kind` is resolved by the implementing change (a declared tool→kind table in the plugin's config) | rule selection for the transform pipeline (§12.12); a rule that cannot select its targets must not fall back to guessing content (ADR-003) |
 | Q19 | the failing-rule reporting surface: `rules/tool_output.toml` says a rule that fails its inline tests is "reported in the startup log and `/health`", while spec §9.1's `/health` shape has no member for it | the startup log carries it; `/health` gains nothing until the surface's own contract is written | a documented surface with no shape must be named, not invented (§9.3's rule); the implementing change raises it |
+| Q20 | spec §4.10 rule 8: a price read the router must make **before** the upstream answers (the switch's re-prefill cost, `decide_switch`'s two unit prices) has no **measured** input size, so it cannot know which band applies | the read uses the **first** band of the destination entry (the one band every entry is guaranteed to have; no estimate is invented), and the figure keeps its `inferred` label (§7) | `result.plan_switch.switch_cost_nano` (and a failover's switch cost) may differ from the band the destination request actually falls in, in either direction — a pre-response figure is band-agnostic by convention and may not be read as a band-faithful quote. Registered trigger for revisiting: a request-size estimate existing at decision time (the dependency allowlist has no tokenizer, GAP-Q14). ADR-021 records why the first band was chosen over the last |
 
 **A note on the numbering: Q17 is not absent by accident.** It belongs to the currency / region / route-tag
 contract that is being written on another branch of this repository, and this tree's table therefore
@@ -2154,6 +2155,116 @@ paths through the one helper; ④ the `builtin/transform_rules` engine against
 `rules/tool_output.toml`, whose 13 inline tests are its acceptance test; ⑤ the conformance cases above
 plus CONF-16's un-ignore; ⑥ the paired measurement that turns the first rule's net gain into a
 `verified` figure — the only step that may be reported as a saving (spec §7).
+
+### 12.13 Input-length price tiers: the types, the one selection point and the refusals (ADR-021, spec §4.10)
+
+**What this section lands.** spec §4.10 fixes the contract of `price.tiers` (the **banded shape**), its
+load-time refusals and the semantics of band selection. This section names the types, the **one place** the
+band is selected, the conversion that stays at load time and the unit tests the implementing card owes — so
+`router-core` (types, parser, the pure selector) and the two `router-proxy` call sites can be written without a
+second reading of §4.10 appearing anywhere.
+
+**Types (spec §4.10 rules 1–3).**
+
+```rust
+/// One band of spec §4.10. The four prices are the same `PriceVal` scalars the flat shape uses, through the
+/// same load-time conversion (§12.5's `price` row); `up_to` is the band's **inclusive** ceiling (tokens, a
+/// plain integer), `None` on the last band only ("no ceiling", rule 2). A band carries no `peak` and no
+/// currency: the multiplier and the unit belong to the entry (§4.10 rule 3, §4.8).
+pub struct TierCfg { pub up_to: Option<CeilingVal>, pub input_miss: PriceVal, pub input_hit: PriceVal,
+                     pub cache_write: PriceVal, pub output: PriceVal }
+
+/// `PriceCfg` keeps the flat shape and gains the banded one: the four flat scalars become optional and `tiers`
+/// joins them, because §4.10 rule 1 is a **cross-field** rule (exactly one shape, and the `peak` both shapes
+/// require) whose refusal must name the field path and the reason. Encoding the alternation as an untagged
+/// serde enum instead is rejected: it answers "data did not match any variant", losing both, and this
+/// repository's load errors are read and quoted by hand.
+pub struct PriceCfg { pub input_miss: Option<PriceVal>, pub input_hit: Option<PriceVal>,
+                      pub cache_write: Option<PriceVal>, pub output: Option<PriceVal>,
+                      pub peak: PeakCfg, pub tiers: Option<Vec<TierCfg>> }
+```
+
+**The conversion stays at load time; the selection is per request.**
+
+```rust
+/// A band and its integerised table: `up_to` present on every band but the last, bands ascending.
+pub struct TierTable { pub up_to: Option<u64>, pub table: PriceTable }
+
+impl PriceCfg {
+    /// The single conversion point for a price block (the generalisation of §12.5's `price` row): one
+    /// `TierTable` per band; the flat shape yields exactly one with `up_to: None`. **Every** refusal of
+    /// §4.10 rule 6 is decided in here, so a check and the conversion it guards cannot drift apart.
+    pub fn to_tier_tables(&self, currency: Currency) -> Result<Vec<TierTable>, String>;
+}
+
+/// spec §4.10 rule 2, spelled once: the first band whose `up_to` is `None` or `>= n`. Pure, O(bands ≤ 8),
+/// no clock, no estimate, no config read. `n = 0` and `n = up_to` both land on the first band that can hold
+/// them (§4.10's boundary table).
+pub fn select_band<'a>(tiers: &'a [TierTable], input_tokens: u64) -> &'a PriceTable;
+```
+
+- The four flat `PriceVal`s and `tiers` share one conversion and one `PeakTable`: each band's `PriceTable`
+  carries the entry's **single** `peak` table, so `cost()` — which takes a `PriceTable` — is unchanged and its
+  signature still says nothing about bands (§12.4). A `PriceTable` is therefore *per band*, and
+  `PriceTable.currency` keeps meaning the entry's unit.
+- `to_price_table` (the flat-shape entry point) becomes a private step of `to_tier_tables`: the flat shape is
+  the one-band case, and no caller outside the conversion should be able to ask a *price block* for "the"
+  table when a block may hold several.
+
+**Where the band is selected — and the one pre-response exception.**
+
+| Call site (at the commit this section was written against) | `n` | Why |
+|---|---|---|
+| the record's own money: `accounting.rs:437` (`cost(&usage, &acc.price, …)`), whose table the route resolves one line earlier at `accounting.rs:62` | **measured** `usage.input_total` (spec §4.10 rule 2) | this is the only place a record's `cost.*` is computed |
+| the switch's re-prefill price — `result.plan_switch` / a failover's switch cost, the `acc.price.input_miss` read at `forward.rs:1941-1943` | none (pre-response) ⇒ the **first** band | §4.10 rule 8: no measured `n` exists yet; the figure stays `inferred` |
+| `router-core::breakeven`'s `SwitchCandidate` (`p_stay_hit` / `p_new_miss`, §12.4) | none (pre-response) ⇒ the **first** band | same rule. `decide_switch` is a pure core function that the serving path does **not** call today (DESIGN §5's note), so this row is a contract to keep when it is wired, not a behaviour change |
+
+- `RouteAccounting.price: PriceTable` becomes `prices: Vec<TierTable>` (the same once-per-request conversion at
+  `accounting.rs:62`, now one table per band) and the accounting call site selects. Those two lines are the
+  whole `router-proxy` change, and for an entry written flat the vector has exactly one element — which is what
+  makes the backward-compatibility requirement testable rather than hopeful.
+- `router-core`'s load check (`config.rs:1394-1396`, the `m.price.to_price_table(p.currency)` that today
+  validates the flat shape) becomes the `to_tier_tables` call above, so the refusals move with the conversion
+  and the load error keeps naming `providers[i].models[j].price`.
+
+**The refusals (§4.10 rule 6), and what each message must name.**
+
+| Refusal | The message names |
+|---|---|
+| both shapes / neither shape | `providers[i].models[j].price`, both keys present (or the missing one), and that a price block is exactly one shape |
+| an empty `tiers:`, or more than 8 bands | the path, the band count found, the cap (8) |
+| `up_to` zero, negative, fractional or non-integer | the path with the band's index, the value found, and that a ceiling is a positive integer of tokens (so a ceiling below 1 covers nothing) |
+| zero or two bands without `up_to` | the path, the indices found, and that exactly one band — the last — has no ceiling |
+| the band without `up_to` is not last | the path, that band's index, and the index of the last band |
+| two `up_to` equal, or descending | the path, both indices and both values (band *k* would overlap band *k+1*) |
+| a band missing one of its four prices | the path with the band's index and the missing key |
+| a band's `input_miss` / `input_hit` / `output` converting to 0 | the existing zero-price reason, with the band's index (`cache_write: 0` stays legal, per band) |
+| a `peak` (or any other unknown key) inside a band | `deny_unknown_fields` on `TierCfg`, naming the band's path |
+
+**Unit tests the implementing card owes** (this list is `spec §4.10`'s rules and its boundary table, row by
+row; a rule with no refusal test is a rule the loader does not actually enforce):
+
+1. **The boundary table, row by row** — the flat shape at `n` ∈ {0, 200000, 10_000_000}; a two-band table at
+   `n` ∈ {0, 200000, 200001, 10_000_000}; a three-band table at `n` ∈ {200000, 200001, 1000000, 1000001} —
+   asserting *which band's prices* priced the request (compare a `cost()` against a hand-computed breakdown,
+   not only that something was returned).
+2. **The two spellings are one table** — a flat entry and the same four prices written as a one-band `tiers:`
+   list produce row-by-row identical `PriceTable`s and an identical `cost()` for the same `Usage`: the
+   backward-compatibility witness, which must exist **before** the flat path is refactored.
+3. **One negative case per refusal row** above.
+4. **Peak orthogonality** — the same `n` with the request's instant inside a `peak.windows` period and outside
+   it selects the **same** band, and the total differs by exactly `multiplier_pct`; and changing the band at a
+   fixed instant does not change `peak_applied_pct`.
+5. **The cap** — 8 bands load, 9 refuse.
+6. **The integer edges** — an `up_to` of `u64::MAX`-adjacent magnitude and an `n` at the top of the range
+   select the last band with no overflow (the comparison is `n <= up_to`, so no arithmetic runs on the
+   boundary at all).
+
+**What it does not change.** `cost()`'s signature, its arithmetic and its rounding; `CostRec` and the trace's
+shape — **nothing is added**, so `schema_version` stays **2** (§12.6's rule does not even come into play: no
+field is introduced); `cost.currency`; the store (no event kind, no projection); `context` and the capability
+guard; `quota`'s chargeable-token convention (`input_total + output`, GAP-Q1); and the in-plan zero marginal
+price. For an entry written flat, every one of these is unchanged by construction — the vector has one element.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
