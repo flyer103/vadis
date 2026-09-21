@@ -559,7 +559,7 @@ mod tests {
             now_us,
             primary_allowed: true,
             deferred_by_window: false,
-            overflow_spend: NanoUsd(0),
+            overflow_spend: Nano(0),
         }
     }
 

@@ -35,7 +35,7 @@ use router_conformance::testkit::{self, PlanRig};
 use router_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 use router_core::store::{EventKind, NewEvent, ProjectionWrite};
 use router_core::store::{Query, QueryRow, Store as _};
@@ -87,7 +87,7 @@ fn guard_answer(
         now_us,
         primary_allowed,
         deferred_by_window,
-        overflow_spend: NanoUsd(0),
+        overflow_spend: Nano(0),
     };
     match rule.probe_admitted(&req) {
         Ok(()) => (true, None),

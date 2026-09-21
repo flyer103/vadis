@@ -1,5 +1,5 @@
 use router_core::config::{PlanPolicyCfg, RecoveryMode, RouterConfig};
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy};
 use router_core::store::{Query, QueryRow, Store};
 use serde_json::{json, Map, Value};
@@ -263,7 +263,7 @@ fn surface_request(i: &PlanHealthInputs) -> PlanRequest<'_> {
         now_us: i.now_us,
         primary_allowed: i.primary_allowed,
         deferred_by_window: i.deferred_by_window,
-        overflow_spend: NanoUsd(0),
+        overflow_spend: Nano(0),
     }
 }
 

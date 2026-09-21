@@ -35,7 +35,7 @@ use router_conformance::testkit::{self, PlanRig};
 use router_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 
 const POLICY_200MS: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 200ms";
@@ -72,7 +72,7 @@ fn guard_word(p: &PlanPolicyCfg, since_us: i64, now_us: i64) -> Option<String> {
         now_us,
         primary_allowed: true,
         deferred_by_window: false,
-        overflow_spend: NanoUsd(0),
+        overflow_spend: Nano(0),
     };
     rule.probe_admitted(&req)
         .err()

@@ -25,7 +25,7 @@ use router_conformance::testkit::{self, PlanRig};
 use router_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 
 /// A plan whose allowance is exactly one request (105 chargeable tokens),
@@ -68,7 +68,7 @@ fn guard_answer(
         now_us: i64::MAX / 2, // far past any cooldown; the arm under test is the window's
         primary_allowed: true,
         deferred_by_window,
-        overflow_spend: NanoUsd(0),
+        overflow_spend: Nano(0),
     };
     match rule.probe_admitted(&req) {
         Ok(()) => (true, None),

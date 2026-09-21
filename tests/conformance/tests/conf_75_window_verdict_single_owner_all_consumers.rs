@@ -32,7 +32,7 @@ use std::net::TcpStream;
 
 use router_conformance::testkit::{self, PlanRig};
 use router_core::config::{CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg};
-use router_core::cost::NanoUsd;
+use router_core::cost::Nano;
 use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 use router_core::store::{Query, QueryRow, Store as _};
 
@@ -180,7 +180,7 @@ async fn conf_75_window_verdict_agreed_by_projection_report_and_request_path() {
         now_us: now_us(),
         primary_allowed: true,
         deferred_by_window: deferred,
-        overflow_spend: NanoUsd(0),
+        overflow_spend: Nano(0),
     };
     assert_eq!(
         rule.probe_admitted(&req),

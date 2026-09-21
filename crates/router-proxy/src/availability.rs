@@ -187,6 +187,8 @@ mod tests {
     fn provider(quota: Option<Vec<QuotaCfg>>) -> ProviderCfg {
         ProviderCfg {
             name: "p-plan".into(),
+            region: router_core::config::Region::Intl,
+            currency: router_core::Currency::Usd,
             base_url: "http://127.0.0.1:1".into(),
             api_key_env: "K".into(),
             wire_api: router_core::config::WireApi::Chat,
@@ -195,6 +197,7 @@ mod tests {
             models: vec![
                 ModelCfg {
                     id: "m1".into(),
+                    family: None,
                     context: router_core::config::ContextVal(128_000),
                     price: PriceCfg {
                         input_miss: router_core::config::PriceVal(0.002),
@@ -207,6 +210,7 @@ mod tests {
                 },
                 ModelCfg {
                     id: "m2".into(),
+                    family: None,
                     context: router_core::config::ContextVal(128_000),
                     price: PriceCfg {
                         input_miss: router_core::config::PriceVal(0.002),
