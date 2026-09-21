@@ -4,6 +4,7 @@
 
 mod accounting;
 mod auth;
+mod availability;
 mod forward;
 mod health;
 mod stream_forward;

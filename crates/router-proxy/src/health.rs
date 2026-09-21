@@ -1,5 +1,6 @@
 use router_core::config::{PlanPolicyCfg, RecoveryMode, RouterConfig};
-use router_core::plan::PlanAccount;
+use router_core::cost::NanoUsd;
+use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy};
 use router_core::store::{Query, QueryRow, Store};
 use serde_json::{json, Map, Value};
 
@@ -127,7 +128,10 @@ fn plan_section_value(state: &AppState) -> Value {
 
 /// Read the projections the section reports (spec §9.1's per-key semantics):
 /// the `plan_state` row (absent ⇒ `primary`, §4.6), ADR-011's cooldown for
-/// the primary provider, and the quota counter's window verdict.
+/// the primary provider, and the quota counter's window verdict. The last
+/// two are `availability`'s single-owner reads (ADR-016 §13.3 L1c/L1d,
+/// fixed R10) — this surface consumes them, it does not re-derive them —
+/// both evaluated against the section's one clock read below.
 fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInputs {
     let now = now_us();
     let (account, since_us) = match state.store.as_ref().map(|s| {
@@ -149,8 +153,17 @@ fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInp
         account,
         since_us,
         now_us: now,
-        primary_allowed: !provider_in_cooldown(state, &policy.primary.provider, now),
-        deferred_by_window: probe_deferred_by_window(state, policy, now),
+        primary_allowed: !crate::availability::provider_in_cooldown(
+            state.store.as_ref(),
+            &policy.primary.provider,
+            now,
+        ),
+        deferred_by_window: crate::availability::probe_deferred_by_window(
+            state.store.as_ref(),
+            &state.config,
+            policy,
+            (now.max(0) as u64) / 1_000_000,
+        ),
     }
 }
 
@@ -159,6 +172,7 @@ fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInp
 /// (`since + cooldown`); no figure here is an estimate (spec §9.1's closing
 /// rule, AGENTS constraint 5).
 pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Value {
+    let rule = PlanFirstRule::new(policy.clone());
     let recover = if policy.recover == RecoveryMode::None {
         "none"
     } else {
@@ -198,25 +212,19 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
     // informational `until_us`, which a rebuild may have derived from a
     // cooldown that has since changed. Always computable when `probe` is
     // present, so no unprintable number exists here.
-    let deadline_us = i.since_us.saturating_add(cooldown_us(policy));
-    // `blocked_by` is the probe predicate's own evaluation order with the
-    // two request-shaped arms left out (§4.6 rule 2; DESIGN §12.10.8):
-    // `recovery_disabled` → `cooldown` → `primary_cooling_down` →
-    // `window_not_reset`, so the surface and the guard cannot disagree
-    // about *why*. "No session" / "not a session boundary" are properties
-    // of a request that does not exist yet and get no word here (§9.1's
-    // table: for every such request the claim would be false).
-    let blocked_by: Option<&str> = if policy.recover == RecoveryMode::None {
-        Some("recovery_disabled")
-    } else if i.now_us < deadline_us {
-        Some("cooldown")
-    } else if !i.primary_allowed {
-        Some("primary_cooling_down")
-    } else if i.deferred_by_window {
-        Some("window_not_reset")
-    } else {
-        None
-    };
+    let deadline_us = i.since_us.saturating_add(policy.cooldown_us());
+    // `blocked_by` is the guard's own answer, not a re-derivation here
+    // (ADR-016 §13.3 L1a: `PlanFirstRule::probe_admitted` is the single
+    // owner of the evaluation order). The request the section renders is
+    // the surface's reduced one: a fresh session at `turn_index == 1` —
+    // the only request shape the probe gate could still admit — so the
+    // two request-shaped arms (`NoSession`, `NotSessionBoundary`) never
+    // fire and get no word (§9.1's table), and `blocked_by_surface_word`
+    // maps every arm that does fire to the surface's vocabulary.
+    let blocked_by = rule
+        .probe_admitted(&surface_request(i))
+        .err()
+        .and_then(ProbeBlockedBy::blocked_by_surface_word);
     let probe = json!({
         "deadline": rfc3339_millis(deadline_us),
         "admitted": blocked_by.is_none(),
@@ -235,18 +243,36 @@ fn route_str(r: &router_core::config::RouteSpec) -> String {
     format!("{}/{}", r.provider, r.model)
 }
 
+/// The reduced request the section renders the guard's answer for: the
+/// surface describes a family, not a request, so the request is the
+/// shape the probe gate could still admit — a fresh session at
+/// `turn_index == 1` on the overflow account (the section's `probe`
+/// member exists only there). With that choice the two request-shaped
+/// arms of `probe_admitted` never fire, and every arm that does fire is
+/// one §9.1 names — the guard's own evaluation order, consumed, not
+/// re-derived (ADR-016 §13.3 L1a). The guard reads the cooldown through
+/// the same `PlanPolicyCfg::cooldown_us` the deadline above used (L1b).
+fn surface_request(i: &PlanHealthInputs) -> PlanRequest<'_> {
+    PlanRequest {
+        session: Some(""),
+        turn_index: 1,
+        state: PlanStateRow {
+            account: i.account,
+            since_us: i.since_us,
+        },
+        now_us: i.now_us,
+        primary_allowed: i.primary_allowed,
+        deferred_by_window: i.deferred_by_window,
+        overflow_spend: NanoUsd(0),
+    }
+}
+
 /// `/health`'s `auth` member (spec §9.1, DESIGN §12.11).
 fn auth_member(server: &router_core::config::ServerCfg) -> Value {
     match server.auth_token_env.as_deref() {
         Some(name) => json!({ "required": true, "env": name }),
         None => json!({ "required": false }),
     }
-}
-
-/// `DurationVal` is milliseconds (§12.5); µs = ms × 1_000 — the same
-/// conversion `PlanFirstRule::cooldown_us` uses.
-fn cooldown_us(policy: &PlanPolicyCfg) -> i64 {
-    (policy.cooldown.0 as i64).saturating_mul(1_000)
 }
 
 fn now_us() -> i64 {
@@ -272,72 +298,12 @@ fn rfc3339_millis(us: i64) -> Option<String> {
     ))
 }
 
-// The two projection reads below mirror `Forwarder`'s private helpers
-// (`forward.rs` keeps those helpers private). CONF-41 witnesses the surface
-// and the guard agree on the live path; a future change that touches both
-// files keeps them in step through that case.
-
-/// ADR-011's route-availability answer for the provider: a live cooldown
-/// row that has not expired refuses it right now.
-fn provider_in_cooldown(state: &AppState, provider: &str, now: i64) -> bool {
-    let Some(store) = &state.store else {
-        return false;
-    };
-    matches!(
-        store.query(Query::Cooldown {
-            provider,
-            model: None,
-        }),
-        Ok(QueryRow::Cooldown(Some(row))) if row.until_us > now
-    )
-}
-
-/// The local counter's window verdict (spec §4.6 rule 3, GAP-Q1): true when
-/// the primary provider declares a quota plan covering the family, that
-/// plan's current window has reached its allowance, and the plan's own
-/// window boundary has not passed yet — the probe waits for the boundary.
-fn probe_deferred_by_window(state: &AppState, policy: &PlanPolicyCfg, now: i64) -> bool {
-    let Some(store) = &state.store else {
-        return false;
-    };
-    let Some(provider) = state
-        .config
-        .providers
-        .iter()
-        .find(|p| p.name == policy.primary.provider)
-    else {
-        return false;
-    };
-    let Some(plans) = provider.quota.as_deref() else {
-        return false;
-    };
-    let now_s = (now.max(0) as u64) / 1_000_000;
-    for (plan_idx, q) in plans
-        .iter()
-        .enumerate()
-        .filter(|(_, q)| q.models.iter().any(|m| m == &policy.family))
-    {
-        let qp = crate::accounting::quota_plan_from_cfg(q);
-        let router_core::quota::QuotaWindow::Monthly { reset_day } = qp.window;
-        let window_start_s = router_core::quota::window_start_for(now_s, reset_day);
-        let next_boundary_s = router_core::quota::next_reset(window_start_s, reset_day);
-        if now_s >= next_boundary_s {
-            continue;
-        }
-        let used = match store.query(Query::QuotaUsed {
-            provider: &provider.name,
-            plan_idx: plan_idx as u32,
-            window_start_us: (window_start_s as i64) * 1_000_000,
-        }) {
-            Ok(QueryRow::Count(n)) => n.max(0) as u64,
-            _ => 0,
-        };
-        if used >= qp.tokens {
-            return true;
-        }
-    }
-    false
-}
+// ADR-016 §13.3 L1c/L1d, fixed R10: the route-availability read and the
+// local counter's window verdict each had a second copy here, mirroring
+// `Forwarder`'s private helpers. Both are deleted — the section (and the
+// request path's `plan_guard`) calls `availability`'s single-owner
+// functions; CONF-75..78 witness the two consumers agreeing on the live
+// path.
 
 pub(crate) fn not_implemented_body(
     request_id: String,

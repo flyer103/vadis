@@ -28,7 +28,6 @@ use router_core::plan::{
     REASON_PRIMARY_EXHAUSTED, REASON_PRIMARY_RECOVERED,
 };
 use router_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
-use router_core::quota::window_start_for;
 use router_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
 use router_core::trace::PlanSwitchRec;
 use router_core::transform::{estimate_tokens, PayloadCtx, TransformEngine, TransformMode};
@@ -1478,14 +1477,27 @@ impl Forwarder {
             // surface already said `admitted: true`.
             now_us,
             // ADR-011's route-availability answer for the primary (the
-            // two constraints are read together, merged nowhere).
-            primary_allowed: !self.provider_in_cooldown(&policy.primary.provider),
+            // two constraints are read together, merged nowhere). The
+            // read lives in `availability` — the single owner both this
+            // guard and `/health` call (ADR-016 §13.3 L1c) — against
+            // this request's own clock word below.
+            primary_allowed: !crate::availability::provider_in_cooldown(
+                self.store.as_ref(),
+                &policy.primary.provider,
+                now_us,
+            ),
             // The local counter's only influence (spec §4.6 rule 3): it
             // may defer a probe until the plan's declared window
             // boundary. Computed only when a probe is otherwise on the
             // table (state overflow + recover: probe); never a Reject
-            // and never a forced spill.
-            deferred_by_window: self.probe_deferred_by_window(&policy, now_epoch_s),
+            // and never a forced spill. The adjudication lives in
+            // `availability` — the single owner (ADR-016 §13.3 L1d).
+            deferred_by_window: crate::availability::probe_deferred_by_window(
+                self.store.as_ref(),
+                &self.config,
+                &policy,
+                now_epoch_s,
+            ),
             overflow_spend: self.overflow_spend(&policy),
         };
         match rule.decide(&req) {
@@ -1505,57 +1517,6 @@ impl Forwarder {
                 })),
             }),
         }
-    }
-
-    /// The local counter's deferral input (spec §4.6 rule 3): true when
-    /// the primary provider declares a quota plan covering the family,
-    /// that plan's current window has already reached its allowance,
-    /// **and** the plan's own window boundary has not passed yet (the
-    /// reset instant is a config fact with a `source`, unlike the
-    /// allowance value — GAP-Q1). A warning that defers an experiment,
-    /// never a block on a request.
-    fn probe_deferred_by_window(&self, policy: &PlanPolicyCfg, now_epoch_s: u64) -> bool {
-        let Some(store) = &self.store else {
-            return false;
-        };
-        let Some(provider) = self
-            .config
-            .providers
-            .iter()
-            .find(|p| p.name == policy.primary.provider)
-        else {
-            return false;
-        };
-        let Some(plans) = provider.quota.as_deref() else {
-            return false;
-        };
-        for (plan_idx, q) in plans
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| q.models.iter().any(|m| m == &policy.family))
-        {
-            let qp = crate::accounting::quota_plan_from_cfg(q);
-            let router_core::quota::QuotaWindow::Monthly { reset_day } = qp.window;
-            let window_start_s = window_start_for(now_epoch_s, reset_day);
-            // Next boundary after this window (the next monthly reset).
-            let next_boundary_s = router_core::quota::next_reset(window_start_s, reset_day);
-            if now_epoch_s >= next_boundary_s {
-                // The boundary passed: nothing to defer to.
-                continue;
-            }
-            let used = match store.query(Query::QuotaUsed {
-                provider: &provider.name,
-                plan_idx: plan_idx as u32,
-                window_start_us: (window_start_s as i64) * 1_000_000,
-            }) {
-                Ok(QueryRow::Count(n)) => n.max(0) as u64,
-                _ => 0,
-            };
-            if used >= qp.tokens {
-                return true;
-            }
-        }
-        false
     }
 
     /// The family's measured metered spend this UTC month (DESIGN
@@ -1632,17 +1593,14 @@ impl Forwarder {
         }
     }
 
+    /// ADR-011's route-availability answer for the provider right now
+    /// (the walk-skip reads, `forward.rs:953`/`:1683` and the streaming
+    /// twin). Delegates to `availability::provider_in_cooldown` — the
+    /// single owner (ADR-016 §13.3 L1c) — on this method's own clock
+    /// read; `plan_guard` passes its request-clock word directly instead
+    /// of coming through here, so the guard's inputs share one instant.
     pub(crate) fn provider_in_cooldown(&self, provider: &str) -> bool {
-        let Some(store) = &self.store else {
-            return false;
-        };
-        matches!(
-            store.query(Query::Cooldown {
-                provider,
-                model: None,
-            }),
-            Ok(QueryRow::Cooldown(Some(row))) if row.until_us > now_us()
-        )
+        crate::availability::provider_in_cooldown(self.store.as_ref(), provider, now_us())
     }
 
     /// `error.classified` (NORMAL) — §12.10.5 row 7, ADR-011 item 8. Every
@@ -1785,7 +1743,7 @@ impl Forwarder {
                 (tok, Some(0))
             }
         };
-        let cooldown_us = (policy.cooldown.0 as i64).saturating_mul(1_000);
+        let cooldown_us = policy.cooldown_us();
         // §4.8: the destination route's unit denominates switch_cost_nano
         // (the same destination the figures were priced at).
         let dest_route = if *to == PlanAccount::Overflow {
