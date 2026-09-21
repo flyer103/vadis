@@ -9,6 +9,7 @@ config.yaml
 
 # autowork data (large, re-derivable)
 autowork/traces/
+autowork/captures/
 autowork/results/
 autowork/corpus/raw/
 autowork/.venv/
