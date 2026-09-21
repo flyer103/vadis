@@ -45,7 +45,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: mock-a
-    base_url: http://127.0.0.1:{dead_port}/v1
+    urls:
+      chat: http://127.0.0.1:{dead_port}/v1/chat/completions
     api_key_env: CONF29_DEAD_KEY
     wire_api: chat
     supports: [chat]
@@ -60,7 +61,8 @@ providers:
           peak: {{ multiplier: 1.0, windows: [] }}
         source: "closed port (test fixture)"
   - name: mock-b
-    base_url: http://127.0.0.1:{live_port}/v1
+    urls:
+      chat: http://127.0.0.1:{live_port}/v1/chat/completions
     api_key_env: CONF29_LIVE_KEY
     wire_api: chat
     supports: [chat]

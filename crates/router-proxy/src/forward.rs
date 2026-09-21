@@ -1019,11 +1019,27 @@ impl Forwarder {
                 .get(&candidate.provider)
                 .cloned()
                 .unwrap_or_default();
+            // spec §4.9 / ADR-020: the entry states the URL for the wire this
+            // attempt uses, and it is used verbatim. `validate` refused any
+            // config whose declared cell has no URL, so a miss here is an
+            // internal error to answer — not a case to paper over by sending
+            // the request to a guessed endpoint.
+            let Some(url) = cand_provider.url_for(cand_provider.wire_api) else {
+                return ForwardOutcome::Failure(ForwardFailure::new(
+                    500,
+                    ErrorCode::Internal,
+                    format!(
+                        "provider '{}' declares '{}' but carries no URL for it",
+                        cand_provider.name,
+                        cand_provider.wire_api.as_str()
+                    ),
+                ));
+            };
             let plan = UpstreamPlan {
                 provider: &candidate.provider,
                 model: &candidate.model,
                 protocol_out: cand_provider.wire_api,
-                base_url: &cand_provider.base_url,
+                url,
                 api_key: &api_key,
                 attempt: attempt_index,
             };

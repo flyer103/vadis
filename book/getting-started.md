@@ -51,13 +51,15 @@ providers:
   - name: zai                       # international: one deployment, one entry
     region: intl                    # which deployment this entry is (the default when the key is absent)
     currency: USD                   # the unit every price below is written in (the default when absent)
-    base_url: <the international endpoint>
+    urls:
+      chat: <the international chat endpoint, in full>
     api_key_env: ZAI_API_KEY
     models: [ { id: glm-5.3, ... } ]
   - name: zai-cn                    # the mainland deployment of the same vendor: its own entry
     region: cn
     currency: CNY
-    base_url: <the mainland endpoint>
+    urls:
+      chat: <the mainland chat endpoint, in full>
     api_key_env: ZAI_CN_API_KEY
     models: [ { id: glm-5.3, ... } ]
 ```

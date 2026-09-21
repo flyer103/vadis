@@ -41,7 +41,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: mock
-    base_url: http://127.0.0.1:{upstream_port}/v1
+    urls:
+      responses: http://127.0.0.1:{upstream_port}/v1/responses
     api_key_env: CONF31_MOCK_KEY
     wire_api: responses
     supports: [responses]

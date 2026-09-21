@@ -43,7 +43,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 providers:
   - name: only-provider
     {patch}
-    base_url: https://only.example/v1
+    urls:
+      chat: https://only.example/v1/chat/completions
     api_key_env: CONF53_ONLY_KEY
     wire_api: chat
     supports: [chat]

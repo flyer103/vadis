@@ -495,7 +495,11 @@ impl<'de> Deserialize<'de> for WeekdaySet {
 // ---------------------------------------------------------------------------
 
 /// The wire protocols of the 3×3 matrix (spec §4 `wire_api` / `supports`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Ord` is what lets `urls` be a `BTreeMap`: diagnostics and any serialized
+/// view list the wires in one fixed order instead of an iteration order that
+/// changes between runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WireApi {
     Chat,
     Responses,
@@ -649,7 +653,7 @@ pub struct PriceCfg {
 /// endpoint and key belong to. `cn` | `intl`, **absent ⇒ `intl`**. It is
 /// declared, displayed and inert: it routes nothing, it chooses no
 /// currency (a CN-region entry billed in USD is legal), and the router
-/// does not check it against `base_url`'s host.
+/// does not check it against a host in `urls` (ADR-018, ADR-020).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Region {
@@ -807,7 +811,11 @@ pub struct ProviderCfg {
     /// derived from `region`; never converted.
     #[serde(default)]
     pub currency: Currency,
-    pub base_url: String,
+    /// spec §4.9 (ADR-020): the **complete** URL for every wire protocol this
+    /// entry declares in `supports` below. The router sends these values
+    /// verbatim — it appends no path, trims no slash and normalizes nothing.
+    /// The key set must equal the declared cells ([`RouterConfig::validate`]).
+    pub urls: BTreeMap<WireApi, String>,
     pub api_key_env: String,
     pub wire_api: WireApi,
     pub supports: Vec<WireApi>,
@@ -817,6 +825,17 @@ pub struct ProviderCfg {
     pub models: Vec<ModelCfg>,
     #[serde(default)]
     pub quota: Option<Vec<QuotaCfg>>,
+}
+
+impl ProviderCfg {
+    /// The URL this entry POSTs to for `wire` (spec §4.9). `None` means the
+    /// entry does not declare that cell at all, which
+    /// [`RouterConfig::validate`] refuses at load — so a `None` here is a
+    /// programming error at the call site, not a case to paper over with a
+    /// fallback (ADR-020: there is no composition left to fall back to).
+    pub fn url_for(&self, wire: WireApi) -> Option<&str> {
+        self.urls.get(&wire).map(String::as_str)
+    }
 }
 
 /// spec §4.6 `on_primary_exhausted`: what a family does once the upstream has
@@ -1282,6 +1301,51 @@ impl RouterConfig {
                 ));
             }
 
+            // spec §4.9 / ADR-020: the declaration and the reachability cannot
+            // disagree. Both directions are refused here, so "declared but
+            // unreachable" (the defect ADR-020 removes) and "reachable but
+            // undeclared" (a capability nobody reads) are equally impossible.
+            // `urls` is a BTreeMap, so the reported key is deterministic.
+            for (wi, w) in p.supports.iter().enumerate() {
+                if !p.urls.contains_key(w) {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.urls"),
+                        format!(
+                            "supports[{wi}] '{}' is declared but this entry carries no `urls.{}` — \
+                             every declared cell needs its complete URL, and the router composes \
+                             no path (spec §4.9, ADR-020)",
+                            w.as_str(),
+                            w.as_str()
+                        ),
+                    ));
+                }
+            }
+            for (w, url) in &p.urls {
+                if !p.supports.contains(w) {
+                    let supports: Vec<&str> = p.supports.iter().map(|s| s.as_str()).collect();
+                    return Err(ConfigError::new(
+                        format!("{ppath}.urls.{}", w.as_str()),
+                        format!(
+                            "a URL for a cell this entry does not declare: add '{}' to supports {:?} \
+                             or drop the URL (spec §4.9, ADR-020)",
+                            w.as_str(),
+                            supports
+                        ),
+                    ));
+                }
+                let absolute = url.starts_with("http://") || url.starts_with("https://");
+                if !absolute || url.chars().any(char::is_whitespace) {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.urls.{}", w.as_str()),
+                        format!(
+                            "'{url}' is not an absolute http(s) URL free of whitespace — this value \
+                             is sent verbatim, so a relative or malformed one has no repair path \
+                             (spec §4.9, ADR-020)"
+                        ),
+                    ));
+                }
+            }
+
             for (mi, m) in p.models.iter().enumerate() {
                 let dup = p.models[..mi].iter().any(|prev| prev.id == m.id);
                 if dup {
@@ -1463,7 +1527,7 @@ mod tests {
         "trace": {"dir": "./state/traces", "rollover": "hourly"},
         "providers": [{
             "name": "p",
-            "base_url": "https://x.example/v1",
+            "urls": {"chat": "https://x.example/v1/chat/completions", "anthropic": "https://x.example/v1/messages"},
             "api_key_env": "P_KEY",
             "wire_api": "chat",
             "supports": ["chat", "anthropic"],
@@ -1645,6 +1709,83 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_cell_without_a_url_is_refused() {
+        let mut cfg = happy();
+        cfg.providers[0].urls.remove(&WireApi::Anthropic);
+        let err = validate_err(&cfg);
+        // the path carries the provider name (DESIGN §12.10.2's convention)
+        assert!(err.contains("providers[0] (p).urls"), "got: {err}");
+        assert!(err.contains("no `urls.anthropic`"), "got: {err}");
+    }
+
+    #[test]
+    fn a_url_for_an_undeclared_cell_is_refused() {
+        let mut cfg = happy();
+        cfg.providers[0].supports = vec![WireApi::Chat];
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("providers[0] (p).urls.anthropic"),
+            "got: {err}"
+        );
+        assert!(err.contains("does not declare"), "got: {err}");
+    }
+
+    #[test]
+    fn a_url_must_be_absolute_and_free_of_whitespace() {
+        for bad in [
+            "api.example.com/chat/completions",
+            "ftp://api.example.com/chat/completions",
+            "https://api.example.com/chat completions",
+            "",
+        ] {
+            let mut cfg = happy();
+            cfg.providers[0].urls.insert(WireApi::Chat, bad.into());
+            let err = validate_err(&cfg);
+            assert!(
+                err.contains("providers[0] (p).urls.chat"),
+                "bad={bad:?} got: {err}"
+            );
+            assert!(err.contains("absolute http(s)"), "bad={bad:?} got: {err}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_wire_key_in_urls_is_refused_by_the_key_type() {
+        let s = HAPPY.replace(
+            "\"chat\": \"https://x.example/v1/chat/completions\"",
+            "\"chta\": \"https://x.example/v1/chat/completions\"",
+        );
+        assert_ne!(s, HAPPY, "the fixture must contain the key being replaced");
+        let err = deser_err(&s);
+        assert!(err.contains("chta"), "got: {err}");
+        assert!(err.contains("chat, responses or anthropic"), "got: {err}");
+    }
+
+    #[test]
+    fn url_for_returns_the_configured_string_untouched() {
+        let cfg = happy();
+        assert_eq!(
+            cfg.providers[0].url_for(WireApi::Chat),
+            Some("https://x.example/v1/chat/completions")
+        );
+        assert_eq!(
+            cfg.providers[0].url_for(WireApi::Anthropic),
+            Some("https://x.example/v1/messages")
+        );
+        // A trailing slash is NOT trimmed: the router composes nothing, so it
+        // must not silently fix anything either (ADR-020 item 1).
+        let mut cfg = happy();
+        cfg.providers[0].urls.insert(
+            WireApi::Chat,
+            "https://x.example/v1/chat/completions/".into(),
+        );
+        assert_eq!(
+            cfg.providers[0].url_for(WireApi::Chat),
+            Some("https://x.example/v1/chat/completions/")
+        );
+    }
+
+    #[test]
     fn duplicate_provider_and_model_names_are_rejected() {
         let mut cfg = happy();
         let mut clone = cfg.providers[0].clone();
@@ -1747,7 +1888,7 @@ mod tests {
         "providers": [
             {
                 "name": "zai-plan",
-                "base_url": "https://api.z.ai/api/anthropic",
+                "urls": {"anthropic": "https://api.z.ai/api/anthropic/v1/messages"},
                 "api_key_env": "ZAI_CODING_API_KEY",
                 "wire_api": "anthropic",
                 "supports": ["anthropic"],
@@ -1767,7 +1908,7 @@ mod tests {
             },
             {
                 "name": "zai",
-                "base_url": "https://api.z.ai/api/paas/v4",
+                "urls": {"chat": "https://api.z.ai/api/paas/v4/chat/completions"},
                 "api_key_env": "ZAI_API_KEY",
                 "wire_api": "chat",
                 "supports": ["chat"],
@@ -1784,7 +1925,7 @@ mod tests {
             },
             {
                 "name": "moonshot-plan",
-                "base_url": "https://api.moonshot.ai/anthropic",
+                "urls": {"anthropic": "https://api.moonshot.ai/anthropic/v1/messages"},
                 "api_key_env": "KIMI_CODING_API_KEY",
                 "wire_api": "anthropic",
                 "supports": ["anthropic"],
@@ -1800,7 +1941,7 @@ mod tests {
             },
             {
                 "name": "moonshot",
-                "base_url": "https://api.moonshot.ai/v1",
+                "urls": {"chat": "https://api.moonshot.ai/v1/chat/completions"},
                 "api_key_env": "KIMI_API_KEY",
                 "wire_api": "chat",
                 "supports": ["chat"],

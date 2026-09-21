@@ -67,7 +67,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: p-plan
-    base_url: http://127.0.0.1:{plan_port}/v1
+    urls:
+      chat: http://127.0.0.1:{plan_port}/v1/chat/completions
     api_key_env: CONF_PF_PLAN_KEY
     wire_api: chat
     supports: [chat]
@@ -75,7 +76,8 @@ providers:
     models:
 {m1p}{m2p}
   - name: p-api
-    base_url: http://127.0.0.1:{api_port}/v1
+    urls:
+      chat: http://127.0.0.1:{api_port}/v1/chat/completions
     api_key_env: CONF_PF_API_KEY
     wire_api: chat
     supports: [chat]

@@ -53,7 +53,8 @@ async fn mixed_rig(tag: &str) -> (PlanRig, MockUpstream) {
             "aliases: {}",
             &format!(
                 r#"  - name: usd-provider
-    base_url: http://127.0.0.1:{port}/v1
+    urls:
+      chat: http://127.0.0.1:{port}/v1/chat/completions
     api_key_env: CONF54_USD_KEY
     wire_api: chat
     supports: [chat]

@@ -20,7 +20,8 @@ trace:    { dir: "./state/traces", rollover: hourly }
 
 providers:
   - name: only-provider
-    base_url: https://only.example/v1
+    urls:
+      chat: https://only.example/v1/chat/completions
     api_key_env: CONF23_ONLY_KEY
     wire_api: chat
     supports: [chat]

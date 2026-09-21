@@ -88,7 +88,10 @@ pub enum StreamOutcome {
 struct Candidate {
     route: RouteSpec,
     wire: WireApi,
-    base_url: String,
+    /// The URL this candidate POSTs to, resolved from the entry's `urls` map
+    /// for `wire` (spec §4.9, ADR-020). Resolved once, when the candidate is
+    /// built, so the attempt path composes nothing.
+    url: String,
     api_key: String,
 }
 
@@ -525,10 +528,22 @@ impl Forwarder {
                     .find(|p| p.name == route.provider)
                 {
                     if cfg.wire_api == proto_in && self.api_keys.contains_key(&cfg.name) {
+                        let Some(url) = cfg.url_for(cfg.wire_api) else {
+                            return StreamOutcome::Failure(ForwardFailure {
+                                status: 500,
+                                code: ErrorCode::Internal,
+                                message: format!(
+                                    "provider '{}' declares '{}' but carries no URL for it",
+                                    cfg.name,
+                                    cfg.wire_api.as_str()
+                                ),
+                                details: Some(json!({"stream": true})),
+                            });
+                        };
                         candidates.push(Candidate {
                             route: route.clone(),
                             wire: cfg.wire_api,
-                            base_url: cfg.base_url.clone(),
+                            url: url.to_string(),
                             api_key: self.api_keys[&cfg.name].clone(),
                         });
                     }
@@ -1090,7 +1105,7 @@ async fn open_head(
         provider: &cand.route.provider,
         model: &cand.route.model,
         protocol_out: cand.wire,
-        base_url: &cand.base_url,
+        url: &cand.url,
         api_key: &cand.api_key,
         attempt: 0,
     };

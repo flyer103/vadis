@@ -189,7 +189,12 @@ mod tests {
             name: "p-plan".into(),
             region: router_core::config::Region::Intl,
             currency: router_core::Currency::Usd,
-            base_url: "http://127.0.0.1:1".into(),
+            urls: [(
+                router_core::config::WireApi::Chat,
+                "http://127.0.0.1:1/chat/completions".to_string(),
+            )]
+            .into_iter()
+            .collect(),
             api_key_env: "K".into(),
             wire_api: router_core::config::WireApi::Chat,
             supports: vec![router_core::config::WireApi::Chat],

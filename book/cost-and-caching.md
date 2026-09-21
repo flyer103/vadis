@@ -117,20 +117,22 @@ a coin flip per request. That is what plan-first routing configures.
 **How you configure it.** Each provider entry says what it *is*: `account: coding_plan` for the
 subscription, `account: api` for the metered one (and `api` is the default when you write
 nothing). The same model therefore appears **twice** in the roster — once per account — and the
-two entries carry their own `base_url`, `wire_api` and API key, because those belong to the
+two entries carry their own `urls`, `wire_api` and API key, because those belong to the
 account and not to the model:
 
 ```yaml
 providers:
   - name: zai-plan
     account: coding_plan
-    base_url: <your plan's endpoint>
+    urls:
+      anthropic: <your plan's Anthropic endpoint, in full>
     api_key_env: ZAI_CODING_API_KEY
     wire_api: anthropic            # a coding plan is usually handed out in the Anthropic format
     models: [ { id: glm-5.3, ... } ]   # taken from config.example.yaml (no price is copied here)
   - name: zai
     account: api                   # the default when the key is absent
-    base_url: https://api.z.ai/api/paas/v4
+    urls:
+      chat: https://api.z.ai/api/paas/v4/chat/completions
     api_key_env: ZAI_API_KEY
     wire_api: chat
     models: [ { id: glm-5.3, ... } ]

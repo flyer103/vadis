@@ -30,7 +30,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: mock
-    base_url: http://127.0.0.1:9/v1
+    urls:
+      chat: http://127.0.0.1:9/v1/chat/completions
     api_key_env: CONF46_MOCK_KEY
     wire_api: chat
     supports: [chat]

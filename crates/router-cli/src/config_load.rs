@@ -102,7 +102,7 @@ cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, sa
 trace:    { dir: "./state/traces", rollover: hourly }
 providers:
   - name: p
-    base_url: https://x.example/v1
+    urls: { chat: https://x.example/v1/chat/completions }
     api_key_env: P_KEY
     wire_api: chat
     supports: [chat]

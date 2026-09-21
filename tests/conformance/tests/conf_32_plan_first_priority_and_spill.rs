@@ -1,6 +1,6 @@
 //! CONF-32 (spec §4.6 / ADR-014 items 4–5): **plan-first priority and the
 //! priced spill.** While the family's account state is `primary` a family
-//! request is served by the primary route's own `base_url`; when the primary
+//! request is served by the primary route's own `urls` entry for that wire; when the primary
 //! answers `403 quota_exhausted` the request spills to the overflow route,
 //! the account move is recorded as one `plan.switched` event (durability
 //! FULL), the trace carries `result.plan_switch` with the re-prefill cost
@@ -58,7 +58,7 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 /// Rule 1 (priority): the family's request goes to the primary route's own
-/// `base_url` — the plan mock receives it, the metered mock receives nothing
+/// `urls` endpoint — the plan mock receives it, the metered mock receives nothing
 /// — and the primary's bytes are relayed verbatim.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_32_primary_is_preferred_while_healthy() {
@@ -83,7 +83,7 @@ async fn conf_32_primary_is_preferred_while_healthy() {
     assert_eq!(seen.method, "POST");
     assert!(
         seen.path.starts_with("/v1/"),
-        "the request went to the primary's base_url path, got path {}",
+        "the request went to the primary's own URL, got path {}",
         seen.path
     );
 

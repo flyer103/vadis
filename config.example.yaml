@@ -20,8 +20,8 @@
 #
 # Source convention for a human re-checking this file (AGENTS constraint 5): every
 #            figure a reviewer may have to verify carries **its own URL and read
-#            date on the line it sits on** — `base_url`, every `context`, every
-#            price block — so the check is a click, not a leap of faith. A line
+#            date on the line it sits on** — every `urls` entry, every `context`,
+#            every price block — so the check is a click, not a leap of faith. A line
 #            whose value changed in a re-read says what it was before.
 #
 # 2026-09-21 re-read of all eight provider entries (the pass this comment records):
@@ -29,12 +29,16 @@
 #     (both vendor docs pages state a 1M context window); `kimi/kimi-k3` `cache_write` 0.0 →
 #     **0.003** (the intl pricing page prices cache writes per TTL tier — the open ADR-018 finding).
 #   * answered: the CN platform's Anthropic / Responses forms (documented, at *different* bases — see
-#     `zai-cn` below), which is also why a per-wire base cannot be expressed by one `base_url`: recorded
-#     as a known deviation on the entries that declare more than one wire.
+#     `zai-cn` below). Every metered vendor in this file serves its wire forms at different bases, so one
+#     `base_url` could never express them: ADR-020 replaced it with `urls`, one complete URL per wire,
+#     and every declared cell below now carries the endpoint its own page states.
 #   * replaced: the two plan `quota` blocks whose vendors publish no token allowance (spec §4.0's last
 #     bullet, GAP-Q17) — their pages' real allowance shape is in the comments instead.
-#   * unchanged: every DeepSeek figure, every `zai-cn` CNY figure, and all four base URLs of the four
-#     metered entries — re-read and identical.
+#   * unchanged: every DeepSeek figure, every `zai-cn` CNY figure, and all four metered endpoints —
+#     re-read and identical.
+#   * schema: `base_url` → `urls` in the same pass (ADR-020). The load-time rule is now
+#     `set(urls) == set(supports)`: a declared wire with no URL, or a URL for a wire the entry does not
+#     declare, refuses the start — so "declared but unreachable" is no longer a state this file can be in.
 #
 # Syntax conventions (DESIGN §12.5):
 #   - duration: `<integer><ms|s|m|h>`, stackable (e.g. `1h30m`); bare seconds
@@ -45,12 +49,11 @@
 #     pages mostly publish per 1M; this file transcribes the /1M value ÷1000
 #     and notes the official /1M value at end of line for manual cross-checking.
 #     A CNY page is transcribed as CNY — never FX-converted (spec §4.0/§4.8).
-#   - provider paths: base_url must already contain the version segment
-#     (`/v1`, `/v4`, `/anthropic`); the router only appends
-#     `chat → /chat/completions`, `responses → /responses`,
-#     `anthropic → /v1/messages`. **One base_url per entry** is therefore the
-#     reason a cell the vendor serves at a *different* base is a known
-#     deviation rather than a declared cell (see `zai` / `kimi`).
+#   - provider endpoints: `urls` gives each wire the entry declares its
+#     **complete** URL, transcribed from the page the entry cites. The router
+#     appends nothing, trims nothing and normalizes nothing (spec §4.9,
+#     ADR-020) — what is written here is what goes on the wire. The key set
+#     must equal `supports` exactly; a mismatch refuses the start.
 #
 # Gap index: GAP-Qn markers and open questions in this file are indexed in
 #            `design/DESIGN.md` §12.9.
@@ -101,21 +104,27 @@ providers:
   # (including wire_api itself) — the declared legal cells of the 3×3 matrix;
   # an undeclared cell = 400 (no "best-effort" translation). Translated cells
   # must handle the spec §2 lossy list item by item.
+  # `urls` = one complete endpoint per declared cell (spec §4.9, ADR-020); the
+  # two sets must be equal, and nothing is composed at request time.
 
   - name: deepseek
     region: intl                            # §4.8: the cited prices come from the platform's international
     currency: USD                           #   docs (api-docs.deepseek.com); no CN-mainland endpoint is configured
-    base_url: https://api.deepseek.com            # official OpenAI-Format BASE URL
-                                                  #   source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21 row "BASE URL (OpenAI Format)"
-                                                  #   actual endpoints: /chat/completions, /responses
-                                                  # official Anthropic-Format BASE: https://api.deepseek.com/anthropic
-                                                  #   (same page, row "BASE URL (Anthropic Format)")
+    urls:
+        # source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21 — its
+        #   "BASE URL (OpenAI Format)" is https://api.deepseek.com and its
+        #   "BASE URL (Anthropic Format)" is https://api.deepseek.com/anthropic;
+        #   each endpoint above is that base plus the form's own path,
+        #   transcribed in full (ADR-020: the router appends nothing)
+      chat:      https://api.deepseek.com/chat/completions
+      responses: https://api.deepseek.com/responses
+      anthropic: https://api.deepseek.com/anthropic/v1/messages
     api_key_env: DEEPSEEK_API_KEY                 # the key is read only from this env; no value in this file
     wire_api: responses                           # official docs explicitly support the Responses API (for the Codex scenario)
-    supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API)
-                                                  # known deviation: this one `base_url` serves chat and responses; the vendor's
-                                                  #   Anthropic base is a *different* path (/anthropic), which the router
-                                                  #   cannot reach from this field — see the note above `providers:`
+    supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API),
+                                                  #   and each carries its own URL above — so all three cells are reachable
+                                                  #   (ADR-020: a declared cell with no endpoint is a load error, and no cell
+                                                  #   here depends on the router appending anything)
     models:
       - id: deepseek-v4-pro
         context: 1m                               # official page: CONTEXT LENGTH = 1M (MAX OUTPUT 384K)
@@ -155,19 +164,16 @@ providers:
 
   # The subscription account. spec §4.6: `account` is a property of the *entry*
   # (the key, the endpoint and the allowance belong to the account), so one
-  # model id appears once per account and the two entries differ in base_url,
+  # model id appears once per account and the two entries differ in urls,
   # wire_api and key. `plan_policy` at the end of this file names the pair.
   - name: zai-plan
     region: intl                           # §4.8: api.z.ai, prices in USD from docs.z.ai
     currency: USD
-    base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
-                                                  #   source: https://docs.z.ai/devpack/quick-start @2026-09-21 ("Endpoint Guide":
-                                                  #   Anthropic Messages = api.z.ai/api/anthropic, OpenAI Chat Completions =
-                                                  #   api.z.ai/api/coding/paas/v4, OpenAI Responses = api.z.ai/api/v1)
-                                                  #   the plan's Anthropic base is the *same* one the metered entry documents,
-                                                  #   so the earlier TODO ("a coding plan may hand out its own base URL") is
-                                                  #   answered: it does not (docs.z.ai/devpack/tool/claude sets
-                                                  #   ANTHROPIC_BASE_URL to exactly this value for Claude Code)
+    urls:
+        # source: https://docs.z.ai/devpack/quick-start @2026-09-21 ("Endpoint Guide":
+        #   Anthropic Messages = api.z.ai/api/anthropic), plus — on the metered
+        #   entry below — https://docs.z.ai/api-reference/llm/chat-completion
+      anthropic: https://api.z.ai/api/anthropic/v1/messages
     api_key_env: ZAI_CODING_API_KEY                 # the plan's key — a separate env var, because it is a separate account
     wire_api: anthropic                           # coding plans are usually handed out in the Anthropic format (the Claude Code shape)
     supports: [anthropic]
@@ -206,23 +212,18 @@ providers:
   - name: zai
     region: intl                           # §4.8: api.z.ai. The same vendor's CN-mainland entries
     currency: USD                          #   (zai-cn / zai-cn-plan) sit below — two regions, two currencies
-    base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
-                                                  #   source: https://docs.z.ai/api-reference/llm/chat-completion @2026-09-21
-                                                  #   (OpenAPI `servers: https://api.z.ai/api` + path `/paas/v4/chat/completions`)
-                                                  #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
-                                                  #   OpenAI Responses BASE: https://api.z.ai/api/v1 (docs.z.ai/devpack/quick-start)
-                                                  #   note: the GLM-5.3 model page's own table lists the OpenAI chat base as
-                                                  #   https://api.z.ai/api/coding/paas/v4 — that is the *coding-plan* base
-                                                  #   (the `zai-plan` account above), not this metered account's
+    urls:
+        # source: https://docs.z.ai/api-reference/llm/chat-completion @2026-09-21
+        #   (OpenAPI: server https://api.z.ai/api + path /paas/v4/chat/completions)
+      chat:      https://api.z.ai/api/paas/v4/chat/completions
+      anthropic: https://api.z.ai/api/anthropic/v1/messages
     api_key_env: ZAI_API_KEY
     wire_api: chat
     supports: [chat, anthropic]                   # only the OpenAI and Anthropic formats are officially documented;
                                                   #   undocumented formats are not declared (better missing than guessed: undeclared = 400)
-                                                  # known deviation: the anthropic cell is documented at /api/anthropic, while this
-                                                  #   entry's base_url is /api/paas/v4 — one base_url cannot carry both, so an
-                                                  #   anthropic inbound would be sent to /api/paas/v4/v1/messages. Same shape as
-                                                  #   the deepseek and kimi entries; the fix is a per-wire base field (a schema
-                                                  #   decision), not a value in this file
+                                                  # the anthropic cell is reachable at its own documented base because this entry
+                                                  #   states both endpoints in full (ADR-020): the two cells no longer share a
+                                                  #   field, and neither is a known deviation any more
     models:
       - id: glm-5.3
         context: 1m                               # **corrected 2026-09-21** (was 200k): "a 1M-token context window",
@@ -274,21 +275,21 @@ providers:
     currency: USD                          #   (the platform's pages answer on the kimi.ai host family today —
                                            #    a 301 measured in R6; the endpoint host is unchanged, and the
                                            #    pricing page now serves on platform.kimi.ai — verified 2026-09-21)
-    base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
-                                                  #   source: https://platform.kimi.ai/docs/api/overview @2026-09-21
-                                                  #   ("Protocol Compatibility": OpenAI Chat Completions **and** OpenAI
-                                                  #   Responses both use /v1; Anthropic Messages uses /anthropic)
-                                                  #   official Anthropic-Format BASE: https://api.moonshot.ai/anthropic
+    urls:
+        # source: https://platform.kimi.ai/docs/api/overview @2026-09-21 ("Protocol
+        #   Compatibility": OpenAI Chat and OpenAI Responses both live at /v1,
+        #   Anthropic Messages at /anthropic)
+      chat:      https://api.moonshot.ai/v1/chat/completions
+      responses: https://api.moonshot.ai/v1/responses
+      anthropic: https://api.moonshot.ai/anthropic/v1/messages
     api_key_env: KIMI_API_KEY                      # Kimi's official quickstart examples use MOONSHOT_API_KEY;
                                                   #   this repo names it KIMI_* per owner naming, so it is never
                                                   #   mistaken for a typo of the platform's own variable
     wire_api: chat
-    supports: [chat, anthropic]                   # official: compatible with both the OpenAI and Anthropic API formats
-                                                  #   the same page also documents an OpenAI Responses endpoint at this
-                                                  #   base (/v1/responses) — not declared here: `supports` is the router's
-                                                  #   capability matrix (spec §2), and this round changes values, not cells
-                                                  # known deviation: the anthropic base is /anthropic, not /v1 — see the
-                                                  #   note above `providers:`
+    supports: [chat, responses, anthropic]        # official: compatible with the OpenAI and the Anthropic API formats, and
+                                                  #   the same page documents an OpenAI Responses endpoint at this base
+                                                  #   (/v1/responses) — so all three cells are declared, each with its
+                                                  #   own URL, which is what `urls` made expressible (ADR-020)
     models:
       - id: kimi-k3
         context: 1m                               # official: 1,048,576 tokens (Context Window column)
@@ -337,19 +338,22 @@ providers:
     # the coding endpoint and uses the coding endpoint's own id; the pair below the
     # CN entries (kimi-cn-plan/k3 + kimi-cn/kimi-k3) demonstrates the §4.8 family
     # tag that pairs two different native ids, and this intl pair now does the same.
-    base_url: https://api.kimi.ai/coding/         # **corrected 2026-09-21**: this entry previously pointed at
-                                                  #   https://api.moonshot.ai/anthropic, which is the *open platform's*
-                                                  #   Anthropic base (the metered `kimi` account above), not a coding
-                                                  #   endpoint. The Kimi Code docs publish the coding bases per region:
-                                                  #   source: https://www.kimi.com/code/docs/ @2026-09-21
-                                                  #     Anthropic format — intl https://api.kimi.ai/coding/ (this line)
-                                                  #                        CN   https://api.kimi.com/coding/ (kimi-cn-plan below)
-                                                  #     OpenAI format    — intl https://api.kimi.ai/coding/v1
-                                                  #                        CN   https://api.kimi.com/coding/v1
-                                                  #   the router appends /v1/messages to this base
+    urls:                                    # **corrected 2026-09-21 (second pass)**: the coding endpoint serves
+                                             #   BOTH forms, so both cells are declared — each with its own URL,
+                                             #   which is exactly what `urls` exists to express
+                                             #   source: https://www.kimi.com/code/docs/ @2026-09-21 ("服务地址"
+                                             #   table: OpenAI 兼容 — intl https://api.kimi.ai/coding/v1, CN
+                                             #   https://api.kimi.com/coding/v1; Anthropic 兼容 — intl
+                                             #   https://api.kimi.ai/coding/, CN https://api.kimi.com/coding/)
+      anthropic: https://api.kimi.ai/coding/v1/messages
+      chat:      https://api.kimi.ai/coding/v1/chat/completions
     api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered kimi entry above
-    wire_api: anthropic
-    supports: [anthropic]
+    wire_api: anthropic                           # the form this entry treats as native (the shape the plan's own
+                                                  #   tooling, Claude Code, speaks). The `chat` cell is served by
+                                                  #   translation to it (spec §2's lossy list). The vendor documents
+                                                  #   both forms, so a client that speaks the OpenAI form should flip
+                                                  #   this field — the choice is the operator's, not the vendor's
+    supports: [anthropic, chat]
     account: coding_plan
     models:
       - id: k3                                    # the coding endpoint's flagship native id (the same id the CN coding
@@ -393,22 +397,21 @@ providers:
   - name: zai-cn
     region: cn                              # §4.8: open.bigmodel.cn — the mainland deployment of the zai vendor
     currency: CNY                           # the CN price page publishes ¥; this entry's table is ¥ end to end
-    base_url: https://open.bigmodel.cn/api/paas/v4      # the CN general (metered) endpoint, OpenAI form
-                                                        #   source: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction @2026-09-21
-                                                        #   ("base_url = https://open.bigmodel.cn/api/paas/v4/"); the model page
-                                                        #   https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3 @2026-09-21 lists
-                                                        #   OpenAI Response at /api/v1 and Anthropic Messages at /api/anthropic
+    urls:
+        # source: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction @2026-09-21
+        #   ("base_url = https://open.bigmodel.cn/api/paas/v4/")
+      chat: https://open.bigmodel.cn/api/paas/v4/chat/completions
     api_key_env: ZAI_CN_API_KEY
     wire_api: chat
     supports: [chat]                        # **TODO answered 2026-09-21** (this line asked whether the CN endpoint
-                                           #   also serves the Anthropic / responses forms): it does, but at *different*
-                                           #   bases — OpenAI Responses at https://open.bigmodel.cn/api/v1 and Anthropic
-                                           #   Messages at https://open.bigmodel.cn/api/anthropic
-                                           #   (https://docs.bigmodel.cn/cn/guide/develop/claude/introduction @2026-09-21
-                                           #   shows the Anthropic SDK pointed at the latter). One `base_url` can carry one
-                                           #   of them, so declaring `anthropic` here would append /v1/messages to
-                                           #   /api/paas/v4; the cell stays undeclared until the schema gains a per-wire
-                                           #   base (see the note above `providers:`)
+                                           #   also serves the Anthropic / responses forms): it does, at
+                                           #   https://open.bigmodel.cn/api/anthropic (Anthropic Messages) and
+                                           #   https://open.bigmodel.cn/api/v1 (OpenAI Responses) —
+                                           #   https://docs.bigmodel.cn/cn/guide/develop/claude/introduction @2026-09-21
+                                           #   shows the Anthropic SDK pointed at the first. Those cells became
+                                           #   expressible when `urls` landed (ADR-020); they stay undeclared here
+                                           #   because this entry is not exercised on those wires — adding one is a
+                                           #   capability decision, not a schema limitation
     models:
       - id: glm-5.3
         context: 1m                         # official CN page: 上下文 1M (the pricing table's own column)
@@ -451,9 +454,10 @@ providers:
     # https://open.bigmodel.cn/api/v1. The Anthropic form is wired here
     # (the Claude Code shape); the official docs are explicit that the plan
     # must use its dedicated endpoints, not the general one.
-    base_url: https://open.bigmodel.cn/api/anthropic
-                                            #   source: https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21
-                                            #   ("接入端点说明" table) — re-read 2026-09-21, unchanged
+    urls:
+        # source: https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21
+        #   (接入端点说明: Anthropic Messages = https://open.bigmodel.cn/api/anthropic)
+      anthropic: https://open.bigmodel.cn/api/anthropic/v1/messages
     api_key_env: ZAI_CN_CODING_API_KEY      # a separate env var, because it is a separate account
     wire_api: anthropic
     supports: [anthropic]
@@ -494,15 +498,17 @@ providers:
   - name: kimi-cn
     region: cn                              # §4.8: the mainland deployment of the kimi vendor
     currency: CNY
-    base_url: https://api.moonshot.cn/v1    # the CN pay-as-you-go endpoint (the docs pages reached from
-                                            #   platform.moonshot.cn answer on the kimi.com host family today —
-                                            #   a 301 measured in R6; the endpoint host is unchanged)
-                                            #   source: https://platform.kimi.com/docs/api/overview @2026-09-21
-                                            #   ("服务地址: https://api.moonshot.cn"; OpenAI chat/responses at /v1,
-                                            #   Anthropic Messages at https://api.moonshot.cn/anthropic)
+    urls:
+        # source: https://platform.kimi.com/docs/api/overview @2026-09-21
+        #   ("服务地址: https://api.moonshot.cn"; OpenAI Chat and Responses at /v1,
+        #   Anthropic Messages at https://api.moonshot.cn/anthropic)
+      chat:      https://api.moonshot.cn/v1/chat/completions
+      responses: https://api.moonshot.cn/v1/responses
+      anthropic: https://api.moonshot.cn/anthropic/v1/messages
     api_key_env: KIMI_CN_API_KEY
     wire_api: chat
-    supports: [chat]
+    supports: [chat, responses, anthropic]        # the CN overview page documents the same three forms as the intl
+                                                  #   one (OpenAI chat and Responses at /v1, Anthropic at /anthropic)
     models:
       - id: kimi-k3
         family: kimi-k3                     # §4.8: the tag that pairs this route with the coding endpoint's `k3`
@@ -526,15 +532,18 @@ providers:
   - name: kimi-cn-plan
     region: cn                              # §4.8: the mainland deployment's Kimi Code (coding plan) account
     currency: CNY
-    base_url: https://api.kimi.com/coding/v1        # the CN coding endpoint's OpenAI form (its Anthropic form:
-                                                    #   https://api.kimi.com/coding/)
-                                                    #   source: https://www.kimi.com/code/docs/ @2026-09-21
-                                                    #   ("服务地址" table: OpenAI 兼容 CN /coding/v1, intl
-                                                    #   api.kimi.ai/coding/v1; Anthropic 兼容 CN /coding/, intl
-                                                    #   api.kimi.ai/coding/) — re-read 2026-09-21, unchanged
+    urls:                                    # **corrected 2026-09-21 (second pass)**: the CN coding endpoint serves
+                                             #   BOTH forms, so both cells are declared
+                                             #   source: https://www.kimi.com/code/docs/ @2026-09-21 ("服务地址"
+                                             #   table: OpenAI 兼容 https://api.kimi.com/coding/v1; Anthropic 兼容
+                                             #   https://api.kimi.com/coding/)
+      chat:      https://api.kimi.com/coding/v1/chat/completions
+      anthropic: https://api.kimi.com/coding/v1/messages
     api_key_env: KIMI_CN_CODING_API_KEY
-    wire_api: chat
-    supports: [chat]
+    wire_api: chat                           # this entry treats the OpenAI form as native; `anthropic` is served by
+                                             #   translation to it. Both forms are documented, so the choice of native
+                                             #   wire is the operator's (flip it if the client speaks the other one)
+    supports: [chat, anthropic]
     account: coding_plan
     models:
       - id: k3                              # the coding endpoint's own native id (its catalogue: k3, k3-256k,

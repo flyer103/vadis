@@ -28,7 +28,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: mock
-    base_url: http://127.0.0.1:{upstream_port}
+    urls:
+      anthropic: http://127.0.0.1:{upstream_port}/v1/messages
     api_key_env: CONF03_MOCK_KEY
     wire_api: anthropic
     supports: [anthropic]
@@ -81,7 +82,8 @@ async fn conf_03_native_anthropic_passthrough() {
     assert_eq!(requests.len(), 1, "exactly one upstream attempt");
     let req = &requests[0];
     assert_eq!(req.method, "POST");
-    // Anthropic path assembly: base without /v1 + /v1/messages.
+    // ADR-020: no assembly happens — the entry's `urls.anthropic` names the
+    // whole endpoint, and the request arrives at exactly that path.
     assert_eq!(req.path, "/v1/messages");
 
     assert_eq!(

@@ -27,8 +27,10 @@ pub struct UpstreamPlan<'a> {
     /// The provider's `wire_api` — for a native route it equals the inbound
     /// protocol by construction.
     pub protocol_out: WireApi,
-    /// Already carries the version segment (spec §4).
-    pub base_url: &'a str,
+    /// The complete URL for this attempt's wire, resolved from the provider
+    /// entry's `urls` map (spec §4.9, ADR-020). It is used verbatim: this
+    /// layer composes no path, trims no slash and normalizes nothing.
+    pub url: &'a str,
     /// The bearer/x-api-key value, from `api_key_env` at startup.
     pub api_key: &'a str,
     /// 0-based attempt index within one inbound request.
@@ -85,24 +87,20 @@ impl AttemptOutcome {
     }
 }
 
-/// Builds the outbound request: URL assembly (the only place a path is
-/// composed), auth headers, the byte-faithful body. Pure — no I/O.
+/// Builds the outbound request: the configured URL verbatim, auth headers,
+/// the byte-faithful body. Pure — no I/O. The URL is **not** assembled here
+/// any more (ADR-020): the provider entry names each wire's endpoint in full,
+/// and this layer sends that string as written.
 ///
 /// The body is the encoder's output: for a native route, the client's own
 /// bytes minus the router-owned top-level keys (`RawBody`'s single
 /// permitted rewrite), everything else verbatim (AGENTS constraint 1).
 pub fn build_request(plan: &UpstreamPlan<'_>, body: &[u8]) -> Result<http::Request<Bytes>, String> {
-    // URL assembly: base_url carries the version segment; append the
-    // protocol's path and nothing else (spec §4, DESIGN §12.10.1).
-    let path = match plan.protocol_out {
-        WireApi::Chat => "/chat/completions",
-        WireApi::Responses => "/responses",
-        WireApi::Anthropic => "/v1/messages",
-    };
-    let base = plan.base_url.trim_end_matches('/');
-    let url = format!("{base}{path}");
-
-    let mut builder = http::Request::post(url).header("content-type", "application/json");
+    // No assembly: the plan carries the complete URL the config declared for
+    // this wire (spec §4.9, ADR-020), and it is sent byte-for-byte as written.
+    // A trailing slash is left alone — the router does not silently repair
+    // what the operator wrote.
+    let mut builder = http::Request::post(plan.url).header("content-type", "application/json");
     // Auth: chat/responses send Authorization: Bearer; anthropic sends
     // x-api-key + anthropic-version. The value exists only in the outbound
     // request — never in a log line, trace field or event payload.
@@ -323,14 +321,14 @@ mod tests {
             provider: "p",
             model: "m",
             protocol_out: WireApi::Chat,
-            base_url: "https://p.example/v1",
+            url: "https://p.example/v1/chat/completions",
             api_key: "sk-test",
             attempt: 0,
         }
     }
 
     #[test]
-    fn url_assembly_and_auth_chat() {
+    fn url_is_the_configured_one_and_auth_chat() {
         let req = build_request(&plan(), b"{}").unwrap();
         assert_eq!(
             req.uri().to_string(),
@@ -347,12 +345,17 @@ mod tests {
     }
 
     #[test]
-    fn url_assembly_and_auth_anthropic() {
+    fn url_is_the_configured_one_and_auth_anthropic() {
         let mut p = plan();
         p.protocol_out = WireApi::Anthropic;
+        // The vendor serves the Anthropic form at a base of its own, so the
+        // entry states the whole thing and nothing is appended to it.
+        p.url = "https://p.example/anthropic/v1/messages";
         let req = build_request(&p, b"{}").unwrap();
-        // anthropic appends /v1/messages even when the base carries no /v1.
-        assert!(req.uri().to_string().ends_with("/v1/messages"));
+        assert_eq!(
+            req.uri().to_string(),
+            "https://p.example/anthropic/v1/messages"
+        );
         assert_eq!(req.headers().get("x-api-key").unwrap(), "sk-test");
         assert_eq!(
             req.headers().get("anthropic-version").unwrap(),
@@ -362,13 +365,17 @@ mod tests {
     }
 
     #[test]
-    fn base_url_trailing_slash_is_not_doubled() {
+    fn a_configured_url_is_sent_verbatim_even_with_a_trailing_slash() {
+        // ADR-020 item 1: no composition and no normalization. A slash the
+        // operator wrote is a slash the upstream sees — which is also why the
+        // URL is validated as absolute at load time instead of being repaired
+        // here.
         let mut p = plan();
-        p.base_url = "https://p.example/v1/";
+        p.url = "https://p.example/v1/chat/completions/";
         let req = build_request(&p, b"{}").unwrap();
         assert_eq!(
             req.uri().to_string(),
-            "https://p.example/v1/chat/completions"
+            "https://p.example/v1/chat/completions/"
         );
     }
 

@@ -41,7 +41,8 @@ cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, 
 trace:    {{ dir: "./state/traces", rollover: hourly }}
 providers:
   - name: mock
-    base_url: http://127.0.0.1:{upstream_port}/v1
+    urls:
+      chat: http://127.0.0.1:{upstream_port}/v1/chat/completions
     api_key_env: CONF63_MOCK_KEY
     wire_api: chat
     supports: [chat]

@@ -143,7 +143,12 @@ providers:
     currency: USD                      # USD | CNY (absent ⇒ USD, §4.8): the unit of every `price` below.
                                        #   Never converted: a CNY page is transcribed as CNY, no rate is ever
                                        #   applied, and two currencies are never added (AGENTS constraint 5)
-    base_url: https://api.deepseek.com/v1
+    urls:                              # spec §4.9: the **complete** URL for every protocol this entry
+                                       #   declares in `supports` below. The router sends it verbatim — it
+                                       #   composes no path (ADR-020). A declared wire with no URL here, a
+                                       #   key outside `supports`, or a non-http(s) value = a load error
+      chat:      https://api.deepseek.com/chat/completions
+      responses: https://api.deepseek.com/responses
     api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only
     wire_api: chat                     # chat | responses | anthropic
     supports: [chat, responses]        # inbound protocols this provider can be translated to
@@ -166,7 +171,10 @@ providers:
                                      # with `<vendor>` matching the product name its api_key_env uses
     region: intl                       # §4.8
     currency: USD                      # §4.8
-    base_url: <the plan endpoint>
+    urls:                              # one complete URL per protocol declared in `supports` below
+      chat:      <the plan's OpenAI-form endpoint, in full>
+      responses: <the plan's Responses endpoint, in full>
+      anthropic: <the plan's Anthropic endpoint, in full>
     api_key_env: CODING_PLAN_KEY
     wire_api: anthropic                # chat | responses | anthropic
     supports: [chat, responses, anthropic]
@@ -185,7 +193,8 @@ providers:
   - name: kimi-cn-plan               # the same vendor, the other region, the subscription account (§4.8)
     region: cn                         # this entry's endpoint and price page are the CN ones
     currency: CNY                      # its price table is published in CNY and stays in CNY
-    base_url: https://api.kimi.com/coding/v1
+    urls:
+      chat: https://api.kimi.com/coding/v1/chat/completions
     api_key_env: KIMI_CN_CODING_API_KEY
     wire_api: chat
     supports: [chat]
@@ -202,7 +211,8 @@ providers:
   - name: kimi-cn                     # the CN metered account of the same vendor — the family's `overflow`
     region: cn
     currency: CNY
-    base_url: https://api.moonshot.cn/v1
+    urls:
+      chat: https://api.moonshot.cn/v1/chat/completions
     api_key_env: KIMI_CN_API_KEY
     wire_api: chat
     supports: [chat]
@@ -583,7 +593,7 @@ tier in that entry's model table, and of nothing else.
 - **Why the entry, and not the model or the tier.** The four tiers of one model are one invoice line from one
   account, so they cannot disagree: a per-tier unit would be a field whose only legal value is the one its
   siblings carry. And the price list belongs to the **account** — the same argument that already puts
-  `account`, `base_url`, `wire_api` and `api_key_env` on the provider entry (§4.6): the same model id can be
+  `account`, `urls`, `wire_api` and `api_key_env` on the provider entry (§4.6): the same model id can be
   billed in CNY through one deployment and in USD through another, and only the entry knows which.
 - **No conversion, ever.** router applies no exchange rate, stores no rate and never converts one currency's
   figure into another's (§4.0). A CNY price page is transcribed **as CNY**; a request served by a CNY entry is
@@ -612,7 +622,7 @@ of one vendor sit in one roster.
   entries and the meaning of already-written records, and would force a reader to parse a name to recover a
   fact the file can simply state. The naming *convention* over operator-chosen names is documentation
   (ADR-018): `<vendor>[-<region>][-<account>]`, with `<vendor>` matching the key variable's product name.
-- **The router does not check `region` against the host in `base_url`.** Vendors own their host lists, a
+- **The router does not check `region` against a host in `urls`.** Vendors own their host lists, a
   built-in table of them would rot, and a wrong-yet-declared region is a documentation error, not a routing
   one. The check that matters is the `source` rule above.
 
@@ -651,6 +661,35 @@ ids** be one family.
 - **Two amounts in different currencies are never equal, greater or lesser** either: a comparison that would
   silently pick a unit is refused at load time where the config can express it (the cap, §4.6) and does not
   exist anywhere else.
+
+### 4.9 `urls` (one complete URL per wire protocol)
+
+**`urls` (a provider-entry property, required).** A map from a wire protocol (`chat` | `responses` |
+`anthropic`) to the **complete URL** the router POSTs to for that protocol. There is no `base_url` and no
+path composition: the value is used verbatim — nothing is appended and nothing is trimmed (ADR-020).
+
+```yaml
+    supports: [chat, anthropic]
+    urls:
+      chat:      https://api.moonshot.ai/v1/chat/completions
+      anthropic: https://api.moonshot.ai/anthropic/v1/messages
+```
+
+- **The keys are exactly the declared cells.** `set(urls) == set(supports)`, checked at load: a wire in
+  `supports` with no URL, or a URL for a wire the entry does not declare, refuses the start (the message
+  names `providers[i].urls`). `wire_api ∈ supports` stays as it is in §4. An unknown key — a typo, or a
+  protocol v0.1 does not define — is refused by the key type itself.
+- **A value must be an absolute `http(s)` URL containing no whitespace**; anything else is a load error
+  naming the path and the value found.
+- **Why the entry, and not the model or the tier.** The endpoint belongs to the **account**, exactly as
+  `api_key_env`, `account` and `currency` do (§4.6, §4.8): every metered vendor in `config.example.yaml`
+  serves its OpenAI form and its Anthropic form at *different* bases (re-read 2026-09-21), so the fact
+  cannot live on a field that does not name a wire.
+- **The router does not verify that a URL is the vendor's URL.** A wrong-yet-absolute URL is a
+  documentation error, and the only defences are the `source` rule (§4.0/§4.8) and the human re-read
+  (ADR-020, "honest boundaries").
+- **The URL is not body bytes.** Nothing in this key touches the passthrough promise, the prefix hash or
+  the cache ledger (§2, §7; AGENTS constraint 1).
 
 ## 5. Onboarding prerequisite (mandatory)
 

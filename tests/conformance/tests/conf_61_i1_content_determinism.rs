@@ -86,7 +86,8 @@ cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, 
 trace:    {{ dir: "{dir}/state/traces", rollover: hourly }}
 providers:
   - name: p1
-    base_url: http://127.0.0.1:{upstream_port}/v1
+    urls:
+      chat: http://127.0.0.1:{upstream_port}/v1/chat/completions
     api_key_env: CONF61_P1_KEY
     wire_api: chat
     supports: [chat]
@@ -211,7 +212,7 @@ async fn conf_61_i1_content_determinism_buffered() {
 async fn conf_61_i1_content_determinism_stream() {
     let dir = router_conformance::testkit::tempdir("conf61-stream");
     // The stream path opens its own HTTP client to the provider's
-    // base_url, so the "wire" is a real mock upstream (CONF-30's rig).
+    // urls, so the "wire" is a real mock upstream (CONF-30's rig).
     let upstream = router_conformance::testkit::MockUpstream::start()
         .await
         .unwrap();

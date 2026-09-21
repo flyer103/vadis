@@ -19,7 +19,8 @@ trace:    {{ dir: "./state/traces", rollover: hourly }}
 
 providers:
   - name: mock-a
-    base_url: http://127.0.0.1:{a_port}/v1
+    urls:
+      chat: http://127.0.0.1:{a_port}/v1/chat/completions
     api_key_env: CONF14_A_KEY
     wire_api: chat
     supports: [chat]
@@ -34,7 +35,8 @@ providers:
           peak: {{ multiplier: 1.0, windows: [] }}
         source: "mock upstream (no price; test fixture)"
   - name: mock-b
-    base_url: http://127.0.0.1:{b_port}/v1
+    urls:
+      chat: http://127.0.0.1:{b_port}/v1/chat/completions
     api_key_env: CONF14_B_KEY
     wire_api: chat
     supports: [chat]
