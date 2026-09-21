@@ -61,12 +61,15 @@ router: config file config.yaml: server.auth_token_env names ROUTER_TOKEN, which
 ### 2. macOS prerequisite: let localhost bypass the system proxy
 
 ```bash
-export NO_PROXY=127.0.0.1,localhost     # both codex (reqwest) and hermes (httpx) read this variable
+export NO_PROXY=127.0.0.1,localhost     # codex (reqwest) deterministically; hermes (httpx) as insurance
 ```
 
-With a system proxy configured, clients send requests to a locally bound router into the proxy
-instead; router receives no connection and the client reports `503 Service Unavailable`. Export
-the variable in the shell that starts the client — see `docs/spec.md` §5 for the recorded
+With a system proxy configured, codex sends requests to a locally bound router into the
+proxy instead; router receives no connection and the client reports `503 Service
+Unavailable` (reproduced 4/4 with only the system proxy set, R11-3). hermes did not
+reproduce this on the same machine (3/3 runs reached the router), so for hermes the
+export is insurance, not the repair of an observed failure. Export the variable in the
+shell that starts the client — see `docs/spec.md` §5 for the recorded
 incident.
 
 ### 3. Probe liveness

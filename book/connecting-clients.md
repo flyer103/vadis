@@ -14,13 +14,20 @@ Do this **before** pointing any client at router:
 export NO_PROXY=127.0.0.1,localhost
 ```
 
-On macOS, clients that read the system proxy settings (`reqwest` in codex, `httpx` in
-hermes) do **not** honour the proxy exclusion list for `127.0.0.1`. When the system proxy
-is configured, requests to a locally bound router are sent into the proxy instead, the
-router receives no connection at all, and the client reports `503 Service Unavailable`.
-The symptom looks like "router is down"; the cause is the proxy. Export the variable in the
-same shell (or the same service environment) that starts the client, not only in the shell
-that starts router.
+On macOS, codex's HTTP stack (`reqwest`) reads the system proxy settings and does
+**not** honour the exclusion list for `127.0.0.1` — this failure is deterministic (4/4
+runs with only the system proxy configured, no proxy variables in the environment). When
+the system proxy is configured, requests to a locally bound router are sent into the
+proxy instead, the router receives no connection at all, and the client reports
+`503 Service Unavailable`. The symptom looks like "router is down"; the cause is the
+proxy. hermes (`httpx`) did **not** reproduce this on the same machine (3/3 runs reached
+the loopback router with only the system proxy configured — httpx appears to honour the
+exclusion list, or not to read the macOS system proxy at all), so for hermes the export
+is insurance rather than the repair of an observed failure. An earlier measurement that
+forced a proxy into the environment explicitly (R1-3) did make httpx fail too — that is
+a different experiment from the system-proxy-only one, and both are recorded. Export the
+variable in the same shell (or the same service environment) that starts the client, not
+only in the shell that starts router.
 
 The contract clause and its measurement are in
 [`docs/spec.md` §5](../docs/spec.md); the captured evidence is in `AGENTS.md` and
@@ -128,9 +135,13 @@ What that run left in the trace, so you know the healthy shape of a hermes sessi
   extra session in the trace; it is not a misroute.
 - The tool-call continuation turn was served almost entirely from the upstream prefix cache:
   10752 of 10861 input tokens cached (99.0%), `prefix.continuity` 1.0. For comparison, the
-  same shape of turn on codex measured `prefix.continuity` 0.6923 in the same smoke after an
-  interrupted predecessor request — an open observation, not a hermes property. Judge
-  continuity per client and per turn; do not read 1.0 as a constant.
+  same shape of turn on codex measured `prefix.continuity` 0.6923 in the same smoke. That
+  number is attributed, not open: the interrupted predecessor request was ruled out at the
+  byte level (it and the completed turn share an identical 18-block hash prefix), and the
+  cause was codex itself changing its `tools` array within the session — block 9, a
+  ~12-token tool definition, block hash `ad41a391…` → `7796b665…` — while with tool bytes
+  stable the same comparison reads 1.0. Clients do change their tool definitions between
+  turns. Judge continuity per client and per turn; do not read 1.0 as a constant.
 
 The **chat wire is a different, unwitnessed cell**: switching hermes to
 `api_mode: chat_completions` requires a chat-native route of your own — the example roster's
