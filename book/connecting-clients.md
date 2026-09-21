@@ -166,13 +166,20 @@ once inbound auth is turned on (next section). With auth off, whatever token you
 is ignored.
 
 Set the model field to an explicit `provider/model` or to an alias defined in your config. What you
-write there is a **route**, not a provider model name: router resolves it and sends the provider its
+write there is a **route, not a provider model name**: router resolves it and sends the provider its
 own native model id, so `deepseek/deepseek-v4-pro` and an alias that points at it reach the upstream
 identically. Your own string is not lost — the trace records it as `decision.requested_model`
 alongside the native id it resolved to. Do **not** paste the bare native id into a client: it is not a
 route and not an alias, so it resolves to nothing and comes back as `404 unknown_model`. `auto` is
 deliberately not enabled in v0.1: it returns an explicit error instead of guessing, and the selector
 slot is reserved for a plugin.
+
+One shape deserves a warning because it looks like a typo and is not. Some vendors sell a 1M-context
+variant of a model as a **separate model id with an `[1m]` suffix** — the shipped example roster has
+such a plan entry, so its route really is `zai-plan/glm-5.3[1m]`, suffix and all. If your fingers keep
+writing the bare name, point the client at the alias instead (`glm-plan` in the example config): the
+alias and the full route string reach the upstream byte-identically, and the alias is the one that
+does not move when the vendor renames the variant.
 
 ## Requiring a token (inbound auth)
 
