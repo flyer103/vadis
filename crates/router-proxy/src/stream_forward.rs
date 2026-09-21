@@ -217,6 +217,9 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            // The one sticky read (spec §6): false until the session is
+            // resolved (see below) — one value per request.
+            sticky_hit: false,
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
@@ -286,8 +289,15 @@ impl Forwarder {
         // projection, ADR-014 item 3).
         let session = resolve_session_key(&self.config, &parsed, headers);
         let turn_index = turn_index_for(&self.store, session.as_deref());
+        // The one sticky read (spec §6), the buffered path's twin: fixed
+        // here, before the binding write below and before the relay
+        // carries the facts — the trace record's value and
+        // `bind_session`'s early return are THIS value, never a second
+        // read taken after the write (R11-F2).
+        let sticky_hit = crate::forward::session_sticky_hit(&self.store, session.as_deref());
         facts.session = session.clone();
         facts.turn_index = turn_index;
+        facts.sticky_hit = sticky_hit;
         // The plan policy's Guard stage (spec §4.6) — the same rule the
         // buffered path runs, before any attempt.
         let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
@@ -496,14 +506,16 @@ impl Forwarder {
                     started,
                     now_epoch_s,
                     plan_switch: facts.plan_switch.clone(),
-                    sticky_hit: crate::forward::session_sticky_hit(&self.store, session.as_deref()),
+                    // The one value (spec §6): the read from session
+                    // resolution, before this binding write.
+                    sticky_hit,
                     transform_mode: facts.transform_mode,
                     transforms: facts.transform_records.clone(),
                     transform_error: facts.transform_error.clone(),
                 },
                 &primary.provider,
                 &primary.model,
-                crate::forward::session_sticky_hit(&self.store, session.as_deref()),
+                sticky_hit,
                 false,
                 self.session_ttl_us,
             );
@@ -828,10 +840,10 @@ impl Forwarder {
                             blocks: facts.blocks.clone(),
                             client_requested_usage,
                             plan_switch: facts.plan_switch.clone(),
-                            sticky_hit: crate::forward::session_sticky_hit(
-                                &self.store,
-                                session.as_deref(),
-                            ),
+                            // The one value (spec §6): the read from
+                            // session resolution, carried through — the
+                            // relay's record is not a second opinion.
+                            sticky_hit,
                             transform_mode: facts.transform_mode,
                             transform_records: facts.transform_records.clone(),
                             transform_error: facts.transform_error.clone(),

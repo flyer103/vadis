@@ -521,6 +521,15 @@ pub(crate) struct RequestFacts<'a> {
     /// move) or when a 403 `quota_exhausted` on the family's primary
     /// spilled it mid-request.
     pub(crate) plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `state.sticky_hit`: **one per-request predicate, read
+    /// once before any binding write** (the R21-1 freeze). The value is
+    /// fixed at session resolution — "did this session already have a
+    /// live binding row when the request arrived?" — and every later
+    /// consumer (the `bind_session` early-return, the trace record, the
+    /// shared failure record) reuses this value; recomputing it after
+    /// the request's own row-4 write would report the write it just
+    /// made (the R11-F2 defect class).
+    pub(crate) sticky_hit: bool,
     /// spec §6 `transform_mode`: resolved from `X-Router-Transform` at the
     /// boundary (ADR-019 §2). `Passthrough` is the default; a request
     /// refused before the transform chain ran keeps it (nothing claimed).
@@ -583,6 +592,10 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            // The one sticky read (spec §6): a request that has not yet
+            // resolved its session cannot have a binding row — false by
+            // definition, never recomputed later.
+            sticky_hit: false,
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
@@ -625,7 +638,11 @@ impl Forwarder {
                 started: facts.started,
                 now_epoch_s: facts.now_epoch_s,
                 plan_switch: facts.plan_switch.clone(),
-                sticky_hit: session_sticky_hit(&self.store, facts.session.as_deref()),
+                // The one value (spec §6): read at session resolution,
+                // before this request's binding write — not recomputed
+                // here at record time, where the same request's write
+                // would answer (R21-1 freeze).
+                sticky_hit: facts.sticky_hit,
                 transform_mode: facts.transform_mode,
                 transforms: facts.transform_records.clone(),
                 transform_error: facts.transform_error.clone(),
@@ -706,8 +723,13 @@ impl Forwarder {
         // client the same way.
         let session = resolve_session_key(&self.config, &parsed, headers);
         let turn_index = turn_index_for(&self.store, session.as_deref());
+        // The one sticky read (spec §6): fixed here, before any binding
+        // write this request may make — the same value feeds
+        // `bind_session`'s early return and the trace record below.
+        let sticky_hit = session_sticky_hit(&self.store, session.as_deref());
         facts.session = session.clone();
         facts.turn_index = turn_index;
+        facts.sticky_hit = sticky_hit;
         // The plan policy's Guard stage (spec §4.6, before the allowance
         // rule; ADR-014 item 9): a request inside a family goes where the
         // family's account state says — primary while it lasts, overflow
@@ -893,7 +915,10 @@ impl Forwarder {
         // drives the next turn's `turn_index` — a missed projection write
         // would freeze the counter, so it goes through the accountant's
         // bind_session, the one writer).
-        let sticky_hit = session_sticky_hit(&self.store, session.as_deref());
+        // The one sticky value (spec §6): the read taken at session
+        // resolution, above — reused here, never recomputed after the
+        // write it gates.
+        let sticky_hit = facts.sticky_hit;
         if session.is_some() {
             crate::accounting::Accountant {
                 store: self.store.as_deref(),
