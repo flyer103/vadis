@@ -957,6 +957,11 @@ impl Forwarder {
         let mut last_class: Option<ErrorClass> = None;
         let mut last_upstream_status: Option<u16> = None;
         let mut attempt_index: u32 = 0;
+        // The walk's own record of which candidates it refused without
+        // attempting, and why (ADR-022 / spec §8): the input of the frozen
+        // `no_available_route` refusal, should the walk end with nothing
+        // served. One entry per eligibility skip, in the chain's order.
+        let mut skipped: Vec<(RouteSpec, &'static str)> = Vec::new();
 
         for candidate in &candidates {
             if attempted_providers.iter().any(|p| p == &candidate.provider) {
@@ -969,6 +974,7 @@ impl Forwarder {
                 // — the skip *abandons* the route and `failover_from`
                 // names it, exactly like a failed attempt would.
                 failover_origin(&mut facts.failover_from, candidate);
+                skipped.push((candidate.clone(), SKIP_DEMOTED));
                 if let Some(policy) = &self.config.plan_policy {
                     if candidate == &policy.primary {
                         cooling_abandoned = Some(candidate.clone());
@@ -977,12 +983,27 @@ impl Forwarder {
                 continue;
             }
             let Some(cand_provider) = self.provider(candidate).cloned() else {
+                // ADR-022's keyless class: the walk's own skip, not an
+                // answer — the chain continues.
+                skipped.push((candidate.clone(), SKIP_UNKNOWN_PROVIDER));
                 continue;
             };
+            // The wire gate (ADR-022 / DESIGN §12.10.9): a candidate may
+            // only be served on its own wire. `wire_api ∈ supports` holds
+            // by config validation, so this one condition subsumes the
+            // inbound protocol being a declared cell. The skip is in the
+            // keyless class — no attempt, no intent row, no
+            // classification, no `failover_from` (nothing failed and
+            // nothing moved), narrated only at the walk's end.
+            if cand_provider.wire_api != proto_in {
+                skipped.push((candidate.clone(), SKIP_WIRE_MISMATCH));
+                continue;
+            }
             let Some(transport) = self.transports.get(&candidate.provider) else {
                 // No transport at startup (missing api key): the provider
                 // is unavailable (§12.10.2), reported by /health; the
                 // chain continues.
+                skipped.push((candidate.clone(), SKIP_KEYLESS));
                 attempted_providers.push(candidate.provider.clone());
                 continue;
             };
@@ -1427,7 +1448,11 @@ impl Forwarder {
             }
         }
 
-        // Every candidate was skipped (demoted providers, missing keys).
+        // Every candidate was skipped (demoted providers, missing keys,
+        // wire mismatches): the frozen `no_available_route` refusal
+        // (ADR-022 / spec §8) — the same body both media return, so a
+        // client cannot tell which path produced it. `skipped[]` is the
+        // machine-readable truth; the sentence is frozen verbatim.
         ForwardOutcome::Failure(ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,
@@ -1435,6 +1460,8 @@ impl Forwarder {
                 "no available route: every candidate provider is demoted, keyless or unavailable"
                     .into(),
             details: Some(json!({
+                "stage": "no_available_route",
+                "skipped": skipped_json(&skipped),
                 "upstream_status": last_upstream_status,
                 "error_class": last_class.map(|c| c.as_str()),
             })),
@@ -1997,6 +2024,31 @@ fn failover_origin(slot: &mut Option<RouteSpec>, failed: &RouteSpec) {
     }
 }
 
+/// The candidate walk's skip reasons (ADR-022 / spec §8's frozen
+/// `no_available_route` shape): one word per eligibility condition that
+/// can refuse a candidate **before** any attempt. Frozen vocabulary —
+/// a client parses these.
+pub(crate) const SKIP_UNKNOWN_PROVIDER: &str = "unknown_provider";
+pub(crate) const SKIP_KEYLESS: &str = "keyless";
+pub(crate) const SKIP_WIRE_MISMATCH: &str = "wire_mismatch";
+pub(crate) const SKIP_DEMOTED: &str = "demoted";
+
+/// The `skipped[]` member of the frozen `no_available_route` refusal
+/// (spec §8): one entry per candidate the walk refused **without
+/// attempting**, in the chain's own order. Shared by both forwarding
+/// paths so the two media cannot disagree about the walk's reasons.
+pub(crate) fn skipped_json(skipped: &[(RouteSpec, &'static str)]) -> Vec<Value> {
+    skipped
+        .iter()
+        .map(|(route, reason)| {
+            json!({
+                "route": route.to_string(),
+                "reason": reason,
+            })
+        })
+        .collect()
+}
+
 fn usage_json(u: &Usage) -> Value {
     json!({
         "input_total": u.input_total,
@@ -2013,5 +2065,253 @@ fn normalize_usage(wire: WireApi, body: &[u8]) -> Option<Usage> {
         WireApi::Chat => router_protocol::usage_from_chat(&v),
         WireApi::Responses => router_protocol::usage_from_responses(&v),
         WireApi::Anthropic => router_protocol::usage_from_anthropic(&v),
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    //! The buffered candidate walk's wire gate (ADR-022 / DESIGN §12.10.9):
+    //! a candidate whose provider's `wire_api` differs from the inbound
+    //! protocol is skipped in the keyless class — never attempted, never a
+    //! displacement — and the walk-end refusal reports it as `wire_mismatch`.
+    //! The mock-upstream proof of the same relations is CONF-57.
+
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// A fake transport that records every request it is handed and answers
+    /// a fixed 200 chat completion.
+    struct RecordingTransport {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ProviderSend for RecordingTransport {
+        fn send(
+            &self,
+            _req: HttpRequest<Bytes>,
+        ) -> impl Future<Output = router_providers::AttemptOutcome> + Send {
+            self.seen.lock().unwrap().push("attempt".to_string());
+            async {
+                router_providers::AttemptOutcome::Responded(
+                    router_providers::UpstreamResponse {
+                        status: 200,
+                        retry_after: None,
+                        content_type: Some("application/json".into()),
+                        body: Bytes::from_static(
+                            br#"{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"served"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}"#,
+                        ),
+                    },
+                )
+            }
+        }
+    }
+
+    fn provider(name: &str, wire: WireApi) -> ProviderCfg {
+        // A minimal legal entry: validate() is not run here, but the shape
+        // matches what load() produces for a keyed provider.
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "urls": { wire.as_str(): format!("http://{name}.example/v1/{wire}") },
+            "api_key_env": format!("UNIT_{name}_KEY"),
+            "wire_api": wire.as_str(),
+            "supports": [wire.as_str()],
+            "models": [{
+                "id": "m",
+                "context": "128k",
+                "price": {
+                    "input_miss": 0.001, "input_hit": 0.0001,
+                    "cache_write": 0.0, "output": 0.002,
+                    "peak": { "multiplier": 1.0, "windows": [] }
+                },
+                "source": "unit fixture"
+            }],
+        }))
+        .unwrap()
+    }
+
+    fn forwarder(
+        config: RouterConfig,
+        transports: HashMap<String, Arc<dyn ProviderTransport>>,
+    ) -> Forwarder {
+        let mut api_keys = HashMap::new();
+        for name in transports.keys() {
+            api_keys.insert(name.clone(), "sk-unit".to_string());
+        }
+        Forwarder {
+            config,
+            transports,
+            api_keys,
+            store: None,
+            trace: None,
+            transform_engine: None,
+            session_ttl_us: 0,
+        }
+    }
+
+    async fn forward(forwarder: &Forwarder, model: &str) -> (u16, Option<Value>) {
+        let body = format!(
+            r#"{{"model":"{model}","messages":[{{"role":"user","content":"x"}}],"stream":false}}"#
+        );
+        match forwarder
+            .forward(
+                WireApi::Chat,
+                body.as_bytes(),
+                "req-unit",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await
+        {
+            ForwardOutcome::Success(s) => (s.status, None),
+            ForwardOutcome::Failure(f) => (f.status, f.details),
+        }
+    }
+
+    /// The gate's positive: a candidate whose wire matches the inbound
+    /// protocol is still served after wire-incompatible candidates were
+    /// skipped — the foreign provider's transport is never handed a
+    /// request.
+    #[tokio::test]
+    async fn wire_matching_candidate_still_serves_after_the_gate_skips_foreign_ones() {
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        let foreign_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let native_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transports.insert(
+            "foreign".into(),
+            Arc::new(RecordingTransport {
+                seen: foreign_seen.clone(),
+            }),
+        );
+        transports.insert(
+            "native".into(),
+            Arc::new(RecordingTransport {
+                seen: native_seen.clone(),
+            }),
+        );
+        let config = RouterConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("keyless", WireApi::Chat),
+                provider("foreign", WireApi::Responses),
+                provider("native", WireApi::Chat),
+            ],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: vec![
+                RouteSpec {
+                    provider: "foreign".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "native".into(),
+                    model: "m".into(),
+                },
+            ],
+            plan_policy: None,
+            state: None,
+        };
+        let f = forwarder(config, transports);
+
+        let (status, _details) = forward(&f, "keyless/m").await;
+
+        assert_eq!(
+            status, 200,
+            "the wire-matching candidate serves the request"
+        );
+        assert_eq!(
+            foreign_seen.lock().unwrap().len(),
+            0,
+            "the responses-wire transport was never handed the chat request"
+        );
+        assert_eq!(native_seen.lock().unwrap().len(), 1);
+    }
+
+    /// The gate's negative: with no wire-matching candidate in the chain,
+    /// the walk ends in the frozen refusal and the wire-incompatible
+    /// entry is reported as `wire_mismatch`, never attempted.
+    #[tokio::test]
+    async fn wire_mismatch_candidate_never_serves_and_reports_the_reason() {
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        let foreign_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transports.insert(
+            "foreign".into(),
+            Arc::new(RecordingTransport {
+                seen: foreign_seen.clone(),
+            }),
+        );
+        let config = RouterConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("keyless", WireApi::Chat),
+                provider("foreign", WireApi::Responses),
+            ],
+            fallback: vec![RouteSpec {
+                provider: "foreign".into(),
+                model: "m".into(),
+            }],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            plan_policy: None,
+            state: None,
+        };
+        let f = forwarder(config, transports);
+
+        let (status, details) = forward(&f, "keyless/m").await;
+
+        assert_eq!(status, 502, "the walk exhausted: nothing may serve");
+        let details = details.expect("the refusal carries details");
+        assert_eq!(details["stage"], "no_available_route");
+        let skipped = details["skipped"].as_array().expect("skipped[]");
+        assert_eq!(skipped.len(), 2, "the resolved route and the one fallback");
+        assert_eq!(skipped[0]["route"], "keyless/m");
+        assert_eq!(skipped[0]["reason"], "keyless");
+        assert_eq!(skipped[1]["route"], "foreign/m");
+        assert_eq!(skipped[1]["reason"], "wire_mismatch");
+        assert_eq!(
+            foreign_seen.lock().unwrap().len(),
+            0,
+            "the foreign transport was never handed a request"
+        );
+    }
+
+    // -- minimal legal config sections for the unit fixtures ------------
+
+    fn server_cfg() -> router_core::config::ServerCfg {
+        serde_json::from_value(serde_json::json!({
+            "addr": "127.0.0.1:0",
+            "upstream_attempt_timeout": "10s",
+            "request_timeout": "30s",
+        }))
+        .unwrap()
+    }
+
+    fn session_cfg() -> router_core::config::SessionCfg {
+        serde_json::from_value(serde_json::json!({
+            "key_sources": ["prompt_cache_key"],
+            "ttl": "11h",
+        }))
+        .unwrap()
+    }
+
+    fn cache_cfg() -> router_core::config::CacheCfg {
+        serde_json::from_value(serde_json::json!({
+            "sticky": true,
+            "breakeven": { "enabled": true, "min_remaining_turns": 2, "safety_factor": 1.1 },
+        }))
+        .unwrap()
+    }
+
+    fn trace_cfg() -> router_core::config::TraceCfg {
+        serde_json::from_value(serde_json::json!({
+            "dir": "./state/traces",
+            "rollover": "hourly",
+        }))
+        .unwrap()
     }
 }

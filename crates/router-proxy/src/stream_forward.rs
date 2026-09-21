@@ -506,7 +506,12 @@ impl Forwarder {
         // filtered to native routes with a key present at startup. For a
         // request inside a plan family the family's `overflow` route is
         // the first candidate after primary (spec §4.2 refined by §4.6).
+        // Entries the filter refuses are classified (ADR-022 / DESIGN
+        // §12.10.9) so the walk-end refusal can say why — the buffered
+        // walk answers "which candidates may serve" with the same rule:
+        // provider entry, key, and `wire_api == proto_in`.
         let mut candidates: Vec<Candidate> = Vec::new();
+        let mut skipped: Vec<(RouteSpec, &'static str)> = Vec::new();
         {
             let mut routes: Vec<RouteSpec> = vec![primary.clone()];
             if let Some(policy) = &self.config.plan_policy {
@@ -521,42 +526,68 @@ impl Forwarder {
                 if candidates.iter().any(|c| c.route == route) {
                     continue;
                 }
-                if let Some(cfg) = self
+                if skipped.iter().any(|(r, _)| *r == route) {
+                    continue;
+                }
+                let Some(cfg) = self
                     .config
                     .providers
                     .iter()
                     .find(|p| p.name == route.provider)
-                {
-                    if cfg.wire_api == proto_in && self.api_keys.contains_key(&cfg.name) {
-                        let Some(url) = cfg.url_for(cfg.wire_api) else {
-                            return StreamOutcome::Failure(ForwardFailure {
-                                status: 500,
-                                code: ErrorCode::Internal,
-                                message: format!(
-                                    "provider '{}' declares '{}' but carries no URL for it",
-                                    cfg.name,
-                                    cfg.wire_api.as_str()
-                                ),
-                                details: Some(json!({"stream": true})),
-                            });
-                        };
-                        candidates.push(Candidate {
-                            route: route.clone(),
-                            wire: cfg.wire_api,
-                            url: url.to_string(),
-                            api_key: self.api_keys[&cfg.name].clone(),
-                        });
-                    }
+                else {
+                    skipped.push((route.clone(), crate::forward::SKIP_UNKNOWN_PROVIDER));
+                    continue;
+                };
+                if cfg.wire_api != proto_in {
+                    // The wire gate (ADR-022): the skip is in the keyless
+                    // class — never attempted, never narrated as a
+                    // displacement; the refusal reports it at the walk's
+                    // end.
+                    skipped.push((route.clone(), crate::forward::SKIP_WIRE_MISMATCH));
+                    continue;
                 }
+                if !self.api_keys.contains_key(&cfg.name) {
+                    skipped.push((route.clone(), crate::forward::SKIP_KEYLESS));
+                    continue;
+                }
+                let Some(url) = cfg.url_for(cfg.wire_api) else {
+                    return StreamOutcome::Failure(ForwardFailure {
+                        status: 500,
+                        code: ErrorCode::Internal,
+                        message: format!(
+                            "provider '{}' declares '{}' but carries no URL for it",
+                            cfg.name,
+                            cfg.wire_api.as_str()
+                        ),
+                        details: Some(json!({"stream": true})),
+                    });
+                };
+                candidates.push(Candidate {
+                    route: route.clone(),
+                    wire: cfg.wire_api,
+                    url: url.to_string(),
+                    api_key: self.api_keys[&cfg.name].clone(),
+                });
             }
         }
         if candidates.is_empty() {
+            // The frozen `no_available_route` refusal (ADR-022 / spec §8):
+            // one shape for both media — this arm differs from the
+            // buffered walk end by nothing but the pre-existing
+            // `"stream": true`.
             return StreamOutcome::Failure(ForwardFailure {
                 status: 502,
                 code: ErrorCode::UpstreamError,
-                message: "no available route: the primary provider is keyless or unavailable"
-                    .into(),
-                details: Some(json!({"stream": true})),
+                message:
+                    "no available route: every candidate provider is demoted, keyless or unavailable"
+                        .into(),
+                details: Some(json!({
+                    "stage": "no_available_route",
+                    "skipped": crate::forward::skipped_json(&skipped),
+                    "upstream_status": None::<u16>,
+                    "error_class": None::<&'static str>,
+                    "stream": true,
+                })),
             });
         }
 
@@ -592,6 +623,12 @@ impl Forwarder {
         let mut failover_from: Option<RouteSpec> = None;
         let mut last_upstream_status: Option<u16> = None;
         let mut last_class: Option<router_core::error_class::ErrorClass> = None;
+        // The construction-time eligibility skips (wire/keyless/unknown),
+        // carried to the walk-end refusal (ADR-022): a candidate the walk
+        // attempts and then demotes is appended below with `demoted`, so
+        // the frozen shape's `skipped[]` holds every candidate the walk
+        // refused without attempting, in the chain's own order.
+        let mut walk_skipped: Vec<(RouteSpec, &'static str)> = skipped;
 
         // The family's primary refused by ADR-011's cooldown projection
         // before any attempt (spec §6's producer table, CONF-42): set by
@@ -612,6 +649,7 @@ impl Forwarder {
                 if failover_from.is_none() {
                     failover_from = Some(cand.route.clone());
                 }
+                walk_skipped.push((cand.route.clone(), crate::forward::SKIP_DEMOTED));
                 if let Some(policy) = &self.config.plan_policy {
                     if cand.route == policy.primary {
                         cooling_abandoned = Some(cand.route.clone());
@@ -998,7 +1036,28 @@ impl Forwarder {
             }
         }
 
-        // Every candidate was skipped or exhausted.
+        // Every candidate was skipped or exhausted. If nothing was
+        // attempted, this is the frozen `no_available_route` refusal
+        // (ADR-022 / spec §8): one shape with the buffered walk end,
+        // differing only by the pre-existing `"stream": true`. When an
+        // attempt was made and failed, the existing exhaustion shape
+        // (with its evidence) is kept — the walk *did* reach upstreams.
+        if attempted.is_empty() {
+            return StreamOutcome::Failure(ForwardFailure {
+                status: 502,
+                code: ErrorCode::UpstreamError,
+                message:
+                    "no available route: every candidate provider is demoted, keyless or unavailable"
+                        .into(),
+                details: Some(json!({
+                    "stage": "no_available_route",
+                    "skipped": crate::forward::skipped_json(&walk_skipped),
+                    "upstream_status": None::<u16>,
+                    "error_class": None::<&'static str>,
+                    "stream": true,
+                })),
+            });
+        }
         StreamOutcome::Failure(ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,

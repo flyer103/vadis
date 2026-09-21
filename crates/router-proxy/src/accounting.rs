@@ -498,7 +498,13 @@ impl<'a> Accountant<'a> {
             protocol: ProtocolRec {
                 protocol_in: ctx.proto_in.to_string(),
                 protocol_out: ctx.proto_out.map(str::to_string),
-                translated: matches!(ctx.proto_out, Some(out) if out != ctx.proto_in),
+                // `translated` is the mapper event (ADR-022 / DESIGN
+                // §12.10.9): true only when the attempt that carried the
+                // request re-encoded the body through a translation
+                // mapper. v0.1 has no mapper, so it is false on every
+                // record this build writes — a comparison of two words
+                // was the R11-F1 fabrication this replaces.
+                translated: false,
                 lossy: Vec::new(),
             },
             decision: DecisionRec {
