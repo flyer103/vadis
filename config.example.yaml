@@ -186,18 +186,26 @@ providers:
         #   OpenAI Chat and OpenAI Responses bases too, and each is a complete URL now, so none has to be guessed.
     account: coding_plan                          # coding_plan | api (absent ⇒ api)
     models:
-      - id: "glm-5.3[1m]"                         # quoted: `[` opens a YAML flow sequence, so the [1m] id needs quotes.
-                                                  #   DECIDED 2026-09-21 (operator decision, option A): the 1M window on this
-                                                  #   wire is the vendor's own `[1m]` spelling — both plan pages state the rule
-                                                  #   (docs.z.ai/devpack/latest-model, docs.bigmodel.cn/cn/coding-plan/
-                                                  #   latest-model), and their note "若模型参数加上 [1m] 后缀后 Claude Code 识别
-                                                  #   模型不存在，则需要升级 Claude Code" shows the suffix is a server-side
-                                                  #   model identity, not a client-side switch. Consequence: the route id this
-                                                  #   entry binds changes from `zai-plan/glm-5.3` to `zai-plan/glm-5.3[1m]`;
-                                                  #   clients use the stable `glm-plan` alias (see `aliases` below).
-        family: glm-5.3                            # explicit (§4.8's tag defaults to the id, and the id renamed): pairs this
-                                                  #   route with the metered `zai/glm-5.3`, so plan_policy.family below still
-                                                  #   matches both sides.
+      - id: glm-5.3                               # the upstream-native id — REVERTED 2026-09-22 (R16-1): `glm-5.3[1m]` is
+                                                  #   refused 400 [1211] 模型不存在 on every plan wire (anthropic / chat /
+                                                  #   responses, on both api.z.ai and open.bigmodel.cn, measured 2026-09-22),
+                                                  #   while the bare id returns 200 on all six. A MITM capture of Claude Code
+                                                  #   2.1.251 invoked with `--model glm-5.3[1m]` shows the client itself strips
+                                                  #   the suffix and sends `model: "glm-5.3"` with the `context-1m-2025-08-07`
+                                                  #   beta header — `[1m]` is a client-side switch, not a server-side model
+                                                  #   identity. This narrows the 2026-09-21 operator decision (option A),
+                                                  #   which read the plan pages' Claude-Code sections as server-side ids, to:
+                                                  #   no wire of this provider carries the suffix. The pages scope it
+                                                  #   themselves: 「开启 GLM 1M 上下文需要模型后缀加上 [1m]」 sits under 在
+                                                  #   Claude Code 中切换, while the same page's Cline section tells OpenAI-
+                                                  #   compatible tools to enter 「glm-5.3 或 glm-5.3-flash」 and set the
+                                                  #   context window client-side (docs.bigmodel.cn/cn/coding-plan/latest-model
+                                                  #   @2026-09-22; docs.z.ai/devpack/latest-model @2026-09-22, same shape).
+                                                  #   Route id: `zai-plan/glm-5.3`; the `glm-plan` alias is unchanged in
+                                                  #   meaning (see `aliases` below).
+        family: glm-5.3                            # explicit (§4.8): pairs this route with the metered `zai/glm-5.3`, so
+                                                  #   plan_policy.family below matches both sides (kept explicit through the
+                                                  #   2026-09-21 → 2026-09-22 id round-trip; absent would default to the id).
         context: 1m                               # **corrected 2026-09-21** (was 200k): the model page states a 1M-token context
                                                   #   window and says GLM-5.3 "is now available to all GLM Coding Plan users"
                                                   #   source: https://docs.z.ai/guides/llm/glm-5.3 @2026-09-21 (MAX OUTPUT 128K)
@@ -213,13 +221,14 @@ providers:
       # ---- 2026-09-21 second pass: the plan serves TWO models, not one —
       #   "The GLM Coding Plan now supports the latest GLM-5.3 and GLM-5.3-Flash models for all users
       #   (Max, Pro, and Lite)" (docs.z.ai/devpack/latest-model @2026-09-21).
-      - id: "glm-5.3-flash[1m]"                    # quoted (YAML flow indicator); the vendor's own 1M spelling — see the
-                                                  #   DECIDED note on the glm-5.3[1m] entry above (operator decision, 2026-09-21).
-                                                  #   The route id is `zai-plan/glm-5.3-flash[1m]`; clients use `glm-plan-flash`.
-        family: glm-5.3-flash                      # explicit (§4.8): the id renamed, the tag keeps pairing the route with the
-                                                  #   metered `zai/glm-5.3-flash`.
-        context: 1m                               # plan model; 1M on this wire is the `[1m]` id itself (see the note
-                                                  #   on the glm-5.3[1m] entry above). source: docs.z.ai/devpack/latest-model
+      - id: glm-5.3-flash                          # upstream-native id — REVERTED 2026-09-22 (R16-1), same evidence as the
+                                                  #   glm-5.3 entry above: `glm-5.3-flash[1m]` → 400 [1211] on all plan wires,
+                                                  #   bare → 200 (measured on every wire incl. CN anthropic, R13-LAND + R16-1).
+                                                  #   Route id: `zai-plan/glm-5.3-flash`; clients use `glm-plan-flash`.
+        family: glm-5.3-flash                      # explicit (§4.8): the tag keeps pairing the route with the
+                                                  #   metered `zai/glm-5.3-flash` (id and tag now equal again; kept explicit).
+        context: 1m                               # plan model; 1M is enabled client-side (Claude Code's `[1m]` suffix or the
+                                                  #   client's context-window setting) — not part of the wire id (R16-1).
         price:                                    # shadow = the metered list price of the same model; marginal price
           input_miss: 0.00015                     #   inside the plan is accounted 0 (spec §4.6 rule 4)
           input_hit: 0.00003
@@ -856,10 +865,14 @@ providers:
         # all three cells the CN plan's endpoint table publishes (it declared `anthropic` alone before).
     account: coding_plan
     models:
-      - id: "glm-5.3[1m]"                         # quoted (YAML flow indicator); the vendor's own 1M spelling — the same
-                                            #   operator decision as the intl plan entry (option A, 2026-09-21; see the
-                                            #   DECIDED note on zai-plan above). Route id: `zai-cn-plan/glm-5.3[1m]`.
-        family: glm-5.3                      # explicit (§4.8): the id renamed, the tag keeps pairing the route with the
+      - id: glm-5.3                               # upstream-native id — REVERTED 2026-09-22 (R16-1): `glm-5.3[1m]` → 400 [1211]
+                                            #   模型不存在 on all three CN plan wires (anthropic / coding/paas/v4 / api/v1,
+                                            #   measured 2026-09-22), bare → 200 on all three; the suffix is a Claude-Code
+                                            #   client-side switch (same evidence as the zai-plan entry above — MITM shows
+                                            #   Claude Code stripping it and sending context-1m-2025-08-07). This narrows the
+                                            #   2026-09-21 operator decision (option A) to: no wire of this provider carries
+                                            #   the suffix. Route id: `zai-cn-plan/glm-5.3`.
+        family: glm-5.3                      # explicit (§4.8): the tag pairs the route with the
                                             #   metered `zai-cn/glm-5.3`, which is what a zai-cn plan_policy would name
         context: 1m
         price:                              # the same model's CN list price as zai-cn above (inside the plan the
@@ -871,14 +884,15 @@ providers:
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — the plan's list prices are the metered ones.
       # ---- 2026-09-21 second pass: the plan serves TWO models, not one —
-      #   "GLM Coding Plan 已面向全量用户（Max & Pro & Lite）支持最新的 GLM-5.3 和 GLM-5.3-Flash"
-      #   (https://docs.bigmodel.cn/cn/coding-plan/latest-model @2026-09-21). This entry uses
-      #   the vendor's own 1M spelling (`glm-5.3-flash[1m]`, the form the CN model-switch page
-      #   writes) — the same operator decision as zai-plan above (option A, 2026-09-21).
-      - id: "glm-5.3-flash[1m]"             # quoted (YAML flow indicator); route id: `zai-cn-plan/glm-5.3-flash[1m]`
-        family: glm-5.3-flash               # explicit (§4.8): the id renamed, the tag keeps pairing the route with the
+      #   「GLM Coding Plan 已面向全量用户（Max & Pro & Lite）支持最新的 GLM-5.3 和 GLM-5.3-Flash」
+      #   (https://docs.bigmodel.cn/cn/coding-plan/latest-model @2026-09-21).
+      - id: glm-5.3-flash                    # upstream-native id — REVERTED 2026-09-22 (R16-1), same evidence as above
+                                            #   (`glm-5.3-flash[1m]` → 400 [1211] on all three CN wires, bare → 200 on all
+                                            #   three; the CN model-switch page's own Cline section writes the bare form
+                                            #   「glm-5.3 或 glm-5.3-flash」). Route id: `zai-cn-plan/glm-5.3-flash`.
+        family: glm-5.3-flash               # explicit (§4.8): the tag pairs the route with the
                                             #   metered `zai-cn/glm-5.3-flash`
-        context: 1m                      # plan model, 1M via the [1m] id itself
+        context: 1m                      # plan model; 1M enabled client-side, not via the wire id (R16-1)
         price:
           input_miss: 0.0008      # official ¥0.8 /1M
           input_hit: 0.00023      # official ¥0.23 /1M
@@ -1051,12 +1065,14 @@ aliases:
   coding-fast: deepseek/deepseek-flash
   coding-bulk: kimi/kimi-k3
   chat-fast: zai/glm-5.3-flash
-  # Stable client-side names for the plan 1M spellings (operator decision,
-  # 2026-09-21): the vendor requires the `[1m]` suffix for the 1M window, so
-  # the routes carry it and these aliases keep a `/`-free name to write in a
-  # client. An alias and the direct route are byte-identical upstream (spec §2).
-  glm-plan: "zai-plan/glm-5.3[1m]"
-  glm-plan-flash: "zai-plan/glm-5.3-flash[1m]"
+  # Stable client-side names for the plan entries (born 2026-09-21 as "1M
+  # spelling" aliases; the ids were reverted to bare on 2026-09-22 by R16-1 —
+  # `[1m]` is a Claude-Code client-side switch the upstream refuses as an id
+  # (400 [1211] on every plan wire, measured), so the routes carry the bare,
+  # upstream-native ids and the aliases keep their `/`-free client names.
+  # An alias and the direct route are byte-identical upstream (spec §2).
+  glm-plan: zai-plan/glm-5.3
+  glm-plan-flash: zai-plan/glm-5.3-flash
   # Aliases pointing to `auto` or carrying parameter overrides (max_tokens
   # etc.) are undefined in v0.1 → GAP-Q13 (DESIGN §12.9)
 
@@ -1113,9 +1129,12 @@ plan_policy:
   # together (GAP-Q15): `deny_unknown_fields` makes an example that carries a key
   # the parser does not know an unservable file.
   family: glm-5.3                    # required: the model id both routes carry — and the key of the family's state.
-                                    #   The plan route's id is `glm-5.3[1m]` now (the vendor's 1M spelling), so both
-                                    #   entries declare `family: glm-5.3` explicitly (§4.8) and this key is unchanged.
-  primary: "zai-plan/glm-5.3[1m]"   # required: a roster route whose provider is `account: coding_plan`
+                                    #   Both entries declare `family: glm-5.3` explicitly (§4.8; kept through the
+                                    #   2026-09-21 → 2026-09-22 `[1m]` → bare id round-trip, R16-1) so the pairing
+                                    #   does not depend on id equality.
+  primary: zai-plan/glm-5.3         # required: a roster route whose provider is `account: coding_plan`. The id is
+                                    #   the bare upstream-native form again (R16-1 revert, 2026-09-22): `[1m]` is a
+                                    #   client-side switch the upstream refuses as an id (400 [1211], measured).
   overflow: zai/glm-5.3              # required: a distinct roster route whose provider is `account: api`. For a request inside
                                      #   this family it is the first candidate after `primary`, before the `fallback` list above (§4.2)
   on_primary_exhausted: spill        # spill | block (default spill). spill: the family continues on the metered account at its

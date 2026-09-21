@@ -642,8 +642,10 @@ of one vendor sit in one roster.
 **The route family tag (`models[].family`, a model-entry property).** Optional non-empty string;
 **absent ⇒ the model's own `id`**, which is ADR-014's rule unchanged and therefore moves no existing config.
 `plan_policy.family` (§4.6) matches this tag — that is what lets two routes with **different provider-native
-ids** be one family. When the plan-side entry's native id differs from the metered one (for example a vendor
-requires a `[1m]` suffix on the model id for the 1M context window), each side must state the same `family:`
+ids** be one family. When the plan-side entry's native id differs from the metered one (a plan may expose a
+different id shape than the metered catalogue — measured example: ZAI's coding plans serve the **bare** ids
+`glm-5.3` / `glm-5.3-flash` on every wire; the `[1m]` form their docs mention is a Claude-Code client-side
+switch, refused 400 `[1211]` by the upstream when sent as an id, R16-1), each side must state the same `family:`
 tag explicitly to complete the pairing; the pairing is never inferred from id equality.
 
 - **A name, not an address.** A client never writes a tag: it writes `provider/model` or an alias (§3), and a
