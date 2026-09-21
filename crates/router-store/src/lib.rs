@@ -600,6 +600,9 @@ impl SqliteStore {
                 .unwrap_or(0)
                 .saturating_mul(1_000);
             let until_us = if account == "overflow" && cooldown_us > 0 {
+                // Derived display value, not a source of truth: no verdict
+                // path reads it — /health and the guard both recompute the
+                // deadline from the *loaded* config (R10-F1).
                 Some(ev.ts_us.saturating_add(cooldown_us))
             } else {
                 None
