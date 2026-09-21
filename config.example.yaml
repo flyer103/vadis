@@ -170,23 +170,32 @@ providers:
     region: intl                           # §4.8: api.z.ai, prices in USD from docs.z.ai
     currency: USD
     urls:
-        # source: https://docs.z.ai/devpack/quick-start @2026-09-21 ("Endpoint Guide":
-        #   Anthropic Messages = api.z.ai/api/anthropic), plus — on the metered
-        #   entry below — https://docs.z.ai/api-reference/llm/chat-completion
+        # source: https://docs.z.ai/devpack/quick-start @2026-09-21 ("Endpoint Guide" — three protocols, not one):
+        #   Anthropic Messages   = api.z.ai/api/anthropic
+        #   OpenAI Chat Complete = api.z.ai/api/coding/paas/v4   ← the plan's own path, not the metered /paas/v4
+        #   OpenAI Responses     = api.z.ai/api/v1
+        #   cross-checked on https://docs.z.ai/devpack/latest-model @2026-09-21 ("Before You Start" repeats all three)
       anthropic: https://api.z.ai/api/anthropic/v1/messages
+      chat:      https://api.z.ai/api/coding/paas/v4/chat/completions
+      responses: https://api.z.ai/api/v1/responses
     api_key_env: ZAI_CODING_API_KEY                 # the plan's key — a separate env var, because it is a separate account
     wire_api: anthropic                           # coding plans are usually handed out in the Anthropic format (the Claude Code shape)
-    supports: [anthropic]
+    supports: [anthropic, chat, responses]
+        # all three cells the plan's Endpoint Guide publishes. **Added 2026-09-21**: earlier revisions declared
+        #   `anthropic` alone, which understated the plan — the same page (and the model-switch guide) lists the
+        #   OpenAI Chat and OpenAI Responses bases too, and each is a complete URL now, so none has to be guessed.
     account: coding_plan                          # coding_plan | api (absent ⇒ api)
     models:
       - id: glm-5.3                               # the family's model id (plan_policy.family below); the metered entry serves the same id
         context: 1m                               # **corrected 2026-09-21** (was 200k): the model page states a 1M-token context
                                                   #   window and says GLM-5.3 "is now available to all GLM Coding Plan users"
                                                   #   source: https://docs.z.ai/guides/llm/glm-5.3 @2026-09-21 (MAX OUTPUT 128K)
-                                                  #   open item: the plan's own Claude Code config writes the model as
-                                                  #   `glm-5.3[1m]` (docs.z.ai/devpack/tool/claude), i.e. the 1M variant may
-                                                  #   need that suffix on this wire; the id above is the id the API reference
-                                                  #   uses for the non-plan form — check before pointing a plan key at this entry
+                                                  #   VERIFIED 2026-09-21: the 1M window on this wire requires the `[1m]`
+                                                  #   suffix — the vendor's own sample config writes `glm-5.3-flash[1m]`, and
+                                                  #   both plan pages state the rule (docs.z.ai/devpack/latest-model,
+                                                  #   docs.bigmodel.cn/cn/coding-plan/latest-model). OPEN DECISION: writing
+                                                  #   `glm-5.3[1m]` here would also rename the route this entry binds (the
+                                                  #   id is the route id), so the operator decides — a rename, not a fix.
         price:                                    # the same model's official list price as the metered entry, same source:
           input_miss: 0.0014                      #   inside the plan the marginal price is accounted **0** (spec §4.6 rule 4);
           input_hit: 0.00026                      #   the table still has to be non-zero, because a zero tier is a load error (spec §4.0)
@@ -196,6 +205,19 @@ providers:
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — GLM-5.3 $1.4 / $0.26 cached / storage "Limited-time
         #   Free" / $4.4 per 1M, no peak/off-peak published ⇒ multiplier 1.0, windows empty.
+      # ---- 2026-09-21 second pass: the plan serves TWO models, not one —
+      #   "The GLM Coding Plan now supports the latest GLM-5.3 and GLM-5.3-Flash models for all users
+      #   (Max, Pro, and Lite)" (docs.z.ai/devpack/latest-model @2026-09-21).
+      - id: glm-5.3-flash
+        context: 1m                               # plan model; 1M on this wire via the `[1m]` suffix (see the note
+                                                  #   on the glm-5.3 entry above). source: docs.z.ai/devpack/latest-model
+        price:                                    # shadow = the metered list price of the same model; marginal price
+          input_miss: 0.00015                     #   inside the plan is accounted 0 (spec §4.6 rule 4)
+          input_hit: 0.00003
+          cache_write: 0.0
+          output: 0.0005
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
     # no `quota:` — **removed 2026-09-21** (it carried a 100,000,000-token placeholder) because spec §4.0's last
     # bullet is explicit: `quota` states a *token* allowance on a monthly window and nothing else, and a plan whose
     # vendor publishes a different shape carries **no** block. GLM Coding Plan publishes credits, not tokens:
@@ -219,7 +241,14 @@ providers:
       anthropic: https://api.z.ai/api/anthropic/v1/messages
     api_key_env: ZAI_API_KEY
     wire_api: chat
-    supports: [chat, anthropic]                   # only the OpenAI and Anthropic formats are officially documented;
+    supports: [chat, anthropic]
+        # two cells, and their provenance is not the same — the API reference on this very page documents Chat
+        #   Completions only: "server https://api.z.ai/api + path /paas/v4/chat/completions". The Anthropic-compatible
+        #   base on this same host is published on the GLM **Coding Plan** pages instead
+        #   (https://docs.z.ai/devpack/quick-start, "Endpoint Guide": api.z.ai/api/anthropic) @2026-09-21 — that is
+        #   also where the plan's other two cells are declared, on `zai-plan` below. **A metered key against
+        #   /api/anthropic is therefore NOT independently documented**: it is declared here because the host is the
+        #   same one the plan page configures, and left visible rather than silently relied on.
                                                   #   undocumented formats are not declared (better missing than guessed: undeclared = 400)
                                                   # the anthropic cell is reachable at its own documented base because this entry
                                                   #   states both endpoints in full (ADR-020): the two cells no longer share a
@@ -262,6 +291,118 @@ providers:
         source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — the pricing page still lists GLM-4.7 in its
         #   "Text Models" table at these figures; the model page is still published (context 200K re-confirmed).
+      # ---- 2026-09-21 second pass: the rest of this account's metered CHAT roster.
+      #   prices: https://docs.z.ai/guides/overview/pricing | contexts: https://docs.z.ai/guides/overview/overview
+      #   (GLM-4.6V rows: https://docs.z.ai/guides/vlm/glm-4.6v). Cross-checked against the vendor's own
+      #   model catalogue on the same pages. Excluded, each with the reason:
+      #     * GLM-4.7-Flash / GLM-4.5-Flash / GLM-4.6V-Flash — the vendor's price is "Free" and a zero
+      #       tier is refused at load, so a $0 model cannot be expressed in the roster at all
+      #     * GLM-OCR — priced under Vision Models, but its guide serves it from /paas/v4/layout_parsing,
+      #       not from chat completions: there is no chat cell to route
+      #     * GLM-5-Turbo — in the catalogue (200K) yet absent from the intl pricing table ⇒ no price
+      #     * GLM-4.5V — priced, but no intl page publishes its context window
+      #     * GLM-4-32B-0414-128K — priced, but its cached-input price is "-" (no cache tier)
+      - id: glm-5.2
+        context: 1m                      # official "Context 1M"
+        price:
+          input_miss: 0.0014      # official $1.4 /1M
+          input_hit: 0.00026      # official $0.26 /1M
+          cache_write: 0.0
+          output: 0.0044          # official $4.4 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-5.1
+        context: 200k                    # official "Context 200K"
+        price:
+          input_miss: 0.0014      # official $1.4 /1M
+          input_hit: 0.00026      # official $0.26 /1M
+          cache_write: 0.0
+          output: 0.0044          # official $4.4 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-5
+        context: 200k                    # official "Context 200K"
+        price:
+          input_miss: 0.001       # official $1 /1M
+          input_hit: 0.0002       # official $0.2 /1M
+          cache_write: 0.0
+          output: 0.0032          # official $3.2 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.7-flashx
+        context: 200k                    # official "Context 200K"
+        price:
+          input_miss: 0.00007     # official $0.07 /1M
+          input_hit: 0.00001      # official $0.01 /1M
+          cache_write: 0.0
+          output: 0.0004          # official $0.4 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.6
+        context: 200k                    # official "Context 200K"
+        price:
+          input_miss: 0.0006      # official $0.6 /1M
+          input_hit: 0.00011      # official $0.11 /1M
+          cache_write: 0.0
+          output: 0.0022          # official $2.2 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.5
+        context: 128k                    # official "Context 128K"
+        price:
+          input_miss: 0.0006      # official $0.6 /1M
+          input_hit: 0.00011      # official $0.11 /1M
+          cache_write: 0.0
+          output: 0.0022          # official $2.2 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.5-x
+        context: 128k                    # official "Context 128K"
+        price:
+          input_miss: 0.0022      # official $2.2 /1M
+          input_hit: 0.00045      # official $0.45 /1M
+          cache_write: 0.0
+          output: 0.0089          # official $8.9 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.5-air
+        context: 128k                    # official "Context 128K"
+        price:
+          input_miss: 0.0002      # official $0.2 /1M
+          input_hit: 0.00003      # official $0.03 /1M
+          cache_write: 0.0
+          output: 0.0011          # official $1.1 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.5-airx
+        context: 128k                    # official "Context 128K"
+        price:
+          input_miss: 0.0011      # official $1.1 /1M
+          input_hit: 0.00022      # official $0.22 /1M
+          cache_write: 0.0
+          output: 0.0045          # official $4.5 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+      - id: glm-4.6v
+        context: 128k                    # official "Context Length 128K"
+        price:
+          input_miss: 0.0003      # official $0.3 /1M
+          input_hit: 0.00005      # official $0.05 /1M
+          cache_write: 0.0
+          output: 0.0009          # official $0.9 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # vision: video/image/text/file in, text out, native function calling
+      - id: glm-4.6v-flashx
+        context: 128k                    # official "Context Length 128K"
+        price:
+          input_miss: 0.00004     # official $0.04 /1M
+          input_hit: 0.000004     # official $0.004 /1M
+          cache_write: 0.0
+          output: 0.0004          # official $0.4 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # vision: the lightweight/high-speed sibling of GLM-4.6V
     # no `quota:` on the metered entry: an allowance belongs to the subscription
     # account above (spec §4.6 `account`), and the metered route is the family's
     # `overflow` in `plan_policy` at the end of this file.
@@ -323,6 +464,31 @@ providers:
         # TODO verify against official source: re-read 2026-09-21 — the K2 table also lists kimi-k2.7-code-highspeed
         #   ($0.38 / $1.90 / $8.00) and kimi-k2.6 ($0.16 / $0.95 / $4.00); neither is in this roster.
 
+      # ---- 2026-09-21 second pass: the K2 series is three models, not one.
+      #   cross-check that did NOT agree with itself: the model-list page (https://platform.kimi.ai/docs/models) omits
+      #   `kimi-k3`, while the pricing page (pricing/chat-k3) publishes it and the platform banner
+      #   features it — the CN list page shows the mirror-image gap, omitting `kimi-k2.7-code-highspeed`
+      #   that its own pricing table sells. The pricing tables decide here, and both are named in-line.
+      - id: kimi-k2.7-code-highspeed
+        context: 256k                    # official "262,144 tokens"
+        price:
+          input_miss: 0.0019      # $1.9 /1M
+          input_hit: 0.00038      # $0.38 /1M
+          cache_write: 0.0
+          output: 0.008           # $8 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.ai/docs/pricing/chat-k27-code @2026-09-21"
+        # high-speed variant: ~180 tok/s, up to 260 tok/s short-context
+      - id: kimi-k2.6
+        context: 256k                    # official "262,144 tokens"
+        price:
+          input_miss: 0.00095     # $0.95 /1M
+          input_hit: 0.00016      # $0.16 /1M
+          cache_write: 0.0
+          output: 0.004           # $4 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.ai/docs/pricing/chat-k26 @2026-09-21"
+        # general-purpose; text/image/video in, 256k context
   # The second subscription account, configured like zai-plan above — with one
   # difference that is the point of spec §4.6: v0.1 carries **at most one**
   # `plan_policy`, so this plan account is a legal roster entry that no policy
@@ -378,6 +544,40 @@ providers:
         # TODO verify against official source: the coding endpoint publishes **no** price table of its own — the
         #   figures above are the open platform's, carried so the tier is non-zero (spec §4.0); the plan's real
         #   cost is the subscription plus the membership's usage windows (see below).
+      # ---- 2026-09-21 second pass: the plan hands out FOUR model ids, not one
+      #   (https://www.kimi.com/code/docs/, "模型 ID": k3, k3-256k, kimi-for-coding, kimi-for-coding-highspeed).
+      #   tier gates (https://www.kimi.com/code/docs/kimi-code/membership.html): K3 needs Moderato/Plus+; the 1M window needs Allegretto/Pro+.
+      #   kimi-for-coding ("K2.8 Preview") is documented but has neither a published per-token price nor
+      #   a metered sibling to shadow it, so it is deliberately NOT declared — a made-up price would
+      #   break the no-fabricated-prices rule (constraint 5).
+      #   `family` tags obey spec §4.8: at most ONE model entry per provider carries a given tag, and the
+      #   tag is what pairs a plan route with its metered route. k3-256k therefore carries none (it has no
+      #   metered twin; an untagged entry's tag is its own id), while the high-speed route pairs with the
+      #   metered `kimi-k2.7-code-highspeed` — the model the vendor says it is.
+      - id: k3-256k
+        context: 256k                    # plan id; the 256k variant of k3
+        price:
+          input_miss: 0.0015      # derived — $1.5 /1M
+          input_hit: 0.00015      # derived — $0.15 /1M
+          cache_write: 0.0015
+          output: 0.0075          # derived — $7.5 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://www.kimi.com/code/docs/ @2026-09-21"
+        # shadow price is DERIVED, not published: the plan page states "k3（1M）消耗约为 k3-256k 两倍",
+        #   so this is half of k3's shadow. Inside the plan the marginal price is accounted 0
+        #   (spec §4.6); the table only has to be non-zero.
+      - id: kimi-for-coding-highspeed
+        family: kimi-k2.7-code-highspeed
+        context: 256k                    # plan id for "K2.7 Code 高速版"
+        price:
+          input_miss: 0.0019      # mapper — $1.9 /1M
+          input_hit: 0.00038      # mapper — $0.38 /1M
+          cache_write: 0.0
+          output: 0.008           # mapper — $8 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://www.kimi.com/code/docs/ @2026-09-21"
+        # shadow = the metered list price of the model the vendor names it after
+        #   (K2.7 Code HighSpeed, https://platform.kimi.ai/docs/pricing/chat-k27-code) — a documented mapping, not a guess.
     # no `quota:` — **removed 2026-09-21** (it carried a 100,000,000-token placeholder) for the same reason as
     # zai-plan above: spec §4.0 permits the block only for a token allowance, and Kimi Code publishes usage
     # windows instead. What the vendor does publish (https://www.kimi.com/code/docs/kimi-code/membership @2026-09-21):
@@ -398,12 +598,20 @@ providers:
     region: cn                              # §4.8: open.bigmodel.cn — the mainland deployment of the zai vendor
     currency: CNY                           # the CN price page publishes ¥; this entry's table is ¥ end to end
     urls:
-        # source: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction @2026-09-21
-        #   ("base_url = https://open.bigmodel.cn/api/paas/v4/")
-      chat: https://open.bigmodel.cn/api/paas/v4/chat/completions
+        # source: the CN platform's three compatibility pages @2026-09-21:
+        #   OpenAI 兼容    https://docs.bigmodel.cn/cn/guide/develop/openai/introduction    (base /api/paas/v4/)
+        #   Response API   https://docs.bigmodel.cn/cn/guide/develop/responses/introduction (base /api/v1, path /responses)
+        #   Claude 兼容    https://docs.bigmodel.cn/cn/guide/develop/claude/introduction    (base /api/anthropic)
+        #   note the three bases are genuinely different: /api/paas/v4, /api/v1, /api/anthropic
+      chat:      https://open.bigmodel.cn/api/paas/v4/chat/completions
+      responses: https://open.bigmodel.cn/api/v1/responses
+      anthropic: https://open.bigmodel.cn/api/anthropic/v1/messages
     api_key_env: ZAI_CN_API_KEY
     wire_api: chat
-    supports: [chat]                        # **TODO answered 2026-09-21** (this line asked whether the CN endpoint
+    supports: [chat, responses, anthropic]
+        # **added 2026-09-21**: the CN platform publishes OpenAI-, Response- and Claude-compatible APIs side by side,
+        #   so all three cells are declared (the entry declared only `chat` before — the same class of understatement
+        #   as `zai-plan`). The Response API is a separate endpoint from chat completion by the vendor's own design.
                                            #   also serves the Anthropic / responses forms): it does, at
                                            #   https://open.bigmodel.cn/api/anthropic (Anthropic Messages) and
                                            #   https://open.bigmodel.cn/api/v1 (OpenAI Responses) —
@@ -442,6 +650,64 @@ providers:
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — the promotion is labelled 5折限时两周; when it
         #   ends the list prices above are what remains.
+      # ---- 2026-09-21 second pass: the rest of the CN metered roster.
+      #   prices: https://docs.bigmodel.cn/cn/guide/start/pricing | contexts: https://docs.bigmodel.cn/cn/guide/start/model-overview
+      #   Excluded, with the reason (cross-checks, not oversights):
+      #     * GLM-4.7-Flash / GLM-4-Flash-250414 / GLM-4.6V-Flash / GLM-4V-Flash — vendor price "免费" and a
+      #       zero tier is refused at load, so a free model cannot be expressed
+      #     * GLM-5.1 / GLM-5-Turbo / GLM-5 / GLM-4.7 / GLM-4.5-Air / GLM-5V-Turbo / GLM-4.6V /
+      #       GLM-4.6V-FlashX — these carry **input-length-tiered** prices on the CN pricing page
+      #       (e.g. GLM-4.7: 2/3/4 元 depending on input size), and the `price:` block here has one tier
+      #       only (input_miss/input_hit/output + a time-based `peak`). Recording one tier of a tiered
+      #       model would mis-cost every request outside it, so they are left out until the schema can say
+      #       it — see spec §4 (a product change, not a config edit)
+      #     * GLM-4-Plus / GLM-4-Air-250414 / GLM-4-AirX / GLM-4-Assistant / GLM-Z1-* — the CN pricing page
+      #       keeps these for historical billing reference; they are not in the current model catalogue
+      - id: glm-5.3-flashx
+        context: 1m                      # official "上下文 1M"
+        price:
+          input_miss: 0.002       # official ¥2 /1M
+          input_hit: 0.00057      # official ¥0.57 /1M
+          cache_write: 0.0
+          output: 0.007           # official ¥7 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+      - id: glm-5.2
+        context: 1m                      # official "上下文 1M"
+        price:
+          input_miss: 0.008       # official ¥8 /1M
+          input_hit: 0.002        # official ¥2 /1M
+          cache_write: 0.0
+          output: 0.028           # official ¥28 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+      - id: glm-4.7-flashx
+        context: 200k                    # official "上下文 200K"
+        price:
+          input_miss: 0.0005      # official ¥0.5 /1M
+          input_hit: 0.0001       # official ¥0.1 /1M
+          cache_write: 0.0
+          output: 0.003           # official ¥3 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+      - id: glm-4-long
+        context: 1m                      # official "上下文 1M"
+        price:
+          input_miss: 0.001       # official ¥1 /1M
+          input_hit: 0.0005       # official ¥0.5 /1M
+          cache_write: 0.0
+          output: 0.001           # official ¥1 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+      - id: glm-4-flashx-250414
+        context: 128k                    # official "上下文 128K"
+        price:
+          input_miss: 0.0001      # official ¥0.1 /1M
+          input_hit: 0.00005      # official ¥0.05 /1M
+          cache_write: 0.0
+          output: 0.0001          # official ¥0.1 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
     # no `quota:` on the metered entry: an allowance belongs to the
     # subscription account below (spec §4.6 `account`).
 
@@ -455,12 +721,18 @@ providers:
     # (the Claude Code shape); the official docs are explicit that the plan
     # must use its dedicated endpoints, not the general one.
     urls:
-        # source: https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21
-        #   (接入端点说明: Anthropic Messages = https://open.bigmodel.cn/api/anthropic)
+        # source: https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21 ("接入端点说明"):
+        #   Anthropic Message 协议      = open.bigmodel.cn/api/anthropic
+        #   OpenAI Chat Completion 协议 = open.bigmodel.cn/api/coding/paas/v4  ← the plan's own path
+        #   OpenAI Response 协议        = open.bigmodel.cn/api/v1
+        #   cross-checked on https://docs.bigmodel.cn/cn/coding-plan/latest-model @2026-09-21 (same three)
       anthropic: https://open.bigmodel.cn/api/anthropic/v1/messages
+      chat:      https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
+      responses: https://open.bigmodel.cn/api/v1/responses
     api_key_env: ZAI_CN_CODING_API_KEY      # a separate env var, because it is a separate account
     wire_api: anthropic
-    supports: [anthropic]
+    supports: [anthropic, chat, responses]
+        # all three cells the CN plan's endpoint table publishes (it declared `anthropic` alone before).
     account: coding_plan
     models:
       - id: glm-5.3                         # the same id as the CN metered entry → the family tag defaults to the
@@ -474,6 +746,21 @@ providers:
           peak: { multiplier: 1.0, windows: [] }
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — the plan's list prices are the metered ones.
+      # ---- 2026-09-21 second pass: the plan serves TWO models, not one —
+      #   "GLM Coding Plan 已面向全量用户（Max & Pro & Lite）支持最新的 GLM-5.3 和 GLM-5.3-Flash"
+      #   (https://docs.bigmodel.cn/cn/coding-plan/latest-model @2026-09-21). The id is the plan's own
+      #   spelling; the CN model-switch page writes the 1M variant as `glm-5.3-flash[1m]` (see the note on
+      #   the intl plan entry above — the suffix changes the route id, so it is left to the operator).
+      - id: glm-5.3-flash
+        context: 1m                      # plan model, 1M via the [1m] suffix
+        price:
+          input_miss: 0.0008      # official ¥0.8 /1M
+          input_hit: 0.00023      # official ¥0.23 /1M
+          cache_write: 0.0
+          output: 0.0028          # official ¥2.8 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+        # shadow price = the CN metered list price of the same model; inside the plan the marginal price is accounted 0 (spec §4.6)
     # no `quota:` — the CN plan's allowance is **credits**, not a token count:
     # Lite 2,000 / 5 h + 10,000 / week, Pro 12,000 / 60,000, Max 28,000 /
     # 140,000, with a published deduction formula (GLM-5.3: input 6.9,
@@ -527,6 +814,37 @@ providers:
         source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
         # TODO verify against official source: re-read 2026-09-21 — one row carries all of it (cache write 5 min
         #   ¥20.00 / 1 h ¥40.00, cached ¥2.00, input ¥20.00, output ¥100.00, context 1,048,576).
+      # ---- 2026-09-21 second pass: the CN platform sells the same K2 series as intl.
+      #   source: https://platform.kimi.com/docs/pricing/chat (¥ per 1M tokens, all four ids) @2026-09-21
+      #   the CN model-list page omits the high-speed id that its pricing table publishes — declared here
+      #   from the pricing table, which is the one with the money in it.
+      - id: kimi-k2.7-code
+        context: 256k                    # official "262,144 tokens"
+        price:
+          input_miss: 0.0065      # ¥6.5 /1M
+          input_hit: 0.0013       # ¥1.3 /1M
+          cache_write: 0.0
+          output: 0.027           # ¥27 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
+      - id: kimi-k2.7-code-highspeed
+        context: 256k                    # official "262,144 tokens"
+        price:
+          input_miss: 0.013       # ¥13 /1M
+          input_hit: 0.0026       # ¥2.6 /1M
+          cache_write: 0.0
+          output: 0.054           # ¥54 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
+      - id: kimi-k2.6
+        context: 256k                    # official "262,144 tokens"
+        price:
+          input_miss: 0.0065      # ¥6.5 /1M
+          input_hit: 0.0011       # ¥1.1 /1M
+          cache_write: 0.0
+          output: 0.027           # ¥27 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
     # no `quota:`: the metered entry carries no allowance (spec §4.6).
 
   - name: kimi-cn-plan
@@ -566,6 +884,31 @@ providers:
         # TODO verify against official source: the coding endpoint publishes no price table of its own — the
         #   figures above are the open platform's (¥20.00 / ¥2.00 / ¥20.00 (5 min) / ¥100.00 per 1M), carried so
         #   the tier is non-zero (spec §4.0); the plan's real cost is the membership.
+      # ---- 2026-09-21 second pass: the CN plan publishes the identical four-id table.
+      #   Shadows are the CN prices of the same models; kimi-for-coding is absent for the same reason
+      #   as on the intl plan (no published price). `family` follows spec §4.8 the same way: k3-256k
+      #   untagged, the high-speed route tagged as the metered CN high-speed model.
+      - id: k3-256k
+        context: 256k                    # plan id; the 256k variant of k3
+        price:
+          input_miss: 0.01        # derived — ¥10 /1M
+          input_hit: 0.001        # derived — ¥1 /1M
+          cache_write: 0.01
+          output: 0.05            # derived — ¥50 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://www.kimi.com/code/docs/ @2026-09-21"
+        # DERIVED shadow = half of k3's CN shadow, per "k3（1M）消耗约为 k3-256k 两倍"
+      - id: kimi-for-coding-highspeed
+        family: kimi-k2.7-code-highspeed
+        context: 256k                    # plan id for "K2.7 Code 高速版"
+        price:
+          input_miss: 0.013       # mapper — ¥13 /1M
+          input_hit: 0.0026       # mapper — ¥2.6 /1M
+          cache_write: 0.0
+          output: 0.054           # mapper — ¥54 /1M
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://www.kimi.com/code/docs/ @2026-09-21"
+        # shadow = the CN metered price of K2.7 Code HighSpeed (https://platform.kimi.com/docs/pricing/chat)
     # no `quota:` — Kimi Code publishes usage windows (a 5-hour rolling window
     # plus a monthly total), not a token allowance; a token count here would
     # be fabricated, so the block is absent (GAP-Q17; ADR-018 §7). The vendor
