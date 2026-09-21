@@ -87,6 +87,13 @@ pub enum StreamOutcome {
 #[derive(Clone)]
 struct Candidate {
     route: RouteSpec,
+    /// This candidate's position in the offered chain (resolved route
+    /// first, then the fallback entries in config order, spec §4.2) — the
+    /// position the walk's `demoted` skip entry must carry so `skipped[]`
+    /// serialises in the chain's own order on both media (ADR-024 ruling 2;
+    /// the buffered walk is in chain order by construction because its
+    /// eligibility and its skipping share one pass).
+    chain_pos: usize,
     wire: WireApi,
     /// The URL this candidate POSTs to, resolved from the entry's `urls` map
     /// for `wire` (spec §4.9, ADR-020). Resolved once, when the candidate is
@@ -511,7 +518,11 @@ impl Forwarder {
         // walk answers "which candidates may serve" with the same rule:
         // provider entry, key, and `wire_api == proto_in`.
         let mut candidates: Vec<Candidate> = Vec::new();
-        let mut skipped: Vec<(RouteSpec, &'static str)> = Vec::new();
+        // Construction-time eligibility skips, each carrying its chain
+        // position (ADR-024 ruling 2) so the serialiser can emit the
+        // chain's own order whichever stage appended an entry.
+        let mut skipped: Vec<ChainSkipped> = Vec::new();
+        let mut chain_pos: usize = 0;
         {
             let mut routes: Vec<RouteSpec> = vec![primary.clone()];
             if let Some(policy) = &self.config.plan_policy {
@@ -523,10 +534,16 @@ impl Forwarder {
                 .into_iter()
                 .chain(self.config.fallback.iter().cloned())
             {
+                // The offered-chain position (ADR-024 ruling 2): every
+                // route this loop visits — candidate or skip — advances
+                // it, so a skip entry can name where in the chain it
+                // was refused (spec §4.2's order).
+                let pos = chain_pos;
+                chain_pos += 1;
                 if candidates.iter().any(|c| c.route == route) {
                     continue;
                 }
-                if skipped.iter().any(|(r, _)| *r == route) {
+                if skipped.iter().any(|s| s.skip.0 == route) {
                     continue;
                 }
                 let Some(cfg) = self
@@ -535,7 +552,10 @@ impl Forwarder {
                     .iter()
                     .find(|p| p.name == route.provider)
                 else {
-                    skipped.push((route.clone(), crate::forward::SKIP_UNKNOWN_PROVIDER));
+                    skipped.push(ChainSkipped {
+                        pos,
+                        skip: (route.clone(), crate::forward::SKIP_UNKNOWN_PROVIDER),
+                    });
                     continue;
                 };
                 if cfg.wire_api != proto_in {
@@ -543,11 +563,17 @@ impl Forwarder {
                     // class — never attempted, never narrated as a
                     // displacement; the refusal reports it at the walk's
                     // end.
-                    skipped.push((route.clone(), crate::forward::SKIP_WIRE_MISMATCH));
+                    skipped.push(ChainSkipped {
+                        pos,
+                        skip: (route.clone(), crate::forward::SKIP_WIRE_MISMATCH),
+                    });
                     continue;
                 }
                 if !self.api_keys.contains_key(&cfg.name) {
-                    skipped.push((route.clone(), crate::forward::SKIP_KEYLESS));
+                    skipped.push(ChainSkipped {
+                        pos,
+                        skip: (route.clone(), crate::forward::SKIP_KEYLESS),
+                    });
                     continue;
                 }
                 let Some(url) = cfg.url_for(cfg.wire_api) else {
@@ -564,6 +590,7 @@ impl Forwarder {
                 };
                 candidates.push(Candidate {
                     route: route.clone(),
+                    chain_pos: pos,
                     wire: cfg.wire_api,
                     url: url.to_string(),
                     api_key: self.api_keys[&cfg.name].clone(),
@@ -583,7 +610,7 @@ impl Forwarder {
                         .into(),
                 details: Some(json!({
                     "stage": "no_available_route",
-                    "skipped": crate::forward::skipped_json(&skipped),
+                    "skipped": chain_ordered_skipped_json(&skipped),
                     "upstream_status": None::<u16>,
                     "error_class": None::<&'static str>,
                     "stream": true,
@@ -625,10 +652,11 @@ impl Forwarder {
         let mut last_class: Option<router_core::error_class::ErrorClass> = None;
         // The construction-time eligibility skips (wire/keyless/unknown),
         // carried to the walk-end refusal (ADR-022): a candidate the walk
-        // attempts and then demotes is appended below with `demoted`, so
-        // the frozen shape's `skipped[]` holds every candidate the walk
-        // refused without attempting, in the chain's own order.
-        let mut walk_skipped: Vec<(RouteSpec, &'static str)> = skipped;
+        // attempts and then demotes is inserted below with `demoted` at its
+        // own chain position, so the frozen shape's `skipped[]` holds every
+        // candidate the walk refused without attempting, in the chain's own
+        // order on both media (ADR-024 ruling 2).
+        let mut walk_skipped: Vec<ChainSkipped> = skipped;
 
         // The family's primary refused by ADR-011's cooldown projection
         // before any attempt (spec §6's producer table, CONF-42): set by
@@ -649,7 +677,10 @@ impl Forwarder {
                 if failover_from.is_none() {
                     failover_from = Some(cand.route.clone());
                 }
-                walk_skipped.push((cand.route.clone(), crate::forward::SKIP_DEMOTED));
+                walk_skipped.push(ChainSkipped {
+                    pos: cand.chain_pos,
+                    skip: (cand.route.clone(), crate::forward::SKIP_DEMOTED),
+                });
                 if let Some(policy) = &self.config.plan_policy {
                     if cand.route == policy.primary {
                         cooling_abandoned = Some(cand.route.clone());
@@ -1041,6 +1072,17 @@ impl Forwarder {
         // (ADR-022 / spec §8; ADR-023 condition N): one shape with the
         // buffered walk end, differing only by the pre-existing
         // `"stream": true`.
+        //
+        // ADR-024 ruling 1: the walk's `failover_from` — set by the
+        // pre-attempt cooldown skip — must reach the request's facts
+        // before `record_failure_trace` writes the terminal record, so a
+        // condition-N refusal whose chain opened on a cooling route
+        // carries the abandoned route exactly as the buffered arm does
+        // (the served and continue paths already copied it in-loop). The
+        // copy covers both refusal returns below: an attempt-bearing
+        // walk never reaches the fall-through with an un-copied origin,
+        // and a nothing-attempted walk has no other writer.
+        facts.failover_from = failover_from.clone();
         if attempted.is_empty() {
             return StreamOutcome::Failure(ForwardFailure {
                 status: 502,
@@ -1050,7 +1092,7 @@ impl Forwarder {
                         .into(),
                 details: Some(json!({
                     "stage": "no_available_route",
-                    "skipped": crate::forward::skipped_json(&walk_skipped),
+                    "skipped": chain_ordered_skipped_json(&walk_skipped),
                     "upstream_status": None::<u16>,
                     "error_class": None::<&'static str>,
                     "stream": true,
@@ -1114,6 +1156,28 @@ impl Forwarder {
             })
             .map(|c| c.route.clone())
     }
+}
+
+/// One walk skip with the chain position it was refused at (ADR-024
+/// ruling 2): `skipped[]` is a property of the chain, not of the medium, so
+/// the streaming walk's list — seeded with the construction-time skips and
+/// grown with the in-walk `demoted` entry — serialises in the chain's own
+/// order, exactly the array the buffered walk's single pass produces.
+struct ChainSkipped {
+    pos: usize,
+    skip: (RouteSpec, &'static str),
+}
+
+/// `skipped[]` in the chain's own order (spec §8 / ADR-024 ruling 2): the
+/// streaming twin of the buffered walk's construction-ordered list — same
+/// entries, same reasons, same order, element for element.
+fn chain_ordered_skipped_json(skipped: &[ChainSkipped]) -> Vec<Value> {
+    let mut ordered: Vec<&ChainSkipped> = skipped.iter().collect();
+    ordered.sort_by_key(|s| s.pos);
+    ordered
+        .iter()
+        .map(|s| crate::forward::skipped_entry_json(&s.skip))
+        .collect()
 }
 
 /// Route resolution (spec §3) — free function so the relay path shares

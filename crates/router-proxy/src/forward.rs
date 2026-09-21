@@ -2055,20 +2055,22 @@ pub(crate) const SKIP_KEYLESS: &str = "keyless";
 pub(crate) const SKIP_WIRE_MISMATCH: &str = "wire_mismatch";
 pub(crate) const SKIP_DEMOTED: &str = "demoted";
 
+/// One `skipped[]` entry: the route in its `<provider>/<model>` wire form
+/// and the one-word reason. Shared by both forwarding paths so the two
+/// media cannot disagree about an entry's shape (ADR-024 ruling 2).
+pub(crate) fn skipped_entry_json((route, reason): &(RouteSpec, &'static str)) -> Value {
+    json!({
+        "route": route.to_string(),
+        "reason": reason,
+    })
+}
+
 /// The `skipped[]` member of the frozen `no_available_route` refusal
 /// (spec §8): one entry per candidate the walk refused **without
 /// attempting**, in the chain's own order. Shared by both forwarding
 /// paths so the two media cannot disagree about the walk's reasons.
 pub(crate) fn skipped_json(skipped: &[(RouteSpec, &'static str)]) -> Vec<Value> {
-    skipped
-        .iter()
-        .map(|(route, reason)| {
-            json!({
-                "route": route.to_string(),
-                "reason": reason,
-            })
-        })
-        .collect()
+    skipped.iter().map(skipped_entry_json).collect()
 }
 
 fn usage_json(u: &Usage) -> Value {
