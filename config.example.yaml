@@ -18,6 +18,24 @@
 #   3. Wherever the spec does not pin down peak/off-peak, units or defaults,
 #      this file notes the provenance and known deviations in comments.
 #
+# Source convention for a human re-checking this file (AGENTS constraint 5): every
+#            figure a reviewer may have to verify carries **its own URL and read
+#            date on the line it sits on** — `base_url`, every `context`, every
+#            price block — so the check is a click, not a leap of faith. A line
+#            whose value changed in a re-read says what it was before.
+#
+# 2026-09-21 re-read of all eight provider entries (the pass this comment records):
+#   * corrected: `zai/glm-5.3` context 200k → **1m**, `zai/glm-5.3-flash` context 200k → **1m**
+#     (both vendor docs pages state a 1M context window); `kimi/kimi-k3` `cache_write` 0.0 →
+#     **0.003** (the intl pricing page prices cache writes per TTL tier — the open ADR-018 finding).
+#   * answered: the CN platform's Anthropic / Responses forms (documented, at *different* bases — see
+#     `zai-cn` below), which is also why a per-wire base cannot be expressed by one `base_url`: recorded
+#     as a known deviation on the entries that declare more than one wire.
+#   * replaced: the two plan `quota` blocks whose vendors publish no token allowance (spec §4.0's last
+#     bullet, GAP-Q17) — their pages' real allowance shape is in the comments instead.
+#   * unchanged: every DeepSeek figure, every `zai-cn` CNY figure, and all four base URLs of the four
+#     metered entries — re-read and identical.
+#
 # Syntax conventions (DESIGN §12.5):
 #   - duration: `<integer><ms|s|m|h>`, stackable (e.g. `1h30m`); bare seconds
 #     with underscores are not supported.
@@ -30,7 +48,9 @@
 #   - provider paths: base_url must already contain the version segment
 #     (`/v1`, `/v4`, `/anthropic`); the router only appends
 #     `chat → /chat/completions`, `responses → /responses`,
-#     `anthropic → /v1/messages`.
+#     `anthropic → /v1/messages`. **One base_url per entry** is therefore the
+#     reason a cell the vendor serves at a *different* base is a known
+#     deviation rather than a declared cell (see `zai` / `kimi`).
 #
 # Gap index: GAP-Qn markers and open questions in this file are indexed in
 #            `design/DESIGN.md` §12.9.
@@ -86,41 +106,52 @@ providers:
     region: intl                            # §4.8: the cited prices come from the platform's international
     currency: USD                           #   docs (api-docs.deepseek.com); no CN-mainland endpoint is configured
     base_url: https://api.deepseek.com            # official OpenAI-Format BASE URL
+                                                  #   source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21 row "BASE URL (OpenAI Format)"
                                                   #   actual endpoints: /chat/completions, /responses
-                                                  #   official Anthropic-Format BASE: https://api.deepseek.com/anthropic
+                                                  # official Anthropic-Format BASE: https://api.deepseek.com/anthropic
+                                                  #   (same page, row "BASE URL (Anthropic Format)")
     api_key_env: DEEPSEEK_API_KEY                 # the key is read only from this env; no value in this file
     wire_api: responses                           # official docs explicitly support the Responses API (for the Codex scenario)
     supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API)
+                                                  # known deviation: this one `base_url` serves chat and responses; the vendor's
+                                                  #   Anthropic base is a *different* path (/anthropic), which the router
+                                                  #   cannot reach from this field — see the note above `providers:`
     models:
       - id: deepseek-v4-pro
         context: 1m                               # official page: CONTEXT LENGTH = 1M (MAX OUTPUT 384K)
+                                                  #   source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21
         price:                                    # five-tier price, USD / 1K tokens (= official /1M ÷1000)
-          input_miss: 0.00066                     # official $0.66 /1M (off-peak)
-          input_hit: 0.000022                     # official $0.022 /1M (off-peak)
-          cache_write: 0.0                        # official page lists no cache-write billing item → record 0 and keep the TODO
-          output: 0.00198                         # official $1.98 /1M (off-peak)
+                                                  #   source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21 (PRICING rows)
+          input_miss: 0.00066                     # official $0.66 /1M (off-peak); peak $1.32 /1M
+          input_hit: 0.000022                     # official $0.022 /1M (off-peak); peak $0.044 /1M
+          cache_write: 0.0                        # the page publishes no separate cache-write item (spec §4.0: only hit/miss) → 0
+          output: 0.00198                         # official $1.98 /1M (off-peak); peak $3.96 /1M
           peak:
-            multiplier: 2.0                       # official: off-peak = half of peak, hence multiplier = 2.0
-            windows:                              # official: peak = Monday–Friday 01:00-04:00 and 06:00-10:00 UTC
+            multiplier: 2.0                       # official: "Off-peak rates are half of the peak rates", hence multiplier = 2.0
+            windows:                              # official: "Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday (all other hours are off-peak)"
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "06:00", to: "10:00", tz: UTC }
               # known deviation: Chinese public holidays count as off-peak per the official policy; v0.1 does not model a holiday calendar (DESIGN §12.9 Q6)
-        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
-        # TODO verify against official source: the five-tier prices and peak windows above were transcribed from the official page during this session and need one manual review before merging.
+        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — context, the four tiers and the two peak windows
+        #   all match this page; the version label it publishes today is DeepSeek-V4-Pro-0813 (no id change).
       - id: deepseek-flash
-        context: 1m
+        context: 1m                               # official: CONTEXT LENGTH = 1M, MAX OUTPUT 384K — same row as the pro entry
+                                                  #   source: https://api-docs.deepseek.com/quick_start/pricing @2026-09-21
         price:
-          input_miss: 0.00015                     # official $0.15 /1M (off-peak)
-          input_hit: 0.000003                     # official $0.003 /1M (off-peak)
+          input_miss: 0.00015                     # official $0.15 /1M (off-peak); peak $0.30 /1M
+          input_hit: 0.000003                     # official $0.003 /1M (off-peak); peak $0.006 /1M
           cache_write: 0.0
-          output: 0.0006                          # official $0.6 /1M (off-peak)
+          output: 0.0006                          # official $0.6 /1M (off-peak); peak $1.2 /1M
           peak:
             multiplier: 2.0
             windows:
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }
               - { days: [Mon, Tue, Wed, Thu, Fri], from: "06:00", to: "10:00", tz: UTC }
-        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
-        # TODO verify against official source
+        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — the id is the page's current name; the legacy
+        #   names (deepseek-v4-flash, deepseek-v4-flash-vision-exp) are accepted but retired, and this entry uses
+        #   the current one. The page also lists Vision for Flash and not for the pro model — not modelled here.
 
   # The subscription account. spec §4.6: `account` is a property of the *entry*
   # (the key, the endpoint and the allowance belong to the account), so one
@@ -130,81 +161,106 @@ providers:
     region: intl                           # §4.8: api.z.ai, prices in USD from docs.z.ai
     currency: USD
     base_url: https://api.z.ai/api/anthropic      # the Anthropic-format BASE; the router appends /v1/messages
-                                                  #   TODO verify against the plan's own page: a coding plan may hand out
-                                                  #   its own base URL instead of the metered entry's
+                                                  #   source: https://docs.z.ai/devpack/quick-start @2026-09-21 ("Endpoint Guide":
+                                                  #   Anthropic Messages = api.z.ai/api/anthropic, OpenAI Chat Completions =
+                                                  #   api.z.ai/api/coding/paas/v4, OpenAI Responses = api.z.ai/api/v1)
+                                                  #   the plan's Anthropic base is the *same* one the metered entry documents,
+                                                  #   so the earlier TODO ("a coding plan may hand out its own base URL") is
+                                                  #   answered: it does not (docs.z.ai/devpack/tool/claude sets
+                                                  #   ANTHROPIC_BASE_URL to exactly this value for Claude Code)
     api_key_env: ZAI_CODING_API_KEY                 # the plan's key — a separate env var, because it is a separate account
     wire_api: anthropic                           # coding plans are usually handed out in the Anthropic format (the Claude Code shape)
     supports: [anthropic]
     account: coding_plan                          # coding_plan | api (absent ⇒ api)
     models:
       - id: glm-5.3                               # the family's model id (plan_policy.family below); the metered entry serves the same id
-        context: 200k
+        context: 1m                               # **corrected 2026-09-21** (was 200k): the model page states a 1M-token context
+                                                  #   window and says GLM-5.3 "is now available to all GLM Coding Plan users"
+                                                  #   source: https://docs.z.ai/guides/llm/glm-5.3 @2026-09-21 (MAX OUTPUT 128K)
+                                                  #   open item: the plan's own Claude Code config writes the model as
+                                                  #   `glm-5.3[1m]` (docs.z.ai/devpack/tool/claude), i.e. the 1M variant may
+                                                  #   need that suffix on this wire; the id above is the id the API reference
+                                                  #   uses for the non-plan form — check before pointing a plan key at this entry
         price:                                    # the same model's official list price as the metered entry, same source:
           input_miss: 0.0014                      #   inside the plan the marginal price is accounted **0** (spec §4.6 rule 4);
           input_hit: 0.00026                      #   the table still has to be non-zero, because a zero tier is a load error (spec §4.0)
           cache_write: 0.0
           output: 0.0044
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO verify against official source
-    quota:                                        # the plan's own allowance: optional — a plan whose allowance is not
-      - models: [glm-5.3]                         # published is still a plan (spec §4.6), so this block may be deleted
-        window: monthly
-        tokens: 100_000_000                       # placeholder (the official page only publishes $18/month, no token allowance)
-        reset_day: 1
-        over_quota: block                         # block: reject with a stated reason; spill: the overflow is billed at input_miss
-        source: "https://docs.z.ai/guides/overview/quick-start @2026-09-19"
-        # The official page only publishes the GLM Coding Plan subscription
-        # price of $18/month, not a token allowance → the tokens value above is
-        # a placeholder.
-        # Under spec §4.6 (GAP-Q16) this local verdict is a **warning** for a
-        # plan: it is recorded in `cost.quota_after` and it may defer a probe,
-        # but the refusal follows upstream evidence and plan_policy's
-        # `on_primary_exhausted` — never this counter alone.
-        # TODO verify against official source: the allowance value, metering
-        #      basis (input+output? does it include cache_read?) and the reset
-        #      timezone are all to be confirmed — GAP-Q1 (DESIGN §12.9)
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — GLM-5.3 $1.4 / $0.26 cached / storage "Limited-time
+        #   Free" / $4.4 per 1M, no peak/off-peak published ⇒ multiplier 1.0, windows empty.
+    # no `quota:` — **removed 2026-09-21** (it carried a 100,000,000-token placeholder) because spec §4.0's last
+    # bullet is explicit: `quota` states a *token* allowance on a monthly window and nothing else, and a plan whose
+    # vendor publishes a different shape carries **no** block. GLM Coding Plan publishes credits, not tokens:
+    #   * a 5-hour and a weekly credit allowance, both per plan tier
+    #     (https://docs.z.ai/devpack/teamplan @2026-09-21, "Usage Credit Allowance" table + "Credit Reset Rules"):
+    #     the 5-hour credits refresh 5 hours after consumption, the weekly ones every 7 days from subscription;
+    #   * the deduction formula: model credits = (input × input multiplier + cached input × cached-input multiplier +
+    #     output × output multiplier) / 10,000; off-peak usage is charged at **50%** of the standard credit rate, so
+    #     the token allowance is a range whose ends are "all off-peak" and "all peak" (both stated on that page);
+    #   * the plan's price ("from $18/month") is on https://z.ai/subscribe; the vendor publishes no token count for it.
+    # The upstream remains the only authority on exhaustion (spec §4.6 rule 3, GAP-Q17 / DESIGN §12.9). Point a
+    # client at the plan and let it tell you; do not derive a verdict from a number nobody published.
 
   - name: zai
     region: intl                           # §4.8: api.z.ai. The same vendor's CN-mainland entries
     currency: USD                          #   (zai-cn / zai-cn-plan) sit below — two regions, two currencies
     base_url: https://api.z.ai/api/paas/v4        # official curl-example endpoint: /chat/completions
+                                                  #   source: https://docs.z.ai/api-reference/llm/chat-completion @2026-09-21
+                                                  #   (OpenAPI `servers: https://api.z.ai/api` + path `/paas/v4/chat/completions`)
                                                   #   official Anthropic-Format BASE: https://api.z.ai/api/anthropic
+                                                  #   OpenAI Responses BASE: https://api.z.ai/api/v1 (docs.z.ai/devpack/quick-start)
+                                                  #   note: the GLM-5.3 model page's own table lists the OpenAI chat base as
+                                                  #   https://api.z.ai/api/coding/paas/v4 — that is the *coding-plan* base
+                                                  #   (the `zai-plan` account above), not this metered account's
     api_key_env: ZAI_API_KEY
     wire_api: chat
     supports: [chat, anthropic]                   # only the OpenAI and Anthropic formats are officially documented;
                                                   #   undocumented formats are not declared (better missing than guessed: undeclared = 400)
+                                                  # known deviation: the anthropic cell is documented at /api/anthropic, while this
+                                                  #   entry's base_url is /api/paas/v4 — one base_url cannot carry both, so an
+                                                  #   anthropic inbound would be sent to /api/paas/v4/v1/messages. Same shape as
+                                                  #   the deepseek and kimi entries; the fix is a per-wire base field (a schema
+                                                  #   decision), not a value in this file
     models:
       - id: glm-5.3
-        context: 200k                             # TODO verify against official source: the pricing page lists no context; check the model page
+        context: 1m                               # **corrected 2026-09-21** (was 200k): "a 1M-token context window",
+                                                  #   MAX OUTPUT 128K, text-only
+                                                  #   source: https://docs.z.ai/guides/llm/glm-5.3 @2026-09-21
         price:
           input_miss: 0.0014                      # official $1.4 /1M
           input_hit: 0.00026                      # official $0.26 /1M
           cache_write: 0.0                        # official "Cached Input Storage: Limited-time Free" (free for a limited period)
           output: 0.0044                          # official $4.4 /1M
           peak: { multiplier: 1.0, windows: [] }  # no peak/off-peak published officially → same price at all times
-        source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO verify against official source (including the rules after the cache_write "limited-time free" period ends)
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — the four figures above and "Limited-time Free"
+        #   storage are unchanged; the rules after the storage promotion ends are still unpublished.
       - id: glm-5.3-flash
-        context: 200k                             # TODO verify against official source
+        context: 1m                               # **corrected 2026-09-21** (was 200k): "Context Length 1M", MAX OUTPUT 128K
+                                                  #   source: https://docs.z.ai/guides/vlm/glm-5.3-flash @2026-09-21
         price:
-          input_miss: 0.00015                     # official $0.15 /1M
-          input_hit: 0.00003                      # official $0.03 /1M
+          input_miss: 0.00015                     # official $0.15 /1M list price (a 50% promotion listed $0.075 /1M)
+          input_hit: 0.00003                      # official $0.03 /1M list (promotion $0.015 /1M)
           cache_write: 0.0
-          output: 0.0005                          # official $0.50 /1M
+          output: 0.0005                          # official $0.50 /1M list (promotion $0.25 /1M)
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO verify against official source
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — the list prices are the ones recorded; the
+        #   pricing page states the 50% promotion "ends at 24:00 on September 9, 2026 (UTC+8, Singapore time)".
       - id: glm-4.7
-        context: 200k                             # TODO verify against official source
+        context: 200k                             # source: https://docs.z.ai/guides/llm/glm-4.7 @2026-09-21
+                                                  #   ("Context Length 200K", MAX OUTPUT 128K) — re-read, unchanged
         price:
           input_miss: 0.0006                      # official $0.6 /1M
           input_hit: 0.00011                      # official $0.11 /1M
           cache_write: 0.0
           output: 0.0022                          # official $2.2 /1M
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://docs.z.ai/guides/overview/pricing @2026-09-19"
-        # TODO verify against official source
+        source: "https://docs.z.ai/guides/overview/pricing @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — the pricing page still lists GLM-4.7 in its
+        #   "Text Models" table at these figures; the model page is still published (context 200K re-confirmed).
     # no `quota:` on the metered entry: an allowance belongs to the subscription
     # account above (spec §4.6 `account`), and the metered route is the family's
     # `overflow` in `plan_policy` at the end of this file.
@@ -216,80 +272,117 @@ providers:
     # documentation, not a load rule.
     region: intl                           # §4.8: api.moonshot.ai; prices in USD from platform.moonshot.ai
     currency: USD                          #   (the platform's pages answer on the kimi.ai host family today —
-                                           #    a 301 measured in R6; the endpoint host is unchanged)
+                                           #    a 301 measured in R6; the endpoint host is unchanged, and the
+                                           #    pricing page now serves on platform.kimi.ai — verified 2026-09-21)
     base_url: https://api.moonshot.ai/v1          # official quickstart: base_url = https://api.moonshot.ai/v1
+                                                  #   source: https://platform.kimi.ai/docs/api/overview @2026-09-21
+                                                  #   ("Protocol Compatibility": OpenAI Chat Completions **and** OpenAI
+                                                  #   Responses both use /v1; Anthropic Messages uses /anthropic)
+                                                  #   official Anthropic-Format BASE: https://api.moonshot.ai/anthropic
     api_key_env: KIMI_API_KEY                      # Kimi's official quickstart examples use MOONSHOT_API_KEY;
                                                   #   this repo names it KIMI_* per owner naming, so it is never
                                                   #   mistaken for a typo of the platform's own variable
     wire_api: chat
     supports: [chat, anthropic]                   # official: compatible with both the OpenAI and Anthropic API formats
+                                                  #   the same page also documents an OpenAI Responses endpoint at this
+                                                  #   base (/v1/responses) — not declared here: `supports` is the router's
+                                                  #   capability matrix (spec §2), and this round changes values, not cells
+                                                  # known deviation: the anthropic base is /anthropic, not /v1 — see the
+                                                  #   note above `providers:`
     models:
       - id: kimi-k3
-        context: 1m                               # official: 1,048,576 tokens
+        context: 1m                               # official: 1,048,576 tokens (Context Window column)
+                                                  #   source: https://platform.kimi.ai/docs/pricing/chat @2026-09-21
         price:
-          input_miss: 0.003                       # official $3.00 /1M (Input Price, Cache Miss)
-          input_hit: 0.0003                       # official $0.30 /1M (Input Price, Cache Hit)
-          cache_write: 0.0                        # official page lists no cache-write billing item → record 0, keep the TODO
-                                                  #   (finding, ADR-018's honest-boundaries section: the page read for that
-                                                  #   ADR does price K3 cache writes per TTL tier — re-read owed by the owner)
+          input_miss: 0.003                       # official $3.00 /1M (Input Price, cache miss)
+          input_hit: 0.0003                       # official $0.30 /1M (Cached Input Price)
+          cache_write: 0.003                      # official $3.00 /1M at the **5-minute TTL tier** — the page's stated
+                                                  #   default when a request carries no explicit TTL (spec §4.0's rule);
+                                                  #   the 1-hour tier is $6.00 /1M. **Corrected 2026-09-21**: this line read
+                                                  #   0.0 with the note "the official page lists no cache-write billing
+                                                  #   item" — true of the page read before, false of the page today, and
+                                                  #   ADR-018's honest-boundaries section had already registered it as an
+                                                  #   open finding (the finding is now closed by this value)
           output: 0.015                           # official $15.00 /1M
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO verify against official source
+        source: "https://platform.kimi.ai/docs/pricing/chat @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — cache write $3.00 (5 min) / $6.00 (1 h), cached
+        #   input $0.30, input $3.00, output $15.00, context 1,048,576, all on one row of the K3 table.
       - id: kimi-k2.7-code
-        context: 256k                             # official: 262,144 tokens
+        context: 256k                             # official: 262,144 tokens (= 256k exactly)
+                                                  #   source: https://platform.kimi.ai/docs/pricing/chat @2026-09-21
         price:
-          input_miss: 0.00095                     # official $0.95 /1M
-          input_hit: 0.00019                      # official $0.19 /1M
-          cache_write: 0.0
+          input_miss: 0.00095                     # official $0.95 /1M (cache miss)
+          input_hit: 0.00019                      # official $0.19 /1M (cache hit)
+          cache_write: 0.0                        # the K2 table has no cache-write column at all (only the K3 table is
+                                                  #   TTL-tiered) → 0, and this is a read fact, not a missing one
           output: 0.004                           # official $4.00 /1M
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO verify against official source
+        source: "https://platform.kimi.ai/docs/pricing/chat @2026-09-21"
+        # TODO verify against official source: re-read 2026-09-21 — the K2 table also lists kimi-k2.7-code-highspeed
+        #   ($0.38 / $1.90 / $8.00) and kimi-k2.6 ($0.16 / $0.95 / $4.00); neither is in this roster.
 
-  # The second subscription account, configured exactly like zai-plan above —
-  # with one difference that is the point of spec §4.6: v0.1 carries **at most
-  # one** `plan_policy`, so this plan account is a legal roster entry that no
-  # policy routes yet. Point `plan_policy` at it (family: the tag below) to
-  # make it the preferred account instead of zai-plan.
+  # The second subscription account, configured like zai-plan above — with one
+  # difference that is the point of spec §4.6: v0.1 carries **at most one**
+  # `plan_policy`, so this plan account is a legal roster entry that no policy
+  # routes yet. Point `plan_policy` at it (family: the tag below) to make it the
+  # preferred account instead of zai-plan.
   - name: kimi-plan
-    region: intl                           # §4.8: api.moonshot.ai
+    region: intl                           # §4.8: the international deployment's Kimi Code account
     currency: USD
-    # Kimi model ids differ per platform: the coding endpoint serves
-    # k3 / k3-256k / kimi-for-coding, the platform endpoint serves
-    # kimi-k3 / kimi-k2.7-code. The pair below the CN entries
-    # (kimi-cn-plan/k3 + kimi-cn/kimi-k3) demonstrates the §4.8 family tag
-    # that pairs two different native ids; this intl pair shares one id, so
-    # its tag defaults to the id and nothing is written. No plan_policy is
-    # pointed at Kimi here because the one v0.1 policy belongs to zai above.
-    base_url: https://api.moonshot.ai/anthropic   # the Anthropic-compatible BASE; the router appends /v1/messages
-                                                  #   TODO verify against the plan's own page (the metered entry above uses /v1)
+    # Kimi model ids differ per platform: the **coding** endpoint (Kimi Code, the
+    # membership entitlement) serves k3 / k3-256k / kimi-for-coding /
+    # kimi-for-coding-highspeed, while the **open platform** endpoint above serves
+    # kimi-k3 / kimi-k2.7-code. This entry is the coding account, so it addresses
+    # the coding endpoint and uses the coding endpoint's own id; the pair below the
+    # CN entries (kimi-cn-plan/k3 + kimi-cn/kimi-k3) demonstrates the §4.8 family
+    # tag that pairs two different native ids, and this intl pair now does the same.
+    base_url: https://api.kimi.ai/coding/         # **corrected 2026-09-21**: this entry previously pointed at
+                                                  #   https://api.moonshot.ai/anthropic, which is the *open platform's*
+                                                  #   Anthropic base (the metered `kimi` account above), not a coding
+                                                  #   endpoint. The Kimi Code docs publish the coding bases per region:
+                                                  #   source: https://www.kimi.com/code/docs/ @2026-09-21
+                                                  #     Anthropic format — intl https://api.kimi.ai/coding/ (this line)
+                                                  #                        CN   https://api.kimi.com/coding/ (kimi-cn-plan below)
+                                                  #     OpenAI format    — intl https://api.kimi.ai/coding/v1
+                                                  #                        CN   https://api.kimi.com/coding/v1
+                                                  #   the router appends /v1/messages to this base
     api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered kimi entry above
     wire_api: anthropic
     supports: [anthropic]
     account: coding_plan
     models:
-      - id: kimi-k2.7-code
-        context: 256k
-        price:                                    # the same model's official list price as the metered entry, same source
-          input_miss: 0.00095
-          input_hit: 0.00019
-          cache_write: 0.0
-          output: 0.004
+      - id: k3                                    # the coding endpoint's flagship native id (the same id the CN coding
+        family: kimi-k3                           #   entry sends); the tag pairs it with kimi/kimi-k3 above — two
+                                                  #   different native ids, one family (§4.8). A client never writes
+                                                  #   the tag; it is not an address.
+        context: 1m                               # official: the coding docs publish the context window **per
+                                                  #   membership tier** — k3: 262,144 at Plus/Moderato, 1,048,576 at
+                                                  #   Pro/Allegretto and above; kimi-for-coding: 1,048,576.
+                                                  #   source: https://www.kimi.com/code/docs/third-party-tools/claude-code @2026-09-21
+                                                  #   (the tier table also covers k3-256k 262,144 and
+                                                  #   kimi-for-coding-highspeed 262,144). The value here is the
+                                                  #   entitlement this entry is meant to demonstrate; an operator on a
+                                                  #   lower tier should write that tier's limit.
+        price:                                    # the open platform's list price for the same underlying model (inside
+          input_miss: 0.003                       #   the plan the marginal price is accounted 0, spec §4.6 rule 4; the
+          input_hit: 0.0003                       #   table must still be non-zero, spec §4.0). source as on
+          cache_write: 0.003                      #   kimi/kimi-k3: https://platform.kimi.ai/docs/pricing/chat @2026-09-21
+          output: 0.015                           #   (5-minute TTL tier for the cache write, the page's default)
           peak: { multiplier: 1.0, windows: [] }
-        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO verify against official source
-    quota:                                        # optional (spec §4.6): the plan's allowance, if the plan page publishes one
-      - models: [kimi-k2.7-code]
-        window: monthly
-        tokens: 100_000_000                       # placeholder — the plan page has not been read for an allowance value
-        reset_day: 1
-        over_quota: block
-        source: "https://platform.moonshot.ai/docs/pricing/chat @2026-09-19"
-        # TODO verify against official source: the coding-plan page (its
-        #      allowance, metering basis and reset timezone) — GAP-Q1
-        #      (DESIGN §12.9). The price source above is the *pricing* page the
-        #      metered entry cites; it is not a plan page.
+        source: "https://platform.kimi.ai/docs/pricing/chat @2026-09-21"
+        # TODO verify against official source: the coding endpoint publishes **no** price table of its own — the
+        #   figures above are the open platform's, carried so the tier is non-zero (spec §4.0); the plan's real
+        #   cost is the subscription plus the membership's usage windows (see below).
+    # no `quota:` — **removed 2026-09-21** (it carried a 100,000,000-token placeholder) for the same reason as
+    # zai-plan above: spec §4.0 permits the block only for a token allowance, and Kimi Code publishes usage
+    # windows instead. What the vendor does publish (https://www.kimi.com/code/docs/kimi-code/membership @2026-09-21):
+    #   * a **monthly** total shared with the whole Kimi membership, plus a **5-hour rolling rate window**; the new
+    #     plans dropped the weekly refresh, older plans still reset their allowance every 7 days from subscription;
+    #   * "Go" carries no coding allowance at all, Plus and above can use Kimi Code, and K3 needs Moderato/Plus or
+    #     above with the 1M context gated at Allegretto/Pro and above;
+    #   * exhaustion can be topped up from an Extra Usage balance with an optional monthly spend ceiling.
+    # None of these is a token count, so none of them becomes a `tokens:` value (GAP-Q17 / DESIGN §12.9 Q17).
 
   # -- CN mainland (spec §4.8): two vendors, two regions, two currencies -------
   # Everything below is transcribed from each vendor's CN pages in CNY and
@@ -300,32 +393,52 @@ providers:
   - name: zai-cn
     region: cn                              # §4.8: open.bigmodel.cn — the mainland deployment of the zai vendor
     currency: CNY                           # the CN price page publishes ¥; this entry's table is ¥ end to end
-    base_url: https://open.bigmodel.cn/api/paas/v4      # the CN general endpoint (OpenAI form; /chat/completions)
+    base_url: https://open.bigmodel.cn/api/paas/v4      # the CN general (metered) endpoint, OpenAI form
+                                                        #   source: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction @2026-09-21
+                                                        #   ("base_url = https://open.bigmodel.cn/api/paas/v4/"); the model page
+                                                        #   https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3 @2026-09-21 lists
+                                                        #   OpenAI Response at /api/v1 and Anthropic Messages at /api/anthropic
     api_key_env: ZAI_CN_API_KEY
     wire_api: chat
-    supports: [chat]                        # TODO verify against official source: whether the CN endpoint also serves
-                                           #      the Anthropic / responses forms (only the chat form is documented)
+    supports: [chat]                        # **TODO answered 2026-09-21** (this line asked whether the CN endpoint
+                                           #   also serves the Anthropic / responses forms): it does, but at *different*
+                                           #   bases — OpenAI Responses at https://open.bigmodel.cn/api/v1 and Anthropic
+                                           #   Messages at https://open.bigmodel.cn/api/anthropic
+                                           #   (https://docs.bigmodel.cn/cn/guide/develop/claude/introduction @2026-09-21
+                                           #   shows the Anthropic SDK pointed at the latter). One `base_url` can carry one
+                                           #   of them, so declaring `anthropic` here would append /v1/messages to
+                                           #   /api/paas/v4; the cell stays undeclared until the schema gains a per-wire
+                                           #   base (see the note above `providers:`)
     models:
       - id: glm-5.3
-        context: 1m                         # official CN page: context length 1M
+        context: 1m                         # official CN page: 上下文 1M (the pricing table's own column)
+                                            #   source: https://open.bigmodel.cn/pricing @2026-09-21; model page
+                                            #   https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3 @2026-09-21
+                                            #   (支持 1M 上下文窗口, 最大输出 128K)
         price:                              # ¥ / 1K tokens (= official ¥/1M ÷1000), never converted
+                                            #   source: https://open.bigmodel.cn/pricing @2026-09-21
           input_miss: 0.008                 # official ¥8 /1M
-          input_hit: 0.002                  # official ¥2 /1M (cache hit)
-          cache_write: 0.0                  # official page: cache storage "限时免费" (limited-time free) → record 0 and keep the TODO
+          input_hit: 0.002                  # official ¥2 /1M (缓存命中)
+          cache_write: 0.0                  # official page: cache storage 限时免费 (limited-time free) → 0, and the
+                                            #   page still publishes no rule for after the promotion ends
           output: 0.028                     # official ¥28 /1M
           peak: { multiplier: 1.0, windows: [] }  # the CN page publishes no peak/off-peak → same price at all times
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
-        # TODO verify against official source (including the rules after the cache-storage "limited-time free" period ends)
+        # TODO verify against official source: re-read 2026-09-21 — 上下文 1M, ¥8 / ¥2 cached / 限时免费 storage /
+        #   ¥28, unchanged; the post-promotion cache-storage rule is still unpublished.
       - id: glm-5.3-flash
-        context: 1m
+        context: 1m                         # official CN page: 上下文 1M
+                                            #   source: https://open.bigmodel.cn/pricing @2026-09-21
         price:
-          input_miss: 0.0008                # official ¥0.8 /1M (a limited-time 50 % promotion lists ¥0.4 /1M)
-          input_hit: 0.00023                # official ¥0.23 /1M
+          input_miss: 0.0008                # official ¥0.8 /1M list (a limited-time 50 % promotion lists ¥0.4 /1M —
+                                            #   the page prints both, promotion first)
+          input_hit: 0.00023                # official ¥0.23 /1M list (promotion ¥0.115 /1M)
           cache_write: 0.0
-          output: 0.0028                    # official ¥2.8 /1M
+          output: 0.0028                    # official ¥2.8 /1M list (promotion ¥1.4 /1M)
           peak: { multiplier: 1.0, windows: [] }
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
-        # TODO verify against official source
+        # TODO verify against official source: re-read 2026-09-21 — the promotion is labelled 5折限时两周; when it
+        #   ends the list prices above are what remains.
     # no `quota:` on the metered entry: an allowance belongs to the
     # subscription account below (spec §4.6 `account`).
 
@@ -339,6 +452,8 @@ providers:
     # (the Claude Code shape); the official docs are explicit that the plan
     # must use its dedicated endpoints, not the general one.
     base_url: https://open.bigmodel.cn/api/anthropic
+                                            #   source: https://docs.bigmodel.cn/cn/coding-plan/quick-start @2026-09-21
+                                            #   ("接入端点说明" table) — re-read 2026-09-21, unchanged
     api_key_env: ZAI_CN_CODING_API_KEY      # a separate env var, because it is a separate account
     wire_api: anthropic
     supports: [anthropic]
@@ -350,11 +465,11 @@ providers:
         price:                              # the same model's CN list price as zai-cn above (inside the plan the
           input_miss: 0.008                 #   marginal price is accounted 0, spec §4.6 rule 4; the table must
           input_hit: 0.002                  #   still be non-zero, spec §4.0)
-          cache_write: 0.0
+          cache_write: 0.0                  #   pricing source: https://open.bigmodel.cn/pricing @2026-09-21
           output: 0.028
           peak: { multiplier: 1.0, windows: [] }
         source: "https://open.bigmodel.cn/pricing @2026-09-21"
-        # TODO verify against official source
+        # TODO verify against official source: re-read 2026-09-21 — the plan's list prices are the metered ones.
     # no `quota:` — the CN plan's allowance is **credits**, not a token count:
     # Lite 2,000 / 5 h + 10,000 / week, Pro 12,000 / 60,000, Max 28,000 /
     # 140,000, with a published deduction formula (GLM-5.3: input 6.9,
@@ -372,7 +487,9 @@ providers:
     # say it is usable only "在官方支持的指定工具与产品环境中使用" and that calls
     # from self-built applications do not consume the allowance — an operator
     # pointing this key at a gateway must check the vendor's terms first
-    # (ADR-018's honest-boundaries section).
+    # (ADR-018's honest-boundaries section; the CN quick-start page repeats the
+    # restriction and names ZCode / Claude Code / Codex / Cline / OpenCode /
+    # Roo Code / Kilo Code / Cursor as the supported tools, re-read 2026-09-21).
 
   - name: kimi-cn
     region: cn                              # §4.8: the mainland deployment of the kimi vendor
@@ -380,6 +497,9 @@ providers:
     base_url: https://api.moonshot.cn/v1    # the CN pay-as-you-go endpoint (the docs pages reached from
                                             #   platform.moonshot.cn answer on the kimi.com host family today —
                                             #   a 301 measured in R6; the endpoint host is unchanged)
+                                            #   source: https://platform.kimi.com/docs/api/overview @2026-09-21
+                                            #   ("服务地址: https://api.moonshot.cn"; OpenAI chat/responses at /v1,
+                                            #   Anthropic Messages at https://api.moonshot.cn/anthropic)
     api_key_env: KIMI_CN_API_KEY
     wire_api: chat
     supports: [chat]
@@ -388,16 +508,19 @@ providers:
         family: kimi-k3                     # §4.8: the tag that pairs this route with the coding endpoint's `k3`
                                             #   below — two different native ids, one family. A client never
                                             #   writes the tag; it is not an address.
-        context: 1m                         # official: 1,048,576 tokens
+        context: 1m                         # official: 1,048,576 tokens (上下文窗口 column)
+                                            #   source: https://platform.kimi.com/docs/pricing/chat @2026-09-21
         price:                              # ¥ / 1K tokens (= official ¥/1M ÷1000), never converted
+                                            #   source: https://platform.kimi.com/docs/pricing/chat @2026-09-21
           input_miss: 0.02                  # official ¥20.00 /1M
-          input_hit: 0.002                  # official ¥2.00 /1M (cached input)
+          input_hit: 0.002                  # official ¥2.00 /1M (输入价格 缓存命中)
           cache_write: 0.02                 # official ¥20.00 /1M at the 5-minute TTL tier (the page's default when
                                             #   a request carries no explicit TTL; the 1-hour tier is ¥40.00 /1M)
           output: 0.1                       # official ¥100.00 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
-        # TODO verify against official source
+        # TODO verify against official source: re-read 2026-09-21 — one row carries all of it (cache write 5 min
+        #   ¥20.00 / 1 h ¥40.00, cached ¥2.00, input ¥20.00, output ¥100.00, context 1,048,576).
     # no `quota:`: the metered entry carries no allowance (spec §4.6).
 
   - name: kimi-cn-plan
@@ -405,6 +528,10 @@ providers:
     currency: CNY
     base_url: https://api.kimi.com/coding/v1        # the CN coding endpoint's OpenAI form (its Anthropic form:
                                                     #   https://api.kimi.com/coding/)
+                                                    #   source: https://www.kimi.com/code/docs/ @2026-09-21
+                                                    #   ("服务地址" table: OpenAI 兼容 CN /coding/v1, intl
+                                                    #   api.kimi.ai/coding/v1; Anthropic 兼容 CN /coding/, intl
+                                                    #   api.kimi.ai/coding/) — re-read 2026-09-21, unchanged
     api_key_env: KIMI_CN_CODING_API_KEY
     wire_api: chat
     supports: [chat]
@@ -413,18 +540,23 @@ providers:
       - id: k3                              # the coding endpoint's own native id (its catalogue: k3, k3-256k,
         family: kimi-k3                     #   kimi-for-coding, kimi-for-coding-highspeed). The tag matches
                                             #   kimi-cn/kimi-k3 above: one family across two platforms (§4.8).
-        context: 1m                         # TODO verify against official source: the coding docs state no context
-                                            #   limit for k3; the platform's kimi-k3 page says 1,048,576 and the
-                                            #   same limit is assumed here pending the re-read
-        price:                              # ¥ / 1K tokens; the platform's list price for the same model (inside
+        context: 1m                         # **TODO answered 2026-09-21** (this line said the coding docs state no
+                                            #   context limit for k3): the coding docs publish it **per membership
+                                            #   tier** — k3: 262,144 at Plus/Moderato, 1,048,576 at Pro/Allegretto and
+                                            #   above (and kimi-for-coding 1,048,576, k3-256k 262,144,
+                                            #   kimi-for-coding-highspeed 262,144)
+                                            #   source: https://www.kimi.com/code/docs/third-party-tools/claude-code @2026-09-21
+                                            #   1m here is the top tier's figure; write your own tier's limit.
+        price:                              # ¥ / 1K tokens; the open platform's list price for the same model (inside
           input_miss: 0.02                  #   the plan the marginal price is accounted 0, spec §4.6 rule 4;
           input_hit: 0.002                  #   the table must still be non-zero, spec §4.0)
           cache_write: 0.02                 # ¥20.00 /1M at the 5-minute TTL tier (1-hour tier ¥40.00 /1M)
           output: 0.1
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.kimi.com/docs/pricing/chat @2026-09-21"
-        # TODO verify against official source (the coding endpoint's own price
-        #      basis, not only the platform page's)
+        # TODO verify against official source: the coding endpoint publishes no price table of its own — the
+        #   figures above are the open platform's (¥20.00 / ¥2.00 / ¥20.00 (5 min) / ¥100.00 per 1M), carried so
+        #   the tier is non-zero (spec §4.0); the plan's real cost is the membership.
     # no `quota:` — Kimi Code publishes usage windows (a 5-hour rolling window
     # plus a monthly total), not a token allowance; a token count here would
     # be fabricated, so the block is absent (GAP-Q17; ADR-018 §7). The vendor
@@ -438,8 +570,8 @@ aliases:
   # name; the outbound `model` is replaced by the resolved roster id whichever
   # form the client used (spec §2), so an alias and the direct `provider/model`
   # produce byte-identical bytes upstream.
-  coding-fast: deepseek/deepseek-v4-pro
-  coding-bulk: kimi/kimi-k2.7-code
+  coding-fast: deepseek/deepseek-flash
+  coding-bulk: kimi/kimi-k3
   chat-fast: zai/glm-5.3-flash
   # Aliases pointing to `auto` or carrying parameter overrides (max_tokens
   # etc.) are undefined in v0.1 → GAP-Q13 (DESIGN §12.9)
@@ -514,9 +646,12 @@ plan_policy:
                                      #   request. Absent = no cap; commented out here on purpose — the shipped example imposes none.
   # A plan's `quota` is a warning, not the authority (spec §4.6 rule 3, GAP-Q1):
   # only an upstream `403 quota_exhausted` moves the account, and it may defer a
-  # probe until the plan's own window boundary has passed.
+  # probe until the plan's own window boundary has passed. Neither plan entry in
+  # this file carries a `quota` block today — both vendors publish their
+  # allowance in a shape that is not a monthly token count (spec §4.0, GAP-Q17),
+  # so the key is demonstrated by `docs/spec.md` §4.6 and not by this roster.
 
 # spec §4.6's other key lives on the provider entries above, not here:
 # `account: coding_plan | api` (absent ⇒ api) — see `zai-plan` and
-# `moonshot-plan`. Operators who want no speculative attempt at all write
+# `kimi-plan`. Operators who want no speculative attempt at all write
 # `recover: none` above instead.
