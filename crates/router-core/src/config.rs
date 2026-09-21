@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 
-use crate::cost::{Currency, Nano, Price, PriceTable};
+use crate::cost::{Currency, Nano, Price, PriceTable, TierTable};
 use crate::peak::{PeakTable, PeakWindow, Tz, Weekdays};
 
 /// A load-time rejection with the exact key it belongs to (§12.10.2: each
@@ -235,9 +235,32 @@ impl fmt::Display for RouteSpec {
 }
 
 /// A price scalar as written (USD / 1K tokens); converted to integer
-/// [`Price`] only through [`PriceCfg::to_price_table`].
+/// [`Price`] only through [`PriceCfg::to_tier_tables`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceVal(pub f64);
+
+/// A band ceiling as written (`tiers[k].up_to`, spec §4.10 rule 2): a
+/// plain integer number of tokens — **no** `k`/`m` suffix, unlike
+/// `context`, because a ceiling is compared against a *measured* token
+/// count and a reader must never guess which of 1000 or 1024 a page's "K"
+/// meant. The as-written scalar is kept; the positive-integer refusal
+/// (zero, negative, fractional) runs in [`PriceCfg::to_tier_tables`] so it
+/// can name the band's index and the value found (DESIGN §12.13).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CeilingVal(pub f64);
+
+impl<'de> Deserialize<'de> for CeilingVal {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(NumVisitor {
+            expecting: "a plain integer token count like 200000 (no k/m suffix)",
+            wrap: CeilingVal,
+        })
+    }
+}
+
+/// The band-count cap of spec §4.10 rule 6: no vendor publishes more than
+/// three bands, and a hand-written block stays reviewable at eight.
+pub const MAX_PRICE_BANDS: usize = 8;
 
 /// A peak/breakeven multiplier scalar (2.0 → 200 pct).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -642,11 +665,43 @@ impl WindowCfg {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriceCfg {
-    pub input_miss: PriceVal,
-    pub input_hit: PriceVal,
-    pub cache_write: PriceVal,
-    pub output: PriceVal,
+    #[serde(default)]
+    pub input_miss: Option<PriceVal>,
+    #[serde(default)]
+    pub input_hit: Option<PriceVal>,
+    #[serde(default)]
+    pub cache_write: Option<PriceVal>,
+    #[serde(default)]
+    pub output: Option<PriceVal>,
     pub peak: PeakCfg,
+    /// The banded shape (spec §4.10 rule 1): `price` carries either the
+    /// four flat scalars above or `tiers` — never both, never neither.
+    /// `Option` + a cross-field refusal (not an untagged enum) so the load
+    /// error can name both keys and the reason (DESIGN §12.13).
+    #[serde(default)]
+    pub tiers: Option<Vec<TierCfg>>,
+}
+
+/// One band of a banded price block (spec §4.10). The four prices are the
+/// same [`PriceVal`] scalars the flat shape uses, through the same
+/// load-time conversion; `up_to` is the band's **inclusive** ceiling
+/// (tokens, a plain integer), `None` on the last band only ("no ceiling",
+/// rule 2). A band carries no `peak` and no currency: the multiplier and
+/// the unit belong to the entry (rule 3, §4.8) — `deny_unknown_fields`
+/// makes a `peak` inside a band a load refusal naming the key.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TierCfg {
+    #[serde(default)]
+    pub up_to: Option<CeilingVal>,
+    #[serde(default)]
+    pub input_miss: Option<PriceVal>,
+    #[serde(default)]
+    pub input_hit: Option<PriceVal>,
+    #[serde(default)]
+    pub cache_write: Option<PriceVal>,
+    #[serde(default)]
+    pub output: Option<PriceVal>,
 }
 
 /// spec §4.8 (ADR-018): the regional deployment a provider entry's
@@ -1031,50 +1086,255 @@ impl PeakCfg {
 }
 
 impl PriceCfg {
-    /// Convert the four tiers + peak into the integer cost-engine table.
-    /// `cache_write: 0` is legal (spec §4.0: the upstream charges no separate
-    /// cache-write price); a zero in any other tier is refused rather than
-    /// silently serving a free model. `currency` is the provider entry's
-    /// (§4.8) — carried, never converted.
-    pub fn to_price_table(&self, currency: Currency) -> Result<PriceTable, String> {
-        const TIERS: [(&str, f64, bool); 4] = [
-            ("input_miss", 0.0, false),
-            ("input_hit", 0.0, false),
-            ("cache_write", 0.0, true),
-            ("output", 0.0, false),
-        ];
-        let mut vals = [0u64; 4];
-        for (i, (name, v, allow_zero)) in TIERS.iter().enumerate() {
-            let value = match i {
-                0 => self.input_miss.0,
-                1 => self.input_hit.0,
-                2 => self.cache_write.0,
-                _ => self.output.0,
-            };
-            let _ = v;
-            if !value.is_finite() || value < 0.0 {
-                return Err(format!(
-                    "{name}: the price must be a finite non-negative number (got {value})"
-                ));
-            }
-            let nano = price_to_nano(value);
-            if nano == 0 && !allow_zero {
-                return Err(format!(
-                    "{name}: converts to 0 nano-USD per 1K tokens; refusing a silently-free \
-                     tier (write an explicit positive price)"
-                ));
-            }
-            vals[i] = nano;
+    /// The single conversion point for a price block (spec §4.10 / DESIGN
+    /// §12.13, the generalisation of §12.5's `price` row): one `TierTable`
+    /// per band; the flat shape yields exactly one with `up_to: None`.
+    /// **Every** refusal of §4.10 rule 6 is decided in here, in the
+    /// spec's row order, so a check and the conversion it guards cannot
+    /// drift apart. The caller supplies the entry's `currency` (§4.8) and
+    /// prefixes the config path (`providers[i].models[j].price`); the
+    /// messages below name the band (`tiers[k]`) and the value found.
+    pub fn to_tier_tables(&self, currency: Currency) -> Result<Vec<TierTable>, String> {
+        // Rule 3: one peak table per entry, converted once here and shared
+        // by every band's table — a band never carries its own multiplier.
+        let peak = self.peak.to_peak_table()?;
+        match &self.tiers {
+            Some(tiers) => Self::banded_tables(self, tiers, currency, peak),
+            None => Self::flat_table(self, currency, peak).map(|t| {
+                vec![TierTable {
+                    up_to: None,
+                    table: t,
+                }]
+            }),
         }
-        Ok(PriceTable {
-            currency,
-            input_miss: Price(vals[0]),
-            input_hit: Price(vals[1]),
-            cache_write: Price(vals[2]),
-            output: Price(vals[3]),
-            peak: self.peak.to_peak_table()?,
-        })
     }
+
+    /// Rule 1, the flat arm: the four flat scalars are one band with no
+    /// ceiling. A missing scalar is the "neither shape" refusal naming the
+    /// missing keys.
+    fn flat_table(&self, currency: Currency, peak: PeakTable) -> Result<PriceTable, String> {
+        const NAMES: [&str; 4] = ["input_miss", "input_hit", "cache_write", "output"];
+        let given = [
+            self.input_miss,
+            self.input_hit,
+            self.cache_write,
+            self.output,
+        ];
+        let missing: Vec<&str> = NAMES
+            .iter()
+            .zip(given)
+            .filter_map(|(name, v)| v.is_none().then_some(*name))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "{}: missing — a price block is exactly one shape: the four flat \
+                 prices or tiers (spec 4.10 rule 1)",
+                missing.join(", ")
+            ));
+        }
+        quad_to_table(
+            "",
+            self.input_miss,
+            self.input_hit,
+            self.cache_write,
+            self.output,
+            currency,
+            peak,
+        )
+    }
+
+    /// Rule 1's banded arm plus every band-level refusal of rule 6, in the
+    /// spec table's row order: count → per-band ceilings → the unceiled
+    /// band's cardinality and position → ascending order → per-band prices.
+    fn banded_tables(
+        &self,
+        tiers: &[TierCfg],
+        currency: Currency,
+        peak: PeakTable,
+    ) -> Result<Vec<TierTable>, String> {
+        const NAMES: [&str; 4] = ["input_miss", "input_hit", "cache_write", "output"];
+        // Row 1: both shapes written is refused before anything else.
+        let flat_written: Vec<&str> = NAMES
+            .iter()
+            .zip([
+                self.input_miss,
+                self.input_hit,
+                self.cache_write,
+                self.output,
+            ])
+            .filter_map(|(name, v)| v.is_some().then_some(*name))
+            .collect();
+        if !flat_written.is_empty() {
+            return Err(format!(
+                "carries both the flat shape ({}) and tiers — a price block is \
+                 exactly one shape (spec 4.10 rule 1)",
+                flat_written.join(", ")
+            ));
+        }
+        // Row 2: an empty list states no price; 8 is the cap.
+        if tiers.is_empty() {
+            return Err(
+                "tiers: the band list is empty — a price block with no band states no \
+                 price (spec 4.10 rule 6)"
+                    .to_string(),
+            );
+        }
+        if tiers.len() > MAX_PRICE_BANDS {
+            return Err(format!(
+                "tiers: {} bands — the cap is {} (no vendor publishes more than three \
+                 bands, and a hand-written block stays reviewable; spec 4.10 rule 6)",
+                tiers.len(),
+                MAX_PRICE_BANDS
+            ));
+        }
+        // Row 3: a ceiling is a positive integer of tokens — zero covers
+        // nothing (n = 0 is priced by the first band), and a fractional or
+        // negative value is not a token count the router can compare
+        // against a measured figure.
+        let mut ceilings: Vec<Option<u64>> = Vec::with_capacity(tiers.len());
+        for (k, band) in tiers.iter().enumerate() {
+            match band.up_to {
+                None => ceilings.push(None),
+                Some(CeilingVal(v)) => {
+                    if !v.is_finite() || v < 1.0 || v.fract() != 0.0 {
+                        return Err(format!(
+                            "tiers[{k}].up_to: {v} — a ceiling is a positive integer of \
+                             tokens (n = 0 is priced by the first band, so a ceiling below \
+                             1 covers nothing; spec 4.10 rule 6)"
+                        ));
+                    }
+                    if v > u64::MAX as f64 {
+                        return Err(format!(
+                            "tiers[{k}].up_to: {v} — the ceiling exceeds the token \
+                             counter's range (u64)"
+                        ));
+                    }
+                    ceilings.push(Some(v as u64));
+                }
+            }
+        }
+        // Rows 4–5: exactly one band omits `up_to`, and it is the last.
+        let unceiled: Vec<usize> = tiers
+            .iter()
+            .enumerate()
+            .filter_map(|(k, b)| b.up_to.is_none().then_some(k))
+            .collect();
+        let last = tiers.len() - 1;
+        match unceiled.as_slice() {
+            [] => {
+                return Err(
+                    "tiers: every band declares up_to — exactly one band, the last, \
+                     must omit it (spec 4.10 rule 2)"
+                        .to_string(),
+                )
+            }
+            [k] if *k != last => {
+                return Err(format!(
+                    "tiers[{k}] omits up_to but is not the last band (band {last} is) — \
+                     bands ascend and the unceiled band is the top one (spec 4.10 rule 2)"
+                ))
+            }
+            [..] if unceiled.len() > 1 => {
+                return Err(format!(
+                    "tiers[{}] and tiers[{}] both omit up_to — exactly one band, the \
+                     last, has no ceiling (spec 4.10 rule 2)",
+                    unceiled[0], unceiled[1]
+                ))
+            }
+            _ => {}
+        }
+        // Row 6: equal or descending ceilings would overlap, so one input
+        // size would carry two prices.
+        for i in 0..tiers.len().saturating_sub(1) {
+            if let (Some(a), Some(b)) = (ceilings[i], ceilings[i + 1]) {
+                if b <= a {
+                    return Err(format!(
+                        "tiers[{}].up_to: {} after tiers[{}].up_to: {} — bands must \
+                         ascend (two equal or descending ceilings overlap, so one input \
+                         size would carry two prices; spec 4.10 rule 6)",
+                        i + 1,
+                        b,
+                        i,
+                        a
+                    ));
+                }
+            }
+        }
+        // Rows 7–8: every band states all four prices, and only
+        // `cache_write` may convert to 0 — the §4.0 rule, per band.
+        let mut out = Vec::with_capacity(tiers.len());
+        for (k, band) in tiers.iter().enumerate() {
+            let table = quad_to_table(
+                &format!("tiers[{k}]."),
+                band.input_miss,
+                band.input_hit,
+                band.cache_write,
+                band.output,
+                currency,
+                peak.clone(),
+            )?;
+            out.push(TierTable {
+                up_to: ceilings[k],
+                table,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// The four-scalar conversion shared by the flat shape and every band (the
+/// body of the former `to_price_table`, unchanged in its checks and
+/// messages): `cache_write: 0` is legal (spec §4.0: the upstream charges no
+/// separate cache-write price); a zero in any other tier is refused rather
+/// than silently serving a free model. `prefix` is `""` for the flat shape
+/// and `tiers[k].` for a band, so a band's refusal names its index.
+fn quad_to_table(
+    prefix: &str,
+    input_miss: Option<PriceVal>,
+    input_hit: Option<PriceVal>,
+    cache_write: Option<PriceVal>,
+    output: Option<PriceVal>,
+    currency: Currency,
+    peak: PeakTable,
+) -> Result<PriceTable, String> {
+    const TIERS: [(&str, bool); 4] = [
+        ("input_miss", false),
+        ("input_hit", false),
+        ("cache_write", true),
+        ("output", false),
+    ];
+    let given = [input_miss, input_hit, cache_write, output];
+    let mut vals = [0u64; 4];
+    for (i, (name, allow_zero)) in TIERS.iter().enumerate() {
+        let Some(PriceVal(value)) = given[i] else {
+            return Err(format!(
+                "{prefix}{name}: the price is missing — every band states all four \
+                 prices; a band that inherits a price from another band is a number the \
+                 page did not publish for it (spec 4.10 rule 6)"
+            ));
+        };
+        if !value.is_finite() || value < 0.0 {
+            return Err(format!(
+                "{prefix}{name}: the price must be a finite non-negative number (got {value})"
+            ));
+        }
+        let nano = price_to_nano(value);
+        if nano == 0 && !allow_zero {
+            return Err(format!(
+                "{prefix}{name}: converts to 0 nano-USD per 1K tokens; refusing a \
+                 silently-free tier (write an explicit positive price)"
+            ));
+        }
+        vals[i] = nano;
+    }
+    Ok(PriceTable {
+        currency,
+        input_miss: Price(vals[0]),
+        input_hit: Price(vals[1]),
+        cache_write: Price(vals[2]),
+        output: Price(vals[3]),
+        peak,
+    })
 }
 
 /// Tier-A builtin kinds compiled into the product (plus the three always
@@ -1392,7 +1652,7 @@ impl RouterConfig {
                     ));
                 }
                 m.price
-                    .to_price_table(p.currency)
+                    .to_tier_tables(p.currency)
                     .map_err(|reason| ConfigError::new(format!("{mpath}.price"), reason))?;
             }
 
@@ -1586,10 +1846,17 @@ mod tests {
     #[test]
     fn price_conversion_is_exact_at_load_time() {
         let cfg = happy();
-        let table = cfg.providers[0].models[0]
+        let tables = cfg.providers[0].models[0]
             .price
-            .to_price_table(cfg.providers[0].currency)
+            .to_tier_tables(cfg.providers[0].currency)
             .unwrap();
+        assert_eq!(
+            tables.len(),
+            1,
+            "the flat shape is one band with no ceiling"
+        );
+        assert_eq!(tables[0].up_to, None);
+        let table = &tables[0].table;
         assert_eq!(table.input_miss, Price(660_000));
         assert_eq!(table.input_hit, Price(22_000));
         assert_eq!(table.cache_write, Price(0)); // legal: no separate cache-write billing
@@ -1804,10 +2071,286 @@ mod tests {
     #[test]
     fn zero_price_outside_cache_write_is_refused() {
         let mut cfg = happy();
-        cfg.providers[0].models[0].price.input_miss = PriceVal(0.0);
+        cfg.providers[0].models[0].price.input_miss = Some(PriceVal(0.0));
         let err = validate_err(&cfg);
         assert!(err.contains("input_miss"), "got: {err}");
         assert!(err.contains("silently-free"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // spec §4.10 (banded pricing): fixtures, the two-spellings witness
+    // and one negative case per rule-6 refusal row.
+    // -----------------------------------------------------------------
+
+    fn no_peak() -> PeakCfg {
+        PeakCfg {
+            multiplier: MultiplierVal(1.0),
+            windows: Vec::new(),
+        }
+    }
+
+    fn flat_price() -> PriceCfg {
+        PriceCfg {
+            input_miss: Some(PriceVal(0.00066)),
+            input_hit: Some(PriceVal(0.000022)),
+            cache_write: Some(PriceVal(0.0)),
+            output: Some(PriceVal(0.00198)),
+            peak: no_peak(),
+            tiers: None,
+        }
+    }
+
+    /// One band: explicit prices (no float arithmetic — the crate denies
+    /// it), `x2` carries exactly double the flat prices so a selected band
+    /// is identifiable from the money it produces.
+    fn band(up_to: Option<u64>, x2: bool) -> TierCfg {
+        TierCfg {
+            up_to: up_to.map(|v| CeilingVal(v as f64)),
+            input_miss: Some(PriceVal(if x2 { 0.00132 } else { 0.00066 })),
+            input_hit: Some(PriceVal(if x2 { 0.000044 } else { 0.000022 })),
+            cache_write: Some(PriceVal(0.0)),
+            output: Some(PriceVal(if x2 { 0.00396 } else { 0.00198 })),
+        }
+    }
+
+    fn banded_price(tiers: Vec<TierCfg>) -> PriceCfg {
+        PriceCfg {
+            input_miss: None,
+            input_hit: None,
+            cache_write: None,
+            output: None,
+            peak: no_peak(),
+            tiers: Some(tiers),
+        }
+    }
+
+    fn cfg_with(price: PriceCfg) -> RouterConfig {
+        let mut cfg = happy();
+        cfg.providers[0].models[0].price = price;
+        cfg
+    }
+
+    #[test]
+    fn tiered_happy_path_loads_and_ascending_bands_are_kept() {
+        let cfg = cfg_with(banded_price(vec![
+            band(Some(200_000), false),
+            band(Some(1_000_000), false),
+            band(None, true),
+        ]));
+        cfg.validate().expect("a legal banded block validates");
+        let tables = cfg.providers[0].models[0]
+            .price
+            .to_tier_tables(cfg.providers[0].currency)
+            .unwrap();
+        assert_eq!(
+            tables.iter().map(|t| t.up_to).collect::<Vec<_>>(),
+            vec![Some(200_000), Some(1_000_000), None]
+        );
+        assert_eq!(tables[0].table.input_miss, Price(660_000));
+        assert_eq!(tables[2].table.input_miss, Price(1_320_000), "the x2 band");
+        // Rule 3: every band carries the entry's single peak table.
+        assert_eq!(tables[0].table.peak, tables[2].table.peak);
+    }
+
+    /// The backward-compatibility witness (DESIGN §12.13 test 2): the same
+    /// four prices written flat and as a one-band `tiers:` list produce
+    /// identical tables and identical money for the same usage.
+    #[test]
+    fn flat_and_one_band_tiers_are_one_table() {
+        use crate::cost::{cost, select_band, Usage};
+        const AT: u64 = 1_789_992_000;
+
+        let flat = flat_price().to_tier_tables(Currency::Usd).unwrap();
+        let one_band = banded_price(vec![band(None, false)])
+            .to_tier_tables(Currency::Usd)
+            .unwrap();
+        assert_eq!(flat, one_band, "the two spellings load to one table");
+
+        let usage = Usage {
+            input_total: 123_456,
+            input_cached: 100_000,
+            cache_write: 500,
+            output: 789,
+            reasoning: 10,
+        };
+        assert_eq!(
+            cost(&usage, select_band(&flat, usage.input_total), AT),
+            cost(&usage, select_band(&one_band, usage.input_total), AT),
+            "the two spellings produce identical money"
+        );
+        // And the validate() path (the load check) accepts both.
+        cfg_with(flat_price()).validate().unwrap();
+        cfg_with(banded_price(vec![band(None, false)]))
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn both_shapes_written_is_refused() {
+        let mut price = banded_price(vec![band(None, false)]);
+        price.input_miss = Some(PriceVal(0.00066));
+        let err = validate_err(&cfg_with(price));
+        assert!(err.contains("price"), "names the price path: {err}");
+        assert!(err.contains("input_miss"), "names the flat key: {err}");
+        assert!(err.contains("exactly one shape"), "got: {err}");
+    }
+
+    #[test]
+    fn neither_shape_written_is_refused() {
+        let mut price = flat_price();
+        price.output = None;
+        let err = validate_err(&cfg_with(price));
+        assert!(err.contains("output"), "names the missing key: {err}");
+        assert!(err.contains("exactly one shape"), "got: {err}");
+    }
+
+    #[test]
+    fn empty_tiers_list_is_refused() {
+        let err = validate_err(&cfg_with(banded_price(Vec::new())));
+        assert!(err.contains("tiers"), "got: {err}");
+        assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn band_count_cap_is_eight() {
+        let eight: Vec<TierCfg> = (0..7)
+            .map(|i| band(Some(200_000 + i * 1_000), false))
+            .chain(std::iter::once(band(None, false)))
+            .collect();
+        cfg_with(banded_price(eight))
+            .validate()
+            .expect("8 bands load");
+        let nine: Vec<TierCfg> = (0..8)
+            .map(|i| band(Some(200_000 + i * 1_000), false))
+            .chain(std::iter::once(band(None, false)))
+            .collect();
+        let err = validate_err(&cfg_with(banded_price(nine)));
+        assert!(err.contains("9 bands"), "names the count found: {err}");
+        assert!(err.contains("cap is 8"), "names the cap: {err}");
+    }
+
+    #[test]
+    fn ceiling_below_one_or_fractional_is_refused_per_band() {
+        for bad in [0.0, -5.0] {
+            let mut price = banded_price(vec![band(Some(200_000), false), band(None, false)]);
+            price.tiers.as_mut().unwrap()[0].up_to = Some(CeilingVal(bad));
+            let err = validate_err(&cfg_with(price));
+            assert!(err.contains("tiers[0].up_to"), "names the band: {err}");
+            assert!(err.contains("positive integer"), "got: {err}");
+        }
+        // Fractional: refused with the value found, named per band.
+        let mut price = banded_price(vec![band(Some(200_000), false), band(None, false)]);
+        price.tiers.as_mut().unwrap()[0].up_to = Some(CeilingVal(200_000.5));
+        let err = validate_err(&cfg_with(price));
+        assert!(err.contains("tiers[0].up_to"), "got: {err}");
+        assert!(err.contains("200000.5"), "names the value found: {err}");
+    }
+
+    #[test]
+    fn ceiling_rejects_suffix_spellings_at_parse() {
+        // A `k`/`m` suffix is a parse refusal, not a multiplier (§4.10
+        // rule 2: a ceiling is a plain integer, unlike `context`).
+        let err = serde_json::from_str::<PriceCfg>(
+            r#"{"tiers": [{"up_to": "200k", "input_miss": 0.1, "input_hit": 0.01,
+                "cache_write": 0.0, "output": 0.2}, {"input_miss": 0.1, "input_hit": 0.01,
+                "cache_write": 0.0, "output": 0.2}],
+                "peak": {"multiplier": 1.0, "windows": []}}"#,
+        )
+        .expect_err("expected a parse error")
+        .to_string();
+        assert!(err.contains("plain integer token count"), "got: {err}");
+    }
+
+    #[test]
+    fn no_ceilless_band_is_refused() {
+        let err = validate_err(&cfg_with(banded_price(vec![
+            band(Some(200_000), false),
+            band(Some(1_000_000), false),
+        ])));
+        assert!(err.contains("every band declares up_to"), "got: {err}");
+    }
+
+    #[test]
+    fn two_ceilless_bands_are_refused() {
+        let err = validate_err(&cfg_with(banded_price(vec![
+            band(Some(200_000), false),
+            band(None, false),
+            band(None, false),
+        ])));
+        assert!(err.contains("tiers[1]"), "names the first offender: {err}");
+        assert!(err.contains("tiers[2]"), "names the second: {err}");
+        assert!(err.contains("exactly one band"), "got: {err}");
+    }
+
+    #[test]
+    fn ceilless_band_not_last_is_refused() {
+        // The only unceiled band sits at index 0 while index 2 is last.
+        let err = validate_err(&cfg_with(banded_price(vec![
+            band(None, false),
+            band(Some(1_000_000), false),
+            band(Some(2_000_000), false),
+        ])));
+        assert!(err.contains("tiers[0] omits up_to"), "got: {err}");
+        assert!(err.contains("not the last band"), "got: {err}");
+    }
+
+    #[test]
+    fn equal_ceilings_are_refused() {
+        let err = validate_err(&cfg_with(banded_price(vec![
+            band(Some(200_000), false),
+            band(Some(200_000), false),
+            band(None, false),
+        ])));
+        assert!(err.contains("tiers[1].up_to: 200000"), "got: {err}");
+        assert!(err.contains("tiers[0].up_to: 200000"), "got: {err}");
+        assert!(err.contains("overlap"), "got: {err}");
+    }
+
+    #[test]
+    fn descending_ceilings_are_refused() {
+        let err = validate_err(&cfg_with(banded_price(vec![
+            band(Some(1_000_000), false),
+            band(Some(200_000), false),
+            band(None, false),
+        ])));
+        assert!(err.contains("ascend"), "got: {err}");
+    }
+
+    #[test]
+    fn band_missing_a_price_is_refused() {
+        let mut price = banded_price(vec![band(Some(200_000), false), band(None, false)]);
+        price.tiers.as_mut().unwrap()[1].input_hit = None;
+        let err = validate_err(&cfg_with(price));
+        assert!(err.contains("tiers[1].input_hit"), "got: {err}");
+        assert!(err.contains("all four"), "got: {err}");
+    }
+
+    #[test]
+    fn band_zero_price_outside_cache_write_is_refused_per_band() {
+        let mut price = banded_price(vec![band(Some(200_000), false), band(None, false)]);
+        price.tiers.as_mut().unwrap()[1].output = Some(PriceVal(0.0));
+        let err = validate_err(&cfg_with(price.clone()));
+        assert!(err.contains("tiers[1].output"), "got: {err}");
+        assert!(err.contains("silently-free"), "got: {err}");
+        // cache_write: 0 stays legal per band.
+        price.tiers.as_mut().unwrap()[1].output = Some(PriceVal(0.00198));
+        price.tiers.as_mut().unwrap()[1].cache_write = Some(PriceVal(0.0));
+        cfg_with(price).validate().expect("cache_write 0 is legal");
+    }
+
+    #[test]
+    fn peak_inside_a_band_is_refused_at_parse() {
+        let err = serde_json::from_str::<TierCfg>(
+            r#"{"up_to": 200000, "input_miss": 0.1, "input_hit": 0.01,
+                "cache_write": 0.0, "output": 0.2,
+                "peak": {"multiplier": 1.0, "windows": []}}"#,
+        )
+        .expect_err("expected a parse error")
+        .to_string();
+        assert!(
+            err.contains("unknown field") && err.contains("peak"),
+            "names the refused key: {err}"
+        );
     }
 
     #[test]
@@ -2045,8 +2588,9 @@ mod tests {
         );
         let table = cfg.providers[1].models[0]
             .price
-            .to_price_table(cfg.providers[1].currency)
+            .to_tier_tables(cfg.providers[1].currency)
             .unwrap();
+        let table = &table[0].table;
         assert_eq!(table.currency, Currency::Cny, "the table carries its unit");
     }
 

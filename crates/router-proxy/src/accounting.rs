@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use router_core::config::{AccountKind, QuotaCfg, RouteSpec, RouterConfig};
-use router_core::cost::{cost, CostBreakdown, Currency, Nano, PriceTable};
+use router_core::cost::{cost, select_band, CostBreakdown, Currency, Nano, TierTable};
 use router_core::prefix::PrefixBlock;
 use router_core::quota::{charge, window_start_for, OverQuota, QuotaPlan, QuotaState, QuotaWindow};
 use router_core::store::{EventId, EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
@@ -40,7 +40,14 @@ use crate::forward::{ForwardFailure, ForwardSuccess};
 /// account is a property of the provider, so the roster lookup here is
 /// the single place it becomes an accounting fact.
 pub struct RouteAccounting {
-    pub price: PriceTable,
+    /// The route's price block as one `TierTable` per band (spec §4.10):
+    /// exactly one element for an entry written flat (the degenerate
+    /// one-band table), so the vector's shape — not a second code path —
+    /// is what carries backward compatibility. The band is selected per
+    /// request by the accounting call site (`select_band` on measured
+    /// `usage.input_total`); pre-response figures use the **first** band
+    /// (§4.10 rule 8).
+    pub prices: Vec<TierTable>,
     pub quota_plans: Vec<QuotaPlan>,
     /// True when the route's provider declares `account: coding_plan`:
     /// every request served by it books the plan's marginal cost 0 while
@@ -59,7 +66,7 @@ pub struct RouteAccounting {
 pub fn route_accounting(config: &RouterConfig, route: &RouteSpec) -> Option<RouteAccounting> {
     let provider = config.providers.iter().find(|p| p.name == route.provider)?;
     let model = provider.models.iter().find(|m| m.id == route.model)?;
-    let price = model.price.to_price_table(provider.currency).ok()?;
+    let prices = model.price.to_tier_tables(provider.currency).ok()?;
     let quota_plans = provider
         .quota
         .as_deref()
@@ -70,7 +77,7 @@ pub fn route_accounting(config: &RouterConfig, route: &RouteSpec) -> Option<Rout
         .collect();
     let in_plan = provider.account == AccountKind::CodingPlan;
     Some(RouteAccounting {
-        price,
+        prices,
         quota_plans,
         in_plan,
         currency: provider.currency,
@@ -434,7 +441,12 @@ impl<'a> Accountant<'a> {
                     // below still runs so `quota_after` is recorded
                     // ("…and record `quota_after`").
                 } else {
-                    breakdown = cost(&usage, &acc.price, ctx.now_epoch_s);
+                    // spec §4.10 rule 2: the band is selected from the
+                    // request's measured total input tokens (cached
+                    // included) — the only place a record's cost.* is
+                    // computed prices the whole request with one band.
+                    let table = select_band(&acc.prices, usage.input_total);
+                    breakdown = cost(&usage, table, ctx.now_epoch_s);
                 }
                 if let Some(store) = self.store {
                     if let Some((plan_idx, plan)) = acc
@@ -712,5 +724,75 @@ mod tests {
         let b = civil_from_epoch(1_000_000 + 86_400);
         assert_eq!(a.3, b.3);
         assert_eq!(a.2 + 1, b.2);
+    }
+
+    /// The migration before/after same-price witness (R15-2's acceptance
+    /// criterion): a flat entry served through the new `prices` vector
+    /// path prices the same usage exactly as the old single-table
+    /// arithmetic did — one band, selected at every `n`, identical money.
+    #[test]
+    fn flat_entry_through_the_band_path_prices_identically() {
+        use router_core::cost::{select_band, Usage};
+        const AT: u64 = 1_789_992_000;
+
+        let cfg: RouterConfig = serde_json::from_str(
+            r#"{"server": {"addr": "127.0.0.1:8790", "upstream_attempt_timeout": "60s", "request_timeout": "10m"},
+                "session": {"key_sources": ["prompt_cache_key"], "ttl": "12h"},
+                "cache": {"sticky": true, "breakeven": {"enabled": true, "min_remaining_turns": 3, "safety_factor": 1.2}},
+                "trace": {"dir": "./state/traces", "rollover": "hourly"},
+                "providers": [{
+                    "name": "p", "urls": {"chat": "https://x.example/v1/chat/completions"},
+                    "api_key_env": "P_KEY", "wire_api": "chat", "supports": ["chat"],
+                    "models": [{
+                        "id": "m1", "context": "200k",
+                        "price": {"input_miss": 0.00066, "input_hit": 0.000022,
+                                  "cache_write": 0.0, "output": 0.00198,
+                                  "peak": {"multiplier": 1.0, "windows": []}},
+                        "source": "https://x.example/pricing @2026-09-19"}],
+                    "quota": [{"models": ["m1"], "window": "monthly", "tokens": 100000000,
+                               "reset_day": 1, "over_quota": "block", "source": "s"}]
+                }],
+                "aliases": {"fast": "p/m1"},
+                "plugins": [],
+                "fallback": ["p/m1"]}"#,
+        )
+        .expect("parses");
+        let acc = route_accounting(
+            &cfg,
+            &RouteSpec {
+                provider: "p".into(),
+                model: "m1".into(),
+            },
+        )
+        .expect("on the roster");
+        assert_eq!(acc.prices.len(), 1, "a flat entry is one band");
+        assert_eq!(acc.prices[0].up_to, None);
+
+        let usage = Usage {
+            input_total: 145_000,
+            input_cached: 144_000,
+            cache_write: 500,
+            output: 800,
+            reasoning: 12,
+        };
+        // The serving-path line (accounting.rs:437's shape) vs the old
+        // single-table arithmetic: identical breakdown at any n.
+        let through_bands = cost(&usage, select_band(&acc.prices, usage.input_total), AT);
+        let direct = cost(&usage, &acc.prices[0].table, AT);
+        assert_eq!(through_bands, direct);
+        // Hand-computed control: the same numbers §4.0's flat block has
+        // always produced for this usage.
+        // miss 1_000 × 660_000/1000 = 660_000
+        // hit 144_000 × 22_000/1000 = 3_168_000
+        // write 500 × 0 = 0
+        // out 812 × 1_980_000/1000 = 1_607_760
+        assert_eq!(through_bands.input_miss, Nano(660_000));
+        assert_eq!(through_bands.input_hit, Nano(3_168_000));
+        assert_eq!(through_bands.cache_write, Nano(0));
+        assert_eq!(through_bands.output, Nano(1_607_760));
+        assert_eq!(
+            through_bands.total,
+            Nano(660_000 + 3_168_000 + 0 + 1_607_760)
+        );
     }
 }

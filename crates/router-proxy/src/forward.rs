@@ -1939,8 +1939,13 @@ impl Forwarder {
         }
         let tokens: u64 = blocks.iter().map(|b| b.tokens).sum();
         let cost_nano = crate::accounting::route_accounting(&self.config, to).map(|acc| {
-            // tokens × price(USD/1K) → Nano, floored (§12.4 discipline).
-            let v = tokens as u128 * acc.price.input_miss.0 as u128 / 1000;
+            // Pre-response (spec §4.10 rule 8): no measured `n` exists
+            // yet, so the FIRST band's prices price the estimate — a
+            // choice that invents no estimate — and the figure keeps its
+            // `inferred` label. tokens × price(USD/1K) → Nano, floored
+            // (§12.4 discipline).
+            let first = &acc.prices[0].table;
+            let v = tokens as u128 * first.input_miss.0 as u128 / 1000;
             if v > u64::MAX as u128 {
                 u64::MAX
             } else {

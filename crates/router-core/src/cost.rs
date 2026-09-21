@@ -184,6 +184,39 @@ pub struct PriceTable {
     pub peak: PeakTable,
 }
 
+/// One band of a loaded price block (spec §4.10 / DESIGN §12.13): the
+/// band's integerised [`PriceTable`] and its inclusive ceiling. `up_to` is
+/// present on every band but the last; a loaded list is ascending and ends
+/// with the unceiled band (the loader refuses anything else, so the
+/// selection below never has to re-check those invariants).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierTable {
+    /// Inclusive upper bound on `usage.input_total` (tokens); `None` on
+    /// the last band only — "no ceiling" (spec §4.10 rule 2).
+    pub up_to: Option<u64>,
+    pub table: PriceTable,
+}
+
+/// spec §4.10 rule 2, spelled once: the first band whose `up_to` is `None`
+/// or `>= input_tokens`. Pure, O(bands ≤ 8), no clock, no estimate, no
+/// config read. `n = 0` and `n = up_to` both land on the first band that
+/// can hold them (§4.10's boundary table). The comparison is `<=`, so no
+/// arithmetic runs on the boundary and no overflow is possible.
+pub fn select_band(tiers: &[TierTable], input_tokens: u64) -> &PriceTable {
+    for tier in tiers {
+        match tier.up_to {
+            Some(up_to) if input_tokens > up_to => continue,
+            _ => return &tier.table,
+        }
+    }
+    // Unreachable through the loader: a loaded block has 1..=8 bands and
+    // its last band is unceiled, so the loop always returns.
+    &tiers
+        .last()
+        .expect("a price block has at least one band")
+        .table
+}
+
 /// Normalized usage (spec §6). Protocol parsing constructs it from the
 /// three wire formats; this module only knows this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
@@ -500,5 +533,164 @@ mod tests {
         // spelling, §4.8).
         assert_eq!(serde_json::to_value(Currency::Cny).unwrap(), "CNY");
         assert_eq!(serde_json::to_value(Currency::Usd).unwrap(), "USD");
+    }
+
+    // -----------------------------------------------------------------
+    // spec §4.10's selection-semantics boundary table, row by row, plus
+    // peak orthogonality (rule 3) and the integer edges.
+    // -----------------------------------------------------------------
+
+    fn tier(up_to: Option<u64>, scale: u64) -> TierTable {
+        TierTable {
+            up_to,
+            table: PriceTable {
+                currency: Currency::Usd,
+                input_miss: Price(150_000 * scale),
+                input_hit: Price(30_000 * scale),
+                cache_write: Price(0),
+                output: Price(500_000 * scale),
+                peak: flat_peak(),
+            },
+        }
+    }
+
+    /// Asserts WHICH band's prices priced the request — by comparing the
+    /// produced breakdown against a hand-computed one for the expected
+    /// band's `scale` (DESIGN §12.13 test 1), not merely that a table was
+    /// returned.
+    fn assert_band(tiers: &[TierTable], n: u64, expected_scale: u64) {
+        fn sat(nano: u128) -> u64 {
+            if nano > u64::MAX as u128 {
+                u64::MAX
+            } else {
+                nano as u64
+            }
+        }
+        let table = select_band(tiers, n);
+        assert_eq!(
+            table.input_miss,
+            Price(150_000 * expected_scale),
+            "n = {n}: expected the x{expected_scale} band"
+        );
+        // The money agrees with a hand-computed breakdown for that band
+        // (saturating, like the engine itself at the top of the range).
+        let u = Usage {
+            input_total: n,
+            input_cached: n / 2,
+            cache_write: 0,
+            output: 1_000,
+            reasoning: 0,
+        };
+        let c = cost(&u, table, AT);
+        let miss = (n - n / 2) as u128 * (150_000u64 * expected_scale) as u128 / 1000;
+        let hit = (n / 2) as u128 * (30_000u64 * expected_scale) as u128 / 1000;
+        let out = 1_000u128 * (500_000u64 * expected_scale) as u128 / 1000;
+        assert_eq!(c.input_miss.0, sat(miss), "n = {n}: input_miss");
+        assert_eq!(c.input_hit.0, sat(hit), "n = {n}: input_hit");
+        assert_eq!(c.output.0, sat(out), "n = {n}: output");
+        assert_eq!(
+            c.total.0,
+            sat(miss + hit + out),
+            "n = {n}: total (no peak window)"
+        );
+    }
+
+    #[test]
+    fn boundary_table_flat_shape_rows() {
+        // `price` flat | n ∈ {0, 200000, 10000000} → the single band.
+        let flat = vec![tier(None, 1)];
+        for n in [0u64, 200_000, 10_000_000] {
+            assert_band(&flat, n, 1);
+        }
+    }
+
+    #[test]
+    fn boundary_table_two_band_rows() {
+        // tiers: [{up_to: 200000}, {no ceiling}]
+        let two = vec![tier(Some(200_000), 1), tier(None, 2)];
+        assert_band(&two, 0, 1); // the first band starts at 0
+        assert_band(&two, 200_000, 1); // the boundary belongs to the declaring band
+        assert_band(&two, 200_001, 2); // one token above the ceiling
+        assert_band(&two, 10_000_000, 2); // beyond every ceiling ⇒ the unceiled band
+    }
+
+    #[test]
+    fn boundary_table_three_band_rows() {
+        // tiers: [{200000}, {1000000}, {no ceiling}]
+        let three = vec![
+            tier(Some(200_000), 1),
+            tier(Some(1_000_000), 2),
+            tier(None, 3),
+        ];
+        assert_band(&three, 200_000, 1); // boundary, inclusive
+        assert_band(&three, 200_001, 2);
+        assert_band(&three, 1_000_000, 2); // boundary, inclusive
+        assert_band(&three, 1_000_001, 3);
+    }
+
+    #[test]
+    fn peak_windows_and_bands_are_orthogonal() {
+        // Rule 3: the same n selects the same band inside and outside a
+        // peak window; the total differs by exactly multiplier_pct, and
+        // changing the band at a fixed instant does not change
+        // peak_applied_pct.
+        let mut two = vec![tier(Some(200_000), 1), tier(None, 2)];
+        two[0].table.peak = always_peak_200();
+        two[1].table.peak = always_peak_200();
+        let n = 5_000u64;
+        let u = Usage {
+            input_total: n,
+            input_cached: 0,
+            cache_write: 0,
+            output: 1_000,
+            reasoning: 0,
+        };
+        let inside = cost(&u, select_band(&two, n), AT);
+        assert_eq!(inside.peak_applied_pct, 200, "the window applied");
+        // The same request with no window: same band (checked by money),
+        // total differs by exactly the multiplier.
+        let flat = vec![tier(Some(200_000), 1), tier(None, 2)];
+        let outside = cost(&u, select_band(&flat, n), AT);
+        assert_eq!(outside.peak_applied_pct, 100);
+        assert_eq!(
+            inside.input_miss, outside.input_miss,
+            "same band, same buckets"
+        );
+        assert_eq!(
+            inside.total.0 as u128,
+            outside.total.0 as u128 * 200 / 100,
+            "the window multiplies the band's sum once"
+        );
+        // A different n (the other band) at the same instant still applies
+        // the same pct — the multiplier is never re-read per band.
+        let n2 = 300_000u64;
+        let u2 = Usage {
+            input_total: n2,
+            input_cached: 0,
+            cache_write: 0,
+            output: 1_000,
+            reasoning: 0,
+        };
+        let other_band = cost(&u2, select_band(&two, n2), AT);
+        assert_eq!(other_band.peak_applied_pct, 200, "the pct is per entry");
+        // miss = 300_000 × (150_000×2)/1000 = 90_000_000 nano.
+        assert_eq!(
+            other_band.input_miss,
+            Nano(90_000_000),
+            "the x2 band priced it"
+        );
+    }
+
+    #[test]
+    fn integer_edges_select_the_last_band_without_overflow() {
+        // An up_to of u64::MAX-adjacent magnitude and an n at the top of
+        // the range select the last band; the comparison is `<=`, so no
+        // arithmetic runs on the boundary at all.
+        let tiers = vec![tier(Some(u64::MAX - 1), 1), tier(None, 2)];
+        assert_band(&tiers, u64::MAX - 1, 1);
+        assert_band(&tiers, u64::MAX, 2);
+        // And a ceiling exactly at u64::MAX on a one-ceilless list.
+        let two = vec![tier(Some(u64::MAX), 1), tier(None, 2)];
+        assert_band(&two, u64::MAX, 1);
     }
 }

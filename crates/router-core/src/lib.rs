@@ -28,7 +28,9 @@ pub use config::{
     PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, RouterConfig, TokensVal, KNOWN_BUILTIN_KINDS,
     KNOWN_SERVICE_SLOTS,
 };
-pub use cost::{cost, CostBreakdown, Currency, Money, Nano, Price, PriceTable, Usage};
+pub use cost::{
+    cost, select_band, CostBreakdown, Currency, Money, Nano, Price, PriceTable, TierTable, Usage,
+};
 pub use error::ErrorCode;
 pub use error_class::{
     classify_upstream_error, Classification, Demotion, ErrorClass, ErrorEvidence, TransportCause,
