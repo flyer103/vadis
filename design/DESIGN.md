@@ -914,6 +914,8 @@ not written).
 | CONF-57 | spec §2 / §4.2 / §8 + ADR-022·a candidate may only be served on its own wire | **the wire gate on both paths, red first**: with the shipped roster's shape — a **chat** request whose resolved route is keyless, a `fallback` chain whose **first** entry is responses-wire and whose **second** is chat-native — (a) the foreign mock's request log stays **empty** (no byte of the client's chat body crosses the matrix) while the chat-native candidate serves the request with `protocol.protocol_out == chat`, `translated == false` and upstream bytes equal to the client's modulo mutations (a)/(b); (b) with **no** chat-native candidate anywhere in the chain, the client gets the frozen exhausted shape on **both** media — `502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `details.skipped[]` holding exactly the candidates the walk refused **without attempting**, in chain order, each with its own reason (`keyless` / `wire_mismatch` / `unknown_provider` / `demoted`), the streaming arm differing by nothing but its pre-existing `"stream": true` — with **no** `upstream.submitted` row, `usage_missing: true`, nothing charged and `failover_from: null`; (c) a chain whose every entry is native and keyed serves normally (the control that keeps (a)/(b) from passing vacuously). Its rig is ADR-023's *nothing was attempted* condition on both arms; the case is unchanged by ADR-023 | the candidate walk's wire predicate on both paths + the exhausted-walk refusal shape (§12.10.9; ADR-022) |
 | CONF-58 | spec §4.2 / §6 / §8 + ADR-023 Decision 1·the walk's refusal is decided by **whether anything was attempted**, not by the chain's length | **the two conditions on both media, red first**: a keyed **chat** head whose mock answers 500, and a `fallback` whose only entry is **responses-wire (keyed)** — (a) **both** media get the attempt-exhausted body: `502`, `error.type == "upstream_error"`, the class-based sentence for the head's own class, `details.upstream_status` == the mock's status, `details.error_class` == the class, and **neither** `details.stage` **nor** `details.skipped[]` (the members that would claim no upstream was contacted), the streaming arm differing by nothing but its pre-existing `"stream": true`; (b) both arms' records carry `result.failover_from: null`, exactly one `upstream.submitted` row (the head) and **no** `failover.triggered` row, with `errors[0].details` equal to what the client saw; (c) the control with a **native keyed** entry appended to the chain: the walk serves 200, `failover_from` names the failed head and `failover.triggered.to` names the native entry — never the wire-ineligible one (the narration predicate); (d) the **other** condition in the same case's rig: the same shape with an all-ineligible chain (the head keyless) still returns the frozen `no_available_route` body with `upstream_status` / `error_class` `null` on both media — the discriminant itself, asserted | the walk's narration predicate on both paths + the two refusal bodies (§12.10.9; ADR-023) |
 | CONF-59 | spec §8 + ADR-023 Decision 3·`skipped[]` carries one entry per candidate the chain offered | with a chain of **two models on one keyless provider** plus a keyed responses-wire entry, and nothing attempted: (a) both media's `no_available_route` refusal lists **three** entries in chain order — both models of the keyless provider with reason `keyless`, the wire-ineligible one with `wire_mismatch` — so `|skipped[]|` equals the rig's own offered-candidate count (the relation, not a snapshot); (b) the control without the duplicate model lists two, i.e. adding the second model of the same provider changed the list by exactly its own entry; (c) neither mock receives a request, no `upstream.submitted` row exists, `usage_missing: true` and nothing is charged | the buffered walk's keyless narration and the streaming construction's (one list, both media) |
+| CONF-64 | spec §6 (`failover_from`'s cooldown row) / §8 (the condition-N record) + ADR-024 Decision 1·a cooling route in a refused chain | **the cooldown displacement survives the refusal, on both media, red first (the streaming half is red at `47ac23c`)**: the resolved route is made to cool down **for real** by the rig's own earlier request (`403` + the `insufficient_quota` wording + `retry-after: 60`; ADR-011 item 4, no seeded projection row and no sleep), and the chain continues with a **keyless** candidate and a **wire-ineligible** one — nothing is attemptable: (a) both media get the frozen `no_available_route` body (`502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `|skipped[]|` equal to the chain's offered count, `upstream_status` / `error_class` `null`), the streaming arm differing by nothing but `"stream": true`; (b) **both** arms' records carry `result.failover_from` naming the abandoned route, with **no** `failover.triggered` row and **no** `upstream.submitted` row, `usage_missing: true`, nothing charged and `errors[0].details` equal to what the client saw — the buffered half is what `conf_42_non_primary_abandon_is_failover_only` already asserts (its `:350`/`:366`), the streaming half is the one this case adds; (c) the control: the same chain with no cooling candidate (the head keyless) leaves `failover_from` `null` on both media (CONF-57 (b)'s shape, re-asserted here as the discriminant against "the head's route is always written") | the streaming walk's refusal record carrying the walk's own `failover_from` (the two refusal returns, `stream_forward.rs:1044-1059` / `:1060-1092`) |
+| CONF-65 | spec §8 (`skipped[]`'s order) + ADR-024 Decision 2·the array is the chain's, not the medium's | **chain order and cross-medium equality, red first (the streaming half is red at `47ac23c`)**: over the CONF-64 rig's chain (cooling head, keyless candidate, wire-ineligible candidate, nothing attemptable): (a) each medium's `details.skipped[]` is the offered candidates that were **not** attempted, in the chain's own order — the `demoted` head first, then `keyless`, then `wire_mismatch` — asserted both as that exact sequence and as a relation (the array's `route` sequence is a subsequence of the chain's offered sequence, so the case does not rest on a snapshot of one config); (b) the two arms' arrays are **equal element for element**, so the whole body differs by `"stream": true` alone — before ADR-024's rule the streaming walk's in-walk `demoted` entry lands **last**; (c) the count half is unchanged (ADR-023 Decision 3, `|skipped[]|` == offered) and CONF-59's rig, which has no in-walk `demoted` entry, still lists its entries in chain order | `skipped[]`'s ordering in the streaming walk (each entry must keep its chain position; `stream_forward.rs:631` + `:652`) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1121,6 +1123,26 @@ CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The IDs are spent: not r
 whole suite is green with ADR-023's rule implemented — 368/0/12, 85 result lines). Nothing in this allocation
 touches a gate definition, the corpus or an **existing** assertion (AGENTS 9 / ADR-012): it adds two rows, two
 files and the §12.10.9 addendum.
+
+**Allocation of CONF-64 and CONF-65 (R20, ADR-024 — a cooling skip's displacement survives the refusal, and
+`skipped[]` is a property of the chain) — recorded 2026-09-22 by the round's adjudication card, the R19-1
+precedent.** The occupancy check was an `ls` of the real directory (`tests/conformance/tests/`, 66 files, ids
+`01–47, 53–63, 71–78`) cross-read with the paragraphs above: `48–51` still reserved, and the paragraph above
+leaves `64–70` unallocated — so the round takes **`CONF-64`**, the condition-N record's cooldown displacement
+(the abandoned route as `result.failover_from` on **both** media, with the cooling-free chain as the control;
+the streaming half is the one that is red at HEAD), and **`CONF-65`**, `skipped[]`'s chain order and the two
+media's element-for-element equality. Both files land with the implementation they witness, in
+`tests/conformance/tests/conf_64_*.rs` / `conf_65_*.rs`, parked
+`#[ignore = "CONF-64: depends on the streaming walk's refusal record"]` /
+`#[ignore = "CONF-65: depends on skipped[]'s chain order on both media"]` if written ahead of it — the CONF-27 /
+CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The IDs are spent: not renumbered, not reused.
+**Occupancy now**: `01–47, 53–65, 71–78` spent; `66–70` unallocated, and the next free ID is **`CONF-66`**.
+`CONF-42`'s assertions are **not** touched and stay exactly as landed — its `:366` is in fact the assertion
+ADR-024 Decision 1 rests on (the buffered half of CONF-64), and it stays green under the rule. `CONF-57`'s,
+`CONF-58`'s and `CONF-59`'s assertions are likewise untouched: each of their rigs is a chain with **no**
+cooling candidate, where the two media already agree. Nothing in this allocation touches a gate definition,
+the corpus or an **existing** assertion (AGENTS 9 / ADR-012): it adds two rows, two files and the §12.8/§12.10.9
+sentences ADR-024 records.
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -1924,7 +1946,8 @@ two**, and the two paths answer "which candidates may serve" identically.
 **Eligibility is a skip, and it is the keyless class.** No intent row, no `error.classified`, no
 `failover.triggered`, no **`failover_from`**, no `plan_switch`, no `errors[]` member: nothing failed and nothing
 moved, so nothing is narrated (ADR-010's vocabulary has no row for a fact that never happened). `failover_from`
-stays reserved for the cooldown skip (CONF-42) and for a failed attempt (ADR-011 item 4). The client learns
+stays reserved for the cooldown skip (CONF-42) and for a failed attempt the walk moves on from (ADR-011 item 4);
+the cooldown skip's own write survives a refusal (ADR-024). The client learns
 nothing from the skip until the walk ends.
 
 **The narration predicate is the eligibility predicate (ADR-023 Decision 2).** The walk names a candidate as the
@@ -1932,9 +1955,11 @@ request's **destination** only if that candidate could serve this request — th
 already-attempted and in-cooldown. In code the buffered walk's narration site is `next_candidate`
 (`forward.rs:1698` today), whose predicate had lost the **wire** condition while the loop one screen above
 applies it; the streaming path's chain is pre-filtered at construction (`stream_forward.rs:541-548`), so its
-`next_candidate_for` is already the rule. Consequences: `result.failover_from` (spec §6) and the
-`failover.triggered` event are written only when the request moves onto a candidate the walk will attempt, and
-the event's `to` names a route that can take the request. Measured on the round's HEAD, one config and one
+`next_candidate_for` is already the rule. Consequences: the `failover.triggered` **event** is written only when
+the request moves onto a candidate the walk will attempt, and the event's `to` names a route that can take the
+request. The `failover_from` **field** has one further producer — ADR-011's pre-attempt cooldown skip, which
+writes it (spec §6's cooldown row) whether the walk then serves, fails, or ends with nothing served (ADR-024).
+Measured on the round's HEAD, one config and one
 request differing only in `stream`: a chain `[kp/m1 (chat, keyed, mock 500) → mx/m (responses, keyed)]` gave the
 buffered arm `failover_from: "kp/m1"` **and** `failover.triggered{to: "mx/m"}` — a displacement narrated onto a
 route that can never serve it, priced at that route's table — while the streaming arm wrote neither. The
@@ -1968,20 +1993,30 @@ evidence (`upstream_status` / `error_class` are `null` *by construction*, not by
 reason from `{unknown_provider, keyless, wire_mismatch, demoted}` — so in condition N `|skipped[]|` equals the
 chain's offered-candidate count, and a second model on a provider the walk already refused as keyless is listed
 with the same reason as the first (the buffered loop's provider-level exclusion must narrate it instead of
-swallowing it; the streaming path's construction already does, `stream_forward.rs:522-552`). A candidate that
+swallowing it; the streaming path's construction already does, `stream_forward.rs:522-552`). **The order, and the
+array itself, are a property of the chain and not of the medium** (ADR-024): for one chain and one request the
+two paths must emit the same entries in the same sequence, so the streaming walk — whose list is seeded with the
+construction-time skips (`stream_forward.rs:631`) and whose in-walk `demoted` entry is **appended** when the walk
+reaches its candidate (`:652`), i.e. after every seeded entry — must carry each entry's chain position through to
+serialisation (CONF-65). A candidate that
 *was* attempted appears in no `skipped[]`: that request is condition E, whose body has no such member — which is
 also why no fifth reason word is needed for "the provider was already attempted". The message is frozen verbatim
 and is not the machine-readable part: "unavailable" is its umbrella for the wire reason, and `skipped[]` is the
 truth.
 
-**Trace truth (spec §6).** A skip leaves the served record untouched (`protocol.out == protocol.in`,
-`translated: false`, `failover_from` clear). Either refusal condition leaves a terminal failure record: `502`,
+**Trace truth (spec §6).** A keyless/wire skip leaves the served record untouched (`protocol.out == protocol.in`,
+`translated: false`, and no `failover_from` **of its own** — a cooldown skip earlier in the same walk may have
+written the field, and it stays). Either refusal condition leaves a terminal failure record: `502`,
 `usage_missing: true`, nothing charged, `errors[0].kind == "upstream_error"` (the `kind_for_code` mapping of
 every 5xx-class code — `crates/router-core/src/trace.rs:310-312`) carrying the same `details` object the client
-received. What differs between the conditions is what moved: condition N wrote nothing (no attempt, so no
-`failover_from` and no `failover.triggered` row — CONF-57 (b) asserts exactly this on both media), and condition
-E wrote an attempt and **no** displacement, so the same two fields stay clear there as well; the trace field
-follows the walk's narration predicate (spec §6's producer table, ADR-023 Decision 2). `protocol.out` may never
+received. The two displacement fields follow the walk's history rather than the condition it ended in (spec §6's
+producer table; ADR-023 Decision 2, ADR-024): the `failover.triggered` **event** is written exactly when the
+request moved onto a candidate the walk attempted, and `failover_from` is written by a failed attempt the walk
+moved on from **or** by ADR-011's pre-attempt cooldown skip (which needs no destination). So a condition-N
+refusal carries no `failover_from` when its chain offered no cooling candidate (CONF-57 (b) asserts exactly this
+on both media) and carries the abandoned route when it opened on one (CONF-64) — while a condition-E refusal
+carries it when the walk did move on from an earlier candidate (an all-eligible all-failing chain) and carries
+`null` when it abandoned nothing it then attempted from (CONF-58). `protocol.out` may never
 name a wire other than the inbound protocol, and **`translated`'s producer
 becomes the mapper event**: v0.1 has no mapper, so it is `false` on every record this build writes, and the
 comparison form at `accounting.rs:501` is removed — it is what produced R11-F1's fabricated `translated: true`
@@ -1996,15 +2031,23 @@ alternative B).
 **Witness.** `CONF-57` (§12.8) — red first on the unfixed walk, then green. The two refusal conditions and the
 narration predicate are witnessed by `CONF-58` (a failing attempt plus an ineligible tail ⇒ the attempt-exhausted
 shape on both media, with the trace's displacement fields clear, plus the native-tail control) and `CONF-59`
-(`skipped[]`'s completeness: one entry per candidate the chain offered). ADR-023 records that the rule was
+(`skipped[]`'s completeness: one entry per candidate the chain offered). `CONF-64` witnesses the cooldown
+displacement in a condition-N record (both media, with the cooling-free chain as the control) and `CONF-65`
+`skipped[]`'s chain order and the two media's element-for-element equality — the two shapes ADR-024 settles and
+the round record's R19-F1 / R19-F2 measured; the buffered halves of both are already asserted by
+`conf_42_non_primary_abandon_is_failover_only` (the field) and `CONF-59` (the order, on chains without an
+in-walk `demoted` entry). ADR-023 records that the rule was
 implemented experimentally in a throwaway worktree and the whole suite stayed green (368/0/12, 85 result lines)
 with **no** existing assertion moved — that experiment is evidence for the freeze, not a delivery.
+The rig that measures ADR-024's two shapes at their HEAD (`autowork/harness/r20-1/`) is a red control: it asserts
+the frozen shape and fails at `47ac23c` on exactly the three streaming-side checks.
 
 **What this section does not do.** No mapper and no translation cell is unblocked; no `error.type` is added
 (`details` is free-form per code, so §8's table does not move); `state.sticky_hit` (R11-F2) is untouched;
 `TRACE_SCHEMA_VERSION` does not move (no field is added or removed; only *values* on already-`502` classes move,
 plus the omission of a `failover.triggered` row and a `failover_from` value for a displacement that has no
-destination). The streaming loop-end fall-through's reachability is not asserted by any case — the probes never
+destination — and, since ADR-024, the presence of that value on a refusal whose chain opened on a cooling
+route). The streaming loop-end fall-through's reachability is not asserted by any case — the probes never
 reached it — so its new shape is frozen but unwitnessed, and the implementing round must not claim a witness for
 it. One user-facing sentence is still owed: `book/connecting-clients.md`'s "failover chain never crosses
 protocols" paragraph describes the `no_available_route` case and stays true, but it does not yet name the second

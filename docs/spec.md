@@ -1023,7 +1023,7 @@ the two answer different questions and are set by different facts:
 |---|---|---|
 | a failed attempt in this request (§4.2's walk) **with a candidate the walk can attempt next** | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
 | a failed attempt in this request and **no** candidate the walk can attempt after it (the attempt-exhausted condition, §4.2/§8) | `null` — nothing moved: the refusal carries that attempt's own evidence (`upstream_status` / `error_class`), and a displacement with no destination would be a fact that never happened (ADR-010) | `null` |
-| ADR-011's cooldown refusing the resolved route **before** any attempt | set — the route the skip abandoned (ADR-011 item 4) | set, `reason: primary_cooling_down`, **when the abandoned route was the family's `primary`**; `null` when it was not (the cooldown displaced the client's own choice, not the family's account) |
+| ADR-011's cooldown refusing the resolved route **before** any attempt | set — the route the skip abandoned (ADR-011 item 4) — and a refusal does not undo it: the field is written whether the walk then serves, fails, or ends with nothing served, so a condition-N refusal whose chain opened on a cooling route carries it, on **both** media (ADR-024; `conf_42_non_primary_abandon_is_failover_only`, CONF-64) | set, `reason: primary_cooling_down`, **when the abandoned route was the family's `primary`**; `null` when it was not (the cooldown displaced the client's own choice, not the family's account) |
 | the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason: primary_exhausted` |
 | the family's account state returning to `primary` | `null` | set, `reason: primary_recovered` |
 
@@ -1194,7 +1194,10 @@ medium produced the refusal):
   transport / wire mismatch / demoted, the resolved route included). This is the shape frozen below:
   `details.stage: "no_available_route"` with `skipped[]`, and `upstream_status` / `error_class` both **`null`**.
   The condition and the behaviour clause above are one condition, which is why this sentence is only ever
-  emitted over a request no upstream was contacted for;
+  emitted over a request no upstream was contacted for. The **record** of such a request carries no displacement
+  beyond the one ADR-011's cooldown may itself have made: a cooling skip in this chain writes
+  `result.failover_from` — the route it abandoned — and still no `failover.triggered` row, while a chain with no
+  cooling candidate leaves both clear (ADR-024; CONF-57 (b), CONF-64);
 - **an attempt was classified and nothing served after it** — the attempt-exhausted condition, the
   `upstream_error` row's first limb. The shape is the one the in-loop exhaustion sites already emit: the
   class-based sentence (`upstream error ({class}) and the fallback chain is exhausted`; the deterministic
@@ -1217,18 +1220,28 @@ The `no_available_route` shape, frozen:
                        "error_class": null}}}
 ```
 
-`skipped[]` lists **every candidate the chain offered**, in the chain's own order, each with exactly one of
+`skipped[]` lists **every candidate the chain offered**, in the chain's own order — the order the walk itself
+iterates: the resolved route, the family's `overflow` where §4.6's policy inserts it, then `fallback` in config
+order (§4.2) — each with exactly one of
 `unknown_provider` / `keyless` / `wire_mismatch` / `demoted` — one entry per candidate, so a second model on a
 provider the walk already refused as keyless is listed with the same reason as the first, and in this shape
 `|skipped[]|` equals the number of candidates the chain offered (nothing was attempted, so "every candidate the
-walk refused without attempting" **is** "every candidate"). A candidate that *was* attempted appears in no
-`skipped[]` — such a request's refusal is the attempt-exhausted shape, and `skipped[]` is a member of this one
-only. The message is frozen verbatim — "unavailable" is its umbrella for the wire reason, and the
-machine-readable truth is `skipped[]`, not the sentence. A candidate skipped on the wire writes **no**
-`failover_from`, no `plan_switch`, no event row and no `errors[]` member: nothing failed and nothing moved, so no
-switch may be narrated (§6) — and the walk never narrates a displacement **onto** a candidate it cannot serve
-either, so `failover_from` and the `failover.triggered` event are written only when the request moves to a
-candidate the walk will actually attempt (§4.2).
+walk refused without attempting" **is** "every candidate"). **The array and its order are a property of the
+chain, not of the medium**: for one chain and one request the two forwarding paths produce the same `skipped[]`
+element for element, so the only difference between their bodies is the streaming path's `"stream": true`
+(ADR-024 — a path that collects its skips in two passes must still place each entry at its chain position, and
+an entry appended when the walk reaches its candidate is in the wrong one). A candidate that *was* attempted
+appears in no `skipped[]` — such a request's refusal is the attempt-exhausted shape, and `skipped[]` is a
+member of this one only. The message is frozen verbatim — "unavailable" is its umbrella for the wire reason,
+and the machine-readable truth is `skipped[]`, not the sentence. A candidate skipped on the wire writes **no**
+`failover_from`, no `plan_switch`, no event row and no `errors[]` member: nothing failed and nothing moved, so
+no switch may be narrated (§6) — and the walk never narrates a displacement **onto** a candidate it cannot
+serve either, so the `failover.triggered` event is written only when the request moves to a candidate the walk
+will actually attempt (§4.2). `failover_from` has exactly two producers, and both name a fact of the request
+rather than a property of its outcome (§6's table): a failed attempt the walk moves on from, and ADR-011's
+pre-attempt cooldown skip — which writes it **whether or not** anything was attempted after it, so a refusal
+whose chain opened on a cooling route carries that route's name while one whose chain offered no cooling route
+carries `null` (ADR-024). A refusal writes no `failover.triggered` row in either case.
 
 ## 9. Reporting surfaces (the operator's read-out)
 
