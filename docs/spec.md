@@ -951,14 +951,37 @@ pre-route rejection, a connect failure, and a request the inbound auth guard ref
 is what keeps such a record out of every rate, every sum and every gate — `router stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
 
-**`state` is written as a constant in v0.1** (known gap G-F): a record has one writer
-(`Accountant::commit`) and it writes `stateful_inbound: false`, `sticky_hit: false`,
-`cache_control_breaks: 0` on every request — no serving path writes any other value. The definitions above
-stay the contract to land: `store` and `previous_response_id` are never read (they are forwarded as the
-client's own bytes, §2), and the sticky-binding read that would give `sticky_hit` its value decides only
-whether a `session.bound` event is written (§4.5). A reader must therefore not take `false` as "the client
-sent no server-side state" or "no binding was found", and the `stateful_unsupported` row of §8 cannot fire.
-ADR-004 item 3 is the ruling this group lands.
+**`state.sticky_hit` is one predicate about the moment a request arrived, and it is not a constant.**
+*Did this session already have a binding row?* — did the `sessions` projection of §4.5 hold, for
+`identity.session`, a row that had not expired at the moment this request arrived and **before this request
+wrote anything of its own** (§4.5's row 4 is where a request writes one). The value is therefore fixed by
+what the request finds in the store, never by the wire it travels: a **new** session's first request is
+`false`, a later request of the same session is `true` while that binding is still live (and `false` again
+once it has lapsed — that expiry is the projection's own), and `session: null` is always `false`. It is
+**one value per request, and the same value on both forwarding media**: the value that decides whether a
+`session.bound` event is written (§4.5) is the value the record carries — read **once**, before any binding
+write, and never recomputed within the request. Both halves of that rule were broken until R21 (on the
+streaming path the read sat *after* its own binding write, so a fresh session's first request reported
+`true`); that finding is R11's `R11-F2`, with its three measurements and its read sites — the two reads
+inside `bind_session` at `stream_forward.rs:499`/`:506` and the record's own read at `:831-834` → `:1519`,
+against the buffered path's single read before its write, `forward.rs:896`. The **shared failure record** is
+the same class, registered structurally by R21-1 (which does not measure it): `record_failure_trace`
+evaluates the predicate at record time — `forward.rs:628`, reached from the buffered path's failure branch
+at `:594` and the streaming one at `stream_forward.rs:228` — which is *after* that same request's binding
+write. DESIGN §12.6 carries the symbol-level landing and §12.8 the case that pins it (`CONF-66`).
+
+**The rest of the group is a constant in v0.1** (known gap G-F): a record has one writer
+(`Accountant::commit`) and it writes `stateful_inbound: false` and `cache_control_breaks: 0` on every
+request — no serving path writes any other value. The definition above stays the contract to land: `store`
+and `previous_response_id` are never read (they are forwarded as the client's own bytes, §2), and the
+sticky-binding read that gives `sticky_hit` its value is the projection read of §4.5, which now answers for
+both the `session.bound` event and the record's field. A reader must therefore not take
+`stateful_inbound: false` as "the client sent no server-side state", and the `stateful_unsupported` row of
+§8 cannot fire. ADR-004 item 3 is the ruling this part of the group lands.
+
+**This restores a definition, it does not change one.** `sticky_hit`'s meaning was stated above from the
+start; R11-F2 measured a serving path departing from it, and R21 aligns the paths to it — so no field is
+added, removed or retyped, no `errors[]` / refusal shape and no price moves (DESIGN §12.8).
 
 **The `transform` group is a mode plus a ledger, and both are needed** (ADR-019). `transform_mode` is
 the word in effect for *this request's outbound body*: `passthrough` on every request that did not ask

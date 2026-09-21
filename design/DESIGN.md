@@ -752,12 +752,28 @@ spec §6 field groups → Rust paths (auditable line by line):
 | result | `status` `upstream_status` `failover_from` `plan_switch` `overhead_ms` `upstream_ms` | `result.*` (`plan_switch` is ADR-014's displacement record: spec §6 defines it, §12.10.8 lands it) |
 | failure details | `errors[]` (`kind` `message` `plugin?` `details?`) | `errors[].*` (the kind vocabulary is shared with the error body of §12.7; the difference between internal details and the client-facing response is explained above) |
 
-- The `state` group is **constant in v0.1** (known gap G-F): `Accountant::commit` — the record's single
-  writer — stores `stateful_inbound: false`, `sticky_hit: false`, `cache_control_breaks: 0` for every
-  request. `store` and `previous_response_id` are never read: they are ordinary client bytes, so at most
-  §12.3.1's two mutations touch them, and the sticky-binding read of §12.10.5 row 4 decides only whether a
-  `session.bound` event is written, never a trace field. The mapping row above stays the contract to land;
-  Q8 below is where it lands.
+- `state.sticky_hit` is **not** a constant, and this bullet is where its rule lands symbol by symbol
+  (spec §6 states it; R11-F2 is the departure R21 corrects). Its meaning is spec §6's own — *the session
+  already had a binding row when the request arrived* — and it is computed by **one read of the `sessions`
+  projection, taken before any binding write, reused by both sinks**: the argument `Accountant::bind_session`
+  receives (which its `sticky_hit && !route_changed` early return at `accounting.rs:193-195` consults, to
+  decide whether a `session.bound` event is written) *is* the value `Accountant::commit` stores into
+  `state.sticky_hit` (`accounting.rs:520`) — never a second read. The buffered path's **success** path does
+  exactly this: one read (`forward.rs:896`) whose value feeds both `AccountCtx.sticky_hit` (`:917`) and
+  `bind_session`'s third argument (`:924`). The streaming path must do the same; before R21 it read the
+  predicate twice inside its own `bind_session` call (`stream_forward.rs:499`, `:506`) **and again per
+  candidate after that write** (`:831-834`), so the record's field (`:1519`) was `true` on a fresh session's
+  first request. A **third** read site is the shared failure record: `record_failure_trace` evaluates the
+  predicate at record time (`forward.rs:628`, reached from the buffered path's failure branch at `:594` and
+  the streaming one at `stream_forward.rs:228`), i.e. *after* that same request's row-4 write — the same
+  class, on both media, which the one-read rule above covers and the R21 implementation folds in. Freezing
+  spec §6's existing definition is a defect correction, not a semantic change; `CONF-66` (§12.8) is the case
+  that pins the value on both media.
+- The **rest** of the group is constant in v0.1 (known gap G-F): `Accountant::commit` — the record's single
+  writer — stores `stateful_inbound: false` and `cache_control_breaks: 0` for every request. `store` and
+  `previous_response_id` are never read: they are ordinary client bytes, so at most §12.3.1's two mutations
+  touch them. The mapping row above stays the contract to land; Q8 below is where the `stateful_inbound`
+  half lands.
 - On disk: `<config trace.dir>/YYYY-MM-DDTHH.jsonl` (spec §4.1; `trace.dir` defaults to
   `./state/traces`), **append-only, rolled hourly** (DESIGN §8); a write failure does not block the
   request and records `errors[].kind = trace_write_failed`.
@@ -795,8 +811,8 @@ spec §6 field groups → Rust paths (auditable line by line):
 - Derived metrics (`router stats`, spec §6 "metric definitions") — all computable in a single pass over
   the trace, with no extra state needed:
   `cache_hit_rate = Σusage.input_cached / Σusage.input_total`;
-  `stateful_inbound_rate` (**always 0 in v0.1**: the group is constant, so no request counts as
-  stateful — gap G-F), `prefix_continuity_p50` (group by session, take adjacent requests),
+  `stateful_inbound_rate` (**always 0 in v0.1**: the group's `stateful_inbound` member is constant, so no
+  request counts as stateful — gap G-F), `prefix_continuity_p50` (group by session, take adjacent requests),
   `verified_savings_tokens` (**accumulates only `verdict=Verified`**), the p99 of
   `overhead_ms_p99 = result.overhead_ms`.
 - Reporting discipline: any statement of "how much was saved" must carry the convention
@@ -1144,6 +1160,42 @@ cooling candidate, where the two media already agree. Nothing in this allocation
 the corpus or an **existing** assertion (AGENTS 9 / ADR-012): it adds two rows, two files and the §12.8/§12.10.9
 sentences ADR-024 records.
 
+**Allocation of `CONF-66` (R21, R11-F2's documentation half) — recorded 2026-09-22 by the freezing card, the
+R19-1/R20 precedent.** The occupancy check was an `ls` of the real directory (`tests/conformance/tests/`, 68
+files: ids `01–47, 53–65, 71–78`) cross-read with the paragraphs above: `48–51` stay reserved and `66–70`
+were unallocated — so the round takes **`CONF-66`**, the case that pins `state.sticky_hit` on both media: a
+fresh session's first request records **`false`** on the buffered *and* the streaming path, the same
+session's later request (its binding still live) records **`true`** on both, `session: null` records
+`false`, and over one session's history the two media agree element for element (§12.6's sticky-hit bullet,
+spec §6). The streaming half is the one that is red at HEAD (its read sits after its own binding write), and
+`conf_35`'s two existing assertions are the **buffered** flip witness — they are not touched: CONF-66 *adds*
+the media comparison they do not make. **R21's read sites are three and the freeze covers all three**: the
+buffered success path's single pre-write read (`forward.rs:896`), the streaming path's reads
+(`stream_forward.rs:499`/`:506` → `:831-834` → `:1519`), and the shared failure record's read at record time
+(`forward.rs:628`, reached from both media) — the third being the site the same one-read rule also fixes.
+`CONF-66`'s assertions name the **served** rows, so a witness for a failure row, if the round writes one, is
+a case of its own: a new allocation, never a re-use of this ID. The file lands with the implementation it
+witnesses, in
+`tests/conformance/tests/conf_66_*.rs`, parked
+`#[ignore = "CONF-66: depends on the streaming path's pre-flight sticky read"]` if written ahead of it — the
+CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. Until that file lands, **this paragraph is
+the allocation record**. The ID is spent: not renumbered, not reused. **Occupancy now**: `01–47, 53–66,
+71–78` spent; `67–70` unallocated, and the next free ID is **`CONF-67`**.
+
+**No ADR, and the reason written down so nobody looks for one** (this card's ruling, item 5). The definition
+frozen here is **spec §6's own**, stated there before R11 measured the departure: this round aligns the two
+forwarding paths and the two documents to it, so it is a **defect correction, not a semantic change**. Every
+freeze that needed an ADR (ADR-022/023/024) introduced a *rule the spec did not already carry*; this one
+carries none — hence no `ADR-025`. **Boundaries that do not move**: no trace member is added, removed or
+retyped (`TRACE_SCHEMA_VERSION` stays **2**, and the member stays a `bool`), §8's error bodies and the
+refusal shapes do not move, no price moves, and `book/` is outside this round's write set. `ADR-022:185`'s
+and `ADR-023:224`'s "still open" lines are append-only and stay exactly as written; the closure lives in the
+round's record, not in a rewrite of them. One user-facing line stays stale and outside this write set too:
+`book/observability-and-accounting.md:44-49` still reads the state group as a constant of
+`false`/`false`/`0` "because … the sticky-binding read does not reach the record" — the clause and its
+illustration above it (`:84`'s `"sticky_hit":true`) must agree after R21, so the next card that opens
+`book/` narrows it (it can ride with the clause ADR-023 still owes `book/connecting-clients.md`).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1177,7 +1229,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q5 | the block granularity of `prefix_blocks[]` is undefined | a structural unit (message / tool definition / input item) | cache-metric comparability |
 | Q6 | the time zone and "holiday" semantics of the peak windows (`peak.windows`) | windows carry an explicit `tz`; holidays are not modeled | cost accuracy (D9) |
 | Q7 | which tier breakeven's `p_stay` uses (hit price vs miss price) | `p_stay = input_hit`; `switch_cost` uses `p_new_miss` | failover/spill decisions (D5) |
-| Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 — **not landed in v0.1**: `state` is a constant group, so no request is ever judged stateful and the 400 cannot fire (gap G-F; §12.6's state note) |
+| Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 — **not landed in v0.1**: `stateful_inbound` is a constant `false`, so no request is ever judged stateful and the 400 cannot fire (gap G-F; §12.6's state note) |
 | Q9 | the behavior when `context` is exceeded (400, or hand it to the upstream) | hand it to the upstream (do not judge on the upstream's behalf) | guard behavior |
 | Q10 | the error-body schema and `errors[]` are not listed in spec §6 | pinned down by §12.6/§12.7, recommended to be written back into the spec | autowork parsing the trace |
 | Q11 | the plugin `inject` is not in spec §4's schema (DESIGN §4 requires it) | already landed in `config.example.yaml` and marked GAP | out-of-order loading safety |
@@ -2043,7 +2095,8 @@ The rig that measures ADR-024's two shapes at their HEAD (`autowork/harness/r20-
 the frozen shape and fails at `47ac23c` on exactly the three streaming-side checks.
 
 **What this section does not do.** No mapper and no translation cell is unblocked; no `error.type` is added
-(`details` is free-form per code, so §8's table does not move); `state.sticky_hit` (R11-F2) is untouched;
+(`details` is free-form per code, so §8's table does not move); `state.sticky_hit` is untouched **by this
+section** — R11-F2's definition is restored in spec §6 / §12.6 and its case allocated as `CONF-66` in §12.8;
 `TRACE_SCHEMA_VERSION` does not move (no field is added or removed; only *values* on already-`502` classes move,
 plus the omission of a `failover.triggered` row and a `failover_from` value for a displacement that has no
 destination — and, since ADR-024, the presence of that value on a refusal whose chain opened on a cooling
