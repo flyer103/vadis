@@ -1038,10 +1038,9 @@ impl Forwarder {
 
         // Every candidate was skipped or exhausted. If nothing was
         // attempted, this is the frozen `no_available_route` refusal
-        // (ADR-022 / spec §8): one shape with the buffered walk end,
-        // differing only by the pre-existing `"stream": true`. When an
-        // attempt was made and failed, the existing exhaustion shape
-        // (with its evidence) is kept — the walk *did* reach upstreams.
+        // (ADR-022 / spec §8; ADR-023 condition N): one shape with the
+        // buffered walk end, differing only by the pre-existing
+        // `"stream": true`.
         if attempted.is_empty() {
             return StreamOutcome::Failure(ForwardFailure {
                 status: 502,
@@ -1058,12 +1057,34 @@ impl Forwarder {
                 })),
             });
         }
+        // The loop-end fall-through (ADR-023 Decision 4): a walk that got
+        // here attempted something and served nothing, so the body is
+        // condition E's — the class-based sentence with the last
+        // attempt's evidence, and **neither** `stage` nor `skipped[]` (the
+        // members that would claim no upstream was contacted). This arm
+        // is a safety net: with every attempt outcome returning in-loop,
+        // no probe has ever reached it, and no case claims a witness for
+        // it — but no path may emit condition N's frozen sentence over a
+        // request an upstream was contacted for, even if it is reached.
+        let deterministic = matches!(
+            last_class,
+            Some(router_core::error_class::ErrorClass::FormatError)
+                | Some(router_core::error_class::ErrorClass::ContentPolicyBlocked)
+        );
         StreamOutcome::Failure(ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,
-            message:
-                "no available route: every candidate provider is demoted, keyless or unavailable"
-                    .into(),
+            message: match last_class {
+                Some(class) if deterministic => format!(
+                    "upstream rejected the request deterministically ({}); it is not retried",
+                    class.as_str()
+                ),
+                Some(class) => format!(
+                    "upstream error ({}) and the fallback chain is exhausted",
+                    class.as_str()
+                ),
+                None => "upstream error and the fallback chain is exhausted".to_string(),
+            },
             details: Some(json!({
                 "upstream_status": last_upstream_status,
                 "error_class": last_class.map(|c| c.as_str()),

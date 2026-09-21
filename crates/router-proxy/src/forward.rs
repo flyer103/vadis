@@ -1002,9 +1002,15 @@ impl Forwarder {
             let Some(transport) = self.transports.get(&candidate.provider) else {
                 // No transport at startup (missing api key): the provider
                 // is unavailable (§12.10.2), reported by /health; the
-                // chain continues.
+                // chain continues. ADR-023 Decision 3: the provider-level
+                // exclusion must not swallow the provider's other models —
+                // a keyless provider is narrated per candidate, so its
+                // second model below gets its own `keyless` entry instead
+                // of vanishing at the loop's first test. Only an
+                // **attempted** provider is excluded whole (ADR-011 item
+                // 4's in-request form), and an attempt always leaves this
+                // loop by return.
                 skipped.push((candidate.clone(), SKIP_KEYLESS));
-                attempted_providers.push(candidate.provider.clone());
                 continue;
             };
             attempted_providers.push(candidate.provider.clone());
@@ -1340,7 +1346,7 @@ impl Forwarder {
                         }
                     }
                     if let Some(next) =
-                        self.next_candidate(&candidates, &attempted_providers, cls.class)
+                        self.next_candidate(&candidates, &attempted_providers, cls.class, proto_in)
                     {
                         {
                             let (reprefill, switch_cost) =
@@ -1389,7 +1395,7 @@ impl Forwarder {
                     let _classified_id =
                         self.record_classification(request_id, attempt_index, None, &cls);
                     if let Some(next) =
-                        self.next_candidate(&candidates, &attempted_providers, cls.class)
+                        self.next_candidate(&candidates, &attempted_providers, cls.class, proto_in)
                     {
                         {
                             let (reprefill, switch_cost) =
@@ -1450,9 +1456,15 @@ impl Forwarder {
 
         // Every candidate was skipped (demoted providers, missing keys,
         // wire mismatches): the frozen `no_available_route` refusal
-        // (ADR-022 / spec §8) — the same body both media return, so a
-        // client cannot tell which path produced it. `skipped[]` is the
-        // machine-readable truth; the sentence is frozen verbatim.
+        // (ADR-022 / spec §8; ADR-023 condition N) — the same body both
+        // media return, so a client cannot tell which path produced it.
+        // `skipped[]` is the machine-readable truth; the sentence is
+        // frozen verbatim. By ADR-023 Decision 2 the narration predicate
+        // is the eligibility predicate, so an attempt-bearing ending
+        // cannot reach this point: every attempt outcome returns in-loop
+        // (it serves, or its `next_candidate` is `None` and the
+        // attempt-exhausted body is emitted there). The evidence members
+        // are therefore `null` by construction — nothing was contacted.
         ForwardOutcome::Failure(ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,
@@ -1700,16 +1712,26 @@ impl Forwarder {
         candidates: &[RouteSpec],
         attempted_providers: &[String],
         class: ErrorClass,
+        proto_in: WireApi,
     ) -> Option<RouteSpec> {
         if !class.fails_over() {
             return None;
         }
+        // ADR-023 Decision 2: the narration predicate *is* the eligibility
+        // predicate — the same conditions the walk's own loop applies, so a
+        // destination is named only if the walk will actually attempt it.
+        // The loop's order is kept (provider entry, wire, key/transport,
+        // not-attempted, not-in-cooldown) so both statements of one rule
+        // cannot drift again.
         candidates
             .iter()
             .find(|c| {
                 !attempted_providers.contains(&c.provider)
-                    && !self.provider_in_cooldown(&c.provider)
-                    && self.transports.contains_key(&c.provider)
+                && !self.provider_in_cooldown(&c.provider)
+                // The provider check doubles as existence: no entry, no
+                // wire to compare, no candidate.
+                && self.provider(c).is_some_and(|p| p.wire_api == proto_in)
+                && self.transports.contains_key(&c.provider)
             })
             .cloned()
     }
