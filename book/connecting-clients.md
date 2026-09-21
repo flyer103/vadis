@@ -80,6 +80,13 @@ chat-native route from your roster if your codex build cannot speak `responses`.
 `--skip-git-repo-check` and `< /dev/null` flags and the `NO_PROXY` export are explained line
 by line in the README quick start.
 
+The **failover chain never crosses protocols either**: a `fallback` entry — or a plan family's `overflow`
+route — whose `wire_api` is not your inbound protocol is skipped exactly as an entry the router holds no key
+for is skipped, so your request can never be answered on a wire you did not ask for. When nothing in the
+chain can serve your protocol you get `502 upstream_error` with `details.stage: "no_available_route"` and a
+`details.skipped[]` list naming every candidate it refused and why; the refusal's frozen shape is
+[`docs/spec.md` §8](../docs/spec.md).
+
 **hermes** speaks the same native `responses` wire as codex through its codex transport.
 The setup below was smoke-verified end to end (two turns in one session, the second a tool
 call, real upstream); the commands and outputs are quoted from that run.

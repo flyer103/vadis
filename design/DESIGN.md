@@ -911,6 +911,7 @@ not written).
 | CONF-76 | ADR-016 §13.3 L1c·the cooldown read's clock semantics | the route-availability read uses **one clock word per evaluation, exclusive boundary, µs granularity**, witnessed live: a seeded cooldown row expiring at `now + 700ms` (sub-second — a truncated-seconds word would disagree for most of the second) makes the live `/health` report `primary_cooling_down` before the boundary and admit after it; the control (no row) admits immediately. The caller supplies the instant (`plan_guard` its request-clock word, the section its one read); no reader owns a private clock | `router-proxy/src/availability.rs::provider_in_cooldown` |
 | CONF-77 | ADR-016 §13.3 L1c·the streaming twin | the SSE relay's pre-relay walk consumes the **same** route-availability read as the buffered walk and the probe gate (its private `in_cooldown` copy is deleted): after a real spill whose 403 demotes `p-plan` for 1s, a **streaming** boundary request is served by the overflow account with the plan mock never reached; once the demotion passes, the same streaming shape probes the primary and recovers the family — same request, same answer, whichever medium carries it | `availability::provider_in_cooldown` via `stream_forward.rs`'s `in_cooldown` |
 | CONF-78 | ADR-016 §13.3 L1d·the adjudication matrix | the window verdict pinned **per adjudication input**, live on `serve` with pre-seeded projections (time-independent, no sleep): the read is **plan-scoped** (two declared plans covering the family — exhausting the 100-token plan defers while the 1000-token plan is untouched, and charging 100 into the roomy plan admits), the comparison is `>=` at the boundary (`used == tokens` defers, `used == tokens - 1` admits), and the read is **window-scoped** (the same exhaustion charged in the previous window leaves the current window at 0 and admits) — each arm's live section equals the test's own derivation from the rows it seeded | `availability::probe_deferred_by_window`'s steps (plan lookup, `window_start_for`, `next_reset`, `Query::QuotaUsed`, `used >= tokens`) |
+| CONF-57 | spec §2 / §4.2 / §8 + ADR-022·a candidate may only be served on its own wire | **the wire gate on both paths, red first**: with the shipped roster's shape — a **chat** request whose resolved route is keyless, a `fallback` chain whose **first** entry is responses-wire and whose **second** is chat-native — (a) the foreign mock's request log stays **empty** (no byte of the client's chat body crosses the matrix) while the chat-native candidate serves the request with `protocol.protocol_out == chat`, `translated == false` and upstream bytes equal to the client's modulo mutations (a)/(b); (b) with **no** chat-native candidate anywhere in the chain, the client gets the frozen exhausted shape on **both** media — `502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `details.skipped[]` holding exactly the candidates the walk refused **without attempting**, in chain order, each with its own reason (`keyless` / `wire_mismatch` / `unknown_provider` / `demoted`), the streaming arm differing by nothing but its pre-existing `"stream": true` — with **no** `upstream.submitted` row, `usage_missing: true`, nothing charged and `failover_from: null`; (c) a chain whose every entry is native and keyed serves normally (the control that keeps (a)/(b) from passing vacuously) | the candidate walk's wire predicate on both paths + the exhausted-walk refusal shape (§12.10.9; ADR-022) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1083,11 +1084,24 @@ records why they were left), so a round that wants a number greps this paragraph
 **`CONF-57`**, or takes 48–51 only by recording the new obligation with the number, per
 this section's rule.
 
+**Allocation of `CONF-57` (R17, ADR-022 — a candidate may only be served on its own wire) — recorded
+2026-09-22 by the round's freeze card, the R9/R10 precedent.** The occupancy check was an `ls` of the real
+directory (`tests/conformance/tests/`, 63 files, ids `01–47, 52–56, 60–63, 71–78`) cross-read with the
+paragraph above: `48–51` still reserved, `57–59` and `64–70` unallocated — so the round **takes the number this
+section already names**, `CONF-57`, and its row above is the allocation record. The file lands with the
+implementation it witnesses, `tests/conformance/tests/conf_57_wire_compatible_candidates_only.rs`, parked
+`#[ignore = "CONF-57: depends on the candidate walk's wire gate"]` if it is written ahead of it — the CONF-27 /
+CONF-41/42 / CONF-45 parking rule, unchanged. The ID is spent: not renumbered, not reused. **Occupancy now**:
+`01–47, 52–56, **57**, 60–63, 71–78` spent; `58–59, 64–70` unallocated, and the next free ID is **`CONF-58`**.
+Nothing in this allocation touches a gate definition, the corpus or an **existing** assertion (AGENTS 9 /
+ADR-012): it adds one row, one file and one section (§12.10.9).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
 
-**Failover-chain note — the failover chain walks routes, but never re-attempts a provider (spec §4.2).** The
+**Failover-chain note — the failover chain walks routes, but never re-attempts a provider (spec §4.2), and
+never crosses the 3×3 matrix (§12.10.9, ADR-022).** The
 chain walks "the next route **not yet attempted**" in list order, skipping routes of a provider
 already attempted in this request (the in-request form of ADR-011 item 4's provider-level demotion:
 a second attempt on a dead provider is the failure mode it designs out). Routes already attempted
@@ -1869,6 +1883,60 @@ and the buffered and streaming paths are expected to carry it (writes: `forward.
 ADR-011), the byte boundary (§12.3.1, §12.10.7), the sticky binding's TTL and the meaning of `state.sticky_hit`
 (a binding *was* found; the account move is `plan_switch`'s job, so the two fields do not fight), and the SSE
 relay (§12.10.3): a displaced request is still one request, with one byte-final body per attempt.
+
+### 12.10.9 The candidate walk's wire gate and the exhausted-walk refusal (ADR-022; spec §2, §4.2, §8)
+
+**The predicate.** A candidate route is eligible for a request's walk iff all three hold: the roster carries its
+provider entry; this process holds a key/transport for that provider; and `provider.wire_api == proto_in`. The
+third condition is exactly the streaming chain's existing test (`stream_forward.rs:530`) applied to the buffered
+walk (`forward.rs:961-988`, which today skips only for already-attempted `:962`, cooldown `:965`, unknown
+provider `:979-981` and no transport `:982-988`). Config validation already requires `wire_api ∈ supports`
+(`router-core/src/config.rs:1551`), so the wire test subsumes "declared in `supports`": **one condition, not
+two**, and the two paths answer "which candidates may serve" identically.
+
+**Eligibility is a skip, and it is the keyless class.** No intent row, no `error.classified`, no
+`failover.triggered`, no **`failover_from`**, no `plan_switch`, no `errors[]` member: nothing failed and nothing
+moved, so nothing is narrated (ADR-010's vocabulary has no row for a fact that never happened). `failover_from`
+stays reserved for the cooldown skip (CONF-42) and for a failed attempt (ADR-011 item 4). The client learns
+nothing from the skip until the walk ends.
+
+**Where it lands.** Buffered: inside the candidate loop, before the transport lookup — a candidate whose wire
+differs is classified and `continue`d. Streaming: the chain's construction (`stream_forward.rs:517-551`)
+already filters on the wire; it grows the same classification, so the refusal can report reasons instead of a
+bare filter.
+
+**The refusal, frozen (spec §8).** Three sites build one body: the buffered walk end (`forward.rs:1430-1441`),
+the streaming chain's empty case (`stream_forward.rs:553-561` — the one place a different sentence exists today,
+*"no available route: the primary provider is keyless or unavailable"*, which the frozen sentence replaces) and
+the streaming walk end (`stream_forward.rs:1001-1013`). Status `502`, `error.type` `upstream_error`, the frozen
+message verbatim, and `details = {stage: "no_available_route", skipped[], upstream_status, error_class}` — plus
+the streaming path's pre-existing `"stream": true` and nothing else. `skipped[]` carries one entry per candidate
+the walk refused **without attempting** it, in chain order, with a reason from
+`{unknown_provider, keyless, wire_mismatch, demoted}`; a candidate that *was* attempted and failed does not
+appear there — its evidence is `upstream_status` / `error_class`. The message is frozen verbatim and is not the
+machine-readable part: "unavailable" is its umbrella for the wire reason, and `skipped[]` is the truth.
+
+**Trace truth (spec §6).** A skip leaves the served record untouched (`protocol.out == protocol.in`,
+`translated: false`, `failover_from` clear). The exhausted walk leaves a terminal failure record: `502`,
+`usage_missing: true`, nothing charged, `errors[0].kind == "upstream_error"` (the `kind_for_code` mapping of
+every 5xx-class code — `crates/router-core/src/trace.rs:310-312`) carrying the same `details` object the client
+received. `protocol.out` may never name a wire other than the inbound protocol, and **`translated`'s producer
+becomes the mapper event**: v0.1 has no mapper, so it is `false` on every record this build writes, and the
+comparison form at `accounting.rs:501` is removed — it is what produced R11-F1's fabricated `translated: true`
+over an untranslated body.
+
+**The resolved route is untouched.** `forward.rs:774-789` / `:790-799` and their streaming twins
+(`stream_forward.rs:352-365`, `:368-379`) keep answering `400 capability_unsupported` / `501 not_implemented`
+for the cell **the client named**. The walk's gate is not a substitute for that answer and does not fire for it:
+a request whose resolved route is 501 is refused, not quietly served by a fallback (ADR-022's rejected
+alternative B).
+
+**Witness.** `CONF-57` (§12.8) — red first on the unfixed walk, then green.
+
+**What this section does not do.** No mapper and no translation cell is unblocked; no `error.type` is added
+(`details` is free-form per code, so §8's table does not move); `state.sticky_hit` (R11-F2) is untouched;
+`TRACE_SCHEMA_VERSION` does not move (no field is added or removed, and the only value that changes is one on
+the already-`502` walk-exhausted class).
 
 ### 12.11 Inbound token auth (the landing of spec §4.7)
 

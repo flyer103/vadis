@@ -37,6 +37,15 @@ passthrough** (byte-faithful); different → **deterministic translation** (the 
 the same upstream bytes, keeping the prefix cache stable). Every provider must declare its supported
 capabilities in config; every translation cell must explicitly mark its lossy points.
 
+**Only the native diagonal is served in v0.1, and the failover walk never crosses it.** Two different questions
+share this rule and must not be merged: for the route the **client named**, a cell that needs translation is
+answered (`501 not_implemented`, §8 — the client asked for that cell and is told what is missing); for a
+**candidate the client did not name** — the plan family's `overflow` route or an entry of the `fallback` list
+(§4.2) — an entry whose `wire_api` is not the inbound protocol is **skipped**, exactly as an entry this process
+holds no key for is skipped, and the walk continues. A candidate can therefore only ever be served on a wire
+equal to the inbound protocol, which is why a served request's `protocol_out` equals `protocol_in` (§6); when no
+candidate at all may serve, the request is refused in the one shape §8 freezes.
+
 **The outbound `model` is the provider-native model id.** Routing is resolved **before** anything leaves
 the process: the client's `model` string is a **route name** (`provider/model` or an alias, §3), never a
 name the upstream is expected to understand. The outbound request therefore carries the roster entry's
@@ -345,6 +354,15 @@ cost (§6 "result"). Chain exhausted → `502 upstream_error` (upstream attempt 
 `504 upstream_timeout`). List entries must be routes that exist in the roster (aliases do not take part
 in fallback). For a request covered by `plan_policy` (§4.6), the family's `overflow` route is tried **before**
 this list's own entries: the family's designated spill target does not have to be repeated here.
+
+**A candidate can serve only on its own wire.** Eligibility is one rule for both forwarding paths, and it
+includes the protocol: a candidate is attempted only if its provider entry exists in the roster, this process
+holds a key and a transport for it, and its `wire_api` equals the **inbound** protocol (validation already
+requires `wire_api ∈ supports`, §4, so the wire condition is the whole of it). A candidate that fails the wire
+condition is skipped in the same class as a keyless one — not attempted, no `failover_from`, no switch cost, no
+trace event — and the chain continues; a skip is **not** a refusal of the request, and it is not the `501` of a
+route the client named (§2). When no candidate at all may serve, the client gets the `502 upstream_error`
+refusal §8 freezes (`details.stage: "no_available_route"`), and the trace records the terminal failure.
 
 ### 4.3 `inject` (plugin dependency declaration)
 
@@ -901,6 +919,16 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard) |
 
+**`protocol` records what left the process outbound, and `translated` records an event — never a comparison.**
+`protocol_out` names the wire the request's bytes actually went out on. Because only a candidate whose
+`wire_api` equals the inbound protocol may be attempted (§2, §4.2), it equals `protocol_in` on every record of
+an attempt and **may never name another protocol**; it is `null` only in the classes where no route was
+selected (the pre-route rows below, the resolved route's `400`/`501`). `translated` is true only when the
+attempt that carried the request re-encoded the body through a mapper; v0.1 ships no mapper, so it is **`false`
+on every record this build writes** and a record of this vintage may not be read as "a translation happened"
+(the R11-F1 record — `protocol_out` a foreign wire with `translated: true` over an untranslated body — is the
+defect this sentence retires). `lossy[]` stays `[]` for the same reason.
+
 **A record's money is in one currency, and the record says which** (§4.8). One request is priced by one
 route's price table, so the whole `cost` group is denominated in that entry's `currency`, and `cost.currency`
 states it — a trace field that said only `184000 nano` would be ambiguous the moment a CNY route exists, and
@@ -1112,9 +1140,9 @@ rely on each upstream's own error shape):
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
-| `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) |
+| `upstream_error` | 502 | upstream error and the fallback chain is exhausted (`details.upstream_status`) — **or** nothing in the chain may serve this request at all: every candidate demoted, keyless or **not native for the inbound protocol** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing) |
+| `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing). It answers the cell the **client named**; it is not the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` below) |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
@@ -1130,6 +1158,10 @@ Behavior clauses:
   `errors[].kind = transform_error`, and the request is forwarded as usual.
 - upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
   cache, so `failover_from` and the resulting re-prefill cost must be recorded).
+- **no candidate may serve this request at all** (every entry of the chain demoted, keyless or not native for
+  the inbound protocol, §4.2) → the same `502 upstream_error`, taken **before any upstream is contacted**: the
+  record is a terminal failure (`usage_missing`, nothing charged) and the client gets the shape frozen at the
+  end of these clauses.
 - prefix discontinuity (detected by cache-guard) → handled per `strict_prefix`: default is warn +
   continue; strict mode rejects that transform.
 - trace write failure → **does not affect the request**, records `errors[].kind = trace_write_failed`
@@ -1139,6 +1171,29 @@ Behavior clauses:
   left to the operator against the provider's bill (§4.5; ADR-010 is normative).
 - unknown fields: **must be passed through verbatim** (friendly to protocol evolution), and must not be
   silently dropped.
+
+**The `no_available_route` shape, frozen** — one shape for both forwarding paths (the streaming path adds only
+its pre-existing `"stream": true` member to `details`; nothing else differs, so a client cannot tell which
+medium produced the refusal):
+
+```json
+{"error": {"type": "upstream_error",
+           "message": "no available route: every candidate provider is demoted, keyless or unavailable",
+           "request_id": "req-9",
+           "details": {"stage": "no_available_route",
+                       "skipped": [{"route": "zai-plan/glm-5.3", "reason": "keyless"},
+                                   {"route": "deepseek/deepseek-v4-pro", "reason": "wire_mismatch"}],
+                       "upstream_status": null,
+                       "error_class": null}}}
+```
+
+`skipped[]` lists every candidate the walk refused **without attempting** it, in the chain's own order, each
+with exactly one of `unknown_provider` / `keyless` / `wire_mismatch` / `demoted`; `upstream_status` and
+`error_class` carry the last attempt's evidence when there was an attempt and are `null` when there was none.
+The message is frozen verbatim — "unavailable" is its umbrella for the wire reason, and the machine-readable
+truth is `skipped[]`, not the sentence. A candidate skipped on the wire writes **no** `failover_from`, no
+`plan_switch`, no event row and no `errors[]` member: nothing failed and nothing moved, so no switch may be
+narrated (§6).
 
 ## 9. Reporting surfaces (the operator's read-out)
 
