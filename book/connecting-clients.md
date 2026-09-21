@@ -73,8 +73,76 @@ chat-native route from your roster if your codex build cannot speak `responses`.
 `--skip-git-repo-check` and `< /dev/null` flags and the `NO_PROXY` export are explained line
 by line in the README quick start.
 
-**hermes / claude code** are the same shape: override the base URL, keep the token in the
-environment.
+**hermes** speaks the same native `responses` wire as codex through its codex transport.
+The setup below was smoke-verified end to end (two turns in one session, the second a tool
+call, real upstream); the commands and outputs are quoted from that run.
+
+1. Keep hermes in an isolated `HERMES_HOME` so it never touches your default profile. The
+   smoke used `/tmp/r11-smoke/hermes-home`; any directory you own works the same way. Write
+   that home's `config.yaml`:
+
+```yaml
+model: {default: coding-fast, provider: router, base_url: http://127.0.0.1:8790/v1, api_mode: codex_responses}
+custom_providers:
+  - {name: router, provider: router, base_url: http://127.0.0.1:8790/v1, model: coding-fast,
+     api_mode: codex_responses, api_key_env: ROUTER_TOKEN, key_env: ROUTER_TOKEN}
+```
+
+2. Put the router token in that home's `.env` **twice**, same value both times:
+   `ROUTER_TOKEN=<token>` (what the two `*_env` keys above name) and `ROUTER_API_KEY=<token>`
+   (the credential name hermes actually resolves — see the pitfall below).
+
+3. Smoke it — one turn, then its continuation in the same session:
+
+```bash
+export NO_PROXY=127.0.0.1,localhost
+HERMES_HOME=/tmp/r11-smoke/hermes-home hermes -z "Reply with the single word: pong"
+# rc=0, stdout: pong
+
+HERMES_HOME=/tmp/r11-smoke/hermes-home hermes --continue -z \
+  "Now use the terminal tool to run the shell command: echo r11-hermes-tool . Then reply with exactly its stdout."
+# rc=0, stdout: r11-hermes-tool
+```
+
+Two pitfalls are load-bearing (both were hit for real during the smoke):
+
+- **`api_mode: codex_responses` must be written explicitly.** That is what makes hermes post
+  `POST /v1/responses` — the same native path codex uses. For a loopback `base_url` hermes's
+  URL detection returns nothing and the entry resolves to `chat_completions`, i.e. the wrong
+  wire against a responses-native route.
+- **`api_key_env` alone is not enough.** hermes resolves a custom provider's credentials as
+  `<PROVIDER>_API_KEY` — here `ROUTER_API_KEY` — and refuses with
+  `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`
+  when it cannot find it. `key_env: ROUTER_TOKEN` in the entry plus `ROUTER_API_KEY` holding
+  the token in `.env` is the combination that reached 200.
+
+What that run left in the trace, so you know the healthy shape of a hermes session:
+
+- The session is hermes's own `prompt_cache_key`, `pck_`-prefixed (the run recorded
+  `pck_495971920e8c2f23d2112597` for turn 1); router invents no key of its own. The key is
+  content-derived, so it holds steady only while the prefix-bearing parts (instructions, tool
+  list) stay stable — the continuation turn was recorded at `turn_index` 2 in that session
+  with `prefix.continuity` 1.0, i.e. the prefix carried over intact.
+- The first `hermes -z` turn is **two** requests, not one: the main conversation plus one
+  small auxiliary call (240 input tokens in the run) in its own `pck_` session. Expect the
+  extra session in the trace; it is not a misroute.
+- The tool-call continuation turn was served almost entirely from the upstream prefix cache:
+  10752 of 10861 input tokens cached (99.0%), `prefix.continuity` 1.0. For comparison, the
+  same shape of turn on codex measured `prefix.continuity` 0.6923 in the same smoke after an
+  interrupted predecessor request — an open observation, not a hermes property. Judge
+  continuity per client and per turn; do not read 1.0 as a constant.
+
+The **chat wire is a different, unwitnessed cell**: switching hermes to
+`api_mode: chat_completions` requires a chat-native route of your own — the example roster's
+`deepseek` (which `coding-fast` points at) is responses-native, and chat against it answers
+`501 not_implemented`. The round's smoke did send hermes down the chat wire against the
+roster's two chat-native routes and witnessed **no 200**: the attempt ended `502` after
+failover (primary `429 rate_limit` → fallback `401 auth`, cost 0) — local upstream
+credentials and quotas, not the gateway. Until you have your own chat-native provider, treat
+hermes-over-chat as untested here.
+
+**claude code** keeps the earlier advice — same shape (override the base URL, keep the token
+in the environment) — and was **not** part of the witnessed matrix above.
 
 **What router does with the token a client sends it.** The token a client sends router is *not*
 the credential router uses upstream. Router ignores the client's `Authorization` / `x-api-key`
