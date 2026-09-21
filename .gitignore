@@ -11,9 +11,12 @@ config.yaml
 autowork/traces/
 autowork/captures/
 autowork/results/
-# R12-F6: corpus bodies live at <corpus-id>/raw/... — ignore every corpus's
-# raw payloads, not just a corpus literally named "raw"
+# R12-F6 / R12-F10: corpus bodies live at <corpus-id>/raw/... (the frozen layout)
+# and, historically, at raw/<capture-id>/... (the R2-era shape). Ignore BOTH — the
+# F6 fix replaced the legacy line instead of adding to it, which left real captures
+# visible to `git add`.
 autowork/corpus/*/raw/
+autowork/corpus/raw/
 autowork/.venv/
 autowork/**/__pycache__/
 autowork/uv.lock.bak
