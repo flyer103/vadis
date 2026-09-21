@@ -665,14 +665,17 @@ providers:
       #   Excluded, with the reason (cross-checks, not oversights):
       #     * GLM-4.7-Flash / GLM-4-Flash-250414 / GLM-4.6V-Flash / GLM-4V-Flash — vendor price "免费" and a
       #       zero tier is refused at load, so a free model cannot be expressed
-      #     * GLM-5.1 / GLM-5-Turbo / GLM-5 / GLM-4.7 / GLM-4.5-Air / GLM-5V-Turbo / GLM-4.6V /
-      #       GLM-4.6V-FlashX — these carry **input-length-tiered** prices on the CN pricing page
-      #       (e.g. GLM-4.7: 2/3/4 元 depending on input size), and the `price:` block here has one tier
-      #       only (input_miss/input_hit/output + a time-based `peak`). Recording one tier of a tiered
-      #       model would mis-cost every request outside it, so they are left out until the schema can say
-      #       it — see spec §4 (a product change, not a config edit)
+      #     * GLM-4.7 / GLM-4.5-Air — still not expressible after §4.10: their CN rows band on input AND
+      #       output jointly (「输入 [0, 32K)，输出 [0, 0.2K)」 vs 「输入 [0, 32K)，输出 ≥0.2K」 differ in
+      #       input price at one input length), and §4.10 rule 7.1 refuses output-length bands — the shape
+      #       the page publishes is not one this schema may record, so neither band set is transcribed
+      #     * GLM-4.6V-FlashX / GLM-4.5V — input-tiered and priced, but absent from the current model
+      #       catalogue (model-overview), the same class as the historical-billing rows
       #     * GLM-4-Plus / GLM-4-Air-250414 / GLM-4-AirX / GLM-4-Assistant / GLM-Z1-* — the CN pricing page
       #       keeps these for historical billing reference; they are not in the current model catalogue
+      #   The input-tiered models the page publishes AND the catalogue lists landed on 2026-09-22 as
+      #   `price.tiers` entries below (GLM-5.1 / GLM-5-Turbo / GLM-5 / GLM-5V-Turbo / GLM-4.6V) — the
+      #   earlier "one tier only" exclusion of the tiered ids is resolved by spec §4.10, not by approximation.
       - id: glm-5.3-flashx
         context: 1m                      # official "上下文 1M"
         price:
@@ -718,6 +721,114 @@ providers:
           output: 0.0001          # official ¥0.1 /1M
           peak: { multiplier: 1.0, windows: [] }
         source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-21"
+      # ---- 2026-09-22 §4.10 pass: the CN page's input-length-banded models, now that `price.tiers`
+      #   can say them. All five are two-band tables banded at 32K input; the page's own band unit is
+      #   stated in its FAQ — 「价格表中长度档位（如[0,32)、[32,+)）单位为千tokens，即32代表32K tokens」
+      #   — so 32K = 32000 tokens, written as the plain integer §4.10 rule 2 requires (no k/m suffix).
+      #   Band prices are ¥ / 1K tokens (= official ¥/1M ÷1000), same convention as every entry above.
+      #   Contexts from the catalogue page: https://docs.bigmodel.cn/cn/guide/start/model-overview @2026-09-22.
+      #   Re-checked against the same exclusion list above: GLM-4.7 / GLM-4.5-Air (joint input+output
+      #   bands, §4.10 rule 7.1 refuses output bands) and GLM-4.6V-FlashX / GLM-4.5V (off-catalogue)
+      #   remain out — a model whose published shape the schema cannot record is not transcribed at all.
+      - id: glm-5.1
+        context: 200k                    # catalogue: 200K context, 128K max output
+        price:
+          peak: { multiplier: 1.0, windows: [] }   # the CN page publishes no peak/off-peak; the one peak
+                                                   #   table sits outside the tiers (§4.10 rule 3)
+          tiers:
+            # section: "GLM-5.1 | 输入长度 [0, 32K)" @2026-09-22
+            - up_to: 32000
+              input_miss: 0.006          # official ¥6 /1M
+              input_hit: 0.0013          # official ¥1.3 /1M
+              cache_write: 0.0           # 缓存存储 限时免费 (limited-time free)
+              output: 0.024              # official ¥24 /1M
+            # section: "GLM-5.1 | 输入长度 ≥32K" @2026-09-22
+            - input_miss: 0.008          # official ¥8 /1M
+              input_hit: 0.002           # official ¥2 /1M
+              cache_write: 0.0
+              output: 0.028              # official ¥28 /1M
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-22"
+        # TODO verify against official source: first read 2026-09-22 — both bands on one page's 文本模型
+        #   table; the cache-hit column differs per band (¥1.3 / ¥2), the storage column is 限时免费 in both.
+      - id: glm-5-turbo
+        context: 200k                    # catalogue: 200K context, 128K max output
+        price:
+          peak: { multiplier: 1.0, windows: [] }
+          tiers:
+            # section: "GLM-5-Turbo | 输入长度 [0, 32K)" @2026-09-22
+            - up_to: 32000
+              input_miss: 0.005          # official ¥5 /1M
+              input_hit: 0.0012          # official ¥1.2 /1M
+              cache_write: 0.0           # 缓存存储 限时免费
+              output: 0.022              # official ¥22 /1M
+            # section: "GLM-5-Turbo | 输入长度 ≥32K" @2026-09-22
+            - input_miss: 0.007          # official ¥7 /1M
+              input_hit: 0.0018          # official ¥1.8 /1M
+              cache_write: 0.0
+              output: 0.026              # official ¥26 /1M
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-22"
+        # TODO verify against official source: first read 2026-09-22 — both bands from the 文本模型 table.
+      - id: glm-5
+        context: 200k                    # catalogue: 200K context, 128K max output
+        price:
+          peak: { multiplier: 1.0, windows: [] }
+          tiers:
+            # section: "GLM-5 | 输入长度 [0, 32K)" @2026-09-22
+            - up_to: 32000
+              input_miss: 0.004          # official ¥4 /1M
+              input_hit: 0.001           # official ¥1 /1M
+              cache_write: 0.0           # 缓存存储 限时免费
+              output: 0.018              # official ¥18 /1M
+            # section: "GLM-5 | 输入长度 ≥32K" @2026-09-22
+            - input_miss: 0.006          # official ¥6 /1M
+              input_hit: 0.0015          # official ¥1.5 /1M
+              cache_write: 0.0
+              output: 0.022              # official ¥22 /1M
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-22"
+        # TODO verify against official source: first read 2026-09-22 — both bands from the 文本模型 table.
+      - id: glm-5v-turbo
+        context: 200k                    # catalogue (视觉理解模型): 200K context, 128K max output
+        price:
+          peak: { multiplier: 1.0, windows: [] }
+          tiers:
+            # section: "GLM-5V-Turbo | 输入长度 [0, 32K)" @2026-09-22
+            - up_to: 32000
+              input_miss: 0.005          # official ¥5 /1M
+              input_hit: 0.0012          # official ¥1.2 /1M
+              cache_write: 0.0           # 缓存存储 限时免费
+              output: 0.022              # official ¥22 /1M
+            # section: "GLM-5V-Turbo | 输入长度 ≥32K" @2026-09-22
+            - input_miss: 0.007          # official ¥7 /1M
+              input_hit: 0.0018          # official ¥1.8 /1M
+              cache_write: 0.0
+              output: 0.026              # official ¥26 /1M
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-22"
+        # vision: multimodal coding base (image/video/file/text in, text out). TODO verify: first read
+        #   2026-09-22 — the 视觉理解 table's own two rows; prices are the same figures as GLM-5-Turbo.
+      - id: glm-4.6v
+        context: 128k                    # catalogue (视觉理解模型): 128K context, 32K max output
+        price:
+          peak: { multiplier: 1.0, windows: [] }
+          tiers:
+            # section: "GLM-4.6V | 输入长度 [0, 32K)" @2026-09-22
+            - up_to: 32000
+              input_miss: 0.001          # official ¥1 /1M
+              input_hit: 0.0002          # official ¥0.2 /1M
+              cache_write: 0.0           # 缓存存储 限时免费
+              output: 0.003              # official ¥3 /1M
+            # section: "GLM-4.6V | 输入长度 [32K, 128K)" @2026-09-22 — the page's top band is bounded
+            #                           #   at 128K (the model's own context ceiling), the only one of the
+            #                           #   five whose upper band is not open; the last tier still omits
+            #                           #   `up_to` (no ceiling) per §4.10 rule 2 — the page's own bound
+            #                           #   is recorded here in prose, not as a third ceiling
+            - input_miss: 0.002          # official ¥2 /1M
+              input_hit: 0.0004          # official ¥0.4 /1M
+              cache_write: 0.0
+              output: 0.006              # official ¥6 /1M
+        source: "https://docs.bigmodel.cn/cn/guide/start/pricing @2026-09-22"
+        # vision: native tool calling, stable front-end code replication. TODO verify: first read
+        #   2026-09-22 — the 更多视觉模型 accordion's two rows; context 128K (32K max output) from the
+        #   catalogue page.
     # no `quota:` on the metered entry: an allowance belongs to the
     # subscription account below (spec §4.6 `account`).
 
