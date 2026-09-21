@@ -33,7 +33,7 @@ set -a && source .env && set +a        # provider keys are read from env only, n
 cargo run --locked -p router-cli -- serve --config config.yaml
 ```
 
-The three numbered steps below are the client side. Every command and output shape quoted here
+Steps 4–6 below are the client side. Every command and output shape quoted here
 was run against this branch's binary with a real provider round-trip.
 
 ### 1. Turn on inbound auth (optional, recommended)
@@ -185,6 +185,54 @@ Why the non-obvious parts are there:
   `501 not_implemented`.
 - `env_key = "ROUTER_TOKEN"` — the token a client sends router is router's own inbound token,
   not a provider credential; provider keys live only in the router process's environment.
+
+### 6. hermes
+
+hermes reaches the same native `/v1/responses` wire through its codex transport, and — unlike
+codex — it needs an isolated `HERMES_HOME` so the setup never touches your default profile.
+
+Write `<HERMES_HOME>/config.yaml` (the smoke used `/tmp/r11-smoke/hermes-home`):
+
+```yaml
+model: {default: coding-fast, provider: router, base_url: http://127.0.0.1:8790/v1, api_mode: codex_responses}
+custom_providers:
+  - {name: router, provider: router, base_url: http://127.0.0.1:8790/v1, model: coding-fast,
+     api_mode: codex_responses, api_key_env: ROUTER_TOKEN, key_env: ROUTER_TOKEN}
+```
+
+Put the router token in `<HERMES_HOME>/.env` **twice** — `ROUTER_TOKEN=<token>` and
+`ROUTER_API_KEY=<token>`, same value both times (why below). Then:
+
+```bash
+export NO_PROXY=127.0.0.1,localhost
+HERMES_HOME=/tmp/r11-smoke/hermes-home hermes -z "Reply with the single word: pong"
+# rc=0   stdout: pong
+
+HERMES_HOME=/tmp/r11-smoke/hermes-home hermes --continue -z \
+  "Now use the terminal tool to run the shell command: echo r11-hermes-tool . Then reply with exactly its stdout."
+# rc=0   stdout: r11-hermes-tool
+```
+
+Expected in the trace: the session key is hermes's own `prompt_cache_key` (`pck_…`-prefixed,
+content-derived); one `hermes -z` turn is two requests (the main conversation plus a small
+auxiliary call in its own `pck_` session — 240 input tokens in the run, not a misroute); the
+tool-call continuation hit the upstream prefix cache at 99.0% with `prefix.continuity` 1.0.
+Chat instead of responses is a different, unwitnessed cell here — see
+[the book](book/connecting-clients.md) before pointing hermes at `/v1/chat/completions`.
+
+Why the non-obvious parts are there:
+
+- `api_mode: codex_responses` (twice) — for a loopback `base_url` hermes's URL detection
+  returns nothing and the entry would resolve to `chat_completions`, i.e. the wrong wire
+  against a responses-native route.
+- `ROUTER_API_KEY` in `.env` — hermes resolves a custom provider's credentials as
+  `<PROVIDER>_API_KEY` and, without it, refuses with
+  `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`;
+  `api_key_env` alone does not reach it. `key_env: ROUTER_TOKEN` plus that variable is the
+  combination that reached 200.
+- `HERMES_HOME` — the isolation boundary: the smoke ran hermes under a scratch home
+  (`/tmp/r11-smoke/hermes-home`) precisely so config, `.env` and sessions live there and your
+  default profile is left alone.
 
 ## CLI
 
