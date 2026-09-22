@@ -327,7 +327,18 @@ pub async fn serve(config_path: &str) -> i32 {
         // fact: this field never decides anything on the passthrough
         // path (I3).
         transform_engine,
-        session_ttl_us: (rc.router.session.ttl.0 as i64).saturating_mul(1_000_000),
+        // The session TTL's one ms → µs conversion (spec §4.5, note R6):
+        // `session.ttl` is a `DurationVal` in **milliseconds**, every
+        // consumer of `session_ttl_us` reads **microseconds** — so the
+        // factor is × 1 000, applied once here at the resolution site,
+        // never in a consumer (R21-F6: the shipped v0.1 multiplied by
+        // 1 000 000, honouring a configured 12h as ~12 000 h). The
+        // saturation shape is the in-tree owner's
+        // (`PlanPolicyCfg::cooldown_us`): `try_from` + saturating, not a
+        // plain `as` cast, which would wrap u64 → i64 negative.
+        session_ttl_us: i64::try_from(rc.router.session.ttl.0)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1_000),
     });
 
     /// One POST through the forwarding engine: body bytes in, the engine's
