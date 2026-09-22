@@ -1916,12 +1916,41 @@ impl Forwarder {
             model: &old_model,
         }) {
             for b in bound {
+                // Row 4's own move arm (DESIGN §12.10.5 note R7, the
+                // R28-1 freeze): the re-point IS a binding write — one
+                // `session.bound` row per re-pointed session, the same
+                // payload shape `Accountant::bind_session` writes, and
+                // the `sessions` projection rides on THAT row
+                // (`last_event` = the move row's id, never the
+                // `plan.switched` id), so an event-derived rebuild
+                // reproduces the incremental projection element for
+                // element (ADR-010). A failed append writes no
+                // projection either (the strict pairing): the session
+                // stays on the abandoned route until its next request
+                // self-heals via `route_changed` — the account state
+                // itself is already durable in the `plan.switched` row
+                // above, and the request is unaffected (ADR-009 item 8).
+                let Ok(move_ev) = store.append(NewEvent {
+                    kind: EventKind::SessionBound,
+                    request_id: Some(request_id),
+                    session: Some(&b.session_key),
+                    body_hash: None,
+                    trace_ref: None,
+                    payload: json!({
+                        "session_key": b.session_key.as_str(),
+                        "provider": new_provider.as_str(),
+                        "model": new_model.as_str(),
+                        "ttl_us": self.session_ttl_us,
+                    }),
+                }) else {
+                    continue;
+                };
                 let _ = store.project(ProjectionWrite::SessionBound {
                     session_key: &b.session_key,
                     provider: &new_provider,
                     model: &new_model,
                     ttl_us: self.session_ttl_us,
-                    last_event: ev,
+                    last_event: move_ev,
                 });
             }
         }
