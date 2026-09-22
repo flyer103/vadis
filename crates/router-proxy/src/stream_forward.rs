@@ -293,8 +293,11 @@ impl Forwarder {
         // here, before the binding write below and before the relay
         // carries the facts — the trace record's value and
         // `bind_session`'s early return are THIS value, never a second
-        // read taken after the write (R11-F2).
-        let sticky_hit = crate::forward::session_sticky_hit(&self.store, session.as_deref());
+        // read taken after the write (R11-F2). The row is retained
+        // whole: its `(provider, model)` is the prior `route_changed`
+        // compares against (note R6 — one read, both inputs).
+        let prior_binding = crate::forward::prior_session_binding(&self.store, session.as_deref());
+        let sticky_hit = prior_binding.is_some();
         facts.session = session.clone();
         facts.turn_index = turn_index;
         facts.sticky_hit = sticky_hit;
@@ -485,7 +488,15 @@ impl Forwarder {
             session.as_deref(),
         );
         // Row 4 — session.bound through the accountant's one writer, the
-        // same call the buffered path makes.
+        // same call the buffered path makes. `route_changed` (note R6)
+        // is measured from the same session-resolution read's row
+        // against the route resolved AFTER the guard chain (`primary`
+        // here) and before the attempt — the buffered path's twin value,
+        // element for element.
+        let route_changed = match &prior_binding {
+            Some(prior) => prior.provider != primary.provider || prior.model != primary.model,
+            None => false,
+        };
         if session.is_some() {
             crate::accounting::Accountant {
                 store: self.store.as_deref(),
@@ -516,7 +527,7 @@ impl Forwarder {
                 &primary.provider,
                 &primary.model,
                 sticky_hit,
-                false,
+                route_changed,
                 self.session_ttl_us,
             );
         }

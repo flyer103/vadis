@@ -299,17 +299,24 @@ pub(crate) fn turn_index_for(store: &Option<Arc<dyn Store>>, session: Option<&st
         .unwrap_or(1)
 }
 
-/// Whether the session already has a binding row (the sticky-hit input).
-pub(crate) fn session_sticky_hit(store: &Option<Arc<dyn Store>>, session: Option<&str>) -> bool {
-    session.is_some()
-        && matches!(
-            store.as_ref().map(|s| {
-                s.query(Query::SessionBinding {
-                    session_key: session.unwrap_or(""),
-                })
-            }),
-            Some(Ok(QueryRow::SessionBinding(Some(_))))
-        )
+/// The binding that existed when this request arrived (spec §6): the
+/// ONE session-resolution read, taken before any binding write this
+/// request may make. `Some(row)` ⇔ a live binding existed — that is
+/// `state.sticky_hit` — and the row's `(provider, model)` is the prior
+/// `route_changed` compares against (note R6: one read, both inputs,
+/// never a second read after the write it gates — R11-F2's class). A
+/// read error is absent, the same way the bool form treated it.
+pub(crate) fn prior_session_binding(
+    store: &Option<Arc<dyn Store>>,
+    session: Option<&str>,
+) -> Option<router_core::store::SessionBindingRow> {
+    let session = session?;
+    match store.as_ref()?.query(Query::SessionBinding {
+        session_key: session,
+    }) {
+        Ok(QueryRow::SessionBinding(row)) => row,
+        _ => None,
+    }
 }
 
 /// The one shared outbound-body composition step (DESIGN §12.10.7): both
@@ -725,8 +732,12 @@ impl Forwarder {
         let turn_index = turn_index_for(&self.store, session.as_deref());
         // The one sticky read (spec §6): fixed here, before any binding
         // write this request may make — the same value feeds
-        // `bind_session`'s early return and the trace record below.
-        let sticky_hit = session_sticky_hit(&self.store, session.as_deref());
+        // `bind_session`'s early return and the trace record below. The
+        // row is retained whole: its `(provider, model)` is the prior
+        // `route_changed` compares against (note R6 — one read, both
+        // inputs, no second read after the write it gates).
+        let prior_binding = prior_session_binding(&self.store, session.as_deref());
+        let sticky_hit = prior_binding.is_some();
         facts.session = session.clone();
         facts.turn_index = turn_index;
         facts.sticky_hit = sticky_hit;
@@ -917,8 +928,16 @@ impl Forwarder {
         // bind_session, the one writer).
         // The one sticky value (spec §6): the read taken at session
         // resolution, above — reused here, never recomputed after the
-        // write it gates.
+        // write it gates. `route_changed` (note R6) is measured from that
+        // same read's row against the route resolved AFTER the guard
+        // chain (`primary` here) and before the attempt: true when the
+        // prior binding named a different provider or model, false with
+        // no prior binding (the create arm) or an unchanged route.
         let sticky_hit = facts.sticky_hit;
+        let route_changed = match &prior_binding {
+            Some(prior) => prior.provider != primary.provider || prior.model != primary.model,
+            None => false,
+        };
         if session.is_some() {
             crate::accounting::Accountant {
                 store: self.store.as_deref(),
@@ -947,7 +966,7 @@ impl Forwarder {
                 &primary.provider,
                 &primary.model,
                 sticky_hit,
-                false,
+                route_changed,
                 self.session_ttl_us,
             );
         }
