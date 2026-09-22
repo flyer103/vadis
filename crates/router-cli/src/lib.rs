@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub mod config_load;
+pub mod config_path;
+pub mod setup;
 pub mod stats;
 
 use clap::{Parser, Subcommand};
@@ -19,15 +21,18 @@ pub struct Cli {
 pub enum Command {
     /// Start the HTTP proxy (config-driven)
     Serve {
-        /// Path to the router config file
+        /// Path to the router config file; absent, found by spec §4.12's
+        /// discovery order (--config > the XDG location > ./config.yaml,
+        /// else a refusal naming `router setup`)
         #[arg(long)]
-        config: String,
+        config: Option<String>,
     },
     /// Report the window's figures from the trace + event log (spec §9.2)
     Stats {
-        /// Path to the router config file (resolves `trace.dir`)
+        /// Path to the router config file (resolves `trace.dir`); absent,
+        /// found by spec §4.12's discovery order, as for `serve`
         #[arg(long)]
-        config: String,
+        config: Option<String>,
         /// The window, in the config duration grammar (`300ms`, `90s`,
         /// `15m`, `1h30m`). Required: a report must state its window.
         #[arg(long)]
@@ -36,6 +41,51 @@ pub enum Command {
         /// notes the human form prints on stderr)
         #[arg(long)]
         json: bool,
+    },
+    /// Guided first configuration (spec §4.11–§4.12): edits the config by
+    /// anchored single-line edits on a verbatim template — never by
+    /// re-serializing it
+    Setup {
+        /// One section to walk (server | auth | session | paths |
+        /// providers | routing | plugins), or all of them when absent
+        #[arg(value_name = "SECTION")]
+        section: Option<String>,
+        /// The file to write; absent, resolved by spec §4.12's discovery
+        /// order (the XDG location is created when nothing is found)
+        #[arg(long)]
+        config: Option<String>,
+        /// The template to start from; default = the config.example.yaml
+        /// embedded in this binary
+        #[arg(long)]
+        from: Option<String>,
+        /// No prompt at all: every question takes its default (CI path)
+        #[arg(long)]
+        non_interactive: bool,
+        /// Ask only about the items --check reports unsatisfied
+        #[arg(long)]
+        quick: bool,
+        /// Print each section's keys with the value the file carries; no
+        /// prompt, no write
+        #[arg(long)]
+        print: bool,
+        /// Load the file with the same loader `serve` runs, then check
+        /// every environment variable it names; no prompt, no write
+        #[arg(long)]
+        check: bool,
+        /// Emit the machine-readable form (--print / --check / --dry-run)
+        #[arg(long)]
+        json: bool,
+        /// Print the edits the run would make, in application order; no
+        /// write
+        #[arg(long)]
+        dry_run: bool,
+        /// The base becomes the template instead of the file that is
+        /// there (implies --backup)
+        #[arg(long)]
+        force: bool,
+        /// Before a write, copy the target to <target>.bak
+        #[arg(long)]
+        backup: bool,
     },
 }
 

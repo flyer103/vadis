@@ -23,6 +23,18 @@ pub struct ResolvedConfig {
     pub router: RouterConfig,
 }
 
+/// The shared parse + validate entry point (spec §4.11 step 8, DESIGN
+/// §12.14 step 8): the same two calls `load()` makes, extracted
+/// mechanically so the `serve` startup and `setup`'s candidate gate are
+/// literally the same code — the two cannot drift. `load()`'s own
+/// messages keep their shape (the path-prefixed wrapper below).
+pub fn validate_text(text: &str) -> Result<RouterConfig, String> {
+    let router: RouterConfig =
+        serde_yaml::from_str(text).map_err(|e| format!("does not parse: {e}"))?;
+    router.validate().map_err(|e| e.to_string())?;
+    Ok(router)
+}
+
 /// Read, parse, validate and resolve. Any failure is terminal for `serve`
 /// (non-zero exit, reason printed by the caller) — there is no silent
 /// fallback to defaults (DESIGN §12.10.2, CONF-25's counterpart).
@@ -31,9 +43,7 @@ pub fn load(path: &Path) -> Result<ResolvedConfig, String> {
     let bytes = std::fs::read(path).map_err(|e| name_err(&format!("cannot be read: {e}")))?;
     let text = std::str::from_utf8(&bytes).map_err(|_| name_err("is not valid UTF-8"))?;
 
-    let router: RouterConfig =
-        serde_yaml::from_str(text).map_err(|e| name_err(&format!("does not parse: {e}")))?;
-    router.validate().map_err(|e| name_err(&e.to_string()))?;
+    let router = validate_text(text).map_err(|e| name_err(&e))?;
 
     let config_dir = path
         .parent()

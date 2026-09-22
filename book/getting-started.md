@@ -5,16 +5,13 @@ chapter does not restate config keys or price tables, it points at their definit
 copy-paste quick start itself — including the verified curl and codex examples — lives in the
 [README](../README.md#quick-start); this chapter stays the map of how the pieces fit together.
 
-The guided-configuration walkthrough below is written **ahead of the command it describes**, which is this
-repository's own rule (the book precedes the implementation). `router setup` is **not served yet**: its contract
-is frozen in [`docs/spec.md` §4.11](../docs/spec.md) and
-[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md), and until it
-lands the working path is the copy-and-edit step in the outline below.
+The guided-configuration walkthrough below is the served `router setup` command (contract in
+[`docs/spec.md` §4.11](../docs/spec.md) and
+[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md)).
 
 Getting from a clone to a first request is four steps: build, copy the example config,
 put provider keys in the environment, start the gateway — or let `router setup` do the copying and asking for
-you. That command is **planned, not served yet**: until it lands, the copy-and-edit path below is the one that
-works.
+you.
 
 ## Outline
 
@@ -22,9 +19,8 @@ works.
 - **Configure**: copy `config.example.yaml` to `config.yaml` and edit the roster —
   providers, models, prices, quotas, aliases. The example file is the single source of
   truth for every price number, and each entry carries a `source` URL plus capture date.
-  The **planned** [`router setup`](#your-first-configuration) does the copy and asks you the handful of
-  questions that are about your own deployment, leaving everything it cannot know alone — it is **not served
-  yet**, so today the copy-and-edit step above is the path.
+  The served [`router setup`](#your-first-configuration) does the copy and asks you the handful of
+  questions that are about your own deployment, leaving everything it cannot know alone.
 - **Secrets stay in the environment**: the config references environment variable names
   only; API keys are never written into YAML. That covers the inbound token too: the key
   `server.auth_token_env` names a variable, and its value is never in the file
@@ -52,17 +48,15 @@ works.
 
 ## Your first configuration
 
-`router setup` is the **planned** guided path, and **not served yet**: its contract is frozen in
+`router setup` is the guided path, served since this landed: its contract is frozen in
 [`docs/spec.md` §4.11–§4.12](../docs/spec.md) and
-[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md), and until it
-lands the copy-and-edit step in the outline above is the path. When it lands it will bring your config file into
-existence and ask you only about the things that are yours: where the file lives, the address to listen on, how a
+[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md). It brings your config file into
+existence and asks you only about the things that are yours: where the file lives, the address to listen on, how a
 conversation is identified and kept sticky, the **names** of the environment variables your keys live in, and —
 if you run a subscription plan — which routes form that family. Everything a vendor owns is *shown* to you,
 never guessed at.
 
 ```bash
-# Planned (spec §4.11), not served yet — the intended interface:
 router setup                    # every section, in order, most answers defaulting to what the file already says
 router setup auth               # one section: server | auth | session | paths | providers | routing | plugins
 router setup --print            # show every key it knows, with the value your file carries
@@ -123,7 +117,7 @@ export DEEPSEEK_API_KEY='<paste the key here>'
 export ROUTER_TOKEN='<what you want your clients to send>'   # only if you turned inbound auth on
 ```
 
-`router setup --check` (**planned, not served yet**) is the read-only version of that check, and it is the one a
+`router setup --check` is the read-only version of that check, and it is the one a
 script should call: it exits `0` when every named variable is present, and `4` when one is missing or (for
 `server.auth_token_env`, which refuses the start) present but empty — see [Operations](operations.md#run-it) for
 why that one is fatal.

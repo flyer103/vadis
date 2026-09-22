@@ -23,7 +23,7 @@ no hidden default address and no built-in plugin list to reconcile with it.
 `serve` and `stats` find the file in one order ([`docs/spec.md` §4.12](../docs/spec.md)): an explicit `--config`,
 else `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`, else `./config.yaml` in the directory you are in.
 When none of them is there they exit non-zero and name `--config` and the setup command — there is no silent
-fallback to a default configuration. The **planned** `router setup` command writes to the XDG location by
+fallback to a default configuration. The `router setup` command writes to the XDG location by
 default (mode `0600`, and any directory it creates at `0700`), which is why the bare `router serve` above works
 after a first run: `--config` becomes unnecessary, not forbidden.
 
