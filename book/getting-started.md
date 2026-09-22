@@ -5,8 +5,13 @@ chapter does not restate config keys or price tables, it points at their definit
 copy-paste quick start itself — including the verified curl and codex examples — lives in the
 [README](../README.md#quick-start); this chapter stays the map of how the pieces fit together.
 
+The guided-configuration walkthrough below is the served `router setup` command (contract in
+[`docs/spec.md` §4.11](../docs/spec.md) and
+[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md)).
+
 Getting from a clone to a first request is four steps: build, copy the example config,
-put provider keys in the environment, start the gateway.
+put provider keys in the environment, start the gateway — or let `router setup` do the copying and asking for
+you.
 
 ## Outline
 
@@ -14,6 +19,8 @@ put provider keys in the environment, start the gateway.
 - **Configure**: copy `config.example.yaml` to `config.yaml` and edit the roster —
   providers, models, prices, quotas, aliases. The example file is the single source of
   truth for every price number, and each entry carries a `source` URL plus capture date.
+  The served [`router setup`](#your-first-configuration) does the copy and asks you the handful of
+  questions that are about your own deployment, leaving everything it cannot know alone.
 - **Secrets stay in the environment**: the config references environment variable names
   only; API keys are never written into YAML. That covers the inbound token too: the key
   `server.auth_token_env` names a variable, and its value is never in the file
@@ -38,6 +45,94 @@ put provider keys in the environment, start the gateway.
   a local store beside the config file, so the two can be backed up together
   ([`docs/spec.md` §4.5](../docs/spec.md)). Request and response bodies are written to
   neither.
+
+## Your first configuration
+
+`router setup` is the guided path, served since this landed: its contract is frozen in
+[`docs/spec.md` §4.11–§4.12](../docs/spec.md) and
+[ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md). It brings your config file into
+existence and asks you only about the things that are yours: where the file lives, the address to listen on, how a
+conversation is identified and kept sticky, the **names** of the environment variables your keys live in, and —
+if you run a subscription plan — which routes form that family. Everything a vendor owns is *shown* to you,
+never guessed at.
+
+```bash
+router setup                    # every section, in order, most answers defaulting to what the file already says
+router setup auth               # one section: server | auth | session | paths | providers | routing | plugins
+router setup --print            # show every key it knows, with the value your file carries
+router setup --check            # load the file and report which named environment variables are present
+router setup --dry-run          # show the edits a run would make, and write nothing
+router setup --non-interactive  # CI / containers: no questions, every answer at its default
+```
+
+A few things worth knowing before you run it:
+
+- **The file comes from the shipped example.** Without `--from`, the starting point is the `config.example.yaml`
+  embedded in your binary — the one of its own commit. Where the result goes is described below; the absolute
+  path is always printed. If the file already exists it is the starting point instead, so your own edits are
+  what the questions start from.
+- **Your answers edit; they never regenerate.** The command replaces the value you answered on its own line and
+  touches nothing else, so every comment, every `source` citation and every note you wrote survives verbatim.
+  That is deliberate: the example's comments carry the provenance of each price, and a command that rewrote the
+  file would throw the provenance away ([ADR-025](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md)).
+- **The defaults are your file's own values.** Press Enter to keep what is there; a menu whose selected item is
+  already the current value says `Skipped (keeping current)` rather than pretending you changed something. Run
+  it twice and nothing moves — a second run with the same answers writes nothing at all.
+- **It refuses rather than guesses.** If an answer cannot be placed exactly — the key is not in your file, or
+  its value is written in a shape the wizard does not edit — it stops, names the key and writes nothing. Your
+  file is never left half-edited; nothing lands unless the result still loads as a config.
+- **It never touches a price, an endpoint or a citation.** Those are transcriptions of the providers' own
+  pages, and they are yours to edit by hand ([`config.example.yaml`](../config.example.yaml),
+  [`docs/spec.md` §4](../docs/spec.md)). `aliases`, `fallback` and `plugins` entries — anything whose edit would
+  mean *adding* or *removing* a line — are shown for reference and edited in the file too.
+
+### Where the file lands, and what is inside it
+
+- **The default location is `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`**, and `--config <path>`
+  overrides it. The same order finds the file that already exists: an explicit `--config`, else the XDG
+  location, else `./config.yaml` in the directory you are in, else — on a first run — the XDG location,
+  created directory and all. `router serve` and `router stats` look in the same order, so once the file exists
+  you stop passing a path at all ([`docs/spec.md` §4.12](../docs/spec.md)). With no `--config` and nothing to
+  find, they refuse and name the setup command rather than falling back to a default silently.
+- **Permissions.** A file this command creates is mode `0600` and a directory it creates is `0700` (set
+  explicitly, not left to the umask; a directory that already exists is never re-moded). The config names your
+  key variables and your whole roster, so it stays private — even though no key *value* is ever written into it.
+- **What a path inside the file means.** Every relative path in it — `trace.dir`, a plugin's rule file, and the
+  state store — resolves against **the directory the config file itself sits in**, never the directory you
+  happened to run the command from. With the default location that puts your traces and your state store under
+  `~/.config/router/`, travelling with the config, which is what the backup advice in
+  [Operations](operations.md#backup) assumes. To keep your traces somewhere else — a directory you already back
+  up, or a drive that is not your dotfiles — write an **absolute** `trace.dir` in the `paths` section: a
+  leading `~` is not expanded, so spell the path out in full.
+
+### Keys: export them, never write them
+
+The config names environment variables; it never carries a value
+([`docs/spec.md` §4.7](../docs/spec.md)). The wizard asks for the **name** and checks whether that variable is
+present in your environment — it does not read the value, print it or store it, and it does not write a `.env`.
+So collect the snippet it prints for each missing name and export it in your shell:
+
+```bash
+export DEEPSEEK_API_KEY='<paste the key here>'
+export ROUTER_TOKEN='<what you want your clients to send>'   # only if you turned inbound auth on
+```
+
+`router setup --check` is the read-only version of that check, and it is the one a
+script should call: it exits `0` when every named variable is present, and `4` when one is missing or (for
+`server.auth_token_env`, which refuses the start) present but empty — see [Operations](operations.md#run-it) for
+why that one is fatal.
+
+### After it runs, check yourself
+
+```bash
+router serve                     # start it; the config is found by the same rule, and a problem is named
+curl -s localhost:8790/health    # what this process actually loaded: plugins, per-provider key presence, auth
+router stats --window 24h        # the figures, once requests have gone through
+```
+
+If `serve` exits instead of starting, the message names the key — most often a variable the config names that
+your shell does not have. The **planned** `--check` mode above answers the same question without starting
+anything.
 
 ## Two deployments of one vendor, and what currency means
 

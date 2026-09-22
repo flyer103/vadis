@@ -242,9 +242,16 @@ Why the non-obvious parts are there:
 ```bash
 router serve      --config config.yaml          # start the gateway
 router stats      --config config.yaml --window 24h   # read the traces back out
+router setup      [--non-interactive] [--config <path>] # guided config: copy the example, ask, edit in place
 ```
 
-`serve` and `stats` are the two subcommands the binary has. `stats` reads the traces in the window and
+`serve`, `stats` and `setup` are the three subcommands the binary has. Without `--config`, all
+three find the file by one rule ([`docs/spec.md` §4.12](docs/spec.md)): the XDG location
+(`${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`), else `./config.yaml` — and when
+neither exists, `serve`/`stats` refuse and name `router setup`, which writes the XDG file
+(mode `0600`; any directory it creates `0700`). `setup` copies `config.example.yaml` verbatim
+and asks only about the keys that are yours, editing them by anchored single-line edits; see
+[the book](book/getting-started.md). `stats` reads the traces in the window and
 prints the cost and cache report, the plan family's switches and their verified cost, and the requests
 whose outcome is unknown; every figure carries its `verified` / `inferred` label, `--window` is required
 (a saving that does not state its window cannot be checked), and `--json` prints the same report for a
@@ -287,7 +294,7 @@ crates/router-providers   provider adapters (wire_api capability, auth, error cl
 crates/router-runtime     the Cordis-semantics runtime (effect / coeffect / fiber / declarative loader) — scaffold in v0.1
 crates/router-plugins     built-in tier-A plugins — scaffold in v0.1, not invoked from the serving path
 crates/router-proxy       data plane (axum), byte-faithful forwarding
-crates/router-cli         `serve` and `stats` — the two subcommands in v0.1
+crates/router-cli         `serve`, `stats` and `setup` — the three subcommands in v0.1
 crates/router-plugin-sdk  out-of-process tier-B plugin protocol — scaffold in v0.1
 crates/router-store       SQLite/WAL store: event log + projections, and the JSONL trace sink (ADR-009)
 tests/conformance         protocol fidelity, prefix stability, the accounting convention

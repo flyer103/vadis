@@ -10,12 +10,29 @@ misbehaves.
 ## Run it
 
 ```bash
-router serve --config config.yaml
+router serve                        # finds the config by the rule below
+router serve --config config.yaml   # or name it explicitly
 ```
 
 Everything the process does comes from that file: the listen address, the plugin set, the
 roster, the aliases, the fallback chain, the trace directory and the state path. There is
 no hidden default address and no built-in plugin list to reconcile with it.
+
+### Where the config comes from
+
+`serve` and `stats` find the file in one order ([`docs/spec.md` §4.12](../docs/spec.md)): an explicit `--config`,
+else `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`, else `./config.yaml` in the directory you are in.
+When none of them is there they exit non-zero and name `--config` and the setup command — there is no silent
+fallback to a default configuration. The `router setup` command writes to the XDG location by
+default (mode `0600`, and any directory it creates at `0700`), which is why the bare `router serve` above works
+after a first run: `--config` becomes unnecessary, not forbidden.
+
+The three paths a config owns all resolve against **the config file's own directory**, never the directory you
+run from: the trace directory it names, a plugin's rule file, and the state store. A config in the XDG location
+therefore keeps its traces and its store beside itself, under `~/.config/router/` — so "back up the config and
+its state together" means copying that one directory. To keep the traces somewhere else, write an **absolute**
+`trace.dir` (a leading `~` is not expanded), and see the startup table below for what a config that cannot be
+loaded does.
 
 Four startup outcomes are worth knowing before the first request:
 
@@ -163,6 +180,12 @@ wrong (ADR-012, ADR-013).
   response headers and degradation behaviour.
 - [`docs/spec.md` §4.1](../docs/spec.md) — trace output parameters and path resolution.
 - [`docs/spec.md` §4.2](../docs/spec.md) — the failover chain as configured.
+- [`docs/spec.md` §4.11](../docs/spec.md) — the guided configuration command and what it may write
+  (the state store's own contract stays §4.5).
+- [`docs/spec.md` §4.12](../docs/spec.md) — where the config file is found, and what the paths inside it mean.
+- [`design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md`](../design/decisions/ADR-025-setup-writes-by-anchored-edits-on-a-verbatim-template.md)
+  — why the configuration is edited rather than regenerated, and why one file is read rather than several
+  merged.
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: the event-log / trace
   split, the join key, durability tiers and the failure behaviour.
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the

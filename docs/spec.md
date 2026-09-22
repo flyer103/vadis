@@ -885,6 +885,239 @@ not prices — the boundary rows are the unit tests' source, DESIGN §12.13):
 | `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000000` | 2nd | boundary, inclusive |
 | `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000001` | 3rd | |
 
+### 4.11 `router setup` — the guided first configuration, and the boundary of what it may write
+
+*Status: the contract. `router setup` is not served yet; it lands with the change that implements this section.
+Until then the working path is the one §4 and §5 already document: copy `config.example.yaml`, edit the roster,
+export the keys — and leave the copy in the repository root, where §4.12's third candidate finds it for every
+command below. The rationale and the rejected alternatives are ADR-025; the landing is DESIGN §12.14; the
+location rule this command's default obeys is **§4.12**.*
+
+`router setup` is a **file-writing command that is not in the serving path**: it handles no request, and nothing
+on the request path reads anything it wrote other than the config file itself. Its whole job is to turn the
+template (the shipped example, §4) into **your** config, with the answers you give and **only** those.
+
+**Command face.**
+
+| Verb / flag | Semantics | Reason |
+|---|---|---|
+| `router setup [<section>]` | the guided wizard over one section, or over all of them when the argument is absent (or `all`) | hermes-agent's per-section granularity: someone who wants to change one thing is not dragged through the other six (the comparison and its sources are the survey DESIGN §12.14 names) |
+| `--config <path>` | the file to write; when it is absent the file is resolved by **§4.12's discovery order** (explicit path > the XDG location > `./config.yaml` > the XDG location, created). The absolute path written is **printed**, with the rule that chose it | one rule for the file the gateway reads and the file this command writes: two rules is how "setup wrote it and serve reads something else" begins. The flag keeps the name `serve` / `stats` use; a card proposed `--out` and it is declined — the path is the **same file**, and two names for one path is how a CLI starts contradicting itself |
+| `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary** | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes |
+| `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
+| `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
+| `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
+| `--check [--json]` | load the file with the **same loader** `serve` runs, then check every environment variable the file **names** and print them; no prompt, no write. No target ⇒ exit 2 | the read-only surface a script calls |
+| `--dry-run` | print the edits the run would make (`<anchor>: <old> → <new>`, with the edit kind), in application order; no write | the write strategy's safety story: a change is inspectable **before** it lands |
+| `--force` | the **base** becomes the template instead of the file that is there: the target is replaced by the template plus your answers | this is both the escape hatch and the recovery from an unusable file. It is **not** `hermes setup --reset`: router has no in-code default set to reset to (§12.5: only the three defaults §4 states are defaults), so the shipped example **is** the default set and "reset" and "start from the template" are one operation. What it discards is any note **you** wrote into your own file, since the base becomes the template again; the `source:` provenance comments survive, because the base is a **file** and never a serializer (ADR-025). It is therefore the explicit hatch, not the routine path — a routine reconfigure is a bare `router setup`, and `--dry-run` prints the replacement first |
+| `--backup` | before a write, copy the target to `<target>.bak` (one fixed name, replaced each run) | rollback for the anchored-edit path. `--force` **implies** it: the wholesale replace is the operation that can lose content, while an anchored edit's edits are bounded and printable with `--dry-run` |
+
+**There is no `--reconfigure`.** On an existing file a bare `router setup` *is* the reconfigure: every question
+shows the **current value** as its default. hermes-agent's `--reconfigure` is a compatibility no-op with exactly
+that meaning, and a flag that merely restates the default is a lie in a help text.
+
+**There is no environment-override layer.** A CI run that must differ passes `--from` / `--config` or writes the
+file; there is no `ROUTER_SETUP_ADDR`-style channel. The only env-shaped facts here are environment *variable
+names*, and a value read from the ambient environment would make the written config a function of the shell that
+ran the command — the opposite of "the file is the single source of truth" (§4's usage note; §12.5's defaults row).
+
+**Sections and the keys they may write.** Seven sections. Each is a group of keys a user answers in one sitting;
+where a group coincides with a file block it takes that block's name.
+
+| Section | Keys it may write | Kind | Default source |
+|---|---|---|---|
+| `server` | `server.addr`, `server.upstream_attempt_timeout`, `server.request_timeout` | value | the file's current value, else the template's |
+| `auth` | `server.auth_token_env` — the **variable name** only, plus whether the key is enabled at all | value / enabled | the file's state (the template ships it commented out) |
+| `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's |
+| `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same |
+| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same |
+| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_monthly_cap_usd` | value / enabled | same |
+| `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same |
+
+What is deliberately **not** a section:
+
+- **`plans`** — a plan is not a file block: it *is* a provider entry (`account: coding_plan`, §4.6) plus the
+  top-level `plan_policy`. Its answers live in `providers` (the key's name) and `routing` (the policy).
+- **`aliases`** and **`fallback`** — file blocks whose members are single-line scalars, but what a user does to
+  them is a **membership** edit (add an entry, drop an entry, reorder). This command has no insert and no
+  delete, so they are **shown** (current value, one line per entry) and edited by hand. A section that could
+  only retarget an existing entry at a fixed position is worse than the file.
+- **`session` merges `cache`** — the two answer one question (how a conversation is identified, and whether it
+  stays on one route), and the example's own comments bind them.
+
+**The vendor facts are never asked for, only shown.** A price, a `source` URL, a `context` window, an endpoint, a
+`models[].id` — every value whose authority is an official page (§4.0, AGENTS constraint 5) — is **displayed** by
+the section that owns it and never prompted. The wizard does not invent a price, and it does not ask a user to
+recall one: it shows what the file carries and what the file cites. A list- or flow-valued key
+(`session.key_sources`, `aliases`, `fallback`) is display-only for the same reason.
+
+**The write strategy: a verbatim template plus anchored single-line edits.**
+
+1. **Base bytes.** The target's own bytes when it exists; the template's when it does not (or under `--force`).
+   The consequence that matters: hand-written keys, a reordering, and every comment survive verbatim, because
+   the file is **edited**, never reproduced.
+2. **A plan.** Each answer that differs from the value at its anchor becomes one edit. Two edit kinds, and only
+   these two: **`set-value`** — replace the value's byte extent on a **single line** whose key anchor resolves
+   **uniquely**; **`set-enabled`** — add or remove the leading comment marker on the key's **own line** (the
+   template ships `server.auth_token_env` and `plan_policy.overflow_monthly_cap_usd` commented out). A plan
+   entry is `(line, byte range, replacement)`, and the replacement is encoded in the file's **own style** at that
+   key (quoted iff the value there is quoted; bare booleans and numbers; the §12.5 duration grammar). The wizard
+   changes a value, never a style.
+3. **The failure boundary — refusal, never best effort.** The run **refuses and writes nothing** (exit 2, naming
+   the key, the anchor and the reason) when an anchor resolves to no line or to more than one; when the value is
+   not a single-line scalar (a flow mapping, a block scalar, a multi-line string — a hand-rewritten file rather
+   than the shipped shape); when two edits' ranges overlap; or when the candidate does not pass the loader
+   below. Anchors are never searched heuristically and never approximated: a near-miss here is a corrupted price
+   table, and the whole point of the strategy is that the bytes which are not the answer are not touched.
+   An anchor that does not resolve with **no** requested change to that key is a **warning** (`not settable in
+   this file; left alone`) — nothing was going to be written there anyway.
+4. **No re-serialization, at any verbosity, behind any flag.** A YAML writer round trip (`serde_yaml` on
+   `RouterConfig`) emits a document **without** this file's `source:` citations and `TODO verify against official
+   source` markers, and those comments are the price authority's only carrier (§4.0, ADR-018 / ADR-020). The way
+   to *replace* a file wholesale is to hand the command a **different template** (`--from <path> --force`) — a
+   file the operator authored and can read — never to regenerate one from memory. **ADR-025 records this
+   trade-off, the rejected alternative, and its cost.**
+
+**The secret boundary: names only.**
+
+- The two keys this command may write are `api_key_env` (per provider entry) and `server.auth_token_env`. Both
+  carry **the name of an environment variable**, which is exactly what §4 says the file may carry, and exactly
+  what §4.7 / §12.11 say the token's *value* may never be (never a struct, a log line, a trace field or an event
+  payload).
+- The command **never reads a key value**: presence is probed against the environment as a set of names
+  (`var_os(name).is_some()` — the same probe `serve` makes for a provider key). It never prints a value, never
+  writes one, and never echoes what it read.
+- Nothing is created or fetched: no key is generated, no endpoint is called, no pricing page is opened.
+- **There is no `.env`.** The command introduces no second secret location: nothing in this product reads a
+  `.env` (§4.7 reads the process environment and the CLI has no dotenv path), so a `.env` it wrote would be a
+  file whose presence does not make a key present. It prints the **export** snippet for each missing name and
+  stops there — `export DEEPSEEK_API_KEY='<paste the key here>'`.
+- `--check` lists the variables the file names: for a provider key "not present"; for the token, **"absent" and
+  "empty" as distinct states**, the distinction `serve` refuses the start on (§4.7, §12.10.2).
+
+**Validation and atomicity, before anything lands.**
+
+- **The same loader, on the candidate, before the write.** The candidate text is parsed by the same `RouterConfig`
+  deserializer and the same `validate()` the `serve` startup runs — one shared entry point, so the two cannot
+  drift — `deny_unknown_fields` included. **A candidate that does not load is never written**, and the message is
+  the loader's own, naming the key.
+- **Landing.** The candidate goes to a temporary file **in the target's directory**, is flushed, and is then
+  `rename`d over the target (one atomic replace on one filesystem); the temporary file is removed on any failure.
+  Nothing lands partially, and no other process can observe a half-written config.
+- **The target's directory is created when it is missing** (`mkdir -p`), because the default location is
+  `~/.config/router/`, which does not exist on a fresh machine. The file this command creates is mode **`0600`**
+  and every directory **it** creates is **`0700`** — set explicitly rather than left to the umask, and a no-op
+  on a platform without Unix modes. Restricting both costs nothing even though no key *value* is ever written to
+  the file, and a directory that already exists is never re-moded. The absolute path printed at the end is what
+  makes a typo'd path visible instead of silent.
+- **Which file gets written is printed, with the rule that chose it.** `--print --json` / `--check --json` carry
+  the selection (`"selected_by": "flag" | "xdg" | "cwd" | "xdg-created"`), so "did my `--config` matter?" and
+  "where did that file come from?" are answered by the command instead of by guessing (§4.12).
+- **An existing target is the normal case, not a conflict.** No `--force` is needed to reconfigure the file that
+  is there — the base is its own bytes and only the answered keys move. `--force` is the operation that
+  *replaces* it (base = the template), and it keeps the previous file as `<target>.bak`.
+- **Nothing to change ⇒ nothing is written.** With an empty plan the command prints
+  `no change: <path> left as it is` and exits 0. That is what makes a second run a no-op rather than a rewrite.
+
+**Determinism — the frozen, assertable properties.** The written bytes are a function of (base bytes, answers,
+template) **only** — never of the clock, the CWD, the answer order or the environment's contents (the environment
+affects the *check* output and the exit code, never a byte of the file).
+
+| # | Property |
+|---|---|
+| G1 | a fresh target, every answer at its default ⇒ the file's bytes are **identical to the template's**, and it loads with the same loader |
+| G2 | with *k* answered changes ⇒ every byte outside those *k* lines' own extents is identical to the base, and the file's counts of `source:` and `TODO verify against official source` occurrences equal the base's (a relation over the run's own base, never a snapshot of a number) |
+| G3 | the same answers twice ⇒ the file's bytes are unchanged and the second run **writes nothing** (content and mtime unchanged, `no change` printed) |
+| G4 | any refusal ⇒ the target is byte-identical to what it was, and no temporary file is left behind |
+| G5 | no environment **value** appears in the command's stdout, its stderr, its `--json`, or any file it wrote — only names, statuses and paths |
+| G6 | the target is modified only after the candidate has passed the loader |
+| G7 | the run reproduces under a different CWD — the **bytes written** are a function of (base bytes, answers, template) only — and no file it writes carries a timestamp. The one CWD-dependent step is §4.12's `./config.yaml` candidate, and it is reported rather than silent (G8) |
+| G8 | the path the command reports and writes is exactly the one §4.12's discovery order selects from (`--config`, `$XDG_CONFIG_HOME`, `$HOME`, the CWD); the `--json` selection member names the rule that chose it; a file or directory the run **created** carries mode `0600` / `0700`; and an existing directory is not re-moded |
+
+**Exit codes** (the vocabulary `serve` already uses).
+
+| Code | Meaning |
+|---|---|
+| `0` | the file was written; or `no change`; or `--print` / `--dry-run` printed; or `--check` found every named variable present |
+| `2` | **refused, nothing written**: an unknown section; stdin not a terminal without `--non-interactive`; an unresolvable or ambiguous anchor; a requested change on a key that is not settable here; a candidate that does not load; a missing template; a target that is a directory, or a target whose directory cannot be created because a path component is not a directory |
+| `4` | `--check`: the file loads, but a variable it names is missing — or, for the token, empty — the same class `serve` refuses the start on (§12.10.2) |
+| `1` | an unexpected I/O failure, with the reason printed |
+
+**No terminal on stdin.** With stdin not a terminal and `--non-interactive` absent, the command prompts nothing:
+it prints the exact working command line for that environment plus the export snippets for the names the file
+carries, and exits **2**. `docker init`'s hard TTY error leaves a script with nothing to do; hermes-agent's
+identical branch returns 0 while writing nothing, which reads as success to a script. Router takes the two
+together — refuse (a run that did not do the work is not a success) **and** hand over the command that does
+work. Answers are read as **lines**, an empty line taking the default, and a terminal-less *stdout* is not a
+refusal, so `router setup | tee setup.log` works.
+
+**The boundary of what `setup` does not do.**
+
+| It does not | Because |
+|---|---|
+| make any network request, probe an upstream, list a provider's models, or fetch a pricing page | the command must be a pure function of local input: networked onboarding would make the config depend on an instant (AGENTS constraint 2), and "verify the price against the official page" is the operator's read, never the router's guess (constraint 5) |
+| read, write or echo any key value; create a key; write a `.env` | §4.7 / §12.11: the value never enters a struct, a log line, a trace field or an event payload — and a wizard is none of those |
+| write any vendor fact (price, `source`, `context`, endpoint, model id) | constraint 5: those values are transcriptions of an official page, and a copy of one in code is exactly what the example's comments exist to prevent |
+| add, remove, reorder or reformat anything in the file | ADR-025: the edits are value replacements on existing lines; the comment-destroying rewrite is not offered |
+| change anything on the decision path or the byte boundary | AGENTS constraint 1: this command is not in the serving path, and it writes no trace, no event and no store row |
+| enable a transform | ADR-019 I3: transform mode is a **request** fact, the client's own opt-in. Switching a plugin entry off or on is a config change; it never edits a request that did not ask |
+| introduce a config key | `deny_unknown_fields`: a key only the wizard understands is an unservable file. There is **no `_config_version`** and no `setup`-owned key — "what is missing" is measured against the shipped example, which §4 already makes the contract, not against a second table |
+| publish a `$schema` | the editor-lint trick needs a schema *generator* and a second definition of the field set; the single source here is the parser's `deny_unknown_fields` plus the example (CONF-25), and two definitions drift |
+| grow a subcommand family (`config get/set`, `doctor`) | one file, one guided command. The read-only needs are `--print` / `--check` / `--dry-run`; a later `router config` family can grow around them without becoming a second writer |
+| add a crate dependency | zero new dependencies: stdin lines, stdout, and `std::io::IsTerminal` from std. No prompt/TUI crate, no dotenv, no schema generator |
+| touch an existing conformance assertion, a gate or the corpus | AGENTS constraint 9 / ADR-012 |
+
+**What must be asserted when this lands** (the shape the implementing round's rig takes; IDs in DESIGN §12.8):
+the non-interactive file is byte-identical to the template and loads (G1); one overridden key moves only its own
+line (G2); the refusal ladder — an unresolvable anchor, an ambiguous anchor, a not-settable key with a requested
+change, a candidate that fails the loader — leaves the target untouched (G4); idempotence (G3); the secret canary
+(G5); `--check`'s three exit codes and the token's absent-versus-empty distinction; and the interactive path
+driven by a **PTY** script rather than by a Rust test harness.
+
+### 4.12 The config file's location, and the paths inside it
+
+Two separate questions, two rules: **which file** the gateway reads (this section), and **where a path written
+inside that file lands** (§4.1's rule, restated here because the answer to the first question now moves the
+second's outcome).
+
+**The discovery order.** One rule, obeyed by `serve`, `stats` and `setup` alike; the first candidate that
+applies wins.
+
+| # | Candidate | Applies when |
+|---|---|---|
+| 1 | `--config <path>` | the flag is given. A path that does not exist (or does not load) is an error — it never falls through to a later candidate |
+| 2 | `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml` | the file exists |
+| 3 | `./config.yaml` (relative to the CWD) | the file exists |
+| 4 | the XDG location, **created** (`mkdir -p`, file mode `0600`, a created directory `0700`) | `setup` only, and only when 1–3 found nothing. `serve` / `stats` **refuse** (exit 2) naming `router setup` and `--config` |
+
+- **Reading** (`serve`, `stats`, and `setup`'s `--print` / `--check`): candidates 1–3, else refuse.
+- **Writing** (`setup`): candidates 1–3, else candidate 4. The absolute path chosen, and the rule that chose it,
+  are printed (`"selected_by": "flag" | "xdg" | "cwd" | "xdg-created"` in `--json`).
+- **This rule decides *which file* is read, never what the file says.** The listen address, the plugin set and
+  the roster still come only from the file (CONF-25), and the resolution lives in `router-cli`'s argument layer:
+  the `serve` / `stats` entry points keep taking a resolved path, so the existing rigs drive them unchanged.
+- **Why the XDG location is the default *write* site**: it is outside the repository — a config there cannot be
+  committed by accident nor removed by a `git clean` — it is the convention the user's other tools already
+  agree on, and it makes the file `--config`-free for every later command.
+- **The repository's own path stays supported**: `cp config.example.yaml config.yaml` (§4's usage line, the
+  README) is candidate 3, and it is what keeps a repository-local development config working.
+
+**What the file's own relative paths mean** (§4.1's rule, unchanged, restated where a user meets it): every
+relative path in the file — `trace.dir`, every `plugins[*].config.rules_file`, and the fixed `state/router.db` —
+resolves against **the directory containing the config file**, never the CWD; an absolute value wins
+(CONF-25 asserts both halves). So a config at the XDG location keeps its traces and its store beside itself,
+under `~/.config/router/`. That is deliberate — one anchor, and one backup story: the config and its state
+travel together (book/operations.md) — and the way to put the traces elsewhere today is an **absolute**
+`trace.dir` (the `paths` section of `router setup` sets it; `~` is **not** expanded, the value is used as
+written). Moving the *store* is not a second resolution rule: it is the additive `state:` key §12.5 already
+anticipates, registered as **GAP-Q22** (DESIGN §12.9).
+
+**What this is not: a configuration layer.** There is no merge across locations, no per-project override, no
+remote or managed file. Exactly one file is read, and the four candidates are ways of *finding* it, never
+sources that combine. The layered model (opencode's eight layers, codex's project/`--profile`/managed stack) is
+the alternative ADR-025 records and rejects for v0.1, with the reason each layer would need — and with what it
+would cost the "one file, one template, one backup" story this section's second rule depends on.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -1359,11 +1592,12 @@ The situations in which a probe is **not** admitted, and where each appears in t
 ### 9.2 `router stats`
 
 ```
-router stats --config <config path> --window <duration> [--json]
+router stats [--config <config path>] --window <duration> [--json]
 ```
 
-- **`--config`** resolves `trace.dir` by §4.1's rule (a relative path is resolved against the config file's
-  directory). There is no way to point the command at a trace directory that the config does not describe.
+- **`--config`** names the config file; absent, it is found by **§4.12's** discovery order (as it is for `serve`).
+  It resolves `trace.dir` by §4.1's rule (a relative path is resolved against the config file's directory). There
+  is no way to point the command at a trace directory that the config does not describe.
   When the loaded config declares a `plan_policy`, it also names the family the report's `plan family` section
   describes; with no policy the report has **no** plan section — a family nobody configured is not reported,
   never fabricated.
