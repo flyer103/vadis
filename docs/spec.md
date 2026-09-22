@@ -444,6 +444,17 @@ One request leaves two records, and they have different jobs:
 - **Derived state is not state**: the sticky table, the cache ledger and the quota counters are
   **projections** of `events`; a lost projection is rebuilt from the log, and losing one regresses
   statistics, never correctness.
+- **A binding's expiry is a microsecond value derived from a millisecond knob.** `session.ttl` is a
+  `DurationVal` — **milliseconds** (the duration grammar of `DESIGN` §12.5) — while the sticky table
+  stores `expires_at_us` in the store's own clock unit: the binding event's `ts_us` plus the
+  `session.bound` payload's **`ttl_us`**, which is **microseconds**. The conversion is therefore
+  **× 1 000**, it happens **once** — where the serving path resolves the configured value, never in a
+  consumer — and a reader that subtracts an event's `ts_us` from `expires_at_us` recovers the configured
+  TTL by dividing by 1 000. Every consumer of that value obeys the same rule, including the account-move
+  handoff of §4.6 that re-points live bindings. (Stated here because it is the sticky table's own state.
+  The shipped v0.1 build converted × 1 000 000 instead, so a configured `12h` was honoured as ~12 000 h —
+  the pre-existing `R21-F6`, frozen and corrected by R27; the store's own fixtures are the convention's
+  witness, `43_200_000_000` µs for a 12 h binding.)
 - **Durability**: intent / accounting events commit (`synchronous=FULL`) **before** the effect they
   authorize; projections are `NORMAL` and batched (ADR-009).
 - **Crash window**: an upstream intent with no response is an `unknown_outcome` — the quota is **not**
@@ -1202,6 +1213,26 @@ the same class, registered structurally by R21-1 (which does not measure it): `r
 evaluates the predicate at record time — `forward.rs:628`, reached from the buffered path's failure branch
 at `:594` and the streaming one at `stream_forward.rs:228` — which is *after* that same request's binding
 write. DESIGN §12.6 carries the symbol-level landing and §12.8 the case that pins it (`CONF-66`).
+
+**The binding's write rule has a second arm, and it is one measured value: `route_changed`.** The
+`session.bound` row is the record of the route a session is on, so its writer's rule (`DESIGN` §12.10.5
+row 4; §4.5's sticky table) is *write it when the binding is **created or moved**; write nothing on a
+sticky hit whose route is unchanged*. `route_changed` is that rule's second input, and it is **a value,
+not a constant**: true exactly when **the binding that existed before this request differed in provider or
+model from the route this request resolved to** — the route **after** the guard chain (§3, §4.6) and
+**before** this request's own attempt — and false when there was **no prior binding** (nothing existed to
+have moved) or when the prior binding already named that same provider and model. Both inputs come from
+**one read**, taken at session resolution on **both** forwarding media — the same read that gives
+`state.sticky_hit` its value, before anything this request writes — so a session's streamed ask and its
+buffered ask cannot disagree about whether the binding moved, and the arm stays a pure function of
+(content, stable config): it adds a store row, never a byte on the wire. One shape follows directly: a
+session whose client `model` string changes from `p1/m-x` to `p2/m-x` writes exactly one `session.bound`
+naming `p2/m-x`, and that write is what moves the `sessions` projection and advances `turn_index`; a
+request resolving to the route its session is already on writes nothing, which is the arm that must not
+regress. A move the plan policy's account handoff makes **later in the same request** is that handoff's own
+accounting (§4.6 rule 1), not this row's edge. (Both halves were unmeasured until R27: the shipped build
+passed a literal `false`, so a moved binding wrote **no** row and left the `sessions` projection on the
+stale route — the pre-existing `R21-F5`, frozen here and pinned by `CONF-80`, `DESIGN` §12.8.)
 
 **The rest of the group is a constant in v0.1** (known gap G-F): a record has one writer
 (`Accountant::commit`) and it writes `stateful_inbound: false` and `cache_control_breaks: 0` on every

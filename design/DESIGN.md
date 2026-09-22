@@ -937,6 +937,7 @@ not written).
 | CONF-69 | spec §4.11 (determinism; G3) + ADR-025·the second run is a no-op | **idempotence**: over one target and one answer set, the first run writes the file and a second run with the same answers leaves the file's bytes **and** its mtime unchanged while printing `no change` — asserted as a relation over the run's own two hashes — and the `--non-interactive` path over a fresh target shows the same property with the template as the base | the `setup` writer's plan/diff step (§12.14) |
 | CONF-70 | spec §4.11 (the secret boundary; G5) + §4.7 + ADR-025·names only | **the canary and the check's exit codes**: with the environment carrying a canary value for every variable the file names, `router setup --check`, `router setup --check --json` and `router setup --non-interactive` print no canary byte to stdout or stderr and write no file containing it — only **names** appear — while `--check` exits **0** with every named variable present, **4** with one provider key removed from the environment, **4** with the token's variable present but **empty**, and **2** when the target does not load | the `setup` writer's probe and report paths (§12.14) |
 | CONF-79 | spec §4.12 (the discovery order; G8) + ADR-025·one file is **found**, never merged | **the location rule on both sides of it**: with `XDG_CONFIG_HOME` pointed at a rig-owned directory carrying `router/config.yaml`, and a second `config.yaml` in the process's CWD — (a) an explicit `--config` naming a third file wins, and `serve` serves from it; (b) with no `--config` the XDG file wins over the CWD one, and the reported path plus its `selected_by` member name the rule; (c) with the XDG file removed, the CWD file is selected; (d) with both removed, a reader refuses (exit 2) naming `--config` and `router setup`, while the writer creates the XDG path together with its directory (`0700`) and the file (`0600`) — the modes read back from the filesystem, not from the code; (e) each case's config keeps §4.1's resolution rule (its traces and its store land under the config file's own directory — CONF-25's relation, re-asserted on the resolved-location shape) | `config_path::resolve` and the CLI argument layer (§12.14) |
+| CONF-80 | §6·state + §4.5·the binding's move arm and the TTL's unit | **the binding is created OR moved, and the TTL is milliseconds in / microseconds stored**: on the real `serve` assembly against a loopback mock — (a) with `session.ttl` at two granularities (a sub-second knob and a whole-hour one) the `session.bound` payload's `ttl_us` **and** the `sessions` row's `expires_at_us − the anchor event's ts_us` both equal the fixture's own configured milliseconds × 1 000 (a relation over the run's own config, never a snapshot of a number), and that binding is live before the deadline and gone after it; (b) over one session whose resolved route changes between turns, exactly one further `session.bound` is written naming the new provider/model, and the `sessions` projection's provider/model plus `turn_index` follow it; (c) a turn that resolves to the route the session is already on writes **no** row (the arm that must not regress); (d) each leg holds element for element on the buffered path and on the stream relay | `Accountant::bind_session` (§12.10.5 row 4 + note R6) and the `Forwarder::session_ttl_us` resolution (the `serve` assembly, `router-cli`) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1223,6 +1224,30 @@ mechanical extraction of the two calls `load` already makes), and CONF-43's docs
 round's own chapter rather than by editing that case — its marker requirement is why every `router setup` mention
 in `book/` carries "planned" / "not served" until the command lands (§12.14). Nothing in this allocation touches
 a gate definition, the corpus or an **existing** assertion (AGENTS 9 / ADR-012).
+
+**Allocation of `CONF-80` (R27, R27-1's freeze — the binding's create-or-move arm and the TTL's unit:
+`R21-F5` / `R21-F6`) — recorded 2026-09-23 by the round's freeze card, the R19-1/R20/R21/R22 precedent.** The
+occupancy check was an `ls` of the real directory (`tests/conformance/tests/`, 69 files: ids `01–47, 53–66,
+71–78`) cross-read with the paragraphs above: `48–51` stay reserved, and the R22 paragraph spends `67–70`
+**and** `79` (their files being owed by that round's own finding, R22-F4) — so, exactly as it says there,
+the next free ID is **`CONF-80`**, and this round takes it: the case that pins §12.10.5 row 4's second arm
+together with the unit of the value that row's payload carries (note R6 below; spec §6, spec §4.5). It lands
+with the implementation it witnesses, in `tests/conformance/tests/conf_80_route_changed_and_session_ttl_unit.rs`,
+parked `#[ignore = "CONF-80: depends on the measured route_changed and the x1000 session TTL"]` if written
+ahead of it — the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The ID is spent: not
+renumbered, not reused. Every leg observes a value that is **red on the pre-fix tree** — the anchor R27-3
+rebuilds it from is **`b9fd007`**, the commit this round is cut from: (a) a configured `60s` reaches the
+store as `60_000_000_000` µs where the fixture's own relation gives `60_000_000`, and the binding outlives
+its configured deadline by 1000×; (b) a session moving `p1/m-x` → `p2/m-x` writes **one** `session.bound`
+(its create arm) where the rule gives two, the `sessions` projection keeps `p1/m-x`, and the moved turn's
+`turn_index` repeats its predecessor's instead of advancing; (c) the unchanged-route leg is green on both
+trees — it is the arm the fix must not break; (d) both media fail (a)/(b) the same way. Measured at
+`b9fd007` by this round's freeze card: `autowork/harness/r27-1/r27-1-probe-output.txt` (29 checks; both
+defects present; the unchanged-route control green on the same tree). **Occupancy now**: `01–47, 53–70,
+71–80` spent; `48–51` reserved; the next free ID is **`CONF-81`**. No existing assertion is touched:
+`conf_66`'s two media legs, `conf_17`'s and `conf_35`'s `sticky_hit` literals, `conf_20`'s and `conf_21`'s
+`43_200_000_000` seed and the store's own unit fixtures stay byte-identical, and nothing here moves a gate
+definition, a threshold, the corpus or the L1 envelope (AGENTS 9 / ADR-012).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -1564,7 +1589,7 @@ CREATE TABLE sessions (                       -- the sticky table (ADR-004)
     provider      TEXT    NOT NULL,
     model         TEXT    NOT NULL,
     requests_seen INTEGER NOT NULL DEFAULT 0, -- the source of `turn_index` (§12.10.5)
-    expires_at_us INTEGER NOT NULL,
+    expires_at_us INTEGER NOT NULL,           -- µs: the binding event's ts_us + its payload's ttl_us (config `session.ttl` in ms x 1_000 — note R6)
     last_event    INTEGER NOT NULL
 );
 CREATE TABLE cache_ledger (                   -- the last prefix block set seen per session (spec §6)
@@ -1689,7 +1714,7 @@ follows ADR-009 item 4's single question (*may this fact be recomputed?*).
 | 1 | receive: the inbound bytes are read and hashed | `request.received` | once per request that entered the pipeline, before any decision | FULL | `protocol_in`, `protocol_out: null` (note R1), `client`, `session?`, `turn_index`, `body_hash` (the router-visible inbound bytes, note R4) |
 | 2 | transform chain, per step that changed the payload | `transform.applied` | after the step returns `Ok` and its report is built | NORMAL | plugin, added/saved tokens, `cache_impact`, verdict |
 | 3 | selector + guard chain | `decision.made` | once a route is chosen and the guards passed (or a `Downgrade` route taken) | NORMAL | provider, model (the provider-native id, §12.10.7), `requested_model` (the client's own string), `selection_source`, plugin chain, `decision_ms`, `protocol_out` |
-| 4 | session binding (after selection, before the attempt) | `session.bound` | only when the binding is created or moved; a sticky hit writes nothing | FULL | session key, provider, model, ttl |
+| 4 | session binding (after selection, before the attempt) | `session.bound` | only when the binding is created **or moved** — the move arm is `route_changed`, a **measured** value (note R6); a sticky hit on an unchanged route writes nothing | FULL | session key, provider, model, and `ttl_us` — **microseconds**, the config `session.ttl` (milliseconds) converted **once** at the resolution site (note R6) |
 | 5 | forward — the intent | `upstream.submitted` | **before** the attempt's request bytes are handed to the wire | **FULL** | route, `attempt_index`, `attempt_id`, `body_hash` of **that attempt's** byte-final bytes (note R4) |
 | 6 | forward — the outcome | `upstream.responded` | when the response head + body complete (buffered) or the stream ends (SSE) | FULL | status, raw `usage?`, latency, `wrote_full_request` |
 | 7 | classifier (a failure, `router-providers` → `router-core`) | `error.classified` | after `classify_upstream_error` returns, before the action's effect (ADR-011 item 8) | NORMAL | status, `reason`, `action`, matched table entry, `retry_after_s?`, `demotion?` |
@@ -1772,6 +1797,60 @@ rather than a position — the table is ordered by number and the *Written* colu
 lands — which is the same convention note R1 uses where a row's field list and its write point differ. Without
 the row, the account state would be memory instead of a projection: a restart would resume on the primary and
 re-send to a plan the upstream already refused, once per session, with no record of why.
+
+**R6 — row 4's move arm and the unit of the value it writes: the two frozen values (`R21-F5` / `R21-F6`).**
+Row 4's *Written* column has always read "only when the binding is created **or moved**", and the write's
+second input is `route_changed`, `Accountant::bind_session`'s argument next to `sticky_hit`
+(`router-proxy/src/accounting.rs`; the guard is `if sticky_hit && !route_changed { return }`). This round
+freezes both halves, because the shipped build passed a literal `false` and resolved the TTL 1000× too
+large.
+
+- **`route_changed` is measured, and it is read once per request.** It is true exactly when *the binding
+  that existed before this request differed in provider or model from the route this request resolved to* —
+  the route **after** the guard chain (`plan_guard`, which is where a family's account state may displace
+  the request) and **before** the attempt's intent row — and false when there is **no prior binding** or
+  when the prior binding already names that same provider and model. The prior binding is the row the same
+  single read already fetches: `Query::SessionBinding` in `session_sticky_hit` (`forward.rs`), taken at
+  session resolution in both paths (`forward.rs`'s and `stream_forward.rs`'s resolution step) *before* any
+  write the request makes — the one-read discipline R21 landed for `sticky_hit` (§12.6's bullet, CONF-66),
+  which this arm joins rather than extending with a second read: the read must yield **both** the predicate
+  and the prior route, so the two media pass the same pair into `bind_session` and a per-medium divergence
+  is impossible by construction. With no prior binding the early return cannot fire (`sticky_hit` is false),
+  so the create arm writes — row 4's first half — and `route_changed` may be reported as `false`, nothing
+  having existed to move. The comparison is over the resolved **provider and model** pair, not the client's
+  `model` string: a route change the client did not name (an alias retarget, a family displacement) is a
+  move too.
+- **The TTL is milliseconds in, microseconds stored — one conversion, × 1 000.** `DurationVal` is
+  milliseconds (§12.5). The `Forwarder` field `session_ttl_us` is what the `serve` assembly resolves from
+  `session.ttl` (`router-cli`), and every consumer reads it as **microseconds**: the row 4 payload
+  (`accounting.rs`), both `sessions` projection paths (`ProjectionWrite::SessionBound` and
+  `rebuild_sessions`, each `expires_at_us = the anchor row's ts_us + ttl_us`), and §12.10.8's account-move
+  handoff (`record_plan_switch`), which passes the same value when it re-points live bindings. One
+  conversion feeds all four, so the unit is stated **once**, at the resolution site, and no consumer may
+  rescale it. The store's own fixtures are the convention's witness (`43_200_000_000` µs for 12 h,
+  `3_600_000_000` for 1 h — one factor, ms × 1_000) and the in-tree counter-example is the plan cooldown's
+  single owner (`PlanPolicyCfg::cooldown_us`: milliseconds × 1_000, saturating via `try_from` so a u64→i64
+  cast cannot wrap negative) — the same rule at the other knob (L1b), not a second unit. The shipped build
+  multiplied × 1 000 000, so a configured `12h` expired at ~12 000 h; measured at `b9fd007`, a configured
+  `60s` reached the store as `60_000_000_000` µs (`autowork/harness/r27-1/`).
+- **Both are observation/accounting, and the boundary is exact.** Not one forwarded request byte moves: the
+  rewrite of the top-level `model` value and every other byte the client sent stay as they are (AGENTS 1),
+  the new value is a pure function of (content, stable config) — no clock, turn number or RNG enters it
+  (AGENTS 2) — and no gate definition, threshold, corpus digest or L1-envelope value moves. §13.3's leak
+  register gains **no row**: this is a single conversion site, not a primitive re-derived in two places (the
+  L1a–L1d shape), and L1b's cooldown row stays exactly as written — recorded so that nobody looks for a row
+  that is deliberately absent, the same convention R21 used for its "no ADR, and the reason written down".
+  The round's one measurement artifact is `CONF-80`'s allocation (§12.8).
+- **Registered, not fixed here — `R27-F1`: the account-move handoff writes the projection with no event
+  row.** `record_plan_switch`'s re-point loop (`forward.rs`, `Query::SessionBindingsFor` over the abandoned
+  route) writes `ProjectionWrite::SessionBound` for every live binding and appends **no** `events` row. Two
+  consequences, both outside this round's fix: `rebuild_sessions` reads `session.bound` rows only, so the
+  incremental `sessions` projection and a rebuild disagree after a spill — the relation this section states
+  ("`requests_seen` == the session's `session.bound` count, and the binding columns come from the latest
+  `session.bound` row") — and the upsert increments `requests_seen` for a session that made no request, so
+  those sessions' `turn_index` jumps. Whether the repair is an event row per re-pointed session or a
+  different ownership of the move is a contract question, so it belongs to a card of its own; this note is
+  its registration, and R27-2 must not fix it inside the pairing fix.
 
 **`turn_index`** is `requests_seen` for that session from the projection, read at receive time
 and incremented by the binding write; with no session, or on the session's first request, it is
