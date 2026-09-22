@@ -274,7 +274,7 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 | `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
 | `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | 2026-09-19 / 2026-09-20 |
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
-| `router-cli` | `serve` / `stats` / `replay` / `trace` | `clap`, `tokio` | 2026-09-19 (serve stub) |
+| `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2) | 2026-09-19 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
 | `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | 2026-09-19 (ADR-009) |
 | `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | 2026-09-19, as an empty shell |
@@ -932,6 +932,11 @@ not written).
 | CONF-59 | spec §8 + ADR-023 Decision 3·`skipped[]` carries one entry per candidate the chain offered | with a chain of **two models on one keyless provider** plus a keyed responses-wire entry, and nothing attempted: (a) both media's `no_available_route` refusal lists **three** entries in chain order — both models of the keyless provider with reason `keyless`, the wire-ineligible one with `wire_mismatch` — so `|skipped[]|` equals the rig's own offered-candidate count (the relation, not a snapshot); (b) the control without the duplicate model lists two, i.e. adding the second model of the same provider changed the list by exactly its own entry; (c) neither mock receives a request, no `upstream.submitted` row exists, `usage_missing: true` and nothing is charged | the buffered walk's keyless narration and the streaming construction's (one list, both media) |
 | CONF-64 | spec §6 (`failover_from`'s cooldown row) / §8 (the condition-N record) + ADR-024 Decision 1·a cooling route in a refused chain | **the cooldown displacement survives the refusal, on both media, red first (the streaming half is red at `47ac23c`)**: the resolved route is made to cool down **for real** by the rig's own earlier request (`403` + the `insufficient_quota` wording + `retry-after: 60`; ADR-011 item 4, no seeded projection row and no sleep), and the chain continues with a **keyless** candidate and a **wire-ineligible** one — nothing is attemptable: (a) both media get the frozen `no_available_route` body (`502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `|skipped[]|` equal to the chain's offered count, `upstream_status` / `error_class` `null`), the streaming arm differing by nothing but `"stream": true`; (b) **both** arms' records carry `result.failover_from` naming the abandoned route, with **no** `failover.triggered` row and **no** `upstream.submitted` row, `usage_missing: true`, nothing charged and `errors[0].details` equal to what the client saw — the buffered half is what `conf_42_non_primary_abandon_is_failover_only` already asserts (its `:350`/`:366`), the streaming half is the one this case adds; (c) the control: the same chain with no cooling candidate (the head keyless) leaves `failover_from` `null` on both media (CONF-57 (b)'s shape, re-asserted here as the discriminant against "the head's route is always written") | the streaming walk's refusal record carrying the walk's own `failover_from` (the two refusal returns, `stream_forward.rs:1044-1059` / `:1060-1092`) |
 | CONF-65 | spec §8 (`skipped[]`'s order) + ADR-024 Decision 2·the array is the chain's, not the medium's | **chain order and cross-medium equality, red first (the streaming half is red at `47ac23c`)**: over the CONF-64 rig's chain (cooling head, keyless candidate, wire-ineligible candidate, nothing attemptable): (a) each medium's `details.skipped[]` is the offered candidates that were **not** attempted, in the chain's own order — the `demoted` head first, then `keyless`, then `wire_mismatch` — asserted both as that exact sequence and as a relation (the array's `route` sequence is a subsequence of the chain's offered sequence, so the case does not rest on a snapshot of one config); (b) the two arms' arrays are **equal element for element**, so the whole body differs by `"stream": true` alone — before ADR-024's rule the streaming walk's in-walk `demoted` entry lands **last**; (c) the count half is unchanged (ADR-023 Decision 3, `|skipped[]|` == offered) and CONF-59's rig, which has no in-walk `demoted` entry, still lists its entries in chain order | `skipped[]`'s ordering in the streaming walk (each entry must keep its chain position; `stream_forward.rs:631` + `:652`) |
+| CONF-67 | spec §4.11 (the write strategy; G1/G2) + ADR-025·the file is **edited**, never reproduced | **the anchored-edit byte contract**: (a) `router setup --non-interactive --config <a path that does not exist>` produces a file whose bytes are **identical** to the template it started from (the binary's embedded `config.example.yaml`) — one hash comparison — and that file loads through the **same** loader `serve` runs; (b) with the `server` section's `addr` answered `<a different address>` and nothing else changed, the produced file differs from the base **only inside that key's own line** — every other line is byte-identical — and the file's counts of `source:` and `TODO verify against official source` occurrences equal the base's counts (relations over the run's own base, never a snapshot of a number) | the `setup` writer (§12.14) |
+| CONF-68 | spec §4.11 (the failure boundary; G4/G6) + ADR-025·refusal, never best effort | **the refusal ladder leaves the file alone**: for each of (a) an anchor the file does not carry (the key deleted from the target) **with** a requested change to it, (b) an anchor that resolves to more than one line (a second copy of the same key path), (c) a key whose value is not a single-line scalar (the target's `server:` block rewritten as a flow mapping) with a requested change to it, and (d) a requested value the loader refuses — the command exits **2**, names the key and the reason, leaves the target's bytes **and** its mtime unchanged, and leaves no `<target>.setup.tmp` behind; and the control, the same four keys with **no** requested change, exits 0 with a warning instead of a refusal for (a) and (c) | the `setup` writer's refusal ladder (§12.14) |
+| CONF-69 | spec §4.11 (determinism; G3) + ADR-025·the second run is a no-op | **idempotence**: over one target and one answer set, the first run writes the file and a second run with the same answers leaves the file's bytes **and** its mtime unchanged while printing `no change` — asserted as a relation over the run's own two hashes — and the `--non-interactive` path over a fresh target shows the same property with the template as the base | the `setup` writer's plan/diff step (§12.14) |
+| CONF-70 | spec §4.11 (the secret boundary; G5) + §4.7 + ADR-025·names only | **the canary and the check's exit codes**: with the environment carrying a canary value for every variable the file names, `router setup --check`, `router setup --check --json` and `router setup --non-interactive` print no canary byte to stdout or stderr and write no file containing it — only **names** appear — while `--check` exits **0** with every named variable present, **4** with one provider key removed from the environment, **4** with the token's variable present but **empty**, and **2** when the target does not load | the `setup` writer's probe and report paths (§12.14) |
+| CONF-79 | spec §4.12 (the discovery order; G8) + ADR-025·one file is **found**, never merged | **the location rule on both sides of it**: with `XDG_CONFIG_HOME` pointed at a rig-owned directory carrying `router/config.yaml`, and a second `config.yaml` in the process's CWD — (a) an explicit `--config` naming a third file wins, and `serve` serves from it; (b) with no `--config` the XDG file wins over the CWD one, and the reported path plus its `selected_by` member name the rule; (c) with the XDG file removed, the CWD file is selected; (d) with both removed, a reader refuses (exit 2) naming `--config` and `router setup`, while the writer creates the XDG path together with its directory (`0700`) and the file (`0600`) — the modes read back from the filesystem, not from the code; (e) each case's config keeps §4.1's resolution rule (its traces and its store land under the config file's own directory — CONF-25's relation, re-asserted on the resolved-location shape) | `config_path::resolve` and the CLI argument layer (§12.14) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1196,6 +1201,29 @@ round's record, not in a rewrite of them. One user-facing line stays stale and o
 illustration above it (`:84`'s `"sticky_hit":true`) must agree after R21, so the next card that opens
 `book/` narrows it (it can ride with the clause ADR-023 still owes `book/connecting-clients.md`).
 
+**Allocation of `CONF-67`…`CONF-70` and `CONF-79` (R22, ADR-025 — the `setup` writer's byte contract and the
+config-file location rule) — recorded 2026-09-22 by the round's freeze card, the R19-1/R20/R21 precedent.** The
+occupancy check was an `ls` of the real directory (`tests/conformance/tests/`) cross-read with the paragraphs
+above: `48–51` stay reserved, the paragraph above leaves `67–70` unallocated — exactly the four IDs it names as
+free — and `79` is the ID that paragraph names as the next free one, so the round takes all five: **`CONF-67`**
+(all-defaults output byte-identical to the template and differing from the base only inside the answered keys'
+lines), **`CONF-68`** (the refusal ladder leaves the target's bytes and mtime untouched, with no temporary file),
+**`CONF-69`** (idempotence: the same answers twice leave the file and its mtime unchanged), **`CONF-70`** (the
+secret canary, plus `--check`'s `0` / `4` / `2` exit codes by environment), and **`CONF-79`** (the discovery
+order, the `selected_by` member, the created file/directory modes, and §4.1's resolution rule re-asserted on the
+resolved-location shape). All five rows are above; the five files land with the implementation they witness, in
+`tests/conformance/tests/conf_67_*.rs` … `conf_70_*.rs` and `conf_79_*.rs`, parked `#[ignore = "CONF-67: depends
+on the setup writer"]` (and the same for 68–70, `CONF-79: depends on the config-file location rule`) if written
+ahead of it — the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The IDs are spent: not
+renumbered, not reused. **Occupancy now**: `01–47, 53–70, 71–79` spent — every ID from `01` to `79` is taken
+except the four reserved ones (`48–51`) — and the next free ID is **`CONF-80`**. No existing assertion is
+touched: the five cases are new files over a surface that did not exist, CONF-25's row, its `config_load` test
+and the loader's own messages are unchanged (the shared entry point `setup` reaches the parser through is a
+mechanical extraction of the two calls `load` already makes), and CONF-43's docs↔CLI relation is **kept** by the
+round's own chapter rather than by editing that case — its marker requirement is why every `router setup` mention
+in `book/` carries "planned" / "not served" until the command lands (§12.14). Nothing in this allocation touches
+a gate definition, the corpus or an **existing** assertion (AGENTS 9 / ADR-012).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1214,7 +1242,7 @@ rewrote their expected upstream body to the native id and parked all three `#[ig
 which un-ignores them. The IDs, the files and the shape of the assertions are unchanged — the expected
 value moved with spec §2, which is the only thing that legitimately moves it.
 
-### 12.9 Gaps and pending rulings (GAP-Q1…Q17)
+### 12.9 Gaps and pending rulings (GAP-Q1…Q23)
 
 **This section changes no existing clause, it only registers.** Each entry gives the default this blueprint
 adopts and its blast radius. (From the 2026-09-19 write-back on, the "write-back record" below the table governs: settled
@@ -1242,7 +1270,9 @@ items are written into the spec, unsettled ones stay registered.)
 
 | Q18 | a rule's `match_kind` is declared as a "payload category declaration" (`rules/tool_output.toml`), but nothing says where the category comes from: no wire field carries it and spec §4 defines no tool→kind table | the first rules select on `match_tool` alone, which is sufficient; `match_kind` is resolved by the implementing change (a declared tool→kind table in the plugin's config) | rule selection for the transform pipeline (§12.12); a rule that cannot select its targets must not fall back to guessing content (ADR-003) |
 | Q19 | the failing-rule reporting surface: `rules/tool_output.toml` says a rule that fails its inline tests is "reported in the startup log and `/health`", while spec §9.1's `/health` shape has no member for it | the startup log carries it; `/health` gains nothing until the surface's own contract is written | a documented surface with no shape must be named, not invented (§9.3's rule); the implementing change raises it |
-| Q20 | spec §4.10 rule 8: a price read the router must make **before** the upstream answers (the switch's re-prefill cost, `decide_switch`'s two unit prices) has no **measured** input size, so it cannot know which band applies | the read uses the **first** band of the destination entry (the one band every entry is guaranteed to have; no estimate is invented), and the figure keeps its `inferred` label (§7) | `result.plan_switch.switch_cost_nano` (and a failover's switch cost) may differ from the band the destination request actually falls in, in either direction — a pre-response figure is band-agnostic by convention and may not be read as a band-faithful quote. Registered trigger for revisiting: a request-size estimate existing at decision time (the dependency allowlist has no tokenizer, GAP-Q14). ADR-021 records why the first band was chosen over the last |
+| Q21 | spec §4.11's section table can only **replace a value on an existing line**: a genuinely new provider entry, a new alias, a new `fallback` entry or a new plugin entry has no anchor, and the command deliberately has no insert | the file is edited by hand for all four (the example's entries are the template to copy from), and `setup`'s own section for that block **says so** instead of pretending to cover it. A guided *insertion* would need a second contract — position, indentation, and the block's own style — inside a code path whose failure mode is a corrupted price table | what "most items take the default" means in practice: the wizard's reach is bounded by the example's own shape. Registered as a boundary, not an oversight; the trigger for revisiting it is a round that wants a wizard-created entry, and that round freezes the insert rule first |
+| Q22 | the config at the XDG default location (`~/.config/router/config.yaml`) keeps its traces **and its store** beside itself: §4.1's one resolution rule puts every relative path in the file under the config file's own directory, and the store's path is not a config key in v0.1 (fixed at `<config dir>/state/router.db`, spec §4.5, ADR-009 item 6) | the rule stays **one rule**: the store's location moves only when a round adds the additive `state:` key §12.5 already anticipates, never by a second rule that depends on where the config happens to sit. Until then `~/.config/router/` holds the config *and* its state, and whoever wants the traces elsewhere writes an **absolute** `trace.dir` (already supported; `~` is not expanded) | a dotfile-managed or synced `~/.config` carries a WAL database and hourly trace files. Registered as a boundary of the location change, with the trigger: a round that wants the XDG split (config under `~/.config`, state under `$XDG_STATE_HOME`) must promote `state.dir` to a key **and** decide the migration for existing installations — ADR-009 item 6's anchor is asserted by CONF-25 |
+| Q23 | a **layered** configuration (a global file plus a project file plus an admin/managed file, merged key by key — opencode's eight layers, codex's project / `--profile` / managed stack) is not modelled: §4.12 finds **one** file | not in v0.1. One file, found by a documented order, is what keeps four things true at once: "the file is the single source of truth" (§4's usage note), `deny_unknown_fields`'s single place to be wrong (§12.5), the anchored-edit write strategy (**a merge has no single base to edit** — ADR-025), and the "back the config and its state together" story (§4.12's second rule) | registered as a **candidate for a later round**, with its own ADR: it changes the config's identity (which file a key came from), the provenance of every load error, what `/health`'s "what was loaded" means, and `setup`'s whole write strategy — one round cannot land half of it |
 
 **A note on the numbering: Q17 is not absent by accident.** It belongs to the currency / region / route-tag
 contract that is being written on another branch of this repository, and this tree's table therefore
@@ -1422,6 +1452,13 @@ pub struct ResolvedConfig {
 - **No defaults outside the file.** The bootstrap stub's hardcoded `127.0.0.1:8790` address and
   hardcoded five-plugin list are removed and may not reappear in the serving path; the listen
   address, plugin set and roster come from the config and are asserted to do so by CONF-25.
+- **`load` is the only reader, and `load` is the only validator.** `router setup` (§12.14) is the
+  **second writer** of a config file (a human editor is the first), and it reaches the parser through
+  the *same* two calls this section's `load` makes — deserialize as `RouterConfig`
+  (`deny_unknown_fields`), then `validate()` — factored so the startup path and the setup path cannot
+  drift: a candidate config is written only after it passes them. The path rule is unchanged for a
+  file `setup` wrote: a relative `trace.dir` / `rules_file` in it resolves against **its own
+  directory**, like any other config file's.
 
 #### 12.10.3 The streaming data plane: SSE byte-level requirements
 
@@ -2501,6 +2538,172 @@ shape — **nothing is added**, so `schema_version` stays **2** (§12.6's rule d
 field is introduced); `cost.currency`; the store (no event kind, no projection); `context` and the capability
 guard; `quota`'s chargeable-token convention (`input_total + output`, GAP-Q1); and the in-plan zero marginal
 price. For an entry written flat, every one of these is unchanged by construction — the vector has one element.
+
+### 12.14 The `router setup` writer: the anchored-edit landing (ADR-025; spec §4.11, §4.12)
+
+The contract is spec §4.11 (the writer) and §4.12 (where the file it writes is found); this is where they land.
+`setup` is the **second writer of a config file** this
+repository has (§12.10.2's `load` / `ResolvedConfig` path is the first, and it is read-only). It is a
+`router-cli` command like the others, and like them it is **not** in the serving path: no request path reaches
+it, and it writes no trace, no event and no store row.
+
+The comparison this landing follows is the round's survey, `autowork/survey/2026-09-22_config-setup-usability.md`
+(hermes-agent / opencode / codex / `docker init`, measured locally with sources); "technique N" below is that
+file's §2, and "anti-pattern N" its §4.
+
+**Module map** (`crates/router-cli/src/`, one module per concern, no new dependency anywhere):
+
+| Module | Holds |
+|---|---|
+| `setup/mod.rs` | the run: the target/base decision, the section list, the plan → validate → land sequence, the exit codes |
+| `setup/sections.rs` | **the section table** — the single place the wizard's key set is written (section, key path, edit kind, how to ask, style hint) |
+| `setup/anchor.rs` | the line-oriented locator: key paths → a unique `(line, byte range)` inside the file's own bytes |
+| `setup/edit.rs` | the two edit kinds, the value codec, `Plan`, `apply` |
+| `setup/prompt.rs` | the answer channel: `std::io::IsTerminal` on stdin, line reads, the `[default]` rendering |
+| `setup/report.rs` | the `--print` / `--check` / `--dry-run` renderings, human and `--json` |
+| `config_path` (**not** under `setup/`) | the location rule both sides call: spec §4.12's order, the `selected_by` member, the `mkdir -p` / `0600` / `0700` rules. `main` resolves once and passes an **absolute path** to `serve` / `stats` / `setup`, whose signatures are unchanged — which is what keeps CONF-23's, CONF-25's and CONF-43's rigs driving the same code path they always did |
+
+**Types** (sketch; the shapes whose *stability* matters, not the bodies):
+
+```rust
+pub enum Section { Server, Auth, Session, Paths, Providers, Routing, Plugins }
+
+/// One askable (or display-only) key. `path` is a key path in the anchor grammar below; it must resolve in
+/// config.example.yaml — a unit test asserts that for every row, so the table and the example cannot drift.
+pub struct KeySpec { pub section: Section, pub path: &'static str,
+                     pub kind: EditKind,          // Value | Enabled
+                     pub ask: Ask,                // Line | Enum(&'static [&'static str]) | Bool | Show
+                     pub note: &'static str }     // the display-only keys' "edit by hand" line
+
+pub enum EditKind { Value, Enabled }
+pub enum Ask { Line, Enum(&'static [&'static str]), Bool, Show }   // Show = never prompted, never written
+
+/// A resolved anchor: the line's index, the byte extent of the value **within that line**, and whether the
+/// line is currently commented out. `Enabled` edits toggle the comment marker at `range`'s line start.
+pub struct Anchor { pub line: usize, pub range: Range<usize>, pub enabled: bool, pub quoted: bool }
+
+pub enum AnchorError { NoSuchKey, Ambiguous(usize), NotSettable(&'static str) }   // &'static str = why
+
+pub enum Edit { Set { anchor: Anchor, bytes: String },                 // replace the extent
+                Enable { anchor: Anchor, enabled: bool, value: Option<String> } }
+
+pub struct Plan { pub edits: Vec<Edit> }        // sorted by (line, range.start), asserted disjoint
+
+pub fn resolve(text: &str, path: &str) -> Result<Anchor, AnchorError>;
+pub fn apply(base: &[u8], plan: &Plan) -> Vec<u8>;            // pure; byte-splicing only
+```
+
+**The anchor grammar** (frozen; the unit tests are its source):
+
+| Form | Resolves to |
+|---|---|
+| `a.b.c` | the value of key `c` in the block mapping `b` in the document's `a` block |
+| `a.b[i]` | the `i`-th entry of the **block sequence** `b` (0-based), when that entry is a single-line scalar |
+| `a[id=NAME].k` / `providers[name=NAME].k` | the key `k` inside the list entry whose own sibling `id:` / `name:` is `NAME` |
+
+**The locator's rules — the one piece that carries the risk, so every rule is stated.** It is a **line
+locator, not a YAML parser**: it never builds a document and never rewrites one (a document would discard the
+comments the whole strategy exists to protect).
+
+1. Indentation is spaces; a tab is never indentation. Depth is compared by indentation, not counted from the
+   document root, so a key path is walked depth by depth from the root block.
+2. The key/value separator is the first `:` that is followed by a space or end-of-line **after** the key text —
+   a `:` inside a value is not one.
+3. A value's extent runs from the first non-space after the separator to the last non-space before an
+   **unquoted** ` #` (the trailing comment) or the end of line; a quoted value's extent is delimited by its
+   quotes, and `quoted` records that, because the codec must reproduce the file's own style.
+4. A list entry that is a single-line scalar is `- <scalar>` at the list's child indentation.
+5. `[id=NAME]` / `[name=NAME]` resolve by scanning that entry's **own** lines only, so a key of a *different*
+   entry can never be matched by text alone.
+6. **Not settable** (a refusal for a requested change, a warning otherwise): a value inside a flow collection
+   (`{ … }`, `[ … ]`), a block scalar, a multi-line value, or a key that appears at two depths the path cannot
+   distinguish. **Ambiguous** when the path matches more than one line. **No such key** when it matches none.
+7. The scanner reads bytes; it edits a **copy** of the base and returns new bytes. The target is never edited
+   in place.
+
+**The value codec.** The replacement is encoded from the anchor's own style — `quoted` reused; a bare boolean
+and a bare number stay bare; the §12.5 duration grammar is reused rather than invented (a duration answer is
+validated before it is encoded, and the loader validates the candidate again). For a key the file ships
+commented out, the *commented* value's style is the style. The codec never re-quotes another key's line and
+never touches a line it has no edit for.
+
+**The run, in order** (each step a place a refusal can happen; every refusal writes nothing):
+
+1. Resolve the target by spec §4.12's discovery order (`config_path::resolve`): `--config` > the XDG location >
+   `./config.yaml` > (the writer only) the XDG location, created. `mkdir -p` the target's directory when it is
+   missing; `0600` on a file this run creates, `0700` on a directory it creates, never a re-mode of one that
+   already exists; a target that is a directory, or a directory that cannot be created because a component is
+   not a directory, is a refusal (exit 2). If the target exists and `--force` is absent, the base is the
+   target's own bytes, else the template's (`--from`, else the embedded example); a missing template is a
+   refusal.
+2. `--print` and `--check` print and return here (no prompt, no write). `--dry-run` runs the plan and prints it
+   in place of step 9.
+3. Build the section list (bare / `all` = all seven, in the order spec §4.11's table lists them).
+4. For each key of each section: resolve the anchor against the **base**; the shown default is the file's
+   current value, else the commented value, else the template's value at that key. `Show` keys are printed
+   with their value and their hand-edit note and are never prompted.
+5. Read the answer: a line (empty = the default), an enum (the default item is marked, and choosing it prints
+   `Skipped (keeping current)` — hermes-agent's technique 2/3, §12.14's survey), or a boolean. **EOF mid-run is
+   a cancel**: nothing is written, exit 2 — a half-answered run never lands.
+6. An answer that differs from the default adds an edit; a key whose anchor did not resolve is a **refusal**
+   when it has a requested change and a **warning** when it does not.
+7. Sort the edits, assert disjoint, `apply` → candidate bytes.
+8. **`config_load::validate_text(&candidate)`** — the shared entry point extracted from `load()`, so the
+   deserializer and `validate()` `serve` runs are literally the same two calls. The messages `load()` prints
+   today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged).
+9. Empty plan → `no change: <path> left as it is`, exit 0 (this is what makes a second run a no-op).
+10. `--backup` (or `--force`, which implies it) → copy the existing target to `<target>.bak`.
+11. Write candidate bytes to `<target>.setup.tmp` in the target's directory, `sync_all`, `rename` over the
+    target; on any failure remove the temporary file and exit with the reason (`1` for I/O). Print the absolute
+    path and the number of edits applied.
+
+**`--check`'s probes** are the two `serve` already makes, and nothing else: for each `providers[*].api_key_env`,
+`std::env::var_os(name).is_some()` → present / absent; for `server.auth_token_env` when the key is enabled,
+`std::env::var(name)` → value (non-empty) / **empty** / **absent**, the distinction `lib.rs:81-98` refuses the
+start on. Both probes are presence-only: no value is stored, formatted or printed by any branch — including
+`--json`, whose members are names, statuses and paths and which has no field a value could occupy.
+
+**The location rule's landing (spec §4.12).** One resolver, called once: `main` computes the target with
+`config_path::resolve(explicit)` and passes an **absolute path** on, so `router_cli::serve(&str)` and
+`stats::stats(&str, …)` keep the signatures their rigs already drive (CONF-23, CONF-25, CONF-43) and
+`Command::Serve { config }` / `Stats { config }` become `Option<String>` (a shape CONF-47's control, which
+matches `Serve { .. }`, tolerates). Absence resolves instead of erroring at the parser; **creation happens only
+in the writer mode**, so a reader that finds nothing refuses (exit 2) naming `router setup` and `--config`.
+Modes need no dependency: the temporary file is opened with `OpenOptions::mode(0o600)` — a umask can only clear
+bits, so `0600` is exact whatever the ambient umask — and a directory `create_dir_all` created gets an explicit
+`set_permissions(0o700)` afterwards, because that call cannot express a mode; nothing is re-moded.
+
+**What this does not change.** §12.5's types and the parser (`setup` adds no key: `deny_unknown_fields` makes a
+wizard-only key an unservable file); `load()`'s messages and `ResolvedConfig`; the store (no event kind, no
+projection — a setup run leaves no row); the proxy and the byte boundary (nothing here is on a request path);
+`TRACE_SCHEMA_VERSION` (2); the dependency allowlist (stdin, stdout and `std::io::IsTerminal` are std, and no
+prompt/TUI crate is taken); `tests/conformance`'s existing assertions; the gates and the corpus (AGENTS 9 /
+ADR-012). `router-cli`'s public surface gains one command (§12.1's row) and its committed dependencies are
+unchanged.
+
+**The rig** (the shape the implementing round builds; assertions and IDs in spec §4.11 and §12.8):
+
+- **Unit, pure, no I/O** (`setup/anchor.rs`, `setup/edit.rs`): the anchor grammar table above row by row,
+  including each refusal (`NoSuchKey` / `Ambiguous` / `NotSettable`); the codec's quoting; the plan's
+  sort-and-disjoint assertion; and the table↔example check (every `KeySpec.path` resolves in
+  `config.example.yaml`).
+- **Integration, the file contract** (the G1–G8 table in spec §4.11, plus the location case CONF-79): byte
+  identity on the all-defaults path,
+  locality of *k* changes, idempotence (a second run's hash **and** mtime unchanged), the refusal ladder
+  leaving the target's hash unchanged, the `--check` exit codes, and the secret canary.
+- **The interactive path is driven by a PTY script** (the survey's own technique for `docker init`), not by a
+  Rust test harness: a PTY test dependency would be a dependency-allowlist change (§12.1) and therefore a human
+  decision, and the zero-dependency path is a script.
+- **The docs↔CLI guard is a hand-off, not a footnote.** CONF-43 already asserts, live, that every `router
+  <subcommand>` mention in `README.md` and `book/` either resolves in the parser or sits in a paragraph carrying
+  one of its five deferral markers. **This round's own chapter is written to keep that green while the command
+  does not exist** — every `router setup` mention carries "planned" / "not served" — and it was verified at this
+  round's tree (`cargo test -p router-conformance --test conf_43_cli_docs_consistency`: 1 passed). The
+  implementing round therefore has **two** obligations beyond the code: add `router setup` to `README.md`'s CLI
+  block (CONF-43's direction 2 requires every served subcommand to be mentioned in the docs), and retire the
+  deferral markers this chapter carries once the command is served — stale "planned" text on a served command
+  is not caught by the case (a mention of a served word never enters its whitelist), so it is a documentation
+  debt the round must pay by hand.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
