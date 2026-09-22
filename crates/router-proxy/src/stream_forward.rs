@@ -882,15 +882,20 @@ impl Forwarder {
                         });
                     }
                     // A failure status head before any relayed byte is the
-                    // ordinary error path (R6 column 1): classify with the
-                    // same evidence inputs as the buffered path, record,
-                    // act — the §8 body answers.
+                    // ordinary error path (R6 column 1), classified per
+                    // DESIGN §12.10.3 R12: the head's OWN answer — status,
+                    // headers and body bytes — through the provider
+                    // layer's one reader, the same evidence expression
+                    // the buffered path feeds the classifier. The read is
+                    // bounded by R4's idle bound alone (no byte cap); a
+                    // read that ends short leaves the classifier the
+                    // bytes that arrived.
                     let status = head.status;
-                    let resp = head.as_upstream_response();
+                    let resp = head.into_upstream_response(idle).await;
                     let evidence = ErrorEvidence {
                         status: Some(status),
                         retry_after: resp.retry_after.as_deref(),
-                        body: b"",
+                        body: &resp.body,
                         wrote_full_request: true,
                         transport_cause: None,
                     };

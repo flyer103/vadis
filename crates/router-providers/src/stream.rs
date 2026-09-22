@@ -26,14 +26,35 @@ pub struct StreamHead {
 }
 
 impl StreamHead {
-    /// The buffered-path view of the head (status + selected headers, no
-    /// body) — what error classification consumes on a failure head.
-    pub fn as_upstream_response(&self) -> crate::UpstreamResponse {
+    /// The buffered-path view of the head (status + selected headers +
+    /// the answer's own body bytes) — what error classification
+    /// consumes on a failure head (DESIGN §12.10.3 R12). The body is
+    /// read to the end, one `read_chunk` at a time, under §12.10.3
+    /// R4's idle bound — no byte cap, matching the buffered path's
+    /// own read; a read that fails or trips the bound simply yields
+    /// the bytes that arrived. Consumes the head: a failure head has
+    /// no second reader, and the success path relays the body instead
+    /// of reading it.
+    pub async fn into_upstream_response(
+        mut self,
+        idle_timeout: Duration,
+    ) -> crate::UpstreamResponse {
+        let status = self.status;
+        let retry_after = self.retry_after.clone();
+        let content_type = self.content_type.clone();
+        let mut body = Vec::new();
+        // Both `Failed` shapes (a mid-body read error and the idle
+        // bound) end the loop like `Ended`: a read that ends short is
+        // fewer evidence bytes, never an outcome of its own (the
+        // classification's input, R12).
+        while let StreamRead::Chunk(c) = read_chunk(&mut self, idle_timeout).await {
+            body.extend_from_slice(&c);
+        }
         crate::UpstreamResponse {
-            status: self.status,
-            retry_after: self.retry_after.clone(),
-            content_type: self.content_type.clone(),
-            body: Bytes::new(),
+            status,
+            retry_after,
+            content_type,
+            body: Bytes::from(body),
         }
     }
 }
