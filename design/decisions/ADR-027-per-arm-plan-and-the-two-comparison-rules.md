@@ -228,6 +228,13 @@ consequence (condition 3 fails until a live byte audit exists) is the *honest* s
 - **What was not executed while writing this**: no arm was started, no mock was run, no upstream was called.
   The two probes behind the L2/L3 statements were read-only calls to the harness's own parser and emitter at
   this HEAD (`e49fcf4`), and their outputs are quoted in the contract's rev-5 facts table.
+- **One residual seam is registered and not ruled on** (contract §15.5): condition 0's derivation counts an
+  *absent* session identity as a distinct one (`sessions_a = [None]` is truthy and `shared` filters `None`
+  out, `replay.py:2162-2176`), so a run whose measured items carry no session would pass the check while
+  reporting "distinct observed client session identities". The per-arm plan makes that shape unreachable for
+  a `paired-sessions` pair (COR-2.5's refusal 2 requires a non-null session), but the derivation itself is
+  untouched here — condition 0's sentence is not this ADR's to edit, and the round that re-opens a live label
+  is where it belongs.
 
 ## Reversibility
 
