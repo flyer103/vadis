@@ -451,10 +451,26 @@ One request leaves two records, and they have different jobs:
   **× 1 000**, it happens **once** — where the serving path resolves the configured value, never in a
   consumer — and a reader that subtracts an event's `ts_us` from `expires_at_us` recovers the configured
   TTL by dividing by 1 000. Every consumer of that value obeys the same rule, including the account-move
-  handoff of §4.6 that re-points live bindings. (Stated here because it is the sticky table's own state.
+  handoff of §4.6 that re-points live bindings — and that handoff's rows are anchored on the
+  `session.bound` row they write, **never** on the `plan.switched` row that caused the move: *the binding
+  event* is the row that carries the binding, and the anchor is a function of that row's own `ts_us`
+  (`R27-F1`, closed by R28; `DESIGN` §12.10.5 note R7). (Stated here because it is the sticky table's own state.
   The shipped v0.1 build converted × 1 000 000 instead, so a configured `12h` was honoured as ~12 000 h —
   the pre-existing `R21-F6`, frozen and corrected by R27; the store's own fixtures are the convention's
   witness, `43_200_000_000` µs for a 12 h binding.)
+- **A binding's state is read off one row, and a move is a write to that row.** The sticky table is a
+  projection of `session.bound` rows **alone**: a session's `provider`/`model` come from its **latest**
+  such row, `requests_seen` is that session's `session.bound` **count**, and `expires_at_us` is that row's
+  `ts_us` + its `ttl_us`. Whoever owns a move owns a write to this row — the request's own resolution
+  (§6's `route_changed`) *and* the plan policy's account handoff (§4.6 rule 1) — so the handoff re-points a
+  family's live bindings by writing **one `session.bound` row per re-pointed session**, never by writing
+  the projection alone: a state transition the log does not carry is not state (ADR-010), and a projection
+  written without its row is exactly the disagreement a rebuild repairs *away* (`R27-F1`, closed by R28;
+  the landing is `DESIGN` §12.10.5 note R7). A move is not a client request, and `requests_seen` therefore
+  counts **binding writes**, not requests: `turn_index` (§6) is this count + 1, and it advances on a move.
+  (One consequence is worth stating because it looks like a defect and is not: a session can gain two rows
+  in one request — its own resolution moved it onto the route the handoff is abandoning, and the handoff
+  then moves it again. The count is still a pure function of the log and live and rebuild agree.)
 - **Durability**: intent / accounting events commit (`synchronous=FULL`) **before** the effect they
   authorize; projections are `NORMAL` and batched (ADR-009).
 - **Crash window**: an upstream intent with no response is an `unknown_outcome` — the quota is **not**
@@ -1230,7 +1246,19 @@ session whose client `model` string changes from `p1/m-x` to `p2/m-x` writes exa
 naming `p2/m-x`, and that write is what moves the `sessions` projection and advances `turn_index`; a
 request resolving to the route its session is already on writes nothing, which is the arm that must not
 regress. A move the plan policy's account handoff makes **later in the same request** is that handoff's own
-accounting (§4.6 rule 1), not this row's edge. (Both halves were unmeasured until R27: the shipped build
+accounting (§4.6 rule 1) and **not** this row's edge — it is not one of the two inputs above (it happens
+*after* the request's own bind, and it compares nothing against the pre-request binding) — but it **is**
+this row: the handoff writes one `session.bound` per re-pointed session, of the same payload shape, and the
+`sessions` row rides on that row's own `ts_us` exactly as any other bind's does (`DESIGN` §12.10.5 note R7).
+So a move advances `turn_index` whoever owns it, and `requests_seen` counts **binding writes** rather than
+client requests; where that matters — the probe's `turn_index == 1` boundary (§4.6 rule 2) — a move is inert
+by construction, because a re-point can only reach a session that already has a live binding (both writers
+insert `1` on create), so its count was already ≥ 1 and the boundary is not crossed. The row is not
+optional: without it the log does not contain the move, so a rebuild repairs the projection *back* onto the
+abandoned route, which is what `R27-F1` measured (twice: `requests_seen` live 3 vs rebuild 1, and, after a
+spill with no recovery, a **provider-level** disagreement — live `api` vs rebuild `coding_plan`) and what
+R28 closes. All three writers of this row (the create arm, the request's own move arm, the handoff) share one
+shape and one projection rule, which is what makes `requests_seen` a pure function of the log. (Both halves were unmeasured until R27: the shipped build
 passed a literal `false`, so a moved binding wrote **no** row and left the `sessions` projection on the
 stale route — the pre-existing `R21-F5`, frozen here and pinned by `CONF-80`, `DESIGN` §12.8.)
 
