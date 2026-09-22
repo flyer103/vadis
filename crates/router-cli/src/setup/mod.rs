@@ -188,63 +188,29 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
         return Ok(EXIT_OK);
     }
 
-    // Step 9: an empty plan over an **existing** target writes nothing —
-    // this is what makes a second run a no-op rather than a rewrite (G3).
-    // A target that does not exist yet still lands: its base was the
-    // template (G1 / CONF-67(a) — a fresh all-defaults run writes the
-    // template verbatim), so "nothing to ask" is not "nothing to do".
-    if plan.is_empty() {
-        if !target_exists {
-            // The candidate is the base itself here (no edits moved), but
-            // the loader gate is not conditional on there being edits: a
-            // template that does not load (`--from` a mangled file) must
-            // refuse exactly like an edited candidate (spec §4.11's
-            // "validation before anything lands").
-            if let Err(reason) = crate::config_load::validate_text(&base_text) {
-                return Err(Failure::Refused(format!(
-                    "the candidate does not load: {reason}"
-                )));
-            }
-            land(&target, base_text.as_bytes())?;
-            if args.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&report::landed_json(
-                        &target.path,
-                        target.selected_by.as_str(),
-                        0
-                    ))
-                    .unwrap()
-                );
-            } else {
-                print!(
-                    "{}",
-                    report::landed_text(&target.path, target.selected_by.as_str(), 0)
-                );
-            }
-            return Ok(EXIT_OK);
-        }
+    // Step 9: an empty plan over a base that **is** the target's own
+    // bytes writes nothing — this is what makes a second run a no-op
+    // rather than a rewrite (G3; spec §4.11: "Nothing to change ⇒
+    // nothing is written"). But "nothing to ask" is not "nothing to do"
+    // when the base is not the file that is there: a fresh target, or
+    // `--force` over an existing one, still lands the template verbatim
+    // with zero answers (G1 / CONF-67(a); spec §4.11's `--force` row:
+    // "the target is replaced by the template plus your answers" —
+    // `--force` is consulted on the empty-plan path too, and it implies
+    // `--backup`, so the replaced file survives at `<target>.bak`;
+    // R22-F1).
+    if plan.is_empty() && target_exists && !args.force {
         print!("{}", report::no_change_text(&target.path));
         return Ok(EXIT_OK);
     }
 
-    // `--dry-run` prints the plan in place of the landing (step 2).
-    if args.dry_run {
-        if args.json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&report::dry_run_json(&plan)).unwrap()
-            );
-        } else {
-            let lines: Vec<&str> = base_text.lines().collect();
-            let get = move |i: usize| lines.get(i).copied().map(|s| s.to_string());
-            print!("{}", report::dry_run_text(get, &plan));
-        }
-        return Ok(EXIT_OK);
-    }
-
-    // Step 7: apply → candidate bytes.
-    let candidate = edit::apply(&base_text, &plan);
+    // Step 7: apply → candidate bytes. An empty plan's candidate is the
+    // base itself (no edits moved it).
+    let candidate = if plan.is_empty() {
+        base_text.clone()
+    } else {
+        edit::apply(&base_text, &plan)
+    };
 
     // Step 8: the same loader, on the candidate, before anything lands.
     // A candidate that does not load is never written, and the message is
@@ -1198,6 +1164,121 @@ mod tests {
                 "(c) --dry-run implies no backup (there is no write to precede)"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R22-F1 (a): `--force` is consulted on the empty-plan path — over
+    /// an existing target it replaces the file with the template (0
+    /// edits) and keeps the previous bytes at `<target>.bak` (`--force`
+    /// implies `--backup`; spec §4.11's `--force` and `--backup` rows).
+    #[test]
+    fn r22_f1_force_replaces_on_the_empty_plan_path() {
+        let dir = temp_root("f1force");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        // A hand note `--force` is defined to discard (spec §4.11: "What
+        // it discards is any note **you** wrote into your own file").
+        let hand = EMBEDDED_TEMPLATE.replace(
+            "  request_timeout: 10m",
+            "  request_timeout: 11m          # my own note",
+        );
+        std::fs::write(&target, &hand).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                force: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            EMBEDDED_TEMPLATE.as_bytes(),
+            "the empty-plan --force run replaced the target with the template"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("config.yaml.bak")).unwrap(),
+            hand.as_bytes(),
+            "--force implies --backup: the replaced file survives at <target>.bak"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R22-F1 (b): the loader gate runs on the empty-plan path too —
+    /// `--force --from <a template that does not load>` over an existing
+    /// target refuses (exit 2), replaces nothing, and writes no backup
+    /// (spec §4.11: "a candidate that does not load" ⇒ exit 2, nothing
+    /// written).
+    #[test]
+    fn r22_f1_loader_gate_runs_on_the_empty_plan_path() {
+        let dir = temp_root("f1loader");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let (before, before_mtime) = (
+            std::fs::read(&target).unwrap(),
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+        );
+        // A template that does not load: an unknown key under
+        // `deny_unknown_fields`.
+        let mangled = EMBEDDED_TEMPLATE.replace("server:\n", "server:\n  no_such_key: 1\n");
+        let from = dir.join("mangled.yaml");
+        std::fs::write(&from, &mangled).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                force: true,
+                non_interactive: true,
+                from: Some(from.display().to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(
+            code, 2,
+            "--force --from <unloadable> over an existing target refuses"
+        );
+        assert_eq!(before, std::fs::read(&target).unwrap(), "bytes unchanged");
+        assert_eq!(
+            before_mtime,
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+            "mtime unchanged"
+        );
+        assert!(
+            !dir.join("config.yaml.bak").exists(),
+            "nothing was written, so nothing was backed up either"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R22-F1 (c): the empty plan over an existing target **without**
+    /// `--force` keeps its no-op behavior — the fix moved the branch,
+    /// this pins that it did not move away. Basis: spec §4.11's `--force`
+    /// row ("the base becomes the template **instead of the file that is
+    /// there**") — without the flag the file that is there is the base,
+    /// and an empty plan over it has nothing to land ("Nothing to change
+    /// ⇒ nothing is written").
+    #[test]
+    fn r22_f1_empty_plan_existing_target_without_force_still_no_op() {
+        let dir = temp_root("f1noop");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let (before, m) = (
+            std::fs::read(&target).unwrap(),
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+        );
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        assert_eq!(before, std::fs::read(&target).unwrap(), "bytes unchanged");
+        assert_eq!(
+            m,
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+            "mtime unchanged"
+        );
+        assert!(
+            !dir.join("config.yaml.bak").exists(),
+            "no backup: no write was attempted"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
