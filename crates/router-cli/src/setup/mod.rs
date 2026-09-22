@@ -155,6 +155,39 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
 
     let plan = build_plan(&base_text, &selected, prompter, args)?;
 
+    // `--dry-run`: the plan in place of any landing — checked before the
+    // empty-plan branches and before the write itself, so "no write"
+    // holds whatever the plan's size and whatever the target's state
+    // (spec §4.11's `--dry-run` row; R22-F2: this used to sit below the
+    // empty-plan landing, so a fresh target was really written).
+    if args.dry_run {
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report::dry_run_json(&plan)).unwrap()
+            );
+        } else {
+            let lines: Vec<&str> = base_text.lines().collect();
+            let get = move |i: usize| lines.get(i).copied().map(|s| s.to_string());
+            print!("{}", report::dry_run_text(get, &plan));
+            // An empty plan is not silence: the run's outcome, stated
+            // without performing it — the landing it would perform (a
+            // base that is not the file that is there), or the
+            // no-change line it would print.
+            if plan.is_empty() {
+                if target_exists && !args.force {
+                    print!("{}", report::no_change_text(&target.path));
+                } else {
+                    print!(
+                        "{}",
+                        report::dry_run_would_write_text(&target.path, target.selected_by.as_str())
+                    );
+                }
+            }
+        }
+        return Ok(EXIT_OK);
+    }
+
     // Step 9: an empty plan over an **existing** target writes nothing —
     // this is what makes a second run a no-op rather than a rewrite (G3).
     // A target that does not exist yet still lands: its base was the
@@ -1074,6 +1107,97 @@ mod tests {
         );
         assert!(after.contains("request_timeout: 11m"));
         assert!(after.contains("127.0.0.1:9911"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R22-F2: `--dry-run` lands nothing — whatever the plan's size and
+    /// whatever the target's state. (a) is the exact run that used to
+    /// write the template verbatim (empty plan, fresh target); (c) adds
+    /// that `--dry-run` implies no backup either — `--backup` is "before
+    /// a write", and there is no write (spec §4.11's rows).
+    #[test]
+    fn r22_f2_dry_run_never_lands() {
+        let dir = temp_root("dryrun");
+        // (a) fresh target, empty plan, non-interactive.
+        {
+            let target = dir.join("fresh.yaml");
+            let dir_before = std::fs::metadata(&dir).unwrap().modified().unwrap();
+            let code = run_with_prompt(
+                &SetupArgs {
+                    dry_run: true,
+                    non_interactive: true,
+                    config: Some(target.display().to_string()),
+                    ..Default::default()
+                },
+                &non_interactive(),
+            );
+            assert_eq!(code, 0);
+            assert!(
+                !target.exists(),
+                "(a) --dry-run: the fresh target is not created"
+            );
+            assert!(
+                !dir.join("fresh.yaml.setup.tmp").exists(),
+                "(a) --dry-run: no temporary file"
+            );
+            assert_eq!(
+                dir_before,
+                std::fs::metadata(&dir).unwrap().modified().unwrap(),
+                "(a) --dry-run: the target's directory mtime is unchanged"
+            );
+        }
+        // (b) fresh target with one answered change: the plan is built
+        // (and printed by the walk) and still nothing lands.
+        {
+            let target = dir.join("fresh2.yaml");
+            let code = run_with_prompt(
+                &SetupArgs {
+                    dry_run: true,
+                    non_interactive: true,
+                    section: Some("server".to_string()),
+                    config: Some(target.display().to_string()),
+                    ..Default::default()
+                },
+                &scripted(&["127.0.0.1:9911", "", ""]),
+            );
+            assert_eq!(code, 0);
+            assert!(!target.exists(), "(b) --dry-run with edits: nothing lands");
+        }
+        // (c) existing target + --force + empty plan: the run would
+        // write, and does not.
+        {
+            let target = dir.join("exists.yaml");
+            run_with_prompt(&args(&target), &non_interactive());
+            let (before, m) = (
+                std::fs::read(&target).unwrap(),
+                std::fs::metadata(&target).unwrap().modified().unwrap(),
+            );
+            let code = run_with_prompt(
+                &SetupArgs {
+                    dry_run: true,
+                    force: true,
+                    non_interactive: true,
+                    config: Some(target.display().to_string()),
+                    ..Default::default()
+                },
+                &non_interactive(),
+            );
+            assert_eq!(code, 0);
+            assert_eq!(
+                before,
+                std::fs::read(&target).unwrap(),
+                "(c) bytes unchanged"
+            );
+            assert_eq!(
+                m,
+                std::fs::metadata(&target).unwrap().modified().unwrap(),
+                "(c) mtime unchanged"
+            );
+            assert!(
+                !dir.join("exists.yaml.bak").exists(),
+                "(c) --dry-run implies no backup (there is no write to precede)"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

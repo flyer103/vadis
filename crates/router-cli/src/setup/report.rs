@@ -212,6 +212,18 @@ pub fn no_change_text(path: &Path) -> String {
     format!("no change: {} left as it is\n", path.display())
 }
 
+/// The `--dry-run` companion of a landing that has no edits to print:
+/// the plan is empty but the base is not the file that is there (a
+/// fresh target, or `--force`), so the run would write — the outcome is
+/// stated without performing it (spec §4.11's `--dry-run` row: an
+/// empty plan is not silence).
+pub fn dry_run_would_write_text(path: &Path, selected_by: &str) -> String {
+    format!(
+        "would write {path} (selected by {selected_by}; 0 edits applied)\n",
+        path = path.display()
+    )
+}
+
 /// The `set-enabled` marker for `--dry-run`'s kind column (kept distinct
 /// so a plan's kinds are inspectable before they land).
 pub fn kind_str(k: EditKind) -> &'static str {
