@@ -371,6 +371,22 @@ freezes (`details.stage: "no_available_route"`), and the trace records the termi
 instead: the walk's refusal has **two conditions, one shape each**, and both paths produce each shape
 identically (§8).
 
+**The classification's evidence is the upstream's own answer, on both forwarding paths.** An upstream error is
+classified from the answer's own material and from nothing else: its status, its headers (`Retry-After`) and
+the answer's **body bytes** (ADR-011 item 10 — parsing the body is never a precondition, but a body that
+arrived is evidence). The two forwarding paths feed the classifier those same three inputs, so one upstream
+answer classifies one way on the buffered path and the same way on the streaming path. On a streaming attempt
+whose head is an error status, the answer's body is therefore **read before the classifier runs** — the relay
+has sent no byte to the client at that point (DESIGN §12.10.3 R6 column 1), so the request is still an ordinary
+one and the §8 refusal answers it. The read is bounded by the streaming path's existing idle bound
+(`server.upstream_attempt_timeout`, DESIGN §12.10.3 R4 — the same bound the relay's own reads use, no new bound
+and no new knob) and it is **internal**: an error head is relayed to no one, so this changes no byte a client
+sees. A read that ends short (the idle bound trips, or the connection closes) leaves the classifier with the
+bytes that arrived — the status-and-headers verdict when none did. The read is an **input** to the
+classification, never a fourth fact about it: a failure whose body could not be read is not a different outcome
+class, and §4.6 rule 3's account-moving verdict is reachable on a streaming request for the same reason it is
+reachable on a buffered one.
+
 ### 4.3 `inject` (plugin dependency declaration)
 
 `inject: [<service>…]` declares the service slots this plugin depends on (Cordis's coeffect declaration,
@@ -525,8 +541,12 @@ future key (the `state:` / `retention` precedent), never a reshaped section.
    **must be recorded** (`result.plan_switch`, §6; the `plan.switched` event). A request with no session never
    probes.
 3. **The upstream is the authority on exhaustion; the local counter is a warning.** Only an upstream `403`
-   classified `quota_exhausted` (ADR-011) may move the account. The local `quota_counters` count may neither
-   refuse a request nor force a spill on its own (GAP-Q1: its denominator may be a placeholder); it is recorded
+   classified `quota_exhausted` (ADR-011) may move the account. The verdict is the *classification*, and the
+   classification is made from the upstream's own answer — its status, its headers and its error body — on
+   **both** forwarding paths (§4.2): a streaming request reads its own error head's body before the classifier
+   runs, so this rule reaches the clients that stream, which is every shipped one. The local `quota_counters`
+   count may neither refuse a request nor force a spill on its own (GAP-Q1: its denominator may be a
+   placeholder); it is recorded
    in `cost.quota_after`, surfaced by `/health` and `router stats`, and it may **defer** a probe until the
    plan's declared window boundary has passed.
 4. **Costs.** In-plan requests are accounted at the plan's marginal cost **0** and record `quota_after`;

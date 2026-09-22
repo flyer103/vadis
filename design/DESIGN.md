@@ -852,7 +852,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-78`)
+### 12.8 conformance case table (`CONF-01…CONF-82`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -939,6 +939,7 @@ not written).
 | CONF-79 | spec §4.12 (the discovery order; G8) + ADR-025·one file is **found**, never merged | **the location rule on both sides of it**: with `XDG_CONFIG_HOME` pointed at a rig-owned directory carrying `router/config.yaml`, and a second `config.yaml` in the process's CWD — (a) an explicit `--config` naming a third file wins, and `serve` serves from it; (b) with no `--config` the XDG file wins over the CWD one, and the reported path plus its `selected_by` member name the rule; (c) with the XDG file removed, the CWD file is selected; (d) with both removed, a reader refuses (exit 2) naming `--config` and `router setup`, while the writer creates the XDG path together with its directory (`0700`) and the file (`0600`) — the modes read back from the filesystem, not from the code; (e) each case's config keeps §4.1's resolution rule (its traces and its store land under the config file's own directory — CONF-25's relation, re-asserted on the resolved-location shape) | `config_path::resolve` and the CLI argument layer (§12.14) |
 | CONF-80 | §6·state + §4.5·the binding's move arm and the TTL's unit | **the binding is created OR moved, and the TTL is milliseconds in / microseconds stored**: on the real `serve` assembly against a loopback mock — (a) with `session.ttl` at two granularities (a sub-second knob and a whole-hour one) the `session.bound` payload's `ttl_us` **and** the `sessions` row's `expires_at_us − the anchor event's ts_us` both equal the fixture's own configured milliseconds × 1 000 (a relation over the run's own config, never a snapshot of a number), and that binding is live before the deadline and gone after it; (b) over one session whose resolved route changes between turns, exactly one further `session.bound` is written naming the new provider/model, and the `sessions` projection's provider/model plus `turn_index` follow it; (c) a turn that resolves to the route the session is already on writes **no** row (the arm that must not regress); (d) each leg holds element for element on the buffered path and on the stream relay | `Accountant::bind_session` (§12.10.5 row 4 + note R6) and the `Forwarder::session_ttl_us` resolution (the `serve` assembly, `router-cli`) |
 | CONF-81 | §6·state + §4.5·the binding's **third** writer (`R27-F1`) + §4.6 rule 1 | **an account move is a binding move** — the account handoff writes row 4's row, not just the projection: on the real `serve` assembly against a loopback mock, with `session.ttl` at a whole-hour granularity and a plan family whose primary answers 403 `quota_exhausted` — (a) a session live at the spill gains **exactly one further `session.bound`** row, whose payload names the overflow route and whose `request_id` is the spilling request, so "the account moved" and "this session moved with it" are two facts in the log; (b) **CONF-21's relation holds on the switched session**: `rebuild(Projection::Sessions)` over that store is a no-op element for element — the `sessions` row's `provider`/`model`/`requests_seen`/`last_event` **and** `expires_at_us − ` the anchor row's `ts_us` — where the pre-fix tree's live row is re-pointed while the rebuild rule gives the abandoned route and one fewer count; (c) the no-regression arm: a turn that resolves to the route the session is already on writes no row — including a turn the family serves from `overflow` to a session already re-pointed there; (d) each leg holds element for element on the buffered path and on the stream relay | `record_plan_switch`'s re-point loop (`router-proxy/src/forward.rs`, both media; §12.10.5 row 4's third writer + note R7) together with the **unchanged** `Store::project` / `rebuild_sessions` pair (`router-store/src/lib.rs`) |
+| CONF-82 | §4.2·the classification's evidence + §4.6 rule 3 + §12.10.3 R12·the failure head (`R28-F3`) | **the streamed failure head is classified on its own answer** — the *same upstream error bytes* produce the same four facts on the two media, element for element, with the buffered arm as the reference: a plan family whose primary answers `403` with the quota wording — (a) **buffered**: the classification is `quota_exhausted` (the `error.classified` row's `reason`, and its `demotion` member), the provider is demoted (the same fact as the log's own cooldown row, `Query::Cooldown`), `plan.switched` is written once (primary → overflow, `reason = primary_exhausted`) and a session live at the spill gains the handoff's `session.bound` move row (CONF-81's shape); (b) **streamed**: the same bytes → the same four facts element for element, where the pre-fix tree reads `auth`, demotes nothing, writes no `plan.switched` and no move row (the arm was unreachable — a failure head was classified with an empty body); (c) the **discriminant**: a `403` whose body lacks the quota wording is `auth` on **both** media with no demotion, no switch and no re-point, so the case pins that the body is *evidence* rather than a status special-case; (d) the read's own edge: a failure body cut off after its first chunk carries the wording that arrived (what arrived is evidence), while a failure head whose body never arrives classifies exactly as the pre-fix tree did (status and headers alone) — the read is an input, never a fourth fact; (e) the forwarded bytes are unchanged: each candidate's upstream-visible request bytes digest-identical to the pre-fix tree's, on both media | the failure head's own evidence, read under §12.10.3 R4's idle bound (`router-providers/src/stream.rs`) with the classifier and both classification sites (`router-core/src/error_class.rs`, `router-proxy/src/stream_forward.rs`; `forward.rs`'s buffered rule unchanged) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1283,6 +1284,47 @@ committed evidence under `autowork/harness/r27-3/`, not a gate and not part of a
 byte moves; whoever re-runs it must re-derive its expectation and must not read a flipped leg as a
 regression.
 
+**Allocation of `CONF-82` (R29, R29-1's freeze — the streamed failure head's classification evidence, the
+repair of `R28-F3`) — recorded 2026-09-23 by the round's freeze card, the R19-1/R20/R21/R22/R27/R28
+precedent.** The occupancy check was an `ls` of the real directory (`tests/conformance/tests/`, **71 files**:
+files for `01–47, 53–66, 71–78, 80–81`; the spent ID set is `01–47, 53–70, 71–81`, the difference being R22's
+file-less allocations `67–70` and `79`, `R22-F4`) cross-read with the paragraphs above: `48–51` stay reserved,
+and the R28 paragraph spends `81` — so, exactly as it says there, the next free ID is **`CONF-82`**, and this
+round takes it: the
+case that pins the failure head's **own body** as classification evidence (`R28-F3`), so a streamed upstream
+answer and a buffered one produce the same four facts (the class, the provider demotion, the `plan.switched`
+row, and the session's re-point row), with the *discriminant* (a `403` whose body lacks the quota wording)
+proving the body is evidence rather than a status special-case. It lands with the implementation it witnesses,
+in `tests/conformance/tests/conf_82_failure_head_evidence.rs`, parked
+`#[ignore = "CONF-82: depends on the failure head's own body reaching the classifier"]` if written ahead of it
+— the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The ID is spent: not renumbered, not
+reused. Every leg observes a value that is **red on the pre-fix tree** for the streamed arm — the anchor
+R29-2/R29-3 rebuild it from is **`3e9d102`**, the commit this round is cut from — and the buffered arm, the
+discriminant and the byte witness are the guards that must stay green **on both trees**: (a) the buffered arm
+is the reference (`CONF-32`'s and `CONF-81`'s own shape, green at base); (b) the streamed arm reads `auth`,
+writes no demotion, no `plan.switched` and no move row at base — four red facts where the buffered arm records
+four facts; (c) the discriminant is green at base **on both media**, and is the leg a "any streamed `403` is
+exhaustion" shortcut would break; (d) the read's edge — a body cut off after its first chunk carries the
+wording that arrived (red at base: the pre-fix tree reads none of it), while a body that never arrives
+classifies exactly as the pre-fix tree did (green at base by construction — the degradation rule); (e) the
+forwarded bytes are digest-identical to the pre-fix tree's on both media (green at base; the read is on the
+response side). **Occupancy now** (the spent ID set): `01–47, 53–70, 71–82`; `48–51` reserved; the next free ID
+is **`CONF-83`**. No existing assertion is touched — the closest miss is opened rather than assumed: `conf_58`'s
+streamed arm *is* a streamed failure head (a `500` whose body is `{"error":{"message":"boom"}}`), and it stays
+green because that body carries no refinement wording, so the class is status-only on both trees and both
+media; `conf_42`'s, `conf_64`'s, `conf_77`'s and `conf_81`'s quota-worded `403`s are all served to **buffered**
+requests (the streamed requests in those rigs are `200`s or refusals with nothing attempted), `conf_30`'s
+streamed classification leg is the pre-head `NotSent` arm, and the refusal shapes (`conf_57`, `conf_58`,
+`conf_64`, `conf_71`) are unchanged by a read that relays no byte. `conf_80`'s four legs, `conf_66`'s two media
+legs and its `session.bound`-count control, `conf_33`'s `turn_index > 2` and the store's own unit fixtures stay
+byte-identical, and nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md` or the
+L1 envelope (AGENTS 9 / ADR-012). One **prediction** is registered with this allocation rather than left to be
+discovered: `conf_81`'s leg-(d) docstring says "the relay's 403 arm cannot fire in v0.1 because the
+failure-head classification never sees the error body, registered in the card" — after this round that sentence
+is false of the tree, and the case is left **byte-identical** (editing a committed case's comment for
+cosmetics is not a card's business; the `R28-N2` / `R28-F` precedent), so whoever reads it must read it as the
+pre-fix state it described.
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1521,7 +1563,7 @@ pub struct ResolvedConfig {
 
 #### 12.10.3 The streaming data plane: SSE byte-level requirements
 
-The relay is a **byte-level** operation. Its requirements are stated as R1–R11 so a reviewer
+The relay is a **byte-level** operation. Its requirements are stated as R1–R12 so a reviewer
 can check an implementation against them one at a time.
 
 **R1 — no re-framing.** Router never parses SSE events in order to re-emit them. The bytes
@@ -1555,7 +1597,7 @@ the quota is not charged again and no cost is invented (ADR-010 item 4).
 
 | Failure | Before our head is sent | After the first event is forwarded |
 |---|---|---|
-| connect/TLS failure, or an upstream error status with a non-SSE body | the ordinary error path: classify (ADR-011) → retry / fail over per the attempt budget → the client receives the §8 error body. The three headers have not been sent yet, so this is still a normal request | not reachable (the head already carries the upstream's status) |
+| connect/TLS failure, or an upstream error status with a non-SSE body | the ordinary error path: classify (ADR-011) → retry / fail over per the attempt budget → the client receives the §8 error body. The three headers have not been sent yet, so this is still a normal request — and the classification's evidence is **R12**: the head's own body, read before the classifier runs | not reachable (the head already carries the upstream's status) |
 | the stream ends without completing (`Timeout`, a closed connection, an upstream error event) | — | failover is **impossible** — the client's output is already committed. Router stops relaying and terminates the stream using the protocol's own in-band failure shape where one exists (`anthropic`: `event: error`; `responses`: the `error`/`response.failed` event) and otherwise ends the stream **without** the protocol's terminal marker (chat completions: no `[DONE]`). The classification is recorded in the trace's `errors[]` |
 
 Standing rule for both columns: router **never fabricates** a successful terminal event, never
@@ -1586,6 +1628,24 @@ attempt. A 3xx is evidence, not instructions.
 events, the trace record and the cost path with the buffered path; `result.status` is the
 status already sent to the client, and a stream that never completed is marked through
 `errors[]` + `usage_missing` rather than through a fabricated status.
+
+**R12 — the failure head is classified from its own answer.** A failure status head before any relayed byte is
+the ordinary error path (R6 column 1), and its classification consumes the same evidence the buffered path
+feeds the classifier — the head's status and headers **and the answer's own body**, read to the end under this
+section's R4 idle bound (`server.upstream_attempt_timeout`, one read at a time, through the provider layer's
+existing reader and through no other) before `classify_upstream_error` runs. Not one byte of that body is
+relayed: nothing was written to the client yet, so the read is internal and the §8 refusal still answers the
+request, byte for byte as before. The rule exists because the classifier's body-dependent entries are not
+decoration — the content-policy patterns decide a *deterministic* verdict that is never re-probed (ADR-011
+item 3), and the `403` / `429` / `5xx` refinements decide `quota_exhausted`, the one class that demotes a
+provider and, on the family's primary, moves the account (spec §4.6 rule 3). A head classified with an empty
+body is therefore a **different verdict on the same upstream answer**, and a body the router never read is
+evidence of nothing. **What the bound is, and what a short read means:** the read carries no byte cap of its
+own, so it is bounded exactly as the relay's own reads are (R4 per read; `server.request_timeout` remains the
+outer bound on the whole request) — a byte cap would be a decision about **both** media and is not taken here.
+A read that ends short (the idle bound trips, or the upstream closes the body) is **not** a fourth outcome
+class: the classifier runs on the bytes that arrived, which is the status-and-headers verdict when none did
+(spec §4.2), and nothing new records the read's own fate.
 
 #### 12.10.4 `trait Store`, the `events` table and the projections
 
@@ -1951,7 +2011,10 @@ rejected alternatives and the consumer table.
   walk's 403 arm (`forward.rs`), the buffered probe's success (`plan_probe_succeeded`, `forward.rs`)
   and the stream relay's 403 arm (`stream_forward.rs`) — call the one function, so the shape cannot
   diverge per medium; `CONF-80(d)`'s element-for-element convention is what R28-2's case asserts on
-  the relay. The consumers whose *value* changes are exactly two, and both are log-vs-projection
+  the relay. The relay's arm is **reachable** only because the failure head's own body is
+  classification evidence — note **R8** below freezes that rule and records the state `R28-F3`
+  measured without it (a streamed quota-worded `403` classified `auth` and moved nothing). The consumers
+  whose *value* changes are exactly two, and both are log-vs-projection
   properties rather than live outputs: a rebuild now reproduces the re-pointed route/count/expiry
   instead of undoing it, and `Query::SessionBindingsFor` therefore returns the same set live and
   after a rebuild (today a rebuild would put those sessions back on the abandoned route, so the
@@ -1993,6 +2056,43 @@ rejected alternatives and the consumer table.
   legs) must flip when R28-2 lands the shape — `R28-F1` in the freeze document, with the leg names
   and the reason. That rig is R27's evidence, not a gate, so nothing in the frozen apparatus is
   touched; whoever re-runs it must re-derive its expectation rather than read a flip as a failure.
+
+**R8 — the failure head's own body is classification evidence, and the stream relay's 403 arm (`R28-F3`).**
+R7 above enumerates the stream relay's 403 arm as the third call site of `record_plan_switch` and concludes
+that a per-medium divergence is impossible *by construction*. The writer is indeed shared — but on the tree
+R28 landed, that arm **could not fire**: the relay classified its failure head from
+`StreamHead::as_upstream_response()`, which returns `body: Bytes::new()` by construction, while a `403`
+reaches `QuotaExhausted` **only** through the body's quota wording and `demotes_provider()` is true for
+`QuotaExhausted` alone (`router-core/src/error_class.rs`). A streamed, quota-worded `403` therefore classified
+`Auth`, ordered no demotion and wrote no `plan.switched` — the family stayed on the primary — while the
+buffered path, handed the *same* upstream answer, classified `QuotaExhausted`, demoted, spilled and
+re-pointed. §12.10.3's **R12** is the rule that closes it; the missing body also silenced the content-policy
+entry (a deterministic verdict that must not be re-probed) and the `429`/`5xx` refinements, which is why the
+repair is one read of the head's own body and not a `403` special case (the freeze's decision table records
+the rejected alternatives). The pre-fix state is registered as `R28-F3` and measured on both media; the
+`OpenHead::NotSent` arm's own `body: b""` is **not** part of the defect — no request byte went out, so there
+is no answer body to read and the transport kind is the whole evidence (spec §4.2, `CONF-30`).
+
+- **Where the read lives.** In the provider layer (`router-providers`' streaming module), which is where §7
+  puts the raw evidence: the head's own reader, bounded by the same idle bound the relay's reads use
+  (§12.10.3 R12), and the buffered view's body-less twin is **removed** rather than kept beside it — one way
+  to build a failure head's evidence, so a later caller cannot reintroduce the empty one (this removes a
+  second implementation instead of adding one).
+- **What the read is not allowed to become.** Not a new event, not a new trace member, not a version move:
+  `TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2, the classification rows keep their payload shape,
+  and the read's own fate (a short read, a tripped bound) is recorded nowhere — the classification simply
+  runs on the bytes that arrived. Adding that fact would be a vocabulary decision, registered instead.
+- **What the client sees.** Nothing changes in shape: an error head is relayed to no one, so the §8 refusal
+  answers (the `CONF-57` / `CONF-58` shapes, byte-identical on both media). One value inside the
+  attempt-exhausted refusal *is* the classification — its `error_class` member and the class word in its
+  sentence — so a streamed quota-worded `403` whose chain is exhausted now reads `quota_exhausted` where the
+  pre-fix tree read `auth`; that is the repair, and the buffered path already said it for the same bytes.
+- **The measurement artifact.** `CONF-82`'s allocation (§12.8), and nothing else: no forwarded byte moves
+  (AGENTS 1 — the read is on the response side of an attempt that is already over), no gate definition, no
+  **existing** assertion in `tests/conformance/`, no corpus byte, no `replay-contract.md` byte, no
+  L1-envelope value, no transform and no `verified` figure. What the round does not fix is registered as a
+  finding in `autowork/harness/r29-1/FREEZE.md` §8 — a byte cap would have to land on both media, and the
+  buffered path's own post-head read-failure arm (`unknown_outcome`) is a different question.
 
 **`turn_index`** is `requests_seen` for that session from the projection, read at receive time
 and incremented by the binding write; with no session, or on the session's first request, it is

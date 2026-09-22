@@ -203,7 +203,10 @@ plan_policy:
 names is a legal roster entry — it is simply not routed specially yet.
 
 **When it spills.** Only when the provider itself says the plan is exhausted — an upstream
-`403`. Everything else about the design is about *not* spilling early: the plan's token
+`403`. The verdict is read off the provider's own answer, which router reads before it decides —
+including on a streaming request, where the answer's error body is read before the classification
+runs, so the same `403` moves you whether or not you stream. Everything else about the design is about *not*
+spilling early: the plan's token
 allowance may not be published at all (a plan page often publishes a monthly price and no
 token count), so the local allowance counter that router keeps is a **warning**, not a verdict.
 You will see it in the trace (`cost.quota_after`), and the state it describes is visible in
