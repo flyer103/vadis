@@ -1903,15 +1903,96 @@ large.
   consumer table: **no** live-observable value moves except the anchor of a re-pointed row (from the
   `plan.switched` row's `ts_us` to the move row's), and the log gains the rows.
 
-**R7 — row 4's third writer: the plan policy's account handoff, and the repair of `R27-F1` (frozen by R28-1; the contract R28-2 implements).** Row 4's *Written* column has always said the binding is rewritten when it is "created **or moved**", and spec §6 owns the second move's *ownership*: a move the account handoff makes later in the same request is that handoff's accounting (§4.6 rule 1). What the shipped build did not do is **write the row**: `record_plan_switch`'s re-point loop wrote `ProjectionWrite::SessionBound` per live binding of the abandoned route with `last_event` = the **`plan.switched`** event id and appended **no** `session.bound` row — a projection write with no event behind it, which is the one thing ADR-010 forbids (the log is the state's single source of truth) and which `R27-F1` measured on both media (`requests_seen` live 3 vs an event-derived rebuild 1; and after a spill with no recovery, a **provider-level** disagreement, live `api` vs rebuild `coding_plan`, so a rebuild would silently undo the re-point). The freeze below is the reference implementation of the shape; `autowork/harness/r28-1/FREEZE.md` carries the decision table, the rejected alternatives and the consumer table.
+**R7 — row 4's third writer: the plan policy's account handoff, and the repair of `R27-F1` (frozen
+by R28-1; the contract R28-2 implements).** Row 4's *Written* column has always said the binding is
+rewritten when it is "created **or moved**", and spec §6 owns the second move's *ownership*: a move
+the account handoff makes later in the same request is that handoff's accounting (§4.6 rule 1). What
+the shipped build did not do is **write the row**: `record_plan_switch`'s re-point loop wrote
+`ProjectionWrite::SessionBound` per live binding of the abandoned route with `last_event` = the
+**`plan.switched`** event id and appended **no** `session.bound` row — a projection write with no
+event behind it, which is the one thing ADR-010 forbids (the log is the state's single source of
+truth) and which `R27-F1` measured on both media (`requests_seen` live 3 vs an event-derived rebuild
+1; and after a spill with no recovery, a **provider-level** disagreement, live `api` vs rebuild
+`coding_plan`, so a rebuild would silently undo the re-point). The freeze below is the reference
+implementation of the shape; `autowork/harness/r28-1/FREEZE.md` carries the decision table, the
+rejected alternatives and the consumer table.
 
-- **The row, and the shape.** The handoff writes, per live binding of the abandoned route (`Query::SessionBindingsFor { provider: old_provider, model: old_model }`, the same read it uses today), exactly **one `session.bound` event** with row 4's own payload — `session_key`, `provider` (the destination route's provider), `model` (its model), `ttl_us` — and **then** the `ProjectionWrite::SessionBound` for that session, riding on **that** row. There is no new event kind, no new payload field and no `EVENT_SCHEMA_VERSION` move: the row kind, the payload shape and the projection arm are `Accountant::bind_session`'s own (`router-proxy/src/accounting.rs`), which is the point — three writers, one row, one rule.
-- **The anchor (CONF-21, AGENTS 2).** `last_event` is the new `session.bound` event id, never the `plan.switched` id, so `expires_at_us = that row's ts_us + ttl_us` — the same expression `rebuild_sessions` uses and the same one spec §4.5 states ("the binding event's `ts_us` plus the `session.bound` payload's `ttl_us`"). The `plan.switched` row's own `ts_us` keeps its separate job (`plan_state.since_us`, §12.10.8) and anchors nothing in `sessions`. The value is therefore element-for-element reproducible by a rebuild, which the shipped one was not: the rebuild reads `session.bound` rows only and the live value came from a `plan.switched` row it cannot know about. No second clock read is introduced: the anchor is read from the row that was just appended, exactly as `bind_session`'s write does.
-- **The count (`requests_seen` / `turn_index`).** The move increments `requests_seen` like every other write of this row. The alternative — counting rows but not a move, or carrying the request count in a separate column — was rejected because it needs either a payload marker (a vocabulary widening, and by §12.10.5's `currency` precedent an `EVENT_SCHEMA_VERSION` move) or a second rebuild rule, and because R27 already froze the opposite for a *request-caused* move (`CONF-80(b)`: "the `sessions` projection's provider/model plus `turn_index` follow it"; spec §6: "that write is what moves the `sessions` projection and advances `turn_index`"). One row kind with two contradictory counting rules is the divergence class this repository's apparatus exists to prevent. The honest reading is written into the `turn_index` paragraph below and spec §4.5: it counts **binding writes**. The one place the value gates behaviour is inert: a re-point can only reach a session that already has a live binding, and both writers insert `1` on create, so its count is already ≥ 1 and the probe's `turn_index == 1` boundary (§12.10.8) is never crossed by a move.
-- **Both media, and every consumer.** All three call sites of `record_plan_switch` — the buffered walk's 403 arm (`forward.rs`), the buffered probe's success (`plan_probe_succeeded`, `forward.rs`) and the stream relay's 403 arm (`stream_forward.rs`) — call the one function, so the shape cannot diverge per medium; `CONF-80(d)`'s element-for-element convention is what R28-2's case asserts on the relay. The consumers whose *value* changes are exactly two, and both are log-vs-projection properties rather than live outputs: a rebuild now reproduces the re-pointed route/count/expiry instead of undoing it, and `Query::SessionBindingsFor` therefore returns the same set live and after a rebuild (today a rebuild would put those sessions back on the abandoned route, so the *next* handoff would move the wrong set). Everything else is unchanged, with the site named in the freeze's consumer table: `/health` reads `plan_state` and never `sessions`; `router stats`' read-only store open issues exactly one query, `Query::AllEvents`; the trace and the `DecisionRecord` gain nothing (no field, no `TRACE_SCHEMA_VERSION` move); `state.sticky_hit` and `route_changed` keep their values (row presence and the one resolution read are untouched); `bind_session` and its arm are untouched, which is why `CONF-80(c)` (a sticky hit on an unchanged route writes nothing) cannot regress — the handoff is not on the resolution path at all and fires only on a classified 403 `quota_exhausted` or an admitted probe's success.
-- **Ordering, and the one shape worth naming.** The rows are written **after** the `plan.switched` row (the intent precedes its effects; ADR-009 item 4 forbids stacking FULL rows, so each is its own commit) and **before** the next `upstream.submitted` — row 15's own position, which the call sites already satisfy. A spill turn's row set is therefore: the request's own row (only if its post-guard route differed from its prior binding, note R6) ∪ one row per live binding of the abandoned route. In the one sequence where a session is in both sets (its own resolution moved it onto the route the handoff is abandoning, and the handoff then re-points it) that session gains **two** rows in one request and its count advances by two; the count stays a pure function of the log — a replay applies both rows in `event_id` order and lands on the same last-writer state — so this is a named shape, not a defect.
-- **Failure modes.** A failed `session.bound` append must **not** be followed by its projection write (the shipped code wrote the projection unconditionally, which is the class this round removes): the row is the truth, and a projection without its row is a disagreement. The append's failure does not fail the request (the account state is already durable in `plan.switched`, and ADR-009 item 8's projection rule keeps a lost projection from touching the request), and the drop is **self-healing**: the session's next request resolves to the route the family is now on, its prior binding differs, `route_changed` is true, and `bind_session` writes the row — the count regresses by one, which §4.5's "losing a projection regresses statistics, never correctness" covers.
-- **What the freeze does not move.** No forwarded byte (AGENTS 1), no gate definition, no **existing** assertion in `tests/conformance/`, no corpus byte, no `replay-contract.md` byte and no L1-envelope value; §13.3's leak register gains no row (this removes a second implementation rather than adding one — the projection rule stays in one place, `rebuild_sessions`, and the two writers keep feeding it the one row it reads). The round's measurement artifact is `CONF-81`'s allocation (§12.8). One *prediction* is registered instead, because it looks like a regression and is not: R27-3's committed rig asserts the defect as its expected value, so four of its legs (`GPL.{buffered,streaming}.spill-turn-writes-no-row-per-R6-postguard-route` and both `R27-F1` legs) must flip when R28-2 lands the shape — `R28-F1` in the freeze document, with the leg names and the reason. That rig is R27's evidence, not a gate, so nothing in the frozen apparatus is touched; whoever re-runs it must re-derive its expectation rather than read a flip as a failure.
+- **The row, and the shape.** The handoff writes, per live binding of the abandoned route
+  (`Query::SessionBindingsFor { provider: old_provider, model: old_model }`, the same read it uses
+  today), exactly **one `session.bound` event** with row 4's own payload — `session_key`, `provider`
+  (the destination route's provider), `model` (its model), `ttl_us` — and **then** the
+  `ProjectionWrite::SessionBound` for that session, riding on **that** row. There is no new event
+  kind, no new payload field and no `EVENT_SCHEMA_VERSION` move: the row kind, the payload shape and
+  the projection arm are `Accountant::bind_session`'s own (`router-proxy/src/accounting.rs`), which
+  is the point — three writers, one row, one rule.
+- **The anchor (CONF-21, AGENTS 2).** `last_event` is the new `session.bound` event id, never the
+  `plan.switched` id, so `expires_at_us = that row's ts_us + ttl_us` — the same expression
+  `rebuild_sessions` uses and the same one spec §4.5 states ("the binding event's `ts_us` plus the
+  `session.bound` payload's `ttl_us`"). The `plan.switched` row's own `ts_us` keeps its separate job
+  (`plan_state.since_us`, §12.10.8) and anchors nothing in `sessions`. The value is therefore
+  element-for-element reproducible by a rebuild, which the shipped one was not: the rebuild reads
+  `session.bound` rows only and the live value came from a `plan.switched` row it cannot know about.
+  No second clock read is introduced: the anchor is read from the row that was just appended,
+  exactly as `bind_session`'s write does.
+- **The count (`requests_seen` / `turn_index`).** The move increments `requests_seen` like every
+  other write of this row. The alternative — counting rows but not a move, or carrying the request
+  count in a separate column — was rejected because it needs either a payload marker (a vocabulary
+  widening, and by §12.10.5's `currency` precedent an `EVENT_SCHEMA_VERSION` move) or a second
+  rebuild rule, and because R27 already froze the opposite for a *request-caused* move
+  (`CONF-80(b)`: "the `sessions` projection's provider/model plus `turn_index` follow it"; spec §6:
+  "that write is what moves the `sessions` projection and advances `turn_index`"). One row kind with
+  two contradictory counting rules is the divergence class this repository's apparatus exists to
+  prevent. The honest reading is written into the `turn_index` paragraph below and spec §4.5: it
+  counts **binding writes**. The one place the value gates behaviour is inert: a re-point can only
+  reach a session that already has a live binding, and both writers insert `1` on create, so its
+  count is already ≥ 1 and the probe's `turn_index == 1` boundary (§12.10.8) is never crossed by a
+  move.
+- **Both media, and every consumer.** All three call sites of `record_plan_switch` — the buffered
+  walk's 403 arm (`forward.rs`), the buffered probe's success (`plan_probe_succeeded`, `forward.rs`)
+  and the stream relay's 403 arm (`stream_forward.rs`) — call the one function, so the shape cannot
+  diverge per medium; `CONF-80(d)`'s element-for-element convention is what R28-2's case asserts on
+  the relay. The consumers whose *value* changes are exactly two, and both are log-vs-projection
+  properties rather than live outputs: a rebuild now reproduces the re-pointed route/count/expiry
+  instead of undoing it, and `Query::SessionBindingsFor` therefore returns the same set live and
+  after a rebuild (today a rebuild would put those sessions back on the abandoned route, so the
+  *next* handoff would move the wrong set). Everything else is unchanged, with the site named in the
+  freeze's consumer table: `/health` reads `plan_state` and never `sessions`; `router stats`' read-
+  only store open issues exactly one query, `Query::AllEvents`; the trace and the `DecisionRecord`
+  gain nothing (no field, no `TRACE_SCHEMA_VERSION` move); `state.sticky_hit` and `route_changed`
+  keep their values (row presence and the one resolution read are untouched); `bind_session` and its
+  arm are untouched, which is why `CONF-80(c)` (a sticky hit on an unchanged route writes nothing)
+  cannot regress — the handoff is not on the resolution path at all and fires only on a classified
+  403 `quota_exhausted` or an admitted probe's success.
+- **Ordering, and the one shape worth naming.** The rows are written **after** the `plan.switched`
+  row (the intent precedes its effects; ADR-009 item 4 forbids stacking FULL rows, so each is its
+  own commit) and **before** the next `upstream.submitted` — row 15's own position, which the call
+  sites already satisfy. A spill turn's row set is therefore: the request's own row (only if its
+  post-guard route differed from its prior binding, note R6) ∪ one row per live binding of the
+  abandoned route. In the one sequence where a session is in both sets (its own resolution moved it
+  onto the route the handoff is abandoning, and the handoff then re-points it) that session gains
+  **two** rows in one request and its count advances by two; the count stays a pure function of the
+  log — a replay applies both rows in `event_id` order and lands on the same last-writer state — so
+  this is a named shape, not a defect.
+- **Failure modes.** A failed `session.bound` append must **not** be followed by its projection
+  write (the shipped code wrote the projection unconditionally, which is the class this round
+  removes): the row is the truth, and a projection without its row is a disagreement. The append's
+  failure does not fail the request (the account state is already durable in `plan.switched`, and
+  ADR-009 item 8's projection rule keeps a lost projection from touching the request), and the drop
+  is **self-healing**: the session's next request resolves to the route the family is now on, its
+  prior binding differs, `route_changed` is true, and `bind_session` writes the row — the count
+  regresses by one, which §4.5's "losing a projection regresses statistics, never correctness"
+  covers.
+- **What the freeze does not move.** No forwarded byte (AGENTS 1), no gate definition, no
+  **existing** assertion in `tests/conformance/`, no corpus byte, no `replay-contract.md` byte and
+  no L1-envelope value; §13.3's leak register gains no row (this removes a second implementation
+  rather than adding one — the projection rule stays in one place, `rebuild_sessions`, and the two
+  writers keep feeding it the one row it reads). The round's measurement artifact is `CONF-81`'s
+  allocation (§12.8). One *prediction* is registered instead, because it looks like a regression and
+  is not: R27-3's committed rig asserts the defect as its expected value, so four of its legs
+  (`GPL.{buffered,streaming}.spill-turn-writes-no-row-per-R6-postguard-route` and both `R27-F1`
+  legs) must flip when R28-2 lands the shape — `R28-F1` in the freeze document, with the leg names
+  and the reason. That rig is R27's evidence, not a gate, so nothing in the frozen apparatus is
+  touched; whoever re-runs it must re-derive its expectation rather than read a flip as a failure.
 
 **`turn_index`** is `requests_seen` for that session from the projection, read at receive time
 and incremented by the binding write; with no session, or on the session's first request, it is
