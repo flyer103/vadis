@@ -17,6 +17,10 @@ autowork/results/
 # visible to `git add`.
 autowork/corpus/*/raw/
 autowork/corpus/raw/
+# CORP-12.1 (rev 4, §14.11 obligation 1): auto-suite bodies live at
+# autowork/corpus-auto/<suite-id>/raw/ — the line lands BEFORE any body is
+# written into the tree; one card owns it (R23-2).
+autowork/corpus-auto/*/raw/
 autowork/.venv/
 autowork/**/__pycache__/
 autowork/uv.lock.bak
