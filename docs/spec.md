@@ -138,6 +138,9 @@ that route's id too (§2).
 
 ```yaml
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
+            max_body_bytes: 2097152,         # §4.13: the largest inbound request body the router will read,
+                                             #   in bytes (default 2 MiB); a larger one is refused at the
+                                             #   boundary with §8's `413 request_too_large`
             auth_token_env: ROUTER_TOKEN }   # optional (§4.7): name of the env var whose value every
                                              # inbound request must present; absent ⇒ no inbound auth
 session:  { key_sources: ["prompt_cache_key", "header:session-id", "header:thread-id"], ttl: 12h }
@@ -1165,6 +1168,75 @@ sources that combine. The layered model (opencode's eight layers, codex's projec
 the alternative ADR-025 records and rejects for v0.1, with the reason each layer would need — and with what it
 would cost the "one file, one template, one backup" story this section's second rule depends on.
 
+### 4.13 `server.max_body_bytes` (the inbound request-body limit)
+
+| Key | Type | Semantics |
+|---|---|---|
+| `server.max_body_bytes` | integer (bytes), default **`2097152`** (2 MiB) | The largest inbound request body this process will **read** on the three protocol endpoints. A body larger than it is refused at the boundary, before the pipeline, with §8's `413 request_too_large` |
+
+- **What the bound is for, stated plainly.** Every inbound request body is buffered in full before the router
+  decides anything about it (the path split reads `stream`, and the byte boundary needs the bytes), and a body
+  is what the store's event log and the trace are *about*. An unbounded inbound body is therefore a
+  resource-exhaustion surface: one client's request size is multiplied by the number of concurrent clients, and
+  the multiplier is chosen by the client, not by the operator. The key makes that multiplier the operator's.
+- **Defaults are the behaviour that already shipped.** The value is a **declared** form of the cap this build
+  has always had in effect — an implicit **2 MiB** one, imposed by the HTTP layer rather than by the router,
+  with a refusal that is not this document's shape (see *The cap has exactly one owner* above). So the key is
+  backward compatible in the same sense §4.7's is: a config written before it behaves exactly as it did. No
+  client that works today stops working because this key exists.
+- **The value is a byte count, and a value that disables the bound is refused.** The key takes a plain integer
+  of bytes — no unit suffixes (there is no byte-suffix grammar anywhere in this file, and inventing one to save
+  three digits is not worth a second grammar). A value **below `1024`** (including `0` and negatives) is a
+  **load error**: exit code `2` with the key named, the code §9.2 already uses for an unusable config. There is
+  deliberately **no "unlimited" spelling**: a bound that can be switched off is the surface this clause exists
+  to close, and an operator who wants a very large bound writes a very large number — explicitly, where a
+  reader can see it.
+- **The cap has exactly one owner, and it is the router.** The bound is enforced by the router, at the
+  boundary, *above* the pipeline — not by the HTTP framework's own default body limit. The framework's cap must
+  therefore be **disabled** (the router's own check replaces it; DESIGN §12.15 names the mechanism), so that
+  exactly one cap exists, its value is the configured one, and its refusal is this document's. Two caps would
+  be two owners of one invariant, and the invisible one would win on the request whose size sits between them.
+
+**A refusal is not an upstream failure** (the same fact table §4.7 gives its guard, with this clause's values):
+
+| Fact | Value |
+|---|---|
+| Response | `413` with §8's unified error body, `error.type = "request_too_large"`; `details.limit_bytes` names the configured bound and `details.content_length` the length the request declared (`null` when it declared none) |
+| `X-Router-Request-Id` | present — §8's "always" has no exception, and this is a refusal an operator correlates like any other |
+| Fallback / retry | **never**: no upstream is contacted and nothing is attempted, so §4.2's chain has nothing to walk and no `skipped[]` exists (that array belongs to a walk) |
+| Upstream | never contacted — no provider request bytes exist for it |
+| State store | **no row**: the boundary runs before §4.5's `request.received` event, exactly as §4.7's guard does |
+| Trace | **one record**, §6's pre-pipeline class (`event_id: 0`, `usage_missing: true`, nothing priced), carrying `errors[].kind = "request_too_large"` — a refusal that left no trace would be the one failure an operator could not count |
+| `router stats` | the record lands in `failed`, split out as `request_too_large`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows) |
+| The connection | **closed after the response.** The refusal may be answered without draining the whole body (that is the point of a bound), so the connection may hold unread request bytes and cannot be reused for another request |
+
+**How a request above the bound is answered, and in which order.** The check is header-first: when the request
+declares a `Content-Length` above the bound, the answer is produced **without reading a byte of the body**;
+when it declares none (a chunked body), the read itself is **bounded** and the same refusal is produced the
+moment the bound is passed. Both arms produce one response and one record — a request cannot be refused twice,
+and the two arms cannot disagree about which rule answered them.
+
+- **Order against the other boundary checks.** The limit sits **above** the transform-mode resolution (§2.1)
+  and **above** the path split, and it is evaluated **after** §4.7's auth guard — an unauthenticated request is
+  still told `401` and never learns anything about this bound. Within the boundary, the body limit answers
+  before the mode header: a request whose body cannot be read at all is refused for that reason, and the
+  `X-Router-Transform` value it carried is not additionally adjudicated.
+- **A streaming request is not an exception, and it cannot be cut mid-stream.** The router reads the whole
+  request body *before* it opens any response, on both media — the `stream` member that selects the SSE relay
+  is a fact of the body (spec §2.1's mode channel is a header, this one is not), so a request that asks for
+  streaming is refused with the same complete, non-SSE `413` body every other refusal has, and no SSE head is
+  ever sent for a request the router has not finished reading. The relay streams the *answer*, never the
+  request: there is no state in which the bound could truncate a response that has already begun.
+- **`details.stream` is absent, and that is not an omission.** The two forwarding media differ by that member
+  in the walk's refusals (a fact the router knows by then). Here it does not — the member is a fact of a body
+  this refusal never read, and inventing it would be a claim about content the router did not see (§7's
+  discipline: an absent measurement is absent, never a value).
+
+**The bound is not a rate limit, and not a content policy.** It says how much of one request will be read; it
+says nothing about how many requests a client may make (§8's refusal vocabulary is unconditional and this
+clause adds no counter, no window and no per-client state). A rate limit is a second admission rule with its
+own contract, and this clause does not create it.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -1204,7 +1276,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
-| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard) |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound) |
 
 **`protocol` records what left the process outbound, and `translated` records an event — never a comparison.**
 `protocol_out` names the wire the request's bytes actually went out on. Because only a candidate whose
@@ -1227,7 +1299,8 @@ vintages without ambiguity.
 
 **`usage_missing: true` means "no usage was measured for this request"** — it is not only "the upstream
 answered without a `usage` member". A request that never reached an upstream is in the same class: a
-pre-route rejection, a connect failure, and a request the inbound auth guard refused (§4.7). The flag
+pre-route rejection, a connect failure, a request the inbound auth guard refused (§4.7), and a request the
+body bound refused (§4.13). The flag
 is what keeps such a record out of every rate, every sum and every gate — `router stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
 
@@ -1309,8 +1382,10 @@ upstream is `result.status`'s answer (a refusal after the chain ran is a differe
 it). A step whose delta cannot be stated is not admissible as a step: an unaccounted content edit is the
 exact failure the mode exists to make impossible.
 
-**A request refused by the inbound auth guard** (§4.7) is in a class of its own: it never entered the
-pipeline, so its record carries what is observable at the boundary and invents nothing.
+**A request refused at the boundary** — by §4.7's auth guard, or by §4.13's body bound — is in a class of its
+own: it never entered the pipeline, so its record carries what is observable at the boundary and invents
+nothing. The table below is that class, instantiated for the guard's `401`; §4.13's `413` is the same class
+field for field, with exactly three differences, named under the table.
 
 | Field | Value | Why |
 |---|---|---|
@@ -1333,6 +1408,16 @@ pipeline, so its record carries what is observable at the boundary and invents n
 | `result.upstream_status` / `failover_from` / `plan_switch` | `null` / `null` / `null` | no upstream, no abandoned attempt (fallback is about *attempts*, §4.7), and `plan_switch` stays present-and-null as always |
 | `result.overhead_ms` / `upstream_ms` | measured / `null` | router's own work against no upstream latency |
 | `errors[]` | one entry: `kind: "unauthorized"`, `details.header = "authorization"` \| `"x-api-key"` \| `null` | the vocabulary above; `null` means the request presented neither header |
+
+**The body bound's refusal (§4.13) is that class with three differences, and no fourth.** `result.status` is
+`413`; `errors[]` is one entry `{kind: "request_too_large", details: {limit_bytes: <the configured bound>,
+content_length: <the length the request declared, or null>}}`; and `identity.session` / `thread_id` stay
+`null` / `null` for the same reason the guard's do — the body is never read, so nothing about it is claimed
+(`decision.requested_model` is `null` on both, and **no `details.stream` member is added**: see §4.13 on why a
+fact of an unread body is not invented). Everything else in the table — `event_id: 0`, `usage_missing: true`,
+zeroed usage, `0` cost, `null` `plan_switch`, `result.overhead_ms` measured against `upstream_ms: null`, the
+`decision.provider` / `model` empty strings — is identical, because it follows from the same single fact: no
+pipeline stage ran.
 
 **`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
 `model` is the id the request was actually billed under at the upstream — the resolved roster entry's own
@@ -1426,7 +1511,11 @@ each improvise):
 - `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
 - `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
-- `overhead_ms_p99` = router's own overhead (excluding upstream)
+- `overhead_ms_p99` = the p99 of (`result.overhead_ms` − `result.upstream_ms`) — **router's own overhead,
+  excluding the upstream** — over the records of the window **whose `upstream_ms` is present**. A record with
+  no upstream latency (`upstream_ms: null`: a boundary refusal, a pre-route rejection) carries the router's
+  work but has nothing to subtract from it, so it is **excluded from the sample** rather than read as a 0 ms
+  observation (the absent-measurement rule of §7, which §9.2's provenance row states for this figure)
 - `unknown_outcome_requests` = the number of `upstream.submitted` events in the window with no
   `upstream.responded` for the same `request_id` — an intent with no response is a **known unknown**
   (ADR-010 item 4). It is counted and reported, and it is never priced: there is no `usage` to read and the
@@ -1476,6 +1565,7 @@ rely on each upstream's own error shape):
 | `error.type` | HTTP | Trigger |
 |---|---|---|
 | `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Router-Transform` value (§2.1 — a client asking for a mode that does not exist is told, never silently served the other way) |
+| `request_too_large` | 413 | the inbound body exceeds `server.max_body_bytes` (§4.13) — refused at the boundary, above the pipeline: no upstream is contacted, nothing is attempted, and no store row is written |
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
@@ -1497,6 +1587,10 @@ Behavior clauses:
 - inbound auth failure → `401 unauthorized` (§4.7), decided **before** the pipeline: it never enters the
   fallback chain, is never retried, never reaches an upstream and writes no state-store row — and it
   **does** write its trace line (§6). It is the one failure a client can fix without looking at a provider.
+- inbound body above `server.max_body_bytes` → `413 request_too_large` (§4.13), decided at the same boundary,
+  by the same rules: before the pipeline, no fallback walk, no retry, no upstream contact, no state-store row,
+  and **one** trace line (§6) — a body the router will not read is refused before it is buffered, and the
+  client is told which rule refused it rather than being handed the HTTP layer's own bare `413`.
 - transform failure → **fall back to the original** (fail-safe), the trace records
   `errors[].kind = transform_error`, and the request is forwarded as usual.
 - upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
@@ -1766,7 +1860,7 @@ Provenance of every figure:
 | `switches without usage` | count of displaced records excluded from `switch cost (verified)` | trace | count | — |
 | `stateful inbound rate` | §6's `stateful_inbound_rate` | trace `state.stateful_inbound` | count | always 0 in v0.1 (gap G-F), which is why it is printed at all |
 | `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
-| `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` | measured | `upstream_ms` (ADR-009's latency budget is router's own work) |
+| `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` **− `result.upstream_ms`** (the derivation §6 defines) | measured | records whose `upstream_ms` is `null` — §6's definition excludes them from the sample, so an unreadable denominator is never read as 0 ms |
 
 Four conventions this report obeys, each of which has bitten someone:
 

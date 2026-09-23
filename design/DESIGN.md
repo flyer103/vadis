@@ -836,6 +836,7 @@ pub struct ErrorDetail { pub r#type: &'static str, pub message: String,
 | `error.type` | HTTP | Trigger |
 |---|---|---|
 | `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Router-Transform` value (spec §2.1, ADR-019) |
+| `request_too_large` | 413 | the inbound body exceeds `server.max_body_bytes` (spec §4.13) — refused at the boundary, above the pipeline: no upstream contact, no attempt, no store row, one pre-pipeline trace record (§12.15) |
 | `unknown_provider` `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `auto_not_supported` | 400 | `model: auto` (v0.1; the hint says a plugin takes it over, spec §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` |
@@ -852,7 +853,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-82`)
+### 12.8 conformance case table (`CONF-01…CONF-84`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -940,6 +941,8 @@ not written).
 | CONF-80 | §6·state + §4.5·the binding's move arm and the TTL's unit | **the binding is created OR moved, and the TTL is milliseconds in / microseconds stored**: on the real `serve` assembly against a loopback mock — (a) with `session.ttl` at two granularities (a sub-second knob and a whole-hour one) the `session.bound` payload's `ttl_us` **and** the `sessions` row's `expires_at_us − the anchor event's ts_us` both equal the fixture's own configured milliseconds × 1 000 (a relation over the run's own config, never a snapshot of a number), and that binding is live before the deadline and gone after it; (b) over one session whose resolved route changes between turns, exactly one further `session.bound` is written naming the new provider/model, and the `sessions` projection's provider/model plus `turn_index` follow it; (c) a turn that resolves to the route the session is already on writes **no** row (the arm that must not regress); (d) each leg holds element for element on the buffered path and on the stream relay | `Accountant::bind_session` (§12.10.5 row 4 + note R6) and the `Forwarder::session_ttl_us` resolution (the `serve` assembly, `router-cli`) |
 | CONF-81 | §6·state + §4.5·the binding's **third** writer (`R27-F1`) + §4.6 rule 1 | **an account move is a binding move** — the account handoff writes row 4's row, not just the projection: on the real `serve` assembly against a loopback mock, with `session.ttl` at a whole-hour granularity and a plan family whose primary answers 403 `quota_exhausted` — (a) a session live at the spill gains **exactly one further `session.bound`** row, whose payload names the overflow route and whose `request_id` is the spilling request, so "the account moved" and "this session moved with it" are two facts in the log; (b) **CONF-21's relation holds on the switched session**: `rebuild(Projection::Sessions)` over that store is a no-op element for element — the `sessions` row's `provider`/`model`/`requests_seen`/`last_event` **and** `expires_at_us − ` the anchor row's `ts_us` — where the pre-fix tree's live row is re-pointed while the rebuild rule gives the abandoned route and one fewer count; (c) the no-regression arm: a turn that resolves to the route the session is already on writes no row — including a turn the family serves from `overflow` to a session already re-pointed there; (d) each leg holds element for element on the buffered path and on the stream relay | `record_plan_switch`'s re-point loop (`router-proxy/src/forward.rs`, both media; §12.10.5 row 4's third writer + note R7) together with the **unchanged** `Store::project` / `rebuild_sessions` pair (`router-store/src/lib.rs`) |
 | CONF-82 | §4.2·the classification's evidence + §4.6 rule 3 + §12.10.3 R12·the failure head (`R28-F3`) | **the streamed failure head is classified on its own answer** — the *same upstream error bytes* produce the same four facts on the two media, element for element, with the buffered arm as the reference: a plan family whose primary answers `403` with the quota wording — (a) **buffered**: the classification is `quota_exhausted` (the `error.classified` row's `reason`, and its `demotion` member), the provider is demoted (the same fact as the log's own cooldown row, `Query::Cooldown`), `plan.switched` is written once (primary → overflow, `reason = primary_exhausted`) and a session live at the spill gains the handoff's `session.bound` move row (CONF-81's shape); (b) **streamed**: the same bytes → the same four facts element for element, where the pre-fix tree reads `auth`, demotes nothing, writes no `plan.switched` and no move row (the arm was unreachable — a failure head was classified with an empty body); (c) the **discriminant**: a `403` whose body lacks the quota wording is `auth` on **both** media with no demotion, no switch and no re-point, so the case pins that the body is *evidence* rather than a status special-case; (d) the read's own edge: a failure body cut off after its first chunk carries the wording that arrived (what arrived is evidence), while a failure head whose body never arrives classifies exactly as the pre-fix tree did (status and headers alone) — the read is an input, never a fourth fact; (e) the forwarded bytes are unchanged: each candidate's upstream-visible request bytes digest-identical to the pre-fix tree's, on both media | the failure head's own evidence, read under §12.10.3 R4's idle bound (`router-providers/src/stream.rs`) with the classifier and both classification sites (`router-core/src/error_class.rs`, `router-proxy/src/stream_forward.rs`; `forward.rs`'s buffered rule unchanged) |
+| CONF-83 | §4.13·the inbound body bound + §8·its refusal + §6·the boundary record | **the bound is the router's own, and so is the refusal** — on the real `serve` assembly against a loopback mock, with `server.max_body_bytes` at the rig's own value: (a) a body **exactly at** the bound is served, the upstream-visible request bytes are the client's own (the byte control), and its record carries `upstream_ms` present with `usage_missing: false`; (b) a body **one byte above** it is refused `413` in §8's unified shape naming `request_too_large`, with `details.limit_bytes` equal to the rig's own configured value, `X-Router-Request-Id` present, **one** pre-pipeline trace record (`event_id: 0`, `usage_missing: true`, nothing priced) and **zero** requests arriving at the stand-in; (c) the same refusal when the length is **not declared** (a chunked body), so omitting `Content-Length` cannot walk around the bound; (d) a body above the bound in a **streaming** request (`stream: true`) is answered as that same complete, non-SSE `413` — `content-type: application/json`, **no** `details.stream` member, no SSE head ever sent — with the connection closed rather than handed on (spec §4.13); (e) the bound follows the key: the rig's own two values move which body is accepted, and a value below `1024` is a load refusal (exit 2) naming the key | the boundary middleware above the path split and the `ErrorCode` vocabulary (spec §4.13, DESIGN §12.15), with the HTTP framework's own cap **disabled** so exactly one bound exists |
+| CONF-84 | §6·`overhead_ms_p99` + §9.2·the `overhead p99` line | **the printed figure is the router's own overhead, not the upstream's** — over a rig-built trace whose records carry a declared `upstream_ms` beside a distinctly larger `overhead_ms`: (a) `overhead p99` in the text report **and** `overhead_ms_p99` in `--json` both equal the p99 of the **differences**, so raising every record's `upstream_ms` while holding `overhead_ms` fixed **does not move the figure** — the control the raw-field p99 fails today; (b) records whose `upstream_ms` is `null` are excluded from the sample rather than read as `0` ms (a window holding only such records has **no** figure, never `0`); (c) the two print paths agree element for element on one window | `stats`'s collector and both print paths (`router-cli/src/stats.rs`), against spec §6's definition and §9.2's provenance row (DESIGN §12.16; the `R32-F5` repair) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1324,6 +1327,28 @@ failure-head classification never sees the error body, registered in the card" �
 is false of the tree, and the case is left **byte-identical** (editing a committed case's comment for
 cosmetics is not a card's business; the `R28-N2` / `R28-F` precedent), so whoever reads it must read it as the
 pre-fix state it described.
+
+**Allocation of `CONF-83` and `CONF-84` (R32 — the inbound body bound, and the gate quantity's derivation) —
+recorded 2026-09-23 by the round's freeze card, the R9/R10/R17/R22/R28/R29 precedent.** The occupancy check
+was a `ls` of the real directory (`tests/conformance/tests/`, **72** case files, ids
+`01–47, 53–66, 71–78, 80–82`) cross-read with the paragraph above, which names `CONF-83` as the next free ID;
+R32 therefore takes `83` and `84`, and the two rows above are the allocation records. `CONF-83` pins the bound
+spec §4.13 freezes, and its file (`tests/conformance/tests/conf_83_inbound_body_limit.rs`) lands with the
+implementation it witnesses — parked `#[ignore = "CONF-83: depends on the inbound body bound"]` if written
+ahead of it, the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. `CONF-84` pins the
+derivation `R32-F5` repairs, and its file (`tests/conformance/tests/conf_84_overhead_p99_excludes_upstream.rs`)
+lands with that repair. The IDs are spent: not renumbered, not reused. **Both are red at the round's base
+`515a22f` on their decisive legs**: for `CONF-83` the key does not exist and a body above the bound is refused
+by the HTTP framework with a plain-text body, no `X-Router-Request-Id` and no trace record; for `CONF-84` the
+report's p99 is taken over the raw field, so raising a record's `upstream_ms` moves the figure.
+**Occupancy now**: the spent ID set is `01–47, 53–70, 71–84`; `48–51` stay reserved exactly as the paragraphs
+above leave them; the next free ID is **`CONF-85`**. No existing assertion is touched: `conf_17` builds a
+fixture record carrying `overhead_ms: 0` and asserts the verdict algebra, never the report's figure; and no
+existing case drives a request body anywhere near a megabyte — the largest authored payload on this machine at
+this base is the synthetic suite's own **22 317**-byte item (`autowork/corpus-auto/r23-selfcheck-synth`'s score
+card, `size` criterion), some two orders of magnitude below `CONF-83`'s smallest configured bound. Nothing here
+moves a gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 /
+ADR-012).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -2497,6 +2522,11 @@ explicitly, because each one is a thing that could otherwise be got wrong:
 - **Out of scope on purpose**: no rate limiting, no lockout, no per-IP counter, no `429` for a repeated
   offender. v0.1 refuses and records; a limiter is a different feature with its own contract, and inventing
   one here would be a second, undocumented policy.
+- **The bound on the body is this guard's sibling, not its part** (spec §4.13): the same boundary, the same
+  route layer, the same class of refusal (`413 request_too_large`, one pre-pipeline record, no store row) —
+  and the reason it is a separate middleware rather than a second check inside `auth.rs` is the ordering the
+  contract fixes: an unauthenticated request is answered `401` and learns nothing about the bound. Where it
+  lands and why there is §12.15.
 
 **Landing list** (each item is additive except where noted):
 
@@ -3035,6 +3065,99 @@ unchanged.
   deferral markers this chapter carries once the command is served — stale "planned" text on a served command
   is not caught by the case (a mention of a served word never enters its whitelist), so it is a documentation
   debt the round must pay by hand.
+
+### 12.15 The inbound request-body limit (the landing of spec §4.13)
+
+**What this section lands.** One config key (`server.max_body_bytes`, default `2097152`), one refusal
+(`413 request_too_large`, spec §8's unified body, `X-Router-Request-Id`, one §6 pre-pipeline record), one
+enforcement site, one owner of the bound, and one conformance case (`CONF-83`, §12.8).
+
+**Where a bound can be placed, and why only one of the three candidates is right.** The bound is an
+admission rule — it decides whether a request *enters*, not what happens to it after — so its placement is
+the same question §12.11 answered for the token guard, and the same three answers are available:
+
+| Candidate site | Why it is rejected, or chosen |
+|---|---|
+| `router-store` (refuse a body the log cannot hold) | the store never sees a body: ADR-009 persists no body, only `body_hash`. A bound there would sit *after* the read it is supposed to prevent, and would be a second owner of one invariant (ADR-016 item 1's rule 2) |
+| `router-proxy`'s forwarding engine (`forward` / `forward_stream`) | **too late by construction.** By the time the engine is called the body is already buffered by the route's extractor, so a check there bounds the *request* but never the *read*, which is the resource being protected; and its refusal would have to be dressed as a walk-shaped one (`skipped[]`, `stage`) although no candidate was ever considered |
+| **the boundary, above the path split, as a sibling of §12.11's guard** | **chosen.** It is the only site where (a) **nothing has been read yet**, so a `Content-Length` above the bound costs zero body bytes, (b) the refusal can leave exactly one **pre-pipeline** record — spec §6's boundary class (`event_id: 0`, `usage_missing: true`, no store row), the class §12.11 already freezes for its `401` — and (c) the bound is the router's own value, so spec §8's body, its request-id header and its trace line all hold instead of the HTTP layer's bare `413` |
+
+**The cap has exactly one owner, and today it has none of our making.** At the base tree the bound is an
+implicit framework default: the protocol routes take `axum::body::Bytes`
+(`crates/router-cli/src/lib.rs:352`, wired at `:490`), no `DefaultBodyLimit` is installed anywhere
+(`grep -rn DefaultBodyLimit crates/` → empty), and axum's `RequestExt::with_limited_body` therefore wraps the
+body in `http_body_util::Limited` with `DEFAULT_LIMIT = 2_097_152`
+(`axum-core` 0.5.6 `src/ext_traits/request.rs:319`, applied at `:326`). The consequence is exactly the
+refusal spec §4.13 exists to retire: `413 Payload Too Large`, body `Failed to buffer the request body`
+(`axum-core/src/extract/rejection.rs:40-48` — the `LengthLimitError` rejection), **no** `X-Router-Request-Id`,
+**no** trace record, no config key, and no way for an operator to see the number. The landing therefore does
+two things at once: it installs the router's own bound, and it **disables** the framework's, so that exactly
+one cap exists and it is the configured one:
+
+- the three protocol routes get `DefaultBodyLimit::disable()` (the framework's cap must not answer first — a
+  request whose size sits between the two caps would otherwise be refused by the invisible one, in the wrong
+  shape);
+- one middleware (`route_layer`, the §12.11 assembly's shape: `crates/router-cli/src/lib.rs:501-516`) runs
+  **inside** the token guard and **above** the transform-mode resolution (`:361`) and the path split (`:389`):
+  it refuses a declared `Content-Length` above the bound **without reading the body**, and otherwise reads the
+  body **bounded** (`axum::body::to_bytes(body, limit)`) and refuses the moment the bound is passed — the same
+  refusal, one response, one record, on both arms. Surviving requests are handed on unchanged, body included,
+  so the byte path (§12.3.1) sees the client's bytes exactly as before.
+- the guard stays **outermost** for the reason spec §4.13 gives (an unauthenticated request is still told `401`
+  and learns nothing about the bound); the layer is installed in **both** assemblies — with and without an
+  `auth_token_env` — because it does not depend on a key, unlike §12.11's guard (`:588-631`), and it is
+  registered on the three protocol routes only, never on `/health` (the same structural scoping, not a path
+  comparison).
+- the refusal closes the connection after the response (spec §4.13): the refused request's body may not have
+  been drained, and a keep-alive connection holding unread body bytes would parse them as the next request.
+
+**Types.** `ServerCfg` (`router-core/src/config.rs`, spec §12.5's landing rules) gains
+`max_body_bytes: usize` with the default above and a load refusal below `1024` (exit `2`, the config-load code —
+`crates/router-cli/src/main.rs:27`,`:43`, where a config that cannot be used is refused before anything is
+bound), so a value that cannot bound anything is refused where
+every other unusable value is. `ErrorCode` (`router-core/src/error.rs`) gains `RequestTooLarge` →
+`"request_too_large"` → `413`; the enum's `as_str`/`http_status` pair is the single writer of that vocabulary,
+which is why spec §8's table and spec §6's `errors[].kind` list must both name it (§12.7's "the two must
+agree"). An **upstream** `413` is unaffected and unrelated: it is classified as the answer's own error
+(`error_class.rs:327-334`, `RateLimit`), never as this refusal.
+
+**The case.** `CONF-83` (`tests/conformance/tests/conf_83_inbound_body_limit.rs`, §12.8's row) drives the real
+binary against the conformance mock: accepted **at** the bound (served, forwarded verbatim, one record with
+`upstream_ms` present), refused **above** it with the rule's name (`error.type`), the header, the status and
+the trace record; the chunked arm (no `Content-Length`) refused by the same rule; a body refused in a
+**streaming** request answered as a complete non-SSE `413`; and the bound moving with the configured key. The
+case is red at the base tree on its decisive legs: the refusal there is the framework's (`details` absent, no
+`X-Router-Request-Id`, no trace record), and the key itself does not exist.
+
+### 12.16 The scale/latency baseline: the quantity, the method, and where the numbers live (ADR-029)
+
+**The gate quantity is a subtraction, and this section records the two fields it is taken from.** The
+blocking latency gate (`autowork/program.md:41`) is about the **router's own** work, so the quantity is
+`result.overhead_ms − result.upstream_ms`: `overhead_ms` is measured from the request's own start
+(`crates/router-proxy/src/forward.rs:593`) to the record's commit
+(`crates/router-proxy/src/accounting.rs:410`) and therefore **includes** the upstream attempt, while
+`upstream_ms` is the answering attempt's own latency (`forward.rs:1194-1198`), so the difference is what the
+router itself spent. A record with `upstream_ms: null` is **excluded from the sample** (spec §6's definition),
+never read as 0 ms. `router stats`'s `overhead p99` line is that quantity's product-side surface
+(`crates/router-cli/src/stats.rs:692`,`:764`), and it printed the p99 of the **raw** field until R32 — i.e. it
+measured the upstream, and on any run with a declared stand-in delay it measured the stand-in. The report's
+derivation is corrected in step with spec §6/§9.2 as written (`CONF-84`, §12.8); that defect is **`R32-F5`**
+in R32's ledger, classified blocking.
+
+**Where the baseline is measured, and why not here.** The load shape, the load generator and the reading path
+are **harness-side** (`autowork/harness/r32-*/`, Python, driving the real binary against a loopback
+stand-in) — the harness is governed by `autowork/program.md`, `work-mode.md` and the replay contract, not by
+this chapter. What belongs here is only the product-side surface the harness reads: the two trace fields
+above (and nothing else for the gate quantity), the `events` log for the store arm, and the process's RSS from
+the operating system. ADR-029 is the method's contract home; it states the quantity, the load shape, the
+saturation criterion and the evidence's home.
+
+**Where the numbers live — and why not in this file.** A measured number in a DESIGN section would be a second
+copy of a measurement, and this repository states each figure once (the same single-source rule §12.5's prices
+obey). Measured baseline figures therefore live in the per-run evidence under `autowork/harness/r32-*/` and in
+`autowork/STATE.md`'s *Key measured facts*, and are restated by a round record. The **budget** those numbers
+are compared against is not a loop decision at all (ADR-012; `autowork/STATE.md`'s waiting-on-human row 1): R32
+freezes the measurement, R33 measures the transform path with it, and the threshold stays the human's.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
