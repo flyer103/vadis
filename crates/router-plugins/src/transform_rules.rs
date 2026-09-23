@@ -42,6 +42,9 @@ use router_core::transform::{PayloadCtx, TransformEngine, TransformOutcome};
 #[serde(deny_unknown_fields, default)]
 struct RuleSpec {
     description: Option<String>,
+    /// The declared try order (R33-FIX, R33-F1): ascending, default 0,
+    /// ties broken by id. Optional; rules without it keep the default.
+    order: Option<i64>,
     match_tool: Option<String>,
     match_kind: Option<Vec<String>>,
     min_input_bytes: Option<usize>,
@@ -89,6 +92,11 @@ enum LineFilter {
 /// checked at load time — `apply` never fails, it only decides.
 struct CompiledRule {
     id: String,
+    /// The declared try order (`rules/tool_output.toml`'s semantics spec):
+    /// ascending, default 0, ties broken by id — never the TOML map's
+    /// order, which is alphabetical by construction (`toml`'s map is a
+    /// BTreeMap) and is not a declared semantic.
+    order: i64,
     match_tool: Option<Regex>,
     match_kind: Vec<String>,
     min_input_bytes: usize,
@@ -145,6 +153,7 @@ impl CompiledRule {
         };
         Ok(Self {
             id: id.to_string(),
+            order: spec.order.unwrap_or(0),
             match_tool,
             match_kind: spec.match_kind.unwrap_or_default(),
             min_input_bytes: spec.min_input_bytes.unwrap_or(0),
@@ -394,8 +403,11 @@ impl LoadReport {
     }
 }
 
-/// The engine: the compiled rules in file order. The first rule that both
-/// selects and produces an edit wins for a node.
+/// The engine: the compiled rules in the declared try order (ascending
+/// `order`, ties alphabetical by id). The first rule that both selects and
+/// produces an edit wins for a node; a rule that selects but does not
+/// apply (byte budget unmet, `json_compact` parse failure, `unless` hit)
+/// falls through to the next.
 pub struct TransformRulesEngine {
     rules: Vec<CompiledRule>,
 }
@@ -512,6 +524,9 @@ pub fn load_str(text: &str) -> (TransformRulesEngine, LoadReport) {
             }
         }
     }
+    // The declared try order (R33-FIX): ascending `order`, ties by id —
+    // the loaded rule file's declaration, not the TOML map's order.
+    rules.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
     (TransformRulesEngine { rules }, report)
 }
 
@@ -530,6 +545,10 @@ pub fn load_path(path: &Path) -> std::io::Result<(TransformRulesEngine, LoadRepo
 #[cfg(test)]
 mod tests {
     use super::*;
+    // R33-FIX: every fixture below builds `PayloadCtx` from `kinds_for_tool`
+    // — the live derivation (`router-proxy/src/forward.rs`) — never from a
+    // hand-built kind list, so an unreachable selection fails a test.
+    use router_core::transform::kinds_for_tool;
 
     const REPO_RULES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/tool_output.toml");
 
@@ -559,7 +578,7 @@ mod tests {
         // original payload's identity.
         let ctx = PayloadCtx {
             tool: Some("Grep"),
-            kinds: &["text"],
+            kinds: kinds_for_tool("Grep"),
         };
         let input = "src/a.rs-10-  fn unrelated() {\nsrc/a.rs:12:let x = foo();\n";
         let o = engine.apply_node(&ctx, input).expect("grep rule fires");
@@ -581,7 +600,7 @@ mod tests {
         let bash = engine.apply_node(
             &PayloadCtx {
                 tool: Some("Bash"),
-                kinds: &["log", "text"],
+                kinds: kinds_for_tool("Bash"),
             },
             noisy,
         );
@@ -589,7 +608,7 @@ mod tests {
         let grep = engine.apply_node(
             &PayloadCtx {
                 tool: Some("Grep"),
-                kinds: &["text"],
+                kinds: kinds_for_tool("Grep"),
             },
             noisy,
         );
@@ -599,17 +618,18 @@ mod tests {
         let other = engine.apply_node(
             &PayloadCtx {
                 tool: Some("some_mcp_tool"),
-                kinds: &[],
+                kinds: kinds_for_tool("some_mcp_tool"),
             },
             noisy,
         );
         assert!(other.is_none(), "content never selects a rule");
         // A nameless payload node: only a wildcard rule could fire, and the
-        // file declares none for log-shaped content.
+        // file declares none for log-shaped content. `forward.rs` derives
+        // the kinds of a nameless node exactly this way ("" matches no row).
         let nameless = engine.apply_node(
             &PayloadCtx {
                 tool: None,
-                kinds: &[],
+                kinds: kinds_for_tool(""),
             },
             noisy,
         );
@@ -644,7 +664,7 @@ expected = "x"
         let o = engine.apply_node(
             &PayloadCtx {
                 tool: Some("Bash"),
-                kinds: &[],
+                kinds: kinds_for_tool("Bash"),
             },
             "a\n\nb\n",
         );
@@ -695,7 +715,7 @@ expected = "one\n"
         let o = engine.apply_node(
             &PayloadCtx {
                 tool: Some("Bash"),
-                kinds: &[],
+                kinds: kinds_for_tool("Bash"),
             },
             "one\ntwo\n",
         );
@@ -714,7 +734,7 @@ expected = "one\n"
         let src = r#"
 schema_version = 1
 [filters.j]
-match_kind = ["json"]
+match_kind = ["log"]
 min_input_bytes = 8
 json_compact = true
 [[tests.j]]
@@ -732,8 +752,8 @@ expected = '''{"a":1.10,"b":7}
         let o = engine
             .apply_node(
                 &PayloadCtx {
-                    tool: None,
-                    kinds: &["json"],
+                    tool: Some("Bash"),
+                    kinds: kinds_for_tool("Bash"),
                 },
                 "{\n  \"a\": 1.10,\n  \"b\": 7\n}\n",
             )
@@ -745,17 +765,32 @@ expected = '''{"a":1.10,"b":7}
     fn min_input_bytes_pass_through_is_verbatim_including_newlines() {
         let text = std::fs::read_to_string(REPO_RULES).unwrap();
         let (engine, _report) = load_str(&text);
-        // tool-result-json's budget: shorter ⇒ the rule does not apply at
+        // tool-result-json's budget: shorter ⇒ THE RULE does not apply at
         // all (no edit), whatever the payload's newlines look like. The
-        // rule selects on kind alone, so the node needs no tool name.
+        // rule selects on kind alone over the live derivation — a Bash
+        // node's kinds are the shell family's. Asserted on the rule: at
+        // engine level a short Bash payload is the shell rule's business
+        // (its trailing-newline normalization is pre-existing live
+        // behaviour, unchanged by the settlement).
+        let rule = engine
+            .rules
+            .iter()
+            .find(|r| r.id == "tool-result-json")
+            .expect("tool-result-json loaded");
         let ctx = PayloadCtx {
-            tool: None,
-            kinds: &["json"],
+            tool: Some("Bash"),
+            kinds: kinds_for_tool("Bash"),
         };
-        assert!(engine.apply_node(&ctx, "{\"a\":1}").is_none());
+        assert!(rule.apply(&ctx, "{\"a\":1}").is_none());
         // And an unmet budget leaves even a payload with no trailing
         // newline byte-for-byte alone (no newline normalization either).
-        assert!(engine.apply_node(&ctx, "{\"a\": 1, \"b\": 2}").is_none());
+        assert!(rule.apply(&ctx, "{\"a\": 1, \"b\": 2}").is_none());
+        // Engine level: the budget guard keeps tool-result-json out of the
+        // picture; the payload falls through to the shell rule.
+        let o = engine
+            .apply_node(&ctx, "{\"a\":1}")
+            .expect("the shell rule fires on the short payload");
+        assert_eq!(o.rule, "bash-log-noise");
     }
 
     #[test]
@@ -764,5 +799,209 @@ expected = '''{"a":1.10,"b":7}
         // No rules is a valid engine (an empty file loads nothing); the id
         // is what the config's `kind: builtin/transform_rules` names.
         assert_eq!(TransformEngine::id(&engine), "builtin/transform_rules");
+    }
+
+    // ------------------------------------------------------------------
+    // R33-FIX (R33-F1): the reachability witness and the red controls.
+    // The fixtures below build `PayloadCtx` from `kinds_for_tool` — the
+    // live derivation (`router-proxy/src/forward.rs`) — never from a
+    // hand-built kind list, so an unreachable selection fails a test.
+    // ------------------------------------------------------------------
+
+    /// E1 witness: the kind table, the loaded try order, and one
+    /// pretty-printed JSON payload from `Bash` driven through
+    /// `apply_node`. Prints the facts; asserts only what holds on both
+    /// sides of the settlement (the raw output is the evidence).
+    #[test]
+    fn r33_fix_witness_kind_table_try_order_and_precedence() {
+        use router_core::transform::TOOL_KINDS;
+        // Fact 1: on the live path a payload's kinds come only from this
+        // declared table — the engine never sniffs payload text.
+        for (pat, kinds) in TOOL_KINDS {
+            println!("tool_kind_row: {pat} -> {kinds:?}");
+        }
+        for tool in ["Bash", "Grep", "Diff", "some_mcp_tool"] {
+            println!("kinds_for_tool({tool:?}) -> {:?}", kinds_for_tool(tool));
+        }
+        // Fact 2: the order the shipped file's rules are tried in.
+        let text = std::fs::read_to_string(REPO_RULES).unwrap();
+        let (engine, report) = load_str(&text);
+        assert!(report.failed.is_empty(), "{report:?}");
+        println!("load_report.loaded (TOML map order): {:?}", report.loaded);
+        for (i, rule) in engine.rules.iter().enumerate() {
+            println!(
+                "try_order[{i}]: {} match_kind={:?}",
+                rule.id, rule.match_kind
+            );
+        }
+        // The same payload through the engine: R33-1's B3 leg shape — a
+        // pretty-printed JSON payload in a tool node paired to `Bash`.
+        let payload = concat!(
+            "{\n",
+            "  \"total\": 3,\n",
+            "  \"hits\": [\n",
+            "    {\"path\": \"a.rs\", \"line\": 12},\n",
+            "    {\"path\": \"b.rs\", \"line\": 40}\n",
+            "  ]\n",
+            "}\n"
+        );
+        let ctx = PayloadCtx {
+            tool: Some("Bash"),
+            kinds: kinds_for_tool("Bash"),
+        };
+        for rule in &engine.rules {
+            let selects = rule.selects(&ctx);
+            let applied = rule
+                .apply(&ctx, payload)
+                .map(|o| (o.rule.clone(), o.new_text.len()));
+            println!(
+                "per_rule: {} selects={selects} applied={applied:?}",
+                rule.id
+            );
+        }
+        let winner = engine
+            .apply_node(&ctx, payload)
+            .expect("a rule fires on the JSON payload from Bash");
+        println!(
+            "winner: {} bytes {} -> {}",
+            winner.rule,
+            payload.len(),
+            winner.new_text.len()
+        );
+    }
+
+    /// E3 red control (R33-FIX): the reachability invariant over the two
+    /// artifacts, read at test time (AGENTS 6 — no snapshot list): every
+    /// rule declared in the shipped file declares at least one
+    /// `match_kind` entry that `kinds_for_tool` can produce for some tool
+    /// name. Red at the pre-fix base (tool-result-json declared "json"),
+    /// green at the settled HEAD.
+    #[test]
+    fn every_shipped_rule_kind_is_reachable_on_the_live_path() {
+        use router_core::transform::TOOL_KINDS;
+        let text = std::fs::read_to_string(REPO_RULES).unwrap();
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        let producible: std::collections::BTreeSet<&str> = TOOL_KINDS
+            .iter()
+            .flat_map(|(_, kinds)| kinds.iter().copied())
+            .collect();
+        let filters = doc
+            .get("filters")
+            .and_then(toml::Value::as_table)
+            .expect("[filters] table");
+        for (id, spec) in filters {
+            let declared: Vec<&str> = spec
+                .get("match_kind")
+                .and_then(toml::Value::as_array)
+                .map(|a| a.iter().filter_map(toml::Value::as_str).collect())
+                .unwrap_or_default();
+            assert!(
+                declared.iter().any(|k| producible.contains(k)),
+                "rule '{id}' declares match_kind {declared:?}; none is producible \
+                 by kinds_for_tool (producible: {producible:?}) — an unreachable \
+                 selection on the live path (R33-F1)"
+            );
+        }
+    }
+
+    /// R33-FIX: the rule's own declared scenario on the live derivation —
+    /// a pretty-printed JSON payload from `Bash` reaches
+    /// `tool-result-json` (order-preserving compaction), not the shell
+    /// rule's `max_lines` truncation.
+    #[test]
+    fn json_from_bash_fires_tool_result_json_on_live_kinds() {
+        let text = std::fs::read_to_string(REPO_RULES).unwrap();
+        let (engine, report) = load_str(&text);
+        assert!(report.failed.is_empty(), "{report:?}");
+        let payload = concat!(
+            "{\n",
+            "  \"total\": 3,\n",
+            "  \"hits\": [\n",
+            "    {\"path\": \"a.rs\", \"line\": 12},\n",
+            "    {\"path\": \"b.rs\", \"line\": 40}\n",
+            "  ]\n",
+            "}\n"
+        );
+        let ctx = PayloadCtx {
+            tool: Some("Bash"),
+            kinds: kinds_for_tool("Bash"),
+        };
+        let o = engine
+            .apply_node(&ctx, payload)
+            .expect("a rule fires on the JSON payload from Bash");
+        assert_eq!(
+            o.rule, "tool-result-json",
+            "the JSON payload must reach the compaction rule (R33-F1)"
+        );
+        assert_eq!(
+            o.new_text,
+            "{\"total\":3,\"hits\":[{\"path\":\"a.rs\",\"line\":12},{\"path\":\"b.rs\",\"line\":40}]}\n"
+        );
+    }
+
+    /// R33-FIX: the `order` key is the declared try order — ascending,
+    /// default 0, ties alphabetical. A rule that selects but does not
+    /// apply falls through to the next rule.
+    #[test]
+    fn declared_order_key_decides_try_order() {
+        let src = r#"
+schema_version = 1
+[filters.a-first-alphabetically]
+match_tool = '^Bash$'
+max_lines = 1
+order = 7
+[[tests.a-first-alphabetically]]
+name = "first line only"
+input = "one\ntwo\n"
+expected = "one\n"
+[filters.z-last-alphabetically]
+match_tool = '^Bash$'
+max_lines = 2
+order = 3
+[[tests.z-last-alphabetically]]
+name = "both lines"
+input = "one\ntwo\n"
+expected = "one\ntwo\n"
+"#;
+        let (engine, report) = load_str(src);
+        assert!(report.failed.is_empty(), "{report:?}");
+        let ids: Vec<&str> = engine.rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["z-last-alphabetically", "a-first-alphabetically"],
+            "ascending order, not the map's alphabetical order"
+        );
+        // z applies (max_lines 2 over a two-line payload), so it wins; had
+        // it not applied, a would have served the node.
+        let o = engine
+            .apply_node(
+                &PayloadCtx {
+                    tool: Some("Bash"),
+                    kinds: kinds_for_tool("Bash"),
+                },
+                "one\ntwo\n",
+            )
+            .expect("a rule fires");
+        assert_eq!(o.rule, "z-last-alphabetically");
+    }
+
+    /// R33-FIX negative control: a non-JSON payload of the same tool keeps
+    /// its pre-settlement outcome — `bash-log-noise` fires with the same
+    /// edit; the settlement changes which rules may act, never what a
+    /// payload's bytes are.
+    #[test]
+    fn non_json_bash_payload_still_fires_bash_log_noise() {
+        let text = std::fs::read_to_string(REPO_RULES).unwrap();
+        let (engine, _report) = load_str(&text);
+        let noisy = "   Compiling serde v1.0.210\n[ 62%] Building object\nerror: boom\n";
+        let ctx = PayloadCtx {
+            tool: Some("Bash"),
+            kinds: kinds_for_tool("Bash"),
+        };
+        let o = engine
+            .apply_node(&ctx, noisy)
+            .expect("the shell rule fires on the log payload");
+        assert_eq!(o.rule, "bash-log-noise");
+        assert_eq!(o.new_text, "error: boom\n");
     }
 }

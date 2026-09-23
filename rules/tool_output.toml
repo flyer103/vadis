@@ -29,6 +29,12 @@
 #         tool name) and `match_kind` (payload category declaration) are both
 #         optional; when both are given, **both must match**; neither given =
 #         wildcard (not recommended by default).
+# Rule order: rules are tried in ascending `order` (an optional integer,
+#         default 0; ties broken by id, alphabetical — never by the file's
+#         text order, which the loader cannot see). The first rule that
+#         both selects and applies wins the node; a rule that selects but
+#         does not apply (byte budget unmet, `json_compact` parse failure,
+#         `unless` hit) falls through to the next rule.
 # Precondition: `min_input_bytes` unmet → the whole rule does not apply; the
 #         payload passes through byte-for-byte (including its original
 #         newlines).
@@ -103,7 +109,17 @@ schema_version = 1
 
 [filters.tool-result-json]
 description = "JSON tool payloads: order-preserving compaction to one line; short payloads and invalid JSON pass through verbatim"
-match_kind = ["json"]
+# Tried before the shell rule: on the live path a Bash payload's kinds are
+#       the shell family's (the declared tool→kind table produces no "json"
+#       kind for any tool name), so `bash-log-noise` would otherwise select
+#       the same payload first and win (R33-F1). A non-JSON payload falls
+#       through this rule (`json_compact` parse failure is fail-safe) to
+#       `bash-log-noise` unchanged.
+order = -1
+# The kinds the shell family actually produces (the declared tool→kind
+#       table): "json" is producible by no tool name and made this rule
+#       unreachable on the live path (R33-F1).
+match_kind = ["log", "text"]
 min_input_bytes = 32
 json_compact = true
 
