@@ -483,11 +483,16 @@ pub async fn serve(config_path: &str) -> i32 {
         forwarder: std::sync::Arc<Forwarder>,
         proto_in: WireApi,
         path: &'static str,
+        limit: usize,
+        trace: std::sync::Arc<dyn router_core::TraceWriter>,
     ) -> axum::Router {
         axum::Router::new().route(
             path,
             post(
-                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                move |headers: axum::http::HeaderMap,
+                      axum::extract::Extension(body): axum::extract::Extension<
+                    axum::body::Bytes,
+                >| {
                     let hs: Vec<(String, String)> = headers
                         .iter()
                         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
@@ -496,6 +501,154 @@ pub async fn serve(config_path: &str) -> i32 {
                 },
             ),
         )
+        // §4.13 / DESIGN §12.15: the framework's own default body limit
+        // (axum's implicit 2 MiB `Limited` wrapper) is **disabled** on
+        // the three protocol routes so exactly one cap exists — the
+        // configured one, answered in §8's shape by the boundary layer
+        // below instead of the framework's plain-text 413.
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        // The bound itself (§12.15): inside the token guard (installed
+        // later, so it wraps this one and stays outermost), above the
+        // transform-mode resolution and the path split — both live in
+        // `proxy_endpoint`, which this layer runs before. It reads the
+        // body bounded and hands the surviving bytes on unchanged, so
+        // the byte path (§12.3.1) sees the client's bytes exactly as
+        // before.
+        .route_layer(axum::middleware::from_fn_with_state(
+            BodyLimitState {
+                limit,
+                trace,
+                proto_in,
+            },
+            body_limit_mw,
+        ))
+    }
+
+    /// What the bound runs with: the configured limit, the same
+    /// `Arc<dyn TraceWriter>` the `Forwarder` holds (a refused request
+    /// and a served one land in the same file, same format), and this
+    /// route's own protocol — the §12.11 assembly's shape.
+    #[derive(Clone)]
+    struct BodyLimitState {
+        limit: usize,
+        trace: std::sync::Arc<dyn router_core::TraceWriter>,
+        proto_in: WireApi,
+    }
+
+    /// One boundary pass of the inbound body bound (spec §4.13,
+    /// DESIGN §12.15). Header-first: a declared `Content-Length` above
+    /// the bound refuses **without reading a byte**. Otherwise the read
+    /// itself is bounded; the moment the bound is passed the same
+    /// refusal answers. One response, one trace record, both arms —
+    /// and the connection is closed (the body may not have been
+    /// drained, and a keep-alive connection holding unread request
+    /// bytes would parse them as the next request).
+    async fn body_limit_mw(
+        axum::extract::State(st): axum::extract::State<BodyLimitState>,
+        req: axum::http::Request<axum::body::Body>,
+        next: axum::middleware::Next,
+    ) -> Response {
+        use futures::StreamExt as _;
+        let started = std::time::Instant::now();
+        let content_length = req
+            .headers()
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let refuse = |declared: Option<u64>| {
+            let request_id = request_id();
+            let now_epoch_s = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let record = router_proxy::too_large_record(
+                &request_id,
+                st.proto_in,
+                st.limit,
+                declared,
+                now_epoch_s,
+                started.elapsed().as_millis() as u32,
+            );
+            // Write, then answer — the same order the auth guard uses;
+            // a trace write failure is §8's non-blocking case.
+            let _ = st.trace.write(&record);
+            let mut eb = ErrorBody::new(
+                router_core::error::ErrorCode::RequestTooLarge,
+                router_proxy::too_large_message(st.limit, declared),
+                &request_id,
+            );
+            eb.error.details = Some(serde_json::json!({
+                "limit_bytes": st.limit,
+                "content_length": declared,
+            }));
+            let mut resp = (
+                StatusCode::from_u16(router_core::error::ErrorCode::RequestTooLarge.http_status())
+                    .expect("413 maps"),
+                Json(eb),
+            )
+                .into_response();
+            if let Ok(v) = request_id.parse() {
+                resp.headers_mut().insert("x-router-request-id", v);
+            }
+            // §4.13: the connection is closed after the refusal — the
+            // refused request's body may not have been drained.
+            resp.headers_mut().insert(
+                axum::http::header::CONNECTION,
+                axum::http::HeaderValue::from_static("close"),
+            );
+            resp
+        };
+        // Arm 1 — header-first: the declared length refuses without a
+        // body read.
+        if let Err(declared) = router_proxy::check_declared(st.limit, content_length) {
+            return refuse(Some(declared));
+        }
+        // Arm 2 — the bounded read (no declaration, or one at/below the
+        // bound): the moment the accumulated bytes pass the bound, the
+        // same refusal answers.
+        let (mut parts, body) = req.into_parts();
+        let mut buf: Vec<u8> = Vec::with_capacity(content_length.unwrap_or(0) as usize);
+        let mut exceeded = false;
+        let mut read_failed = false;
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    buf.extend_from_slice(&bytes);
+                    if buf.len() > st.limit {
+                        exceeded = true;
+                        break;
+                    }
+                }
+                Err(_) => {
+                    // A transport-level read failure (client disconnect
+                    // mid-body): the same class the framework's `Bytes`
+                    // extractor rejected with a bare 400 before this
+                    // layer existed — no record, no invented refusal.
+                    read_failed = true;
+                    break;
+                }
+            }
+        }
+        if exceeded {
+            return refuse(content_length);
+        }
+        if read_failed {
+            let mut resp = (
+                StatusCode::BAD_REQUEST,
+                "Failed to buffer the request body",
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CONNECTION,
+                axum::http::HeaderValue::from_static("close"),
+            );
+            return resp;
+        }
+        let bytes = axum::body::Bytes::from(buf);
+        parts.extensions.insert(bytes);
+        let req = axum::http::Request::from_parts(parts, axum::body::Body::empty());
+        next.run(req).await
     }
 
     fn guarded_protocol_route(
@@ -504,15 +657,18 @@ pub async fn serve(config_path: &str) -> i32 {
         trace: std::sync::Arc<dyn router_core::TraceWriter>,
         proto_in: WireApi,
         path: &'static str,
+        limit: usize,
     ) -> axum::Router {
-        protocol_route(forwarder, proto_in, path).route_layer(axum::middleware::from_fn_with_state(
-            GuardState {
-                gate,
-                trace,
-                proto_in,
-            },
-            guard_mw,
-        ))
+        protocol_route(forwarder, proto_in, path, limit, trace.clone()).route_layer(
+            axum::middleware::from_fn_with_state(
+                GuardState {
+                    gate,
+                    trace,
+                    proto_in,
+                },
+                guard_mw,
+            ),
+        )
     }
 
     /// What the guard runs with: the startup token's gate, the same
@@ -585,6 +741,11 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     }
 
+    // Spec §4.13's bound, resolved once from the validated config: the
+    // loader already refused anything below 1024, so the `usize` cast
+    // here is total.
+    let max_body_bytes = rc.router.server.max_body_bytes as usize;
+
     let app = match &auth_token {
         Some(token) => {
             // One gate per route (each carries its own `proto_in`), all
@@ -595,6 +756,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 trace_writer.clone(),
                 WireApi::Chat,
                 "/v1/chat/completions",
+                max_body_bytes,
             );
             let responses = guarded_protocol_route(
                 forwarder.clone(),
@@ -602,6 +764,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 trace_writer.clone(),
                 WireApi::Responses,
                 "/v1/responses",
+                max_body_bytes,
             );
             let anthropic = guarded_protocol_route(
                 forwarder.clone(),
@@ -609,6 +772,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 trace_writer.clone(),
                 WireApi::Anthropic,
                 "/v1/messages",
+                max_body_bytes,
             );
             health_router.merge(chat).merge(responses).merge(anthropic)
         }
@@ -617,16 +781,22 @@ pub async fn serve(config_path: &str) -> i32 {
                 forwarder.clone(),
                 WireApi::Chat,
                 "/v1/chat/completions",
+                max_body_bytes,
+                trace_writer.clone(),
             ))
             .merge(protocol_route(
                 forwarder.clone(),
                 WireApi::Responses,
                 "/v1/responses",
+                max_body_bytes,
+                trace_writer.clone(),
             ))
             .merge(protocol_route(
                 forwarder.clone(),
                 WireApi::Anthropic,
                 "/v1/messages",
+                max_body_bytes,
+                trace_writer.clone(),
             )),
     }
     .with_state(());

@@ -318,6 +318,10 @@ impl TraceError {
             | ErrorCode::UnknownProvider
             | ErrorCode::UnknownModel => "transform_error",
             ErrorCode::Unauthorized => "unauthorized",
+            // §4.13's bound is a boundary refusal with a kind of its
+            // own, shared with §8's error.type table (the two move
+            // together).
+            ErrorCode::RequestTooLarge => "request_too_large",
             ErrorCode::CostCapExceeded => "upstream_error",
             ErrorCode::Internal => "internal",
         }

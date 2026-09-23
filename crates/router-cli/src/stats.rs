@@ -155,7 +155,22 @@ pub fn aggregate(records: &[Value]) -> TraceFigures {
             .and_then(|x| x.get("overhead_ms"))
             .and_then(Value::as_u64)
         {
-            f.overhead_ms.push(oh);
+            // Spec §6 / §9.2 / DESIGN §12.16 (the R32-F5 repair): the
+            // gate quantity is the router's OWN overhead —
+            // `overhead_ms − upstream_ms` — and a record whose
+            // `upstream_ms` is null (a boundary refusal, an unanswered
+            // attempt) is EXCLUDED from the sample rather than read as
+            // 0 ms. The raw `overhead_ms` field spans the whole request
+            // (it includes the upstream attempt), so reading it
+            // directly would print the upstream's own latency as the
+            // router's.
+            let upstream = r
+                .get("result")
+                .and_then(|x| x.get("upstream_ms"))
+                .and_then(Value::as_u64);
+            if let Some(up) = upstream {
+                f.overhead_ms.push(oh.saturating_sub(up));
+            }
         }
         // `plan_switch` is present-and-null when the policy did not
         // displace the request (spec §6); only a present object counts.
@@ -527,7 +542,7 @@ fn cost_json(f: &TraceFigures) -> serde_json::Value {
 /// same order, with each figure's §7 label inline. Spacing matches the
 /// example's columns (label, value, then a three-space note).
 #[allow(clippy::format_in_format_args)]
-fn print_text(
+pub(crate) fn print_text(
     rc: &crate::config_load::ResolvedConfig,
     window: &str,
     start_ms: i64,

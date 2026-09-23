@@ -5,6 +5,7 @@
 mod accounting;
 mod auth;
 mod availability;
+mod body_limit;
 mod forward;
 mod health;
 mod stream_forward;
@@ -15,6 +16,7 @@ pub use accounting::{
     Accountant, RouteAccounting,
 };
 pub use auth::{refused_message, refused_record, AuthGate, AuthVerdict};
+pub use body_limit::{check_declared, too_large_message, too_large_record};
 pub use forward::{
     mode_refused_record, resolve_transform_mode, BoxedAttempt, ForwardFailure, ForwardOutcome,
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,

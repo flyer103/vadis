@@ -585,12 +585,34 @@ fn default_safety_factor() -> MultiplierVal {
     MultiplierVal(1.2)
 }
 
+/// Spec §4.13: the default inbound request-body limit, 2 MiB — the
+/// declared form of the cap this build has always had in effect (the
+/// HTTP layer's implicit one). Same value, now the router's own.
+fn default_max_body_bytes() -> i64 {
+    2_097_152
+}
+
+/// The smallest bound the key accepts (spec §4.13): a value below 1024
+/// — including 0 and negatives — cannot bound anything and is a load
+/// error, not a quiet default.
+pub const MIN_MAX_BODY_BYTES: i64 = 1024;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerCfg {
     pub addr: String,
     pub upstream_attempt_timeout: DurationVal,
     pub request_timeout: DurationVal,
+    /// Spec §4.13: the largest inbound request body this process will
+    /// **read** on the three protocol endpoints, an integer count of
+    /// bytes (no unit suffixes). A body above it is refused at the
+    /// boundary with §8's `413 request_too_large`, before the pipeline.
+    /// Held as `i64` so a negative value reaches [`RouterConfig::validate`]'s
+    /// own refusal (which names the key and the value) instead of a
+    /// generic serde type error; converted to `usize` once, after
+    /// validation, at the one consumer.
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: i64,
     /// Spec §4.7: the **name** of the env var whose value this process
     /// expects as the inbound token. Absent ⇒ no inbound auth (today's
     /// behaviour; the backward-compatibility clause). A plain string the
@@ -1521,6 +1543,21 @@ impl RouterConfig {
     /// and the reason; there is no partially-started process.
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.listen_addr()?;
+
+        // Spec §4.13: the body bound is a load-time rule like any other
+        // scalar — a value below 1024 (including 0 and negatives) cannot
+        // bound anything and names its key in the refusal.
+        if self.server.max_body_bytes < MIN_MAX_BODY_BYTES {
+            return Err(ConfigError::new(
+                "server.max_body_bytes",
+                format!(
+                    "{} — the inbound body limit must be an integer of bytes ≥ {} \
+                     (there is deliberately no 'unlimited' spelling; write a large \
+                     number where a reader can see it)",
+                    self.server.max_body_bytes, MIN_MAX_BODY_BYTES
+                ),
+            ));
+        }
 
         for (i, src) in self.session.key_sources.iter().enumerate() {
             if src != "prompt_cache_key" {
