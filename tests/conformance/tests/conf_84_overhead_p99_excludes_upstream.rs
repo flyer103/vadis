@@ -33,8 +33,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::Write as _;
-
 /// Builds one trace record with the given `overhead_ms` and
 /// `upstream_ms` (None ⇒ the field is `null`, the §6 shape a boundary
 /// refusal or an unanswered attempt writes).
@@ -89,12 +87,31 @@ fn hour_stamp() -> String {
 }
 
 fn now_rfc3339() -> String {
-    // `stats` parses the record's `ts` with its own parser; the current
-    // hour with a mid-hour minute always lands inside a 24h window.
-    // `hour_stamp` is `YYYY-MM-DDTHH` — splice the minute in after the
-    // hour, not appended to the whole stamp.
-    let stamp = hour_stamp();
-    format!("{stamp}:30:00.000Z")
+    // `stats` parses the record's `ts` with its own parser and keeps only
+    // records inside [now − window, now]; a stamped time must therefore
+    // never read as the FUTURE either. The earlier ":30" splice put the
+    // record up to 30 minutes ahead when the suite ran in the first half
+    // of an hour, and the window reader lawfully dropped it. Stamp the
+    // actual current time.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let days = secs / 86_400;
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    let hour = (secs % 86_400) / 3_600;
+    let minute = (secs % 3_600) / 60;
+    let second = secs % 60;
+    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}.000Z")
 }
 
 /// One rigged config + trace dir holding the given records; returns
@@ -149,41 +166,6 @@ fn json_p99(config: &std::path::Path) -> serde_json::Value {
     let rep = router_cli::stats::report(&cfg, "24h").expect("report computes");
     let rc = router_cli::config_load::load(config).expect("config reloads");
     router_cli::stats::report_json(&rc, "24h", &rep, &None)["overhead_ms_p99"].clone()
-}
-
-/// The text report's `overhead p99` value, captured from stdout.
-fn text_p99(config: &std::path::Path) -> Option<u64> {
-    let cfg = config.to_string_lossy().into_owned();
-    let rep = router_cli::stats::report(&cfg, "24h").expect("report computes");
-    let rc = router_cli::config_load::load(config).expect("config reloads");
-    // print_text writes to stdout; capture it the way the CLI does.
-    // (The printer is deterministic; the test reads it through the same
-    // buffer the process uses.)
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut w = std::io::BufWriter::new(&mut buf);
-        // The printer's signature is internal; drive it through the
-        // same wrapper `stats()` uses by calling the crate's public
-        // `report` figures and re-deriving — no: assert through the
-        // json path and the captured text of `stats()` itself below.
-        let _ = w.write(b"");
-    }
-    let _ = (&rc, &rep);
-    None
-}
-
-/// `router stats`'s own text output, captured: the printer writes to
-/// stdout, so the case runs it through the same public entry the CLI
-/// main calls and captures the process's stdout with a pipe swap.
-fn stats_text(config: &std::path::Path) -> String {
-    // The conformance crate runs in-process; swapping the real stdout
-    // fd is fragile under the test harness. The text path's figure is
-    // derived from the same `TraceFigures.overhead_ms` sample the json
-    // path reads, so leg (c) asserts the two surfaces agree by reading
-    // the figures both printers are built from (CONF-41's standing).
-    let cfg = config.to_string_lossy().into_owned();
-    let _ = cfg;
-    String::new()
 }
 
 #[test]

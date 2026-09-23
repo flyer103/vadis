@@ -85,7 +85,10 @@ fallback: []
 
 /// One rigged `serve` on a fresh tempdir with the given bound. Returns
 /// (listen_addr, dir, serve_task).
-async fn rig(tag: &str, limit: usize) -> (String, std::path::PathBuf, tokio::task::JoinHandle<i32>) {
+async fn rig(
+    tag: &str,
+    limit: usize,
+) -> (String, std::path::PathBuf, tokio::task::JoinHandle<i32>) {
     let dir = testkit::tempdir(tag);
     let upstream = testkit::MockUpstream::start().await.unwrap();
     upstream.queue(CannedResponse::json(
@@ -134,10 +137,7 @@ fn sized_body(size: usize, stream: bool) -> Vec<u8> {
 
 /// POSTs raw bytes with a declared content-length; returns
 /// (status, body, headers).
-fn post_declared(
-    addr: &str,
-    body: &[u8],
-) -> (u16, Vec<u8>, Vec<(String, String)>) {
+fn post_declared(addr: &str, body: &[u8]) -> (u16, Vec<u8>, Vec<(String, String)>) {
     testkit::http_post(addr, "/v1/chat/completions", body, &[])
 }
 
@@ -226,7 +226,10 @@ fn assert_refusal(
     let v: serde_json::Value = serde_json::from_slice(body).expect("§8 unified error body json");
     assert_eq!(v["error"]["type"], "request_too_large", "the rule is named");
     assert_eq!(v["error"]["details"]["limit_bytes"], LIMIT as u64);
-    assert_eq!(v["error"]["details"]["content_length"], expected_content_length);
+    assert_eq!(
+        v["error"]["details"]["content_length"],
+        expected_content_length
+    );
     let req_id = v["error"]["request_id"].as_str().expect("request_id");
     assert!(!req_id.is_empty());
     let hdr_id = headers
@@ -321,7 +324,11 @@ async fn conf_83_inbound_body_limit() {
     assert_eq!(served[0]["usage_missing"], false);
 
     let refused: Vec<&serde_json::Value> = refusal_records(&records);
-    assert_eq!(refused.len(), 3, "legs (b), (c) and (d) each leave one record");
+    assert_eq!(
+        refused.len(),
+        3,
+        "legs (b), (c) and (d) each leave one record"
+    );
     let _ = &refused;
     for rec in &refused {
         assert_eq!(rec["identity"]["event_id"], 0, "the pre-pipeline class");
@@ -331,7 +338,10 @@ async fn conf_83_inbound_body_limit() {
         assert_eq!(rec["cost"]["total"], 0, "nothing priced");
     }
     // (b)'s own record names the declared length; (c)'s names null.
-    assert_eq!(refused[0]["errors"][0]["details"]["content_length"], LIMIT + 1);
+    assert_eq!(
+        refused[0]["errors"][0]["details"]["content_length"],
+        LIMIT + 1
+    );
     assert_eq!(
         refused[1]["errors"][0]["details"]["content_length"],
         serde_json::Value::Null
@@ -383,15 +393,10 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
     assert_eq!(status, 200, "the bound follows the key: 5000 < 8192 serves");
 
     let over = sized_body(8193, false);
-    let (status, resp_body, headers) = testkit::http_post(
-        &listen_addr,
-        "/v1/chat/completions",
-        &over,
-        &[],
-    );
+    let (status, resp_body, headers) =
+        testkit::http_post(&listen_addr, "/v1/chat/completions", &over, &[]);
     assert_eq!(status, 413);
-    let v: serde_json::Value =
-        serde_json::from_slice(&resp_body).expect("unified body");
+    let v: serde_json::Value = serde_json::from_slice(&resp_body).expect("unified body");
     assert_eq!(v["error"]["type"], "request_too_large");
     assert_eq!(v["error"]["details"]["limit_bytes"], 8193u64 - 1); // 8192
     let _ = headers; // shape asserted in the main leg
@@ -400,7 +405,11 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
     // recordings: exactly the one served request.
     std::thread::sleep(std::time::Duration::from_millis(200));
     let recorded = upstream.requests();
-    assert_eq!(recorded.len(), 1, "the refused request never reached the upstream");
+    assert_eq!(
+        recorded.len(),
+        1,
+        "the refused request never reached the upstream"
+    );
     // The byte control: the recorded body IS the client's body modulo
     // the two permitted byte-level mutations (AGENTS 1) — here exactly
     // the model re-point (`mock/glm` → the resolved route's native id
@@ -422,7 +431,10 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
         1023,
     ))
     .expect_err("a bound below 1024 cannot load");
-    assert!(err.contains("server.max_body_bytes"), "the key is named: {err}");
+    assert!(
+        err.contains("server.max_body_bytes"),
+        "the key is named: {err}"
+    );
     assert!(err.contains("1024"), "the floor is named: {err}");
     // And `serve` maps it to exit 2.
     let dir2 = testkit::tempdir("conf83-load-refusal");

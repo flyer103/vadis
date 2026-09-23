@@ -258,6 +258,7 @@ mod tests {
                 upstream_attempt_timeout: router_core::config::DurationVal(60_000),
                 request_timeout: router_core::config::DurationVal(600_000),
                 auth_token_env: None,
+                max_body_bytes: 2_097_152,
             },
             session: router_core::config::SessionCfg {
                 key_sources: vec!["prompt_cache_key".into()],

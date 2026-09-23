@@ -486,42 +486,43 @@ pub async fn serve(config_path: &str) -> i32 {
         limit: usize,
         trace: std::sync::Arc<dyn router_core::TraceWriter>,
     ) -> axum::Router {
-        axum::Router::new().route(
-            path,
-            post(
-                move |headers: axum::http::HeaderMap,
-                      axum::extract::Extension(body): axum::extract::Extension<
-                    axum::body::Bytes,
-                >| {
-                    let hs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                        .collect();
-                    proxy_endpoint(forwarder, proto_in, hs, body)
+        axum::Router::new()
+            .route(
+                path,
+                post(
+                    move |headers: axum::http::HeaderMap,
+                          axum::extract::Extension(body): axum::extract::Extension<
+                        axum::body::Bytes,
+                    >| {
+                        let hs: Vec<(String, String)> = headers
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                            .collect();
+                        proxy_endpoint(forwarder, proto_in, hs, body)
+                    },
+                ),
+            )
+            // §4.13 / DESIGN §12.15: the framework's own default body limit
+            // (axum's implicit 2 MiB `Limited` wrapper) is **disabled** on
+            // the three protocol routes so exactly one cap exists — the
+            // configured one, answered in §8's shape by the boundary layer
+            // below instead of the framework's plain-text 413.
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            // The bound itself (§12.15): inside the token guard (installed
+            // later, so it wraps this one and stays outermost), above the
+            // transform-mode resolution and the path split — both live in
+            // `proxy_endpoint`, which this layer runs before. It reads the
+            // body bounded and hands the surviving bytes on unchanged, so
+            // the byte path (§12.3.1) sees the client's bytes exactly as
+            // before.
+            .route_layer(axum::middleware::from_fn_with_state(
+                BodyLimitState {
+                    limit,
+                    trace,
+                    proto_in,
                 },
-            ),
-        )
-        // §4.13 / DESIGN §12.15: the framework's own default body limit
-        // (axum's implicit 2 MiB `Limited` wrapper) is **disabled** on
-        // the three protocol routes so exactly one cap exists — the
-        // configured one, answered in §8's shape by the boundary layer
-        // below instead of the framework's plain-text 413.
-        .layer(axum::extract::DefaultBodyLimit::disable())
-        // The bound itself (§12.15): inside the token guard (installed
-        // later, so it wraps this one and stays outermost), above the
-        // transform-mode resolution and the path split — both live in
-        // `proxy_endpoint`, which this layer runs before. It reads the
-        // body bounded and hands the surviving bytes on unchanged, so
-        // the byte path (§12.3.1) sees the client's bytes exactly as
-        // before.
-        .route_layer(axum::middleware::from_fn_with_state(
-            BodyLimitState {
-                limit,
-                trace,
-                proto_in,
-            },
-            body_limit_mw,
-        ))
+                body_limit_mw,
+            ))
     }
 
     /// What the bound runs with: the configured limit, the same
@@ -634,11 +635,8 @@ pub async fn serve(config_path: &str) -> i32 {
             return refuse(content_length);
         }
         if read_failed {
-            let mut resp = (
-                StatusCode::BAD_REQUEST,
-                "Failed to buffer the request body",
-            )
-                .into_response();
+            let mut resp =
+                (StatusCode::BAD_REQUEST, "Failed to buffer the request body").into_response();
             resp.headers_mut().insert(
                 axum::http::header::CONNECTION,
                 axum::http::HeaderValue::from_static("close"),
