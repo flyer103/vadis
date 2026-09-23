@@ -2775,10 +2775,11 @@ expected to use.
 **Where the transform-inclusive measurement is defined, and its state.** The *method* is **ADR-030**
 (the four-assembly shape — R32's own assembly plus a mode arm, a mode-closed carrier control and the
 measured carrier arm; the attribution model and its stated confound; the R = 3 repetitions, the band
-and the citation rule; the body-bound legs; and D5's boundary that the **budget itself is a human
+and the citation rule; and the body-bound legs; and D5's boundary that the **budget itself is a human
 decision**, `autowork/STATE.md`'s waiting-on-human row 1). The *quantity*, the ladder, the per-rung
 rules and the ceiling criterion are ADR-029's and are not restated here. The load figures are
-`to be measured by R33-2/R33-3` and live in `autowork/harness/r33-*/` and the round record — never in
+**measured** — by R33-2 (`autowork/harness/r33-2/`, runs of record and report) and to be reproduced
+by R33-3 — and live in `autowork/harness/r33-*/` and the round record, never in
 this section (§12.16's own rule: a measured number in DESIGN is a copy that drifts). Two facts a reader
 of this paragraph needs, both measured at R33's base and recorded in
 `autowork/harness/r33-1/EVIDENCE.md`: R32's own synthetic payload shape (a user message carrying the pad)
@@ -3178,7 +3179,8 @@ freezes the measurement, R33 measures the transform path with it, and the thresh
 **The transform-inclusive half of that measurement is **ADR-030**'s** (the four-assembly shape `P`/`M`/`K0`/`K`,
 the mode-closed carrier control, the attribution model with its stated confound, the R = 3 band and its citation
 rule, and the body-bound legs); its load figures live under `autowork/harness/r33-*/` and in the round record,
-`to be measured by R33-2/R33-3`. §12.12's latency clause carries the pointer, states no number, and records the
+**measured by R33-2, to be reproduced by R33-3**. §12.12's latency clause carries the pointer, states no number,
+and records the
 one premise this section's reader must not lose: R32's own payload shape carries no payload node, so it exercises
 no rule.
 
