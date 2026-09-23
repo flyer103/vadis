@@ -2784,9 +2784,13 @@ this section (§12.16's own rule: a measured number in DESIGN is a copy that dri
 of this paragraph needs, both measured at R33's base and recorded in
 `autowork/harness/r33-1/EVIDENCE.md`: R32's own synthetic payload shape (a user message carrying the pad)
 **has no payload node at all**, so it exercises the mode channel and the locator scan and **no rule**;
-and at this revision **three of `rules/tool_output.toml`'s four rules can fire on the live path while
-`tool-result-json` cannot** (its `match_kind = ["json"]` has no counterpart in the declared `TOOL_KINDS`
-table), which R33's ledger registers as `R33-F1`, blocking.
+and at R33's base **three of `rules/tool_output.toml`'s four rules could fire on the live path while
+`tool-result-json` could not** (its `match_kind = ["json"]` had no counterpart in the declared `TOOL_KINDS`
+table, and the TOML map's alphabetical try order let `bash-log-noise` win the same payload first), which
+R33's ledger registered as `R33-F1`, blocking — **closed by R33-FIX** (`autowork/harness/r33-fix/`): the
+rule's `match_kind` now declares the kinds the shell family actually produces and the rule-file format
+carries an explicit `order` key (ascending, default 0, ties alphabetical), so all four rules can fire on
+the live path.
 
 **What it does not change.** `RouteSpec` and the route vocabulary (the mode is a request fact, never a
 route property, so CONF-27's "alias ≡ direct, byte-identical" claim is untouched); the two-mutation
