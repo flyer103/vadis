@@ -59,6 +59,12 @@ layer's scorer had run the suite against its **own** mock base, where the namesp
 scored 9/9 discriminative. Both are green, and both are green about **different bases**. Nothing compared
 the body's route against the base the run declares.
 
+**The finding this ADR remedies.** The card that stopped (`R38-1`, `t_805170d7`) registered it as
+**R38-1-F1** in `autowork/harness/r38-1/EVIDENCE.md` §6 — blocking for the round's third limb, owner the
+human (freeze repair, delegated) or the operator (`live-base.yaml`) — and closed with a process note that
+proposed, in one line, the step D2 now makes mandatory: *"every item's `model` resolves under the intended
+live `base_config`"*. That note is the ancestry of this decision; D1–D5 are its executable form.
+
 **The owner's ruling.** On 2026-09-24 the human owner adopted the orchestrator's two-part recommendation
 (verbatim in the loop's session thread: 〈按照你的建议进行〉): **(a)** re-freeze the corpus with its route
 namespace reconciled to the declared live base, and **(b)** give the promotion path a step that refuses an
