@@ -223,9 +223,12 @@ impl CompiledRule {
         };
 
         // Stage 2: json_compact — order-preserving parse, compact to one
-        // line, number literals verbatim (serde_json's arbitrary_precision
-        // keeps the literal text). Parse failure ⇒ the rule does not apply
-        // (fail-safe: no partial edit).
+        // line. Number spelling: the value is preserved, the literal is
+        // not — significand and decimal forms are kept verbatim
+        // (`arbitrary_precision`), exponent notation is normalized by
+        // serde_json (`1e3` → `1e+3`). R33-VERIFY-F1's crates half: the
+        // rule file's own spec text is the wording source. Parse failure
+        // ⇒ the rule does not apply (fail-safe: no partial edit).
         if self.json_compact {
             match serde_json::from_str::<serde_json::Value>(&cur) {
                 Ok(v) => {
