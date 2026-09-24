@@ -2790,7 +2790,12 @@ table, and the TOML map's alphabetical try order let `bash-log-noise` win the sa
 R33's ledger registered as `R33-F1`, blocking — **closed by R33-FIX** (`autowork/harness/r33-fix/`): the
 rule's `match_kind` now declares the kinds the shell family actually produces and the rule-file format
 carries an explicit `order` key (ascending, default 0, ties alphabetical), so all four rules can fire on
-the live path.
+the live path. *(R35-1's qualifier, added 2026-09-24: "the live path" in that sentence means the
+**declared table's own** names — R33-1's carriers are `Bash`/`Grep`/`Diff`, taken from `TOOL_KINDS` itself
+(`autowork/harness/r33-1/EVIDENCE.md:169-173`). The clients this repository configures send
+`exec_command`, which is in **no** row of the table, so today **no** shipped rule selects a payload node
+on real client traffic: 36 nodes, 0 selected, 0 edited, measured in
+`autowork/harness/r35-1/corpus-shape.json`. See §12.18 and `R35-1-F1`.)*
 
 **What it does not change.** `RouteSpec` and the route vocabulary (the mode is a request fact, never a
 route property, so CONF-27's "alias ≡ direct, byte-identical" claim is untouched); the two-mutation
@@ -3226,6 +3231,47 @@ arithmetic must reproduce the trace row it was computed from — field by field,
 or the row is not citable. R34's freeze demonstrates the relation against two committed live rows
 (`autowork/harness/r34-1/FREEZE.md` §2, `§7`), and the red control that keeps it honest is a deliberately
 wrong window and a cross-currency addition that must be refused.
+
+### 12.18 The L2 measurement's home: the method is ADR-032's, and no figure of it lives in this file
+
+**What this section is.** The loop's first lever — *input-side compression (P1), and what a saving from it
+may be called* — has one method home, **ADR-032**, and one product-side pointer, this section. The method
+fixes five things: **the lever** (the tier-A rule engine of §12.12 over `rules/tool_output.toml`, run in
+the request's own `Transform` mode, with the shell-log rule named as the one that realises it for the
+clients this repository configures); **the predicate** ("the corpus can exercise it" is a **triple** —
+≥ 1 ledger-attested edited path on a paired measured item, a non-zero `delta.input_total` with the sign of
+a saving, and a published bound on the pair's own between-session content difference — because a
+`paired-sessions` pair's two arms send two different client sessions and the ladder's arithmetic carries
+that difference too); **the label conditions** (the contract's own five, quoted, never restated);
+**the corpus tier** (only the signed layer's row type carries the ladder, and a freeze is a human act —
+HAND-10 §11.3/§11.4, CORP-12 §14.1/§14.2); and **the provenance obligation** (a figure derived from a
+delegated freeze, from an ADR-028 recorder-mediated `external`, or from composed rather than captured
+bytes says so in the same breath — R23-F6).
+
+**Where the numbers live.** In R35's own artifacts under `autowork/harness/r35-*/` — the probe's reading
+(`r35-1/corpus-shape.json`), the round's record and the live row's `result.jsonl` — restated by the round
+record, and **never here**. This is §12.5's, §12.16's and §12.17's own single-source rule: a measured
+number copied into this file would be a second copy that goes stale silently.
+
+**R35-2's artifact, named.** The implementing card's product-side artifacts are
+`rules/tool_output.toml` (the rule file: selection by the tool names this repository's clients actually
+send, and the missing `tee` on the shell rule) and `crates/router-plugins/src/transform_rules.rs` (the
+engine's own unit batch, including the reachability assertion whose subject is an **observed client
+vocabulary** rather than the declared table). **`crates/router-core` is not in that card's write set**:
+`kinds_for_tool`'s declared table (`router-core/src/transform.rs:157-164`) is a declaration about names no
+configured client sends, and whether it should cover them is a human's wording decision — see
+`autowork/harness/r35-1/FREEZE.md` §PREREQUISITE and `R35-1-F1`.
+
+**What it deliberately does not touch.** No new trace field, no new event, no schema move
+(`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command and no new reporting surface:
+`router stats` serves no `$`-ranked table and no `verified` figure, and no clause here promises one.
+`tee`'s originals store and its retrieve channel stay unimplemented (spec §4.4) — a `tee` marker is a
+prerequisite of adoption, never a saving.
+
+**What it may never claim** (ADR-032 D5, restated where a product reader meets it): no `verified` figure
+minted outside the five conditions; **no threshold** — the L1 envelope and the transform band stay
+`autowork/STATE.md`'s waiting-on-human **row 1**; no price number in `book/`; and no saving whose
+retrieval path does not exist.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
