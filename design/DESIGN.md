@@ -3262,6 +3262,27 @@ vocabulary** rather than the declared table). **`crates/router-core` is not in t
 configured client sends, and whether it should cover them is a human's wording decision — see
 `autowork/harness/r35-1/FREEZE.md` §PREREQUISITE and `R35-1-F1`.
 
+**The implementation note (R35-2, landed).** What the implementing card actually
+did, and where the evidence lives (the numbers themselves stay in the round's
+record, per this section's own single-source rule): the shell rule now selects
+on the wire's own tool name alone — `match_tool` widened to the observed client
+vocabulary `exec_command`, the kind gate lifted on that one rule, which the
+freeze names as L2's only realiser — witnessed red-then-green by the engine's
+unit batch (`observed_client_tool_vocabulary_selects_a_shipped_rule`, R35-1's
+D7 R-c) and by a byte witness whose passthrough digest is identical across the
+rule change (AGENTS 1: the repair moves nothing on the passthrough path). The
+corpus that can exercise L2 exists as an auto-layer nomination under
+`autowork/corpus-auto/`; the promotion into the signed tier is the human's
+delegated freeze, never the loop's act. What the card deliberately did **not**
+land: the `tee` half of `R35-1-F4` — that prescription collides with the frozen
+CONF-63 (`tests/conformance/tests/conf_63_i2_prefix_monotonicity.rs:295`
+asserts the shell rule declares no tee), and the measurement apparatus is not
+the loop's to change (ADR-012); the collision is measured and registered in the
+round's record with the human as owner. `write_stdin` is not declared (absent
+from the measured vocabulary), and `tool-result-json` keeps its
+declared-kinds selection — both stated in the rule file's own comment, neither
+silent.
+
 **What it deliberately does not touch.** No new trace field, no new event, no schema move
 (`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command and no new reporting surface:
 `router stats` serves no `$`-ranked table and no `verified` figure, and no clause here promises one.
