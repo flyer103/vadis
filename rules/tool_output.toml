@@ -162,8 +162,25 @@ expected = '{"a": 1,, "b": 2, "note": "padding for the byte budget guard"}'
 
 [filters.bash-log-noise]
 description = "build/test logs: drop progress lines and blank lines, strip ANSI, normalize durations; placeholder when empty"
-match_kind = ["log", "text"]
-match_tool = '^(Bash|bash|shell|run_terminal_cmd)$'
+# R35-1-F1 (R35-2's repair): selection on the wire's own tool name alone,
+#       the kind gate lifted. The declared tool→kind table
+#       (`router-core/src/transform.rs` TOOL_KINDS) names no client this
+#       repository configures — every tool call in the captured traffic is
+#       `exec_command` (measured: `autowork/harness/r35-1/corpus-shape.json`,
+#       36/36 payload nodes) — so `match_kind` made this rule unreachable on
+#       the live path for every client that exists. `match_tool` is the
+#       tier-1 selection path (`router-core/src/transform.rs:154-156`), and
+#       with both-given-both-must-match the gate can only be lifted by
+#       dropping `match_kind` from this rule. The regex keeps the table's
+#       hypothetical shell names (their selection is unchanged: they all
+#       map to [log, text], which the gate admitted anyway) and declares
+#       the observed client vocabulary. `write_stdin` is NOT declared: it
+#       is not in the measured vocabulary (stated, not guessed). Scope:
+#       the freeze names this rule alone as L2's realiser (R35-1 §D1.1);
+#       `tool-result-json` deliberately keeps its declared-kinds selection,
+#       so a JSON payload from `exec_command` gets this rule's line
+#       filters, not compaction.
+match_tool = '^(Bash|bash|shell|run_terminal_cmd|exec_command)$'
 strip_ansi = true
 replace = [
   { pattern = '\s+in \d+(\.\d+)?s$', replacement = '' },

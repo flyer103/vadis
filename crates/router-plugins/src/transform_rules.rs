@@ -870,12 +870,19 @@ expected = '''{"a":1.10,"b":7}
         );
     }
 
-    /// E3 red control (R33-FIX): the reachability invariant over the two
-    /// artifacts, read at test time (AGENTS 6 — no snapshot list): every
-    /// rule declared in the shipped file declares at least one
-    /// `match_kind` entry that `kinds_for_tool` can produce for some tool
-    /// name. Red at the pre-fix base (tool-result-json declared "json"),
-    /// green at the settled HEAD.
+    /// E3 red control (R33-FIX; amended by R35-2): the reachability
+    /// invariant over the two artifacts, read at test time (AGENTS 6 — no
+    /// snapshot list). Two limbs: (i) a rule that declares `match_kind`
+    /// declares at least one entry `kinds_for_tool` can produce for some
+    /// tool name — an unreachable kind declaration is a load-time lie
+    /// (R33-F1); (ii) a rule that declares NO `match_kind` — the
+    /// R35-1-F1 repair shape, selection on the wire's own tool name with
+    /// the kind gate lifted — declares `match_tool`, because a wildcard
+    /// selection is not this file's default. The invariant's subject is
+    /// the DECLARATION; the observed client vocabulary is the sibling
+    /// case `observed_client_tool_vocabulary_selects_a_shipped_rule`
+    /// (R35-1's D7 R-c), which is the assertion that can fail for the
+    /// reason R35-1-F1 names.
     #[test]
     fn every_shipped_rule_kind_is_reachable_on_the_live_path() {
         use router_core::transform::TOOL_KINDS;
@@ -895,11 +902,62 @@ expected = '''{"a":1.10,"b":7}
                 .and_then(toml::Value::as_array)
                 .map(|a| a.iter().filter_map(toml::Value::as_str).collect())
                 .unwrap_or_default();
+            if declared.is_empty() {
+                assert!(
+                    spec.get("match_tool").is_some(),
+                    "rule '{id}' declares neither match_kind nor match_tool — \
+                     a wildcard selection is not this file's default (R35-2)"
+                );
+                continue;
+            }
             assert!(
                 declared.iter().any(|k| producible.contains(k)),
                 "rule '{id}' declares match_kind {declared:?}; none is producible \
                  by kinds_for_tool (producible: {producible:?}) — an unreachable \
                  selection on the live path (R33-F1)"
+            );
+        }
+    }
+
+    /// R35-2 red control (R35-1's D7 R-c, finding R35-1-F1): the shipped
+    /// rule set must SELECT at least one payload node on the tool names
+    /// this repository's own captured traffic carries. The vocabulary is
+    /// the committed measurement (`autowork/harness/r35-1/corpus-shape.json`
+    /// — the frozen corpus's 36 payload nodes, every one named
+    /// `exec_command`), never a recalled list. The pre-existing invariant
+    /// (`every_shipped_rule_kind_is_reachable_on_the_live_path`) asserts
+    /// over the DECLARED table and cannot fail for this reason; this case
+    /// asserts over the observed client vocabulary.
+    #[test]
+    fn observed_client_tool_vocabulary_selects_a_shipped_rule() {
+        let text = std::fs::read_to_string(REPO_RULES).unwrap();
+        let (engine, report) = load_str(&text);
+        assert!(report.failed.is_empty(), "{report:?}");
+        let shape: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../autowork/harness/r35-1/corpus-shape.json"
+            ))
+            .expect("r35-1's committed corpus-shape.json on disk"),
+        )
+        .expect("corpus-shape.json is JSON");
+        let names: Vec<&str> = shape["summary"]["tool_names_seen"]
+            .as_array()
+            .expect("tool_names_seen is an array")
+            .iter()
+            .map(|v| v.as_str().expect("tool names are strings"))
+            .collect();
+        assert!(!names.is_empty(), "the measured vocabulary is not empty");
+        for tool in names {
+            let ctx = PayloadCtx {
+                tool: Some(tool),
+                kinds: kinds_for_tool(tool),
+            };
+            assert!(
+                engine.rules.iter().any(|r| r.selects(&ctx)),
+                "0 shipped rules select a node whose tool is {tool:?} — \
+                 every shipped rule is unreachable for the clients this \
+                 repository configures (R35-1-F1)"
             );
         }
     }
