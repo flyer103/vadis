@@ -264,7 +264,11 @@ this repository's units.
   (`yes`)**; the witness requirement ← **D/F3 (`yes`)** and **D/F1-limb1 (`yes`)**; the conditioned verdict
   vocabulary ← **G/F3 (`yes`)** plus **G/F1 and G/F4 (the two `no`s that are mis-fires)**; the E-condition ←
   **E/F2 (the table's only `yes` for E)** and E's `needs-human` class. `autowork/harness/r37-1/clauses.json`
-  is the machine-readable form of that mapping, and `make_clauses.py` regenerates it.
+  is the machine-readable form of that mapping, and `make_clauses.py` regenerates it: **17 clauses, 42
+  references, all 28 cells (6 `yes` / 22 `no`), every reference verified against the committed `cells.json`
+  including its verdict** — so a clause whose cell stopped resolving fails the script instead of surviving as
+  prose. Clause `C-1` writes the six boundary cells (D/F2, D/F4, E/F1, E/F3, E/F4, G/F2) explicitly, so no
+  clause above can be read as broader than its cells.
 - **Nothing enters the measurement.** No clause touches the gate table, the corpus, the conformance
   assertions, the L1 envelope, the replay code or any threshold. The three obligations bind **loop-side
   artifacts** — a ledger, a card section, a findings row — which is the half of RRSI that R36-1's §7 table
