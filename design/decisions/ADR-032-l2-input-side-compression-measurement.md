@@ -110,6 +110,32 @@ human who accepts it) — and in both the freeze is §11.3's four commands, exec
 `item_count`, emitting a digest and printing a refusal table. **A round whose honest path needs a signed
 freeze stops and registers `needs_input`** — it does not improvise a corpus and does not reach for one.
 
+**Amendment 2026-09-24 (the ruling, and the one limb it leaves open).** The owner ruled **route (ii)**
+(2026-09-24 13:27 CST, relayed on the board; `autowork/harness/r35-1/FREEZE.md` §D2.0·A1) — the corpus that
+can exercise the lever "is produced as an auto-layer nomination and a human freezes it into the signed
+tier" — to be executed as a **delegated** freeze on the R23-F6 precedent (STATE row 11). §D2.0 spells the
+promotion out with one owner per step: the loop (a card under `autowork/corpus-auto/`) builds, verifies,
+scores and nominates; the human (delegated) copies the nominated bodies and writes the signed manifest,
+with the FREEZE DISCLOSURE comment naming every authored field. Two things in that path are **not** free:
+
+1. the auto layer's refusal of `[[pair]].kind = paired-sessions` (`corpus_auto.py:385-398`) is a **suite**
+   rule and does not travel with the bytes; the signed loader admits `paired-sessions` (ARM-3.9) and its
+   checks require one pair, distinct items, a `session_note` and a **non-null `session` per item**
+   (`replay.py:396-434`) — so the promoted manifest's pair block and its per-item session fields are
+   **authored** bytes, not transcribed ones; and
+2. every auto adapter leaves `session = null` / `session_source = "auto:composed"`
+   (`corpus_auto.py:246-247`, CORP-12.7's table), so the session identity a promoted pair must carry is a
+   **client-identity claim** the harness cannot witness — CAP-1.3 calls recording a session the client did
+   not send "a forgery of the input" (`replay-contract.md:320-322`) and ARM-3.9.1's premise is two **real**
+   client sessions (`replay-contract.md:1156-1165`), a premise no ladder condition reads
+   (`replay.py:3483-3496` vs the non-gating per-arm check at `:3232-3246`).
+
+Whether the delegated freeze may author those session fields — reading (a), recommended, with the
+disclosure naming them — or whether no composed corpus may carry `verified` at all — reading (b), which
+would leave D3 unmet — is a **human's** decision, registered as `R35-1-F5` in
+`autowork/harness/r35-1/FREEZE.md` §D2.0·A3/§D9. This ADR takes neither; it records that the route is
+chosen and that this one limb is not.
+
 ### D5. What a `verified` figure from this lever may and may not claim
 
 **May claim:** that on a named corpus, a named commit and a named clean instrument, two live external arms
@@ -138,6 +164,9 @@ observed client vocabulary cannot fail for the right reason.
 - **R35-1 stops.** The corpus limb needs a human freeze; the card registers `needs_input` and writes no
   corpus and no corpus-side plan. The lever, the protocol, the label conditions, the prohibitions and the
   ledger are decided and corpus-independent, so the round can resume the moment the corpus exists.
+  *(Amended 2026-09-24: the human answered the same day — **route (ii)**, an auto-layer nomination promoted
+  into the signed tier under a delegated freeze; `autowork/harness/r35-1/FREEZE.md` §D2.0 carries the
+  promotion path and the one limb the ruling leaves open, `R35-1-F5`.)*
 - **Two blocking findings and two rule-file repairs enter R35-2's scope**: selection by the clients' real
   tool names, and `tee` on the shell rule (today only the patch and search rules carry the marker).
 - **Every later round must name the corpus's provenance** in the same breath as a figure derived from it
@@ -154,8 +183,10 @@ observed client vocabulary cannot fail for the right reason.
   envelope** (ADR-012 item 2; AGENTS 9).
 - **It does not decide whether `crates/router-core`'s `TOOL_KINDS` table should name configured clients**:
   that is a human's wording decision, registered in `r35-1/FREEZE.md` §PREREQUISITE.
-- **It does not choose between the capture route and the nomination route** — that is the human's answer
-  to the round's `needs_input`.
+- **It does not choose between the capture route and the nomination route** — that was the human's answer
+  to the round's `needs_input`, and it is given: **route (ii)**, the nomination route, 2026-09-24 (D4's
+  amendment). What the ruling does **not** settle is `R35-1-F5`: whether a delegated freeze may author the
+  promoted corpus's session-identity fields.
 
 ## References
 
