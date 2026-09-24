@@ -3180,13 +3180,52 @@ obey). Measured baseline figures therefore live in the per-run evidence under `a
 are compared against is not a loop decision at all (ADR-012; `autowork/STATE.md`'s waiting-on-human row 1): R32
 freezes the measurement, R33 measures the transform path with it, and the threshold stays the human's.
 
-**The transform-inclusive half of that measurement is **ADR-030**'s** (the four-assembly shape `P`/`M`/`K0`/`K`,
+**The transform-inclusive half of that measurement is ADR-030's** (the four-assembly shape `P`/`M`/`K0`/`K`,
 the mode-closed carrier control, the attribution model with its stated confound, the R = 3 band and its citation
 rule, and the body-bound legs); its load figures live under `autowork/harness/r33-*/` and in the round record,
-**measured by R33-2, to be reproduced by R33-3**. §12.12's latency clause carries the pointer, states no number,
-and records the
+**measured by R33-2 (`autowork/harness/r33-2/results/`) and reproduced by R33-3 at `68f79a8`
+(`autowork/harness/r33-3/results/`) — `R33-4-F2` closed here**, and the ladder's own counts are reconciled in
+`autowork/harness/r34-1/FREEZE.md` §12.1: the freeze's §4 table enumerates **37** rung ids, the two rigs ran
+**40** declarations — the 37 plus the three `K0` twins (`K0-N2`, `K0-S2`, `K0-S3`) the attribution model needed —
+and **104** runs (`8 × 1 + 32 × 3`), so the §4 prose's "34 … ≈ 77 runs" is superseded (**`R33-3-F4`**,
+reconciled there; the line itself is outside this card's write set). §12.12's latency clause carries the
+pointer, states no number, and records the
 one premise this section's reader must not lose: R32's own payload shape carries no payload node, so it exercises
 no rule.
+
+### 12.17 The cost ranking's home: the method is ADR-031's, and the numbers are not in this file
+
+**What this section is.** The loop's cost work — *which lever is worth money, and on what arithmetic* — has one
+method home, **ADR-031**, and one product-side pointer, this section. The method fixes four things: the
+**arithmetic** (ADR-031 D1 = this repository's own cost function, adopted rather than re-derived, so a ranking
+row is checkable field by field against the trace row it came from); the **denominator** (`$` per 1 000
+requests) on a **named, committed base**, with the basis and the sample count printed beside every row; the
+**window rule** (a money line names the rate the run's own window required, and a mixed-currency window has
+**no combined total** — ADR-018); and the **label rule** (`inferred` is never mixed with `verified`, and a
+ranking mints nothing).
+
+**Where the numbers live.** In R34-2's committed artifacts under `autowork/harness/r34-2/` — one row per lever,
+each carrying its base, its basis, its sample count, the price entry's official source URL + date, and its
+label — restated by the round record, and **never here**. This is the same single-source rule §12.5's prices
+and §12.16's baseline figures obey: a measured number copied into this file would be a second copy that goes
+stale silently, and a stale price is indistinguishable from a fabricated one to a reader.
+
+**What it deliberately does not touch.** No new trace field, no new event, no schema move
+(`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command and no new reporting surface: the
+ranking is **loop-side**. `router stats` serves per-currency money, the hit rate and the savings ledger exactly
+as it does today (`crates/router-cli/src/stats.rs`); it serves **no `$`-ranked table**, and no clause here
+promises one.
+
+**What it may never claim** (ADR-031 D6, restated where a product reader meets it): no `verified` figure; no
+price without its official source URL and date; **no threshold** — the L1 envelope and the transform band stay
+`autowork/STATE.md`'s waiting-on-human **row 1**; and no saving whose retrieval path does not exist (`tee`'s
+originals store and its retrieve channel are still unimplemented, spec §4.4).
+
+**The one thing this section does require, and it is a relation rather than a figure.** A ranking row's
+arithmetic must reproduce the trace row it was computed from — field by field, including `peak_applied_pct` —
+or the row is not citable. R34's freeze demonstrates the relation against two committed live rows
+(`autowork/harness/r34-1/FREEZE.md` §2, `§7`), and the red control that keeps it honest is a deliberately
+wrong window and a cross-currency addition that must be refused.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 

@@ -50,10 +50,16 @@
 # Stages:
 #   strip_ansi          : remove ANSI escape sequences (ESC[ ... m etc.).
 #   json_compact        : order-preserving parse then compact to one line (no
-#                         whitespace between `,`/`:`), **number literals kept
-#                         verbatim**; output is a single line + trailing
-#                         newline; parse failure → the whole rule does not
-#                         apply (fail-safe).
+#                         whitespace between `,`/`:`); output is a single line
+#                         + trailing newline; parse failure → the whole rule
+#                         does not apply (fail-safe). **Number spelling: the
+#                         value is preserved, the literal is not.** Significand
+#                         and decimal forms are kept verbatim (`1.10`, `1.0e-2`,
+#                         `9007199254740993`), while an exponent notation is
+#                         normalized by serde_json (`1e3` → `1e+3`, `1E3` →
+#                         `1e+3`) — the number is unchanged, its spelling is
+#                         not. Measured: `autowork/harness/r33-verify/probes/
+#                         jsonnum_probe.rs` (`R33-VERIFY-F1`, closed here).
 #   replace             : per-line replace_all (array order = application
 #                         order).
 #   match_output        : matched against the **full text**; the first hit
