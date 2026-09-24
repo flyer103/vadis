@@ -3294,6 +3294,31 @@ minted outside the five conditions; **no threshold** — the L1 envelope and the
 `autowork/STATE.md`'s waiting-on-human **row 1**; no price number in `book/`; and no saving whose
 retrieval path does not exist.
 
+### 12.19 The RRSI subset's home: the decision is ADR-033's, and the product is untouched
+
+**What this section is.** The loop's adoption of three of RRSI's seven regularizers — a **candidate ledger**
+with a pre-spend refusal clause (B), a **reachability witness** required of a card that adds a rule, a stage,
+a module or a switch (D), and a **conditioned** unproductive-components report (G, conditional on the noise
+band E) — has one decision home, **ADR-033**, and its clauses live in `autowork/ledger/README.md` (the
+ledger's data contract) and `autowork/work-mode.md` §"The pre-spend declarations" (the card-body
+obligations). This section exists for the two things a product reader must be able to see without opening
+the loop's files.
+
+**Nothing product-side is added, and the one product-side half is already landed.** B and G are loop-side
+entirely; G's deletion step is ordinary product work through the four gates. D's screen is a **card-body**
+requirement, and the invariant its product-side half corresponds to already landed at
+`crates/router-plugins/src/transform_rules.rs:890` (as landed, `:880` at `a429b9a`) —
+`every_shipped_rule_kind_is_reachable_on_the_live_path`, whose subject is the client vocabulary §12.18
+describes. **No clause of ADR-033 adds a rule, a stage, a module or a switch**: the wording decision on
+`kinds_for_tool`'s declared table stays the human's (§12.18, `R35-1-F1`), and this section asserts no new
+product rule.
+
+**What it deliberately does not touch.** No new trace field, no new event, no schema move
+(`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command, no reporting surface: the ledger is
+loop-side and is never read by the serving path (AGENTS 3). **No threshold** — the L1 envelope and the
+transform band stay `autowork/STATE.md`'s waiting-on-human **row 1** — and neither the ledger nor the pruning
+report mints a `verified` figure (ADR-033 D6, D7).
+
 ## 13. Primitive register, module map and leak register (ADR-016)
 
 The vocabulary is ADR-016's; this chapter is the enumeration. It answers three questions that §2–§12 answer
