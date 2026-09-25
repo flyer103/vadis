@@ -31,10 +31,11 @@ the observation boundary.
 ## 2. crate dependency direction
 
 ```
-router-cli → router-proxy → router-protocol → router-core ← router-plugins
-                    ↘ router-runtime ↗                 ↑
-                          router-providers        router-plugin-sdk (tier-B protocol types)
-                    router-store ──→ router-core  (trait Store implementation, ADR-009)
+router-cli      → router-proxy → router-protocol → router-core
+                → router-plugins → router-runtime → router-core
+                → router-store → router-core            (trait Store implementation, ADR-009)
+router-proxy    → router-providers → router-core
+router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 ```
 
 - `router-core`: the domain model of request/decision, the cost engine, the cache ledger, the plugin
@@ -274,9 +275,11 @@ implementation order is given by each row's "Lands in".
 ### 12.1 crate list, dependency direction and the third-party dependency allowlist
 
 ```
-router-cli → router-proxy → router-protocol → router-core ← router-plugins
-                    ↘ router-runtime ↗                 ↑
-                          router-providers        router-plugin-sdk
+router-cli      → router-proxy → router-protocol → router-core
+                → router-plugins → router-runtime → router-core
+                → router-store → router-core            (trait Store implementation, ADR-009)
+router-proxy    → router-providers → router-core
+router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 ```
 
 | crate | Public surface (what is usable outside) | Permitted third-party dependencies | Lands in |
@@ -285,7 +288,7 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 | `router-protocol` | codec for the 3 protocols, translation matrix, `Usage` normalization, `raw_json` (span-faithful editing) | `serde_json` | 2026-09-19 |
 | `router-providers` | `ProviderClient` (wire capabilities, authentication, retry, SSE parsing) | `reqwest` (with a TLS feature — all real providers are https), `tokio`, `futures` | 2026-09-19 |
 | `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
-| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | 2026-09-19 / 2026-09-20 |
+| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky; and the **assembly** that mounts them from the `plugins:` list (`assemble`, R41-3) | `toml`, `regex` | 2026-09-19 / 2026-09-20 / 2026-09-25 |
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
 | `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2) | 2026-09-19 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
@@ -3421,7 +3424,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | **L2b** | P3 | the `supports` capability check and its 400 body | `router-proxy/src/forward.rs:491-507` | `router-proxy/src/stream_forward.rs:332-345` | spec §8's `capability_unsupported` is a contract; two renderings can drift in `details`/message | **open** |
 | **L3** | P7/P5 | the two reporting consumers read the same state by **different mechanisms** | `/health` reads through the writer's own connection (`router-proxy/src/health.rs:104-135` via `AppState::store`, `:24-28`) | `router stats` scans the trace directory and opens the store read-only (`router-cli/src/stats.rs:188-283`, `:221`, `:366`) | only one of them works while the other is true: the read-only open is refused while `serve` holds `PRAGMA locking_mode = EXCLUSIVE` (`router-store/src/lib.rs:218`, R6-G3), so the "same fact, two views" is really "two facts, one of them unavailable" | **open**; a read seam must state which figures each consumer can honestly obtain |
 | **L4** | P3 | the reserved `auto`/`Selector` slot | prose says reserved (`docs/spec.md:78-79`; `design/DESIGN.md:14,367`, §3's closing paragraph) | code has no slot: the refusal is a literal comparison (`router-proxy/src/forward.rs:403-407`), there is no `trait Selector`, and `decision.selection_source` is a `String` (`router-core/src/trace.rs:88`) whose third value is absent from spec §3's own list | the repository's own rule forbids this shape ("a documented-but-unreachable surface is a defect", spec §9.3); the honest options are to define the value or delete it — **a human decision** | **open, by design**; recorded rather than silently kept |
-| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (**R41-2**: the machinery landed and **nothing consumes it**), `router-plugin-sdk/src/lib.rs:1-4` (still a stub) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
+| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (**R41-2** the machinery landed; **R41-3** the launcher's assembly consumes it — the pipeline is built from the `plugins:` list — while `isolate`/`intercept` are consumed by nobody), `router-plugin-sdk/src/lib.rs:1-4` (still a stub) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | P9's machinery exists (R41-2) and R41-3 mounts plugins through it, but **`isolate`/`intercept` are still consumed by nobody** and ADR-013's rails compose exactly those; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
 | **L6** | P4 | the guard's answer vocabulary: `GuardOutcome` is named as existing vocabulary (`router-core/src/plan.rs:3-5`) and sketched in `design/DESIGN.md:368-369`, but no such type exists | the code answers with a plan-specific `PlanMove` (`router-core/src/plan.rs:52-69`) | the caller is a hand-written method with its own outcome struct (`router-proxy/src/forward.rs:156,1121-1200`) | a second rule would invent a second move type, so "the guard chain" is a paragraph rather than an interface — which is exactly what a decision provider needs | **open** (becomes real when a second rule lands) |
 
 Three shapes that are **not** leaks, listed so the register is not re-litigated:
