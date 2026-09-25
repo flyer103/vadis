@@ -26,6 +26,41 @@ use std::path::PathBuf;
 /// works.
 pub const EMBEDDED_TEMPLATE: &str = include_str!("../../../../config.example.yaml");
 
+/// The roster half of the embedded template (spec §4.14): the shipped
+/// example is a **pair** since the split, so the roster template is
+/// embedded for the same reason the root is — an installed binary with no
+/// example beside it still writes a complete pair (spec §4.11's `--from`
+/// row: "the embedded **roster** template for the roster target").
+pub const EMBEDDED_ROSTER: &str = include_str!("../../../../providers.example.yaml");
+
+/// The root's shape, which decides which file the `providers` section's
+/// anchors live in (spec §4.11's target-file column). The shape is a parse
+/// fact read off the same wire type the loader parses; a root that does
+/// not parse is treated as **inline** here, because the parse refusal is
+/// the candidate gate's to issue (the loader), exactly as before the
+/// split. A root writing **both** keys stays `Inline` for the wizard's
+/// purposes — the inline block is where its provider anchors are — and the
+/// both-written refusal is the join's, at the gate (§4.14 shape 1).
+enum Shape {
+    Inline,
+    Split { written: String, resolved: PathBuf },
+}
+
+/// Read the shape off a root text, resolving a named roster by §4.1's
+/// rule against the root's own directory (never the CWD).
+fn shape_of(root_text: &str, config_dir: &std::path::Path) -> Shape {
+    let Ok(root) = serde_yaml::from_str::<router_core::config::RootFile>(root_text) else {
+        return Shape::Inline;
+    };
+    match (&root.providers, &root.providers_file) {
+        (None, Some(written)) => Shape::Split {
+            written: written.clone(),
+            resolved: crate::config_load::resolve(config_dir, written),
+        },
+        _ => Shape::Inline,
+    }
+}
+
 /// `router setup`'s flags, as `main` parsed them.
 #[derive(Debug, Clone, Default)]
 pub struct SetupArgs {
@@ -95,6 +130,30 @@ fn io(reason: String) -> Failure {
     Failure::Io(reason)
 }
 
+/// One file the run may write: the root lane always exists; the roster
+/// lane exists when the base root names one (spec §4.11's target-file
+/// column; §4.14). `base` is the bytes the plan edits — the file's own
+/// bytes, or the lane's template when the run starts it fresh.
+struct Lane {
+    path: PathBuf,
+    /// The file was there before the run.
+    existed: bool,
+    /// The run replaces the file wholesale (fresh, or `--force` over a
+    /// section that targets it) — the fact `--force ⇒ --backup` keys off.
+    replaced: bool,
+    base: String,
+    plan: Plan,
+}
+
+impl Lane {
+    /// Whether this lane lands: an edit, or a base that is not the file
+    /// that is there (a fresh lane, or a `--force`d one) — §4.11's
+    /// empty-plan rows, read per file of the pair.
+    fn lands(&self) -> bool {
+        !self.plan.is_empty() || !self.existed || self.replaced
+    }
+}
+
 fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     // `--print` and `--check` return before any prompt or write (step 2).
     if args.print || args.check {
@@ -103,40 +162,30 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
 
     // Step 1: resolve the target (§4.12's discovery order, write side).
     let target = config_path::resolve_write(args.config.as_deref()).map_err(Failure::Refused)?;
-    let template = load_template(args)?;
-
-    // The base: the target's own bytes when it exists and `--force` is
-    // absent; the template's otherwise (step 1). An existing target is
-    // the normal case — no flag, no confirmation (spec §4.11).
     let target_exists = target.path.is_file();
-    let base_text: String = if target_exists && !args.force {
-        std::fs::read_to_string(&target.path)
-            .map_err(|e| io(format!("cannot read target {}: {e}", target.path.display())))?
+    let config_dir = target
+        .path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let existing: Option<String> = if target_exists {
+        Some(
+            std::fs::read_to_string(&target.path)
+                .map_err(|e| io(format!("cannot read target {}: {e}", target.path.display())))?,
+        )
     } else {
-        template.clone()
+        None
     };
-
-    // No terminal on stdin and no --non-interactive: refuse with the
-    // working command in hand (spec §4.11; the `interactive` flag the
-    // prompter carries is exactly this disjunction).
-    if !prompter.interactive && !args.non_interactive {
-        let mut out = String::new();
-        out.push_str(&format!(
-            "stdin is not a terminal and --non-interactive was not given: nothing \
-             was written.\nrun the non-interactive form:\n  router setup \
-             --non-interactive{}\n",
-            args.config
-                .as_deref()
-                .map(|c| format!(" --config {c}"))
-                .unwrap_or_default()
-        ));
-        for name in missing_env_names(&base_text) {
-            out.push_str(&prompt::export_snippet(&name));
-            out.push('\n');
-        }
-        print!("{out}");
-        return Ok(EXIT_REFUSED);
-    }
+    // `--from` is read eagerly, as before the split: an unreadable
+    // template is a refusal whether or not the run ends up using it.
+    let from_text: Option<String> = match &args.from {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| Failure::Refused(format!("template {path} cannot be read: {e}")))?,
+        ),
+        None => None,
+    };
 
     // Section list (step 3): bare / `all` = all seven, in table order.
     let selected: Vec<Section> = match &args.section {
@@ -153,7 +202,121 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
         },
     };
 
-    let plan = build_plan(&base_text, &selected, prompter, args)?;
+    // `--from`'s meaning follows the file the run starts from (spec
+    // §4.11's `--from` / `--force` rows: "replaces the file it starts
+    // from — for the `providers` section under the split form that is
+    // how a roster is replaced as a unit"). Exactly one run shape reads
+    // `--from` as the roster's replacement: the providers-section run
+    // over an **existing** split root — the operator's own root is what
+    // names the roster being swapped. Every other run reads `--from` as
+    // the root template, as before the split (a fresh start begins from
+    // a root; ADR-037 D9: a unit replacement, never an insertion).
+    let existing_shape = existing.as_deref().map(|text| shape_of(text, &config_dir));
+    let roster_scoped_from = from_text.is_some()
+        && args.section.as_deref() == Some("providers")
+        && matches!(existing_shape, Some(Shape::Split { .. }));
+    let root_template: &str = if roster_scoped_from {
+        EMBEDDED_TEMPLATE
+    } else {
+        from_text.as_deref().unwrap_or(EMBEDDED_TEMPLATE)
+    };
+    let roster_template: &str = if roster_scoped_from {
+        from_text.as_deref().unwrap()
+    } else {
+        EMBEDDED_ROSTER
+    };
+
+    // The root lane's base: the target's own bytes when it exists and the
+    // run does not replace it; the root template's otherwise (step 1).
+    // `--force` replaces the root when a selected section targets it **in
+    // the existing shape** — so the providers-only `--force` run over a
+    // split root leaves the root alone. The run's own shape is then read
+    // off the base: the shipped template is split, so a forced run over
+    // an inline root writes the pair form.
+    let root_targeted = match existing_shape {
+        None => true,                // a fresh target: the root is always written
+        Some(Shape::Inline) => true, // every section edits the inline root
+        Some(Shape::Split { .. }) => selected
+            .iter()
+            .any(|s| s.target(true) == sections::TargetFile::Root),
+    };
+    let root_replaced = !target_exists || (args.force && root_targeted);
+    let root_base: String = match &existing {
+        Some(text) if !root_replaced => text.clone(),
+        _ => root_template.to_string(),
+    };
+    let shape = shape_of(&root_base, &config_dir);
+    let split = matches!(shape, Shape::Split { .. });
+
+    // The roster lane. The roster's base follows the same rule: the
+    // file's own bytes when it exists and is not replaced; the roster
+    // template's otherwise. A roster the root names but that is missing
+    // is started from the template — the run writes the pair it
+    // validates, so what lands always loads (step 8's gate).
+    let roster_lane: Option<Lane> = match &shape {
+        Shape::Inline => None,
+        Shape::Split { resolved, .. } => {
+            let roster_exists = resolved.is_file();
+            let roster_targeted = selected
+                .iter()
+                .any(|s| s.target(split) == sections::TargetFile::Roster);
+            let roster_replaced = !roster_exists || (args.force && roster_targeted);
+            let roster_base: String = if roster_exists && !roster_replaced {
+                std::fs::read_to_string(resolved)
+                    .map_err(|e| io(format!("cannot read roster {}: {e}", resolved.display())))?
+            } else {
+                roster_template.to_string()
+            };
+            Some(Lane {
+                path: resolved.clone(),
+                existed: roster_exists,
+                replaced: roster_replaced,
+                base: roster_base,
+                plan: Plan::default(),
+            })
+        }
+    };
+    let mut root_lane = Lane {
+        path: target.path.clone(),
+        existed: target_exists,
+        replaced: root_replaced,
+        base: root_base,
+        plan: Plan::default(),
+    };
+    let mut roster_lane = roster_lane;
+
+    // No terminal on stdin and no --non-interactive: refuse with the
+    // working command in hand (spec §4.11; the `interactive` flag the
+    // prompter carries is exactly this disjunction).
+    if !prompter.interactive && !args.non_interactive {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "stdin is not a terminal and --non-interactive was not given: nothing \
+             was written.\nrun the non-interactive form:\n  router setup \
+             --non-interactive{}\n",
+            args.config
+                .as_deref()
+                .map(|c| format!(" --config {c}"))
+                .unwrap_or_default()
+        ));
+        for name in missing_env_names(
+            &root_lane.base,
+            roster_lane.as_ref().map(|l| l.base.as_str()),
+        ) {
+            out.push_str(&prompt::export_snippet(&name));
+            out.push('\n');
+        }
+        print!("{out}");
+        return Ok(EXIT_REFUSED);
+    }
+
+    build_plan(
+        &mut root_lane,
+        roster_lane.as_mut(),
+        &selected,
+        prompter,
+        args,
+    )?;
 
     // `--dry-run`: the plan in place of any landing — checked before the
     // empty-plan branches and before the write itself, so "no write"
@@ -164,94 +327,153 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
         if args.json {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&report::dry_run_json(&plan)).unwrap()
+                serde_json::to_string_pretty(&report::dry_run_json(
+                    &root_lane.plan,
+                    roster_lane.as_ref().map(|l| (l.path.as_path(), &l.plan))
+                ))
+                .unwrap()
             );
         } else {
-            let lines: Vec<&str> = base_text.lines().collect();
-            let get = move |i: usize| lines.get(i).copied().map(|s| s.to_string());
-            print!("{}", report::dry_run_text(get, &plan));
-            // An empty plan is not silence: the run's outcome, stated
-            // without performing it — the landing it would perform (a
-            // base that is not the file that is there), or the
-            // no-change line it would print.
-            if plan.is_empty() {
-                if target_exists && !args.force {
-                    print!("{}", report::no_change_text(&target.path));
-                } else {
-                    print!(
-                        "{}",
-                        report::dry_run_would_write_text(&target.path, target.selected_by.as_str())
-                    );
+            let print_lane = |lane: &Lane, selected_by: &str| {
+                let lines: Vec<&str> = lane.base.lines().collect();
+                let get = move |i: usize| lines.get(i).copied().map(|s| s.to_string());
+                print!("{}", report::dry_run_text(get, &lane.plan));
+                // An empty plan is not silence: the run's outcome, stated
+                // without performing it — the landing it would perform (a
+                // base that is not the file that is there), or the
+                // no-change line it would print.
+                if lane.plan.is_empty() {
+                    if lane.lands() {
+                        print!(
+                            "{}",
+                            report::dry_run_would_write_text(&lane.path, selected_by)
+                        );
+                    } else {
+                        print!("{}", report::no_change_text(&lane.path));
+                    }
                 }
+            };
+            if let Some(roster) = &roster_lane {
+                // Two lanes: label each with its file so an edit's target
+                // is never ambiguous (spec §4.11's target-file column).
+                println!("# {}", root_lane.path.display());
+                print_lane(&root_lane, target.selected_by.as_str());
+                println!("# {}", roster.path.display());
+                print_lane(roster, "named by providers_file");
+            } else {
+                print_lane(&root_lane, target.selected_by.as_str());
             }
         }
         return Ok(EXIT_OK);
     }
 
-    // Step 9: an empty plan over a base that **is** the target's own
-    // bytes writes nothing — this is what makes a second run a no-op
+    // Step 9: an empty plan over a base that **is** the file that is
+    // there writes nothing — this is what makes a second run a no-op
     // rather than a rewrite (G3; spec §4.11: "Nothing to change ⇒
-    // nothing is written"). But "nothing to ask" is not "nothing to do"
-    // when the base is not the file that is there: a fresh target, or
-    // `--force` over an existing one, still lands the template verbatim
-    // with zero answers (G1 / CONF-67(a); spec §4.11's `--force` row:
-    // "the target is replaced by the template plus your answers" —
-    // `--force` is consulted on the empty-plan path too, and it implies
-    // `--backup`, so the replaced file survives at `<target>.bak`;
-    // R22-F1).
-    if plan.is_empty() && target_exists && !args.force {
+    // nothing is written"). Read for the pair: nothing lands only when
+    // **neither** lane has a reason to land.
+    if !root_lane.lands() && !roster_lane.as_ref().is_some_and(|l| l.lands()) {
         print!("{}", report::no_change_text(&target.path));
         return Ok(EXIT_OK);
     }
 
-    // Step 7: apply → candidate bytes. An empty plan's candidate is the
-    // base itself (no edits moved it).
-    let candidate = if plan.is_empty() {
-        base_text.clone()
+    // Step 7: apply → candidate bytes, per lane. An empty plan's
+    // candidate is the base itself (no edits moved it).
+    let root_candidate = if root_lane.plan.is_empty() {
+        root_lane.base.clone()
     } else {
-        edit::apply(&base_text, &plan)
+        edit::apply(&root_lane.base, &root_lane.plan)
     };
+    let roster_candidate = roster_lane.as_ref().map(|l| {
+        if l.plan.is_empty() {
+            l.base.clone()
+        } else {
+            edit::apply(&l.base, &l.plan)
+        }
+    });
 
     // Step 8: the same loader, on the candidate, before anything lands.
-    // A candidate that does not load is never written, and the message is
-    // the loader's own, naming the key (G6).
-    if let Err(reason) = crate::config_load::validate_text(&candidate) {
+    // The candidate is the **pair** (spec §4.11: the two files are
+    // validated together), and a candidate that does not load is never
+    // written — a failure lands neither file, G4 read for two targets.
+    let gate = match (&shape, &roster_candidate) {
+        (Shape::Split { resolved, .. }, Some(roster)) => {
+            crate::config_load::validate_pair(&root_candidate, roster, resolved)
+        }
+        _ => crate::config_load::validate_text(&root_candidate),
+    };
+    if let Err(reason) = gate {
         return Err(Failure::Refused(format!(
             "the candidate does not load: {reason}"
         )));
     }
 
     // Step 10: `--backup` (or `--force`, which implies it) copies the
-    // existing target to `<target>.bak` first — the anchored-edit
-    // rollback path (spec §4.11's `--backup` row).
-    if (args.backup || args.force) && target_exists {
-        let bak = backup_path(&target.path);
-        std::fs::copy(&target.path, &bak).map_err(|e| {
-            io(format!(
-                "cannot back up {} to {}: {e}",
-                target.path.display(),
-                bak.display()
-            ))
-        })?;
+    // existing file to `<file>.bak` first — per lane, before either
+    // landing, so a backup failure aborts the run with nothing written.
+    let lanes: Vec<&Lane> = match &roster_lane {
+        Some(r) => vec![&root_lane, r],
+        None => vec![&root_lane],
+    };
+    for lane in &lanes {
+        if lane.lands() && lane.existed && (args.backup || (args.force && lane.replaced)) {
+            let bak = backup_path(&lane.path);
+            std::fs::copy(&lane.path, &bak).map_err(|e| {
+                io(format!(
+                    "cannot back up {} to {}: {e}",
+                    lane.path.display(),
+                    bak.display()
+                ))
+            })?;
+        }
     }
 
-    // Step 11: land (temp file + sync + rename; mkdir -p; modes).
-    land(&target, candidate.as_bytes())?;
+    // Step 11: land, roster first (an orphan roster is harmless where a
+    // root naming a missing roster is not), temp file + sync + rename.
+    if let Some(roster) = &roster_lane {
+        if roster.lands() {
+            land(
+                &roster.path,
+                roster_candidate.as_deref().unwrap().as_bytes(),
+            )?;
+        }
+    }
+    if root_lane.lands() {
+        land(&target.path, root_candidate.as_bytes())?;
+    }
     if args.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&report::landed_json(
                 &target.path,
                 target.selected_by.as_str(),
-                plan.edits.len()
+                root_lane.plan.edits.len(),
+                roster_lane
+                    .as_ref()
+                    .filter(|l| l.lands())
+                    .map(|l| (l.path.as_path(), l.plan.edits.len()))
             ))
             .unwrap()
         );
     } else {
-        print!(
-            "{}",
-            report::landed_text(&target.path, target.selected_by.as_str(), plan.edits.len())
-        );
+        if let Some(roster) = &roster_lane {
+            if roster.lands() {
+                print!(
+                    "{}",
+                    report::landed_roster_text(&roster.path, roster.plan.edits.len())
+                );
+            }
+        }
+        if root_lane.lands() {
+            print!(
+                "{}",
+                report::landed_text(
+                    &target.path,
+                    target.selected_by.as_str(),
+                    root_lane.plan.edits.len()
+                )
+            );
+        }
     }
     Ok(EXIT_OK)
 }
@@ -262,29 +484,23 @@ fn backup_path(p: &std::path::Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn load_template(args: &SetupArgs) -> Result<String, Failure> {
-    match &args.from {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|e| Failure::Refused(format!("template {path} cannot be read: {e}"))),
-        None => Ok(EMBEDDED_TEMPLATE.to_string()),
-    }
-}
-
-/// The named environment variables the file carries but the ambient
+/// The named environment variables the pair carries but the ambient
 /// environment does not — `--quick`'s "only ask what is missing" and the
 /// no-TTY branch's export snippets (spec §4.11). Names only; no value is
-/// ever read (the secret boundary).
-fn missing_env_names(base: &str) -> Vec<String> {
+/// ever read (the secret boundary). The provider names resolve against
+/// the roster's text when the root names one (the target-file column).
+fn missing_env_names(root_base: &str, roster_base: Option<&str>) -> Vec<String> {
+    let roster_text = roster_base.unwrap_or(root_base);
     let mut out = Vec::new();
-    for name in anchor::entry_names(base, "providers", "name") {
+    for name in anchor::entry_names(roster_text, "providers", "name") {
         let p = format!("providers[name={name}].api_key_env");
-        if let Ok(a) = anchor::resolve_typed(base, &p) {
+        if let Ok(a) = anchor::resolve_typed(roster_text, &p) {
             if std::env::var_os(&a.value).is_none() {
                 out.push(a.value);
             }
         }
     }
-    if let Ok(a) = anchor::resolve_typed(base, "server.auth_token_env") {
+    if let Ok(a) = anchor::resolve_typed(root_base, "server.auth_token_env") {
         if a.enabled && std::env::var_os(&a.value).is_none() {
             out.push(a.value);
         }
@@ -303,27 +519,60 @@ fn parse_bool(s: &str) -> Option<bool> {
     }
 }
 
-/// Steps 4–6: walk the sections' rows against the **base**, show each
-/// display-only key, ask each askable one, and turn each answer that
-/// differs from the value at its anchor into one edit. A key whose anchor
-/// did not resolve is a **refusal** when it carries a requested change
-/// and a **warning** when it does not (spec §4.11 step 3).
+/// Steps 4–6: walk the sections' rows against the **base of the file
+/// that owns each section** (the section table's target-file column —
+/// `providers` resolves against the roster's base under a split root),
+/// show each display-only key, ask each askable one, and turn each
+/// answer that differs from the value at its anchor into one edit of
+/// that lane's plan. A key whose anchor did not resolve is a **refusal**
+/// when it carries a requested change and a **warning** when it does not
+/// (spec §4.11 step 3).
 fn build_plan(
-    base: &str,
+    root_lane: &mut Lane,
+    roster_lane: Option<&mut Lane>,
     selected: &[Section],
     prompter: &Prompt,
     args: &SetupArgs,
-) -> Result<Plan, Failure> {
-    let mut edits: Vec<Edit> = Vec::new();
+) -> Result<(), Failure> {
+    let split = roster_lane.is_some();
+    let mut root_edits: Vec<Edit> = Vec::new();
+    let mut roster_edits: Vec<Edit> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let quick_missing: Vec<String> = if args.quick {
-        missing_env_names(base)
+        missing_env_names(
+            &root_lane.base,
+            roster_lane.as_ref().map(|l| l.base.as_str()),
+        )
     } else {
         Vec::new()
     };
 
     for section in selected {
         println!("== {} ==", section.name());
+        // The lane this section's keys live in — the mapping is the
+        // section table's data, not a special case here.
+        let roster_side = section.target(split) == sections::TargetFile::Roster;
+        let base: &str = if roster_side {
+            &roster_lane
+                .as_ref()
+                .expect("a roster lane under the split")
+                .base
+        } else {
+            &root_lane.base
+        };
+        // The fallback default is the **embedded** example of the lane's
+        // file — the shipped pair the table is rigged against (DESIGN
+        // §12.14), never the `--from` text.
+        let template: &str = if roster_side {
+            EMBEDDED_ROSTER
+        } else {
+            EMBEDDED_TEMPLATE
+        };
+        let edits: &mut Vec<Edit> = if roster_side {
+            &mut roster_edits
+        } else {
+            &mut root_edits
+        };
         for (path, note) in sections::show_entries(*section, base) {
             if note.is_empty() {
                 println!("  {path}");
@@ -338,7 +587,7 @@ fn build_plan(
                 // is the warning shape when nothing is asked of it — but
                 // it is never prompted for: a question about a key this
                 // file does not carry is how a wizard starts guessing.
-                let template_has_it = anchor::resolve_typed(EMBEDDED_TEMPLATE, row.path).is_ok();
+                let template_has_it = anchor::resolve_typed(template, row.path).is_ok();
                 if !template_has_it {
                     warnings.push(format!(
                         "{}: not settable in this file ({}); left alone",
@@ -353,7 +602,7 @@ fn build_plan(
             // (DESIGN §12.14 step 4) — never a constant in code.
             let (default, a) = match &anchor_res {
                 Ok(a) => (a.value.clone(), Some(a.clone())),
-                Err(_) => match anchor::resolve_typed(EMBEDDED_TEMPLATE, row.path) {
+                Err(_) => match anchor::resolve_typed(template, row.path) {
                     Ok(t) => (t.value.clone(), None),
                     Err(_) => unreachable!("handled by the warning branch above"),
                 },
@@ -532,7 +781,14 @@ fn build_plan(
     for w in warnings {
         eprintln!("router: setup: warning: {w}");
     }
-    Ok(Plan::build(edits)?)
+    // Disjointness is asserted per file (spec §4.11 step 3's overlap
+    // refusal) — two edits of two different files cannot overlap.
+    root_lane.plan = Plan::build(root_edits)?;
+    match roster_lane {
+        Some(l) => l.plan = Plan::build(roster_edits)?,
+        None => debug_assert!(roster_edits.is_empty()),
+    }
+    Ok(())
 }
 
 /// `--print` / `--check` (step 2): no prompt, no write. Both resolve
@@ -567,11 +823,15 @@ fn print_or_check(args: &SetupArgs) -> Result<i32, Failure> {
     };
 
     if args.check {
-        // Load with the same loader `serve` runs, then probe every name
-        // the file carries (presence only — the secret boundary).
-        let cfg: router_core::config::RouterConfig = crate::config_load::validate_text(&text)
-            .map_err(|e| Failure::Refused(format!("config file {}: {e}", target.path.display())))?;
-        let rows = report::check_rows(&cfg);
+        // Load with the same loader `serve` runs — the one entry point
+        // that knows the configuration can be a **pair** — then probe
+        // every name the file carries (presence only — the secret
+        // boundary). A broken pair's refusal is the loader's own message
+        // and names the roster's own resolved path (spec §4.14's ladder);
+        // the exit codes are unchanged: a config that does not load is
+        // exit 2, as today.
+        let cfg = crate::config_load::load(&target.path).map_err(Failure::Refused)?;
+        let rows = report::check_rows(&cfg.router);
         let all_present = rows.iter().all(|(_, s)| *s == report::KeyState::Present);
         if args.json {
             println!(
@@ -590,10 +850,54 @@ fn print_or_check(args: &SetupArgs) -> Result<i32, Failure> {
     }
 
     // `--print`: every section's keys with the value the file carries
-    // (and the state of a key the template ships commented out).
+    // (and the state of a key the template ships commented out). Under a
+    // split root the providers section's anchors resolve in the roster's
+    // text (spec §4.11's target-file column); a roster that is named but
+    // unreadable is stated on the section, and the root still prints.
+    let config_dir = target
+        .path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let shape = shape_of(&text, &config_dir);
+    let split = matches!(shape, Shape::Split { .. });
+    let (roster_text, roster_note): (Option<String>, Option<String>) = match &shape {
+        Shape::Inline => (None, None),
+        Shape::Split { written, resolved } => {
+            if from_template {
+                (Some(EMBEDDED_ROSTER.to_string()), None)
+            } else {
+                match std::fs::read_to_string(resolved) {
+                    Ok(t) => (Some(t), None),
+                    Err(e) => (
+                        None,
+                        Some(format!(
+                            "providers_file '{written}' (resolved: {}): cannot be read: {e}",
+                            resolved.display()
+                        )),
+                    ),
+                }
+            }
+        }
+    };
     let mut rows = Vec::new();
     for section in sections::ALL {
-        for (path, note) in sections::show_entries(section, &text) {
+        let section_text: Option<&str> = match section.target(split) {
+            sections::TargetFile::Root => Some(&text),
+            sections::TargetFile::Roster => roster_text.as_deref(),
+        };
+        let Some(section_text) = section_text else {
+            rows.push(report::PrintRow {
+                path: "providers".to_string(),
+                value: format!("({})", roster_note.clone().unwrap_or_default()),
+                enabled: false,
+                note: "",
+                from_template,
+            });
+            continue;
+        };
+        for (path, note) in sections::show_entries(section, section_text) {
             rows.push(report::PrintRow {
                 path,
                 value: note,
@@ -602,8 +906,8 @@ fn print_or_check(args: &SetupArgs) -> Result<i32, Failure> {
                 from_template,
             });
         }
-        for row in sections::rows_for(section, &text) {
-            match anchor::resolve_typed(&text, row.path) {
+        for row in sections::rows_for(section, section_text) {
+            match anchor::resolve_typed(section_text, row.path) {
                 Ok(a) => rows.push(report::PrintRow {
                     path: row.path.to_string(),
                     value: a.value,
@@ -637,23 +941,21 @@ fn print_or_check(args: &SetupArgs) -> Result<i32, Failure> {
     Ok(EXIT_OK)
 }
 
-/// Landing (step 11): candidate to `<target>.setup.tmp` **in the target's
+/// Landing (step 11): candidate to `<path>.setup.tmp` **in the file's
 /// directory**, `sync_all`, `rename` over the target; the temporary file
 /// is removed on any failure, so nothing lands partially and no other
-/// process can observe a half-written config. The target's directory is
+/// process can observe a half-written config. The file's directory is
 /// created when missing (`mkdir -p`): a file this run creates is `0600`
 /// — exact under any umask, `OpenOptions::mode` can only have bits
 /// cleared by one — and a directory this run creates is `0700` (set
 /// explicitly after `create_dir_all`, which cannot express a mode).
-/// Nothing that already exists is re-moded.
-fn land(target: &Resolved, bytes: &[u8]) -> Result<(), Failure> {
-    let dir = target
-        .path
+/// Nothing that already exists is re-moded. The roster lane lands through
+/// the same function: one landing rule for both files of the pair.
+fn land(path: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
+    let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| {
-            Failure::Refused(format!("target {} has no directory", target.path.display()))
-        })?;
+        .ok_or_else(|| Failure::Refused(format!("target {} has no directory", path.display())))?;
     if !dir.exists() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             return Err(Failure::Refused(format!(
@@ -667,7 +969,7 @@ fn land(target: &Resolved, bytes: &[u8]) -> Result<(), Failure> {
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
         }
     }
-    let tmp = target.path.with_extension("setup.tmp");
+    let tmp = path.with_extension("setup.tmp");
     {
         use std::io::Write as _;
         #[cfg(unix)]
@@ -694,12 +996,12 @@ fn land(target: &Resolved, bytes: &[u8]) -> Result<(), Failure> {
             return Err(io(format!("cannot sync {}: {e}", tmp.display())));
         }
     }
-    if let Err(e) = std::fs::rename(&tmp, &target.path) {
+    if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(io(format!(
             "cannot move {} over {}: {e}",
             tmp.display(),
-            target.path.display()
+            path.display()
         )));
     }
     let _ = std::io::stdout().flush();
@@ -748,6 +1050,12 @@ mod tests {
         p
     }
 
+    fn scripted_owned(answers: Vec<String>) -> Prompt {
+        let p = Prompt::new(true);
+        p.load_answers(answers);
+        p
+    }
+
     fn non_interactive() -> Prompt {
         Prompt::new(false)
     }
@@ -761,8 +1069,10 @@ mod tests {
     }
 
     /// G1 / CONF-67(a): a fresh target, every answer at its default ⇒ the
-    /// file's bytes are identical to the template's, and it loads through
-    /// the same loader `serve` runs.
+    /// **pair**'s bytes are identical to the embedded templates', and it
+    /// loads through the same loader `serve` runs. The shipped template is
+    /// split (spec §4.14), so a fresh run writes two files: the root and
+    /// the roster it names.
     #[test]
     fn g1_defaults_write_the_template_verbatim() {
         let dir = temp_root("g1");
@@ -772,30 +1082,72 @@ mod tests {
         assert_eq!(
             written,
             EMBEDDED_TEMPLATE.as_bytes(),
-            "G1: the fresh all-defaults file must be byte-identical to the template"
+            "G1: the fresh all-defaults root must be byte-identical to the template"
         );
-        assert!(crate::config_load::validate_text(EMBEDDED_TEMPLATE).is_ok());
+        let roster = dir.join("providers.example.yaml");
+        assert_eq!(
+            std::fs::read(&roster).unwrap(),
+            EMBEDDED_ROSTER.as_bytes(),
+            "G1: the fresh all-defaults roster must be byte-identical to the roster template"
+        );
+        // The written pair loads through the same loader `serve` runs —
+        // the pair entry point, not a text-only gate.
+        assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The embedded pair itself: the root template names the roster
+    /// template's shipped file name, and the two validate together — the
+    /// two `include_str!`s cannot drift apart.
+    #[test]
+    fn the_embedded_pair_is_a_pair() {
+        let dir = temp_root("embedded-pair");
+        match shape_of(EMBEDDED_TEMPLATE, &dir) {
+            Shape::Split { written, resolved } => {
+                assert_eq!(written, "providers.example.yaml");
+                assert_eq!(resolved, dir.join("providers.example.yaml"));
+            }
+            Shape::Inline => panic!("the shipped template is split (spec §4.14)"),
+        }
+        crate::config_load::validate_pair(
+            EMBEDDED_TEMPLATE,
+            EMBEDDED_ROSTER,
+            &dir.join("providers.example.yaml"),
+        )
+        .expect("the embedded pair validates");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// G3 / CONF-69: the same answers twice ⇒ the second run writes
-    /// nothing (bytes **and** mtime unchanged).
+    /// nothing (bytes **and** mtime unchanged) — of **both** files of
+    /// the pair.
     #[test]
     fn g3_second_run_is_a_no_op() {
         let dir = temp_root("g3");
         let target = dir.join("config.yaml");
         run_with_prompt(&args(&target), &non_interactive());
+        let roster = dir.join("providers.example.yaml");
         let (b1, m1) = (
             std::fs::read(&target).unwrap(),
             std::fs::metadata(&target).unwrap().modified().unwrap(),
+        );
+        let (r1, rm1) = (
+            std::fs::read(&roster).unwrap(),
+            std::fs::metadata(&roster).unwrap().modified().unwrap(),
         );
         assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
         let (b2, m2) = (
             std::fs::read(&target).unwrap(),
             std::fs::metadata(&target).unwrap().modified().unwrap(),
         );
-        assert_eq!(b1, b2, "bytes unchanged");
-        assert_eq!(m1, m2, "mtime unchanged (nothing was written)");
+        let (r2, rm2) = (
+            std::fs::read(&roster).unwrap(),
+            std::fs::metadata(&roster).unwrap().modified().unwrap(),
+        );
+        assert_eq!(b1, b2, "root bytes unchanged");
+        assert_eq!(m1, m2, "root mtime unchanged (nothing was written)");
+        assert_eq!(r1, r2, "roster bytes unchanged");
+        assert_eq!(rm1, rm2, "roster mtime unchanged (nothing was written)");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -831,7 +1183,15 @@ mod tests {
         assert_eq!(moved, vec![a.line], "only the answered line may move");
         assert!(after_lines[a.line].contains("127.0.0.1:9911"));
         assert_eq!(provenance_counts(base), provenance_counts(&after));
-        assert!(crate::config_load::validate_text(&after).is_ok());
+        // The roster file is not the server section's target: untouched.
+        let roster = dir.join("providers.example.yaml");
+        assert_eq!(
+            std::fs::read(&roster).unwrap(),
+            EMBEDDED_ROSTER.as_bytes(),
+            "a server answer never moves the roster's bytes"
+        );
+        // The written pair loads through the same loader `serve` runs.
+        assert!(crate::config_load::load(&target).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -938,14 +1298,32 @@ mod tests {
                 !dir.join("fresh-d.yaml.setup.tmp").exists(),
                 "(d) no temporary file is left behind"
             );
+            // G4 read for two targets: the roster half of the pair does
+            // not move either (the pair is validated before either file
+            // is written) — the first run's roster is still there,
+            // byte-identical, and no roster temp file is left behind.
+            assert_eq!(
+                std::fs::read(dir.join("providers.example.yaml")).unwrap(),
+                EMBEDDED_ROSTER.as_bytes(),
+                "(d) the roster lane does not land on a refused pair"
+            );
+            assert!(
+                !dir.join("providers.example.setup.tmp").exists(),
+                "(d) no roster temporary file is left behind"
+            );
         }
 
         // The untouched-target half: whatever happened above, the original
-        // target never moved.
+        // pair never moved.
         assert_eq!(before, std::fs::read(&target).unwrap());
         assert_eq!(
             before_mtime,
             std::fs::metadata(&target).unwrap().modified().unwrap()
+        );
+        assert_eq!(
+            std::fs::read(dir.join("providers.example.yaml")).unwrap(),
+            EMBEDDED_ROSTER.as_bytes(),
+            "the refusal ladder leaves the roster byte-identical too"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -957,7 +1335,9 @@ mod tests {
     fn check_exit_code_by_environment() {
         let dir = temp_root("check");
         let target = dir.join("config.yaml");
+        // The config is the pair: the root names its roster (spec §4.14).
         std::fs::write(&target, EMBEDDED_TEMPLATE).unwrap();
+        std::fs::write(dir.join("providers.example.yaml"), EMBEDDED_ROSTER).unwrap();
         let code = run_with_prompt(
             &SetupArgs {
                 check: true,
@@ -968,6 +1348,47 @@ mod tests {
         );
         // The test process's environment decides which of the two.
         assert!(code == 0 || code == 4, "--check exits 0 or 4 (got {code})");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §4.14's ladder at the `--check` surface (the pair validated as a
+    /// pair): a missing roster, a malformed roster and a root writing both
+    /// shapes are each refused with the **same exit code** a bad root has
+    /// today (2), and the loader's message names the roster's own path —
+    /// the message contents are asserted in `config_load`'s tests; here
+    /// the codes are the contract (spec §4.11's table).
+    #[test]
+    fn check_refuses_a_broken_pair_like_a_bad_root() {
+        let dir = temp_root("check-pair");
+        let check = |root: &std::path::Path| {
+            run_with_prompt(
+                &SetupArgs {
+                    check: true,
+                    config: Some(root.display().to_string()),
+                    ..Default::default()
+                },
+                &non_interactive(),
+            )
+        };
+        // The control: a good pair exits 0 or 4 (environment-dependent).
+        let root = dir.join("config.yaml");
+        std::fs::write(&root, EMBEDDED_TEMPLATE).unwrap();
+        std::fs::write(dir.join("providers.example.yaml"), EMBEDDED_ROSTER).unwrap();
+        assert!(check(&root) == 0 || check(&root) == 4);
+
+        // (i) the named roster is missing.
+        let _ = std::fs::remove_file(dir.join("providers.example.yaml"));
+        assert_eq!(check(&root), 2, "a missing roster refuses");
+
+        // (ii) the roster is not the roster block (spec §4.14 shape 4).
+        std::fs::write(dir.join("providers.example.yaml"), "server: {}\n").unwrap();
+        assert_eq!(check(&root), 2, "a malformed roster refuses");
+
+        // (iii) the root writes both shapes (spec §4.14 shape 1).
+        let both = dir.join("both.yaml");
+        std::fs::write(&both, format!("{EMBEDDED_TEMPLATE}providers: []\n")).unwrap();
+        std::fs::write(dir.join("providers.example.yaml"), EMBEDDED_ROSTER).unwrap();
+        assert_eq!(check(&both), 2, "both shapes written refuses");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -984,6 +1405,10 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let file_mode = std::fs::metadata(&target).unwrap().permissions().mode();
             assert_eq!(file_mode & 0o777, 0o600, "created file is 0600");
+            // The roster half of the pair is a file this run creates too.
+            let roster = dir.join("nested/deeper/providers.example.yaml");
+            let roster_mode = std::fs::metadata(&roster).unwrap().permissions().mode();
+            assert_eq!(roster_mode & 0o777, 0o600, "created roster is 0600");
             let dir_mode = std::fs::metadata(dir.join("nested/deeper"))
                 .unwrap()
                 .permissions()
@@ -1038,7 +1463,15 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("config.yaml.bak")).unwrap(), first);
         let after = std::fs::read_to_string(&target).unwrap();
         assert_ne!(after.as_bytes(), first.as_slice());
-        assert!(crate::config_load::validate_text(&after).is_ok());
+        // The server section does not target the roster: under `--force`
+        // the roster is neither replaced nor backed up.
+        let roster = dir.join("providers.example.yaml");
+        assert_eq!(std::fs::read(&roster).unwrap(), EMBEDDED_ROSTER.as_bytes());
+        assert!(
+            !dir.join("providers.example.yaml.bak").exists(),
+            "a lane the run does not replace is not backed up"
+        );
+        assert!(crate::config_load::load(&target).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1073,6 +1506,11 @@ mod tests {
         );
         assert!(after.contains("request_timeout: 11m"));
         assert!(after.contains("127.0.0.1:9911"));
+        // The server section never touches the roster half of the pair.
+        assert_eq!(
+            std::fs::read(dir.join("providers.example.yaml")).unwrap(),
+            EMBEDDED_ROSTER.as_bytes()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1103,6 +1541,10 @@ mod tests {
                 "(a) --dry-run: the fresh target is not created"
             );
             assert!(
+                !dir.join("providers.example.yaml").exists(),
+                "(a) --dry-run: the fresh roster is not created either"
+            );
+            assert!(
                 !dir.join("fresh.yaml.setup.tmp").exists(),
                 "(a) --dry-run: no temporary file"
             );
@@ -1128,6 +1570,10 @@ mod tests {
             );
             assert_eq!(code, 0);
             assert!(!target.exists(), "(b) --dry-run with edits: nothing lands");
+            assert!(
+                !dir.join("providers.example.yaml").exists(),
+                "(b) --dry-run with edits: the roster lane does not land either"
+            );
         }
         // (c) existing target + --force + empty plan: the run would
         // write, and does not.
@@ -1162,6 +1608,10 @@ mod tests {
             assert!(
                 !dir.join("exists.yaml.bak").exists(),
                 "(c) --dry-run implies no backup (there is no write to precede)"
+            );
+            assert!(
+                !dir.join("providers.example.yaml.bak").exists(),
+                "(c) --dry-run: no roster backup either"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -1279,6 +1729,196 @@ mod tests {
             !dir.join("config.yaml.bak").exists(),
             "no backup: no write was attempted"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------
+    // The pair (spec §4.11's target-file column; §4.14): the providers
+    // section's anchored edit lands in the file that owns the key, and
+    // `--from <roster> --force` replaces the roster as a unit.
+    // -----------------------------------------------------------------
+
+    /// The providers section's rows, as the wizard walks them: one
+    /// `api_key_env` question per roster entry, in file order.
+    fn providers_answers(first_answer: &str) -> Vec<String> {
+        let n = anchor::entry_names(EMBEDDED_ROSTER, "providers", "name").len();
+        let mut v = vec![first_answer.to_string()];
+        v.extend(std::iter::repeat(String::new()).take(n - 1));
+        v
+    }
+
+    /// (b) split shape: the `providers` section's anchored edit lands in
+    /// the **roster** — the root does not move one byte, and only the
+    /// answered line of the roster moves (G2 read for the roster lane).
+    #[test]
+    fn providers_edit_lands_in_the_roster_under_a_split_root() {
+        let dir = temp_root("edit-split");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let roster = dir.join("providers.example.yaml");
+        let (root_before, root_mtime) = (
+            std::fs::read(&target).unwrap(),
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+        );
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("providers".to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &scripted_owned(providers_answers("DEEPSEEK_API_KEY_2")),
+        );
+        assert_eq!(code, 0);
+        // The root: byte- and mtime-identical — the edit is not its.
+        assert_eq!(root_before, std::fs::read(&target).unwrap());
+        assert_eq!(
+            root_mtime,
+            std::fs::metadata(&target).unwrap().modified().unwrap()
+        );
+        // The roster: exactly the answered key's own line moved.
+        let a =
+            anchor::resolve_typed(EMBEDDED_ROSTER, "providers[name=deepseek].api_key_env").unwrap();
+        let base_lines: Vec<&str> = EMBEDDED_ROSTER.lines().collect();
+        let after = std::fs::read_to_string(&roster).unwrap();
+        let after_lines: Vec<&str> = after.lines().collect();
+        assert_eq!(base_lines.len(), after_lines.len());
+        let moved: Vec<usize> = base_lines
+            .iter()
+            .zip(after_lines.iter())
+            .enumerate()
+            .filter(|(_, (b, c))| b != c)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(moved, vec![a.line], "only the answered line may move");
+        assert!(after_lines[a.line].contains("DEEPSEEK_API_KEY_2"));
+        assert_eq!(
+            provenance_counts(EMBEDDED_ROSTER),
+            provenance_counts(&after)
+        );
+        // The pair still loads through the same loader `serve` runs.
+        assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (b) inline shape: the same answered question lands in the **root**,
+    /// and no roster file appears beside it — the inline form's behaviour
+    /// is byte-for-byte the pre-split one.
+    #[test]
+    fn providers_edit_lands_in_the_root_under_the_inline_form() {
+        let dir = temp_root("edit-inline");
+        // An inline template: the roster block spliced back into the root
+        // (the pre-split shape, built from the shipped pair's own bytes).
+        let inline = EMBEDDED_TEMPLATE.replace(
+            "# The roster is its own file (spec §4.14): the `providers:` block this file\n# carried inline through v0.1's early rounds moved to `providers.example.yaml`\n# byte for byte — entries, comments and every source citation included.\n# Exactly one of `providers:` / `providers_file:` is written; both or neither\n# is a load refusal that names both keys.\nproviders_file: providers.example.yaml  # resolved against this file's own directory (§4.1) — named, never searched\n",
+            EMBEDDED_ROSTER.trim_end(),
+        );
+        assert!(inline.contains("providers:\n"), "the splice landed");
+        let from = dir.join("inline-template.yaml");
+        std::fs::write(&from, &inline).unwrap();
+        let target = dir.join("config.yaml");
+        // Fresh run over the inline template: one file, no roster.
+        let code = run_with_prompt(
+            &SetupArgs {
+                non_interactive: true,
+                from: Some(from.display().to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(std::fs::read(&target).unwrap(), inline.as_bytes());
+        assert!(
+            !dir.join("providers.example.yaml").exists(),
+            "the inline form writes no second file"
+        );
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("providers".to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &scripted_owned(providers_answers("DEEPSEEK_API_KEY_2")),
+        );
+        assert_eq!(code, 0);
+        let a = anchor::resolve_typed(&inline, "providers[name=deepseek].api_key_env").unwrap();
+        let after = std::fs::read_to_string(&target).unwrap();
+        let base_lines: Vec<&str> = inline.lines().collect();
+        let after_lines: Vec<&str> = after.lines().collect();
+        assert_eq!(base_lines.len(), after_lines.len());
+        let moved: Vec<usize> = base_lines
+            .iter()
+            .zip(after_lines.iter())
+            .enumerate()
+            .filter(|(_, (b, c))| b != c)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            moved,
+            vec![a.line],
+            "the inline form: the answered line of the ROOT moves"
+        );
+        assert!(after_lines[a.line].contains("DEEPSEEK_API_KEY_2"));
+        assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (c) `--from <roster> --force` over a split root replaces the
+    /// roster **as a unit** — the new roster's bytes land verbatim, the
+    /// replaced roster survives at `<roster>.bak` (`--force` implies
+    /// `--backup`), and no other byte of any file moves: the root keeps
+    /// even a hand-written note, and no root backup is made (ADR-037 D9;
+    /// a replacement, never an insertion — Q21's boundary stands).
+    #[test]
+    fn from_roster_force_replaces_the_roster_and_nothing_else() {
+        let dir = temp_root("roster-swap");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        // A hand note in the root the swap must not touch.
+        let hand = EMBEDDED_TEMPLATE.replace(
+            "  request_timeout: 10m",
+            "  request_timeout: 10m          # my own note",
+        );
+        std::fs::write(&target, &hand).unwrap();
+        // The operator's replacement roster: the shipped one with one
+        // entry's key-variable name changed.
+        let replacement =
+            EMBEDDED_ROSTER.replace("api_key_env: DEEPSEEK_API_KEY", "api_key_env: DS_KEY");
+        let from = dir.join("my-roster.yaml");
+        std::fs::write(&from, &replacement).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("providers".to_string()),
+                from: Some(from.display().to_string()),
+                force: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        let roster = dir.join("providers.example.yaml");
+        assert_eq!(
+            std::fs::read(&roster).unwrap(),
+            replacement.as_bytes(),
+            "the roster is the handed file, verbatim"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("providers.example.yaml.bak")).unwrap(),
+            EMBEDDED_ROSTER.as_bytes(),
+            "the replaced roster survives at <roster>.bak"
+        );
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            hand.as_bytes(),
+            "the root did not move one byte (the hand note survives)"
+        );
+        assert!(
+            !dir.join("config.yaml.bak").exists(),
+            "the root was not written, so it was not backed up"
+        );
+        assert!(crate::config_load::load(&target).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

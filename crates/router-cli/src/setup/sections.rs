@@ -57,6 +57,41 @@ pub const ALL: [Section; 7] = [
     Section::Plugins,
 ];
 
+/// Which of the pair's files a section's keys are written in — spec
+/// §4.11's *target file* column, as explicit data (ADR-037 D9). Six
+/// sections own keys of the root config; `providers` owns keys of the
+/// roster. Under an **inline** root the roster *is* the root and the
+/// column collapses to `Root` for every section — today's behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetFile {
+    /// The root config file — the one §4.12's discovery order finds.
+    Root,
+    /// The roster file the root names with `providers_file:` (§4.14).
+    Roster,
+}
+
+impl TargetFile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetFile::Root => "root",
+            TargetFile::Roster => "roster",
+        }
+    }
+}
+
+impl Section {
+    /// The file this section's anchors are resolved against and its edits
+    /// land in, given the root's shape. The mapping is a property of the
+    /// **section**, stated once here — the edit path carries no special
+    /// case for `providers`.
+    pub fn target(self, split: bool) -> TargetFile {
+        match (self, split) {
+            (Section::Providers, true) => TargetFile::Roster,
+            _ => TargetFile::Root,
+        }
+    }
+}
+
 /// What a question is: a free line, one of an enum, a boolean, or a
 /// display-only entry (never prompted, never written).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -355,18 +390,62 @@ mod tests {
         .unwrap()
     }
 
+    /// The roster half of the shipped pair (spec §4.14): the example
+    /// splits, so the `providers` section's anchors live here.
+    fn roster_example() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers.example.yaml"),
+        )
+        .unwrap()
+    }
+
+    /// The shipped example for a row's target file — the test form of the
+    /// section table's target-file column (the shipped root is split, so
+    /// `providers` rows resolve in `providers.example.yaml`).
+    fn shipped_example_for(row: &KeySpec) -> String {
+        match row.section.target(true) {
+            TargetFile::Root => example(),
+            TargetFile::Roster => roster_example(),
+        }
+    }
+
     /// The table↔example check (DESIGN §12.14's rig): every static path
-    /// the table carries must resolve in the shipped example — the table
-    /// and the example cannot drift.
+    /// the table carries must resolve in the shipped example **of its
+    /// target file** — the table and the example cannot drift, and the
+    /// split cannot move a section's keys without this test seeing it.
     #[test]
     fn every_static_row_resolves_in_the_example() {
-        let text = example();
         for row in STATIC_ROWS.iter().chain(ENABLE_ROWS) {
+            let text = shipped_example_for(row);
             assert!(
                 anchor::resolve(&text, row.path).is_ok(),
-                "{} must resolve in config.example.yaml",
-                row.path
+                "{} must resolve in the shipped {} example",
+                row.path,
+                row.section.target(true).as_str()
             );
+        }
+    }
+
+    /// The target-file column itself (spec §4.11): `providers` owns the
+    /// roster when the root names one, and the column collapses to the
+    /// root for every section of the inline form.
+    #[test]
+    fn the_target_file_column() {
+        assert_eq!(Section::Providers.target(true), TargetFile::Roster);
+        for s in ALL {
+            assert_eq!(
+                s.target(false),
+                TargetFile::Root,
+                "the inline form edits the root for every section"
+            );
+            if s != Section::Providers {
+                assert_eq!(
+                    s.target(true),
+                    TargetFile::Root,
+                    "{}'s keys are the root's even under the split",
+                    s.name()
+                );
+            }
         }
     }
 
@@ -391,7 +470,9 @@ mod tests {
 
     #[test]
     fn provider_rows_come_from_the_file() {
-        let text = example();
+        // The roster file is the providers section's text under the split
+        // (spec §4.11's target-file column).
+        let text = roster_example();
         let rows = rows_for(Section::Providers, &text);
         assert!(rows
             .iter()

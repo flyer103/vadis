@@ -171,21 +171,34 @@ fn key_of(e: &Edit) -> String {
     e.path.rsplit('.').next().unwrap_or(&e.path).to_string()
 }
 
-/// The `--dry-run` JSON form: the same facts, machine-shaped.
-pub fn dry_run_json(plan: &Plan) -> serde_json::Value {
-    json!({
-        "edits": plan
-            .edits
+/// The `--dry-run` JSON form: the same facts, machine-shaped. Under a
+/// split root the roster lane's edits ride in an additive `roster`
+/// member, labelled with its path — an edit's target file is never
+/// ambiguous (spec §4.11's target-file column).
+pub fn dry_run_json(plan: &Plan, roster: Option<(&Path, &Plan)>) -> serde_json::Value {
+    let edits = |p: &Plan| {
+        p.edits
             .iter()
-            .map(|e| json!({
-                "kind": e.kind.as_str(),
-                "path": e.path,
-                "line": e.line + 1,
-                "old": e.old,
-                "new": e.replacement,
-            }))
-            .collect::<Vec<_>>(),
-    })
+            .map(|e| {
+                json!({
+                    "kind": e.kind.as_str(),
+                    "path": e.path,
+                    "line": e.line + 1,
+                    "old": e.old,
+                    "new": e.replacement,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut v = json!({ "edits": edits(plan) });
+    if let Some((path, rplan)) = roster {
+        v["roster"] = json!({
+            "path": path.display().to_string(),
+            "named_by": "providers_file",
+            "edits": edits(rplan),
+        });
+    }
+    v
 }
 
 /// The landing line: the absolute path plus the rule that chose it, the
@@ -198,12 +211,39 @@ pub fn landed_text(path: &Path, selected_by: &str, n: usize) -> String {
     )
 }
 
-pub fn landed_json(path: &Path, selected_by: &str, n: usize) -> serde_json::Value {
-    json!({
+/// The roster lane's landing line: the roster is **named** by the root's
+/// `providers_file`, never selected by §4.12's order — the line says so
+/// rather than borrowing the root's rule (spec §4.14: named, never
+/// searched).
+pub fn landed_roster_text(path: &Path, n: usize) -> String {
+    format!(
+        "wrote {path} (named by providers_file; {n} edit{s} applied)\n",
+        path = path.display(),
+        s = if n == 1 { "" } else { "s" }
+    )
+}
+
+/// The landing JSON: the root's facts as today, plus an additive
+/// `roster` member when the run also landed the roster.
+pub fn landed_json(
+    path: &Path,
+    selected_by: &str,
+    n: usize,
+    roster: Option<(&Path, usize)>,
+) -> serde_json::Value {
+    let mut v = json!({
         "wrote": path.display().to_string(),
         "selected_by": selected_by,
         "edits_applied": n,
-    })
+    });
+    if let Some((rpath, m)) = roster {
+        v["roster"] = json!({
+            "wrote": rpath.display().to_string(),
+            "named_by": "providers_file",
+            "edits_applied": m,
+        });
+    }
+    v
 }
 
 /// `no change: <path> left as it is` — the line that makes a second run
