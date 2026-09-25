@@ -17,6 +17,7 @@ pub mod testkit {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -511,13 +512,22 @@ pub mod testkit {
     // -----------------------------------------------------------------
 
     pub fn tempdir(tag: &str) -> PathBuf {
+        // R43-F8: on this platform `SystemTime::as_nanos()` ticks at
+        // microsecond resolution, so two arms calling `tempdir` in the
+        // same tick were handed ONE directory and one arm's fixtures
+        // overwrote the other's (74 call sites — a collision can make a
+        // case read another arm's pair and return a false verdict). A
+        // process-wide monotonic counter makes the name unique per call;
+        // the pid and the caller's tag stay in the name.
+        static CALL: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "conf-{}-{}-{tag}",
+            "conf-{}-{}-{}-{tag}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            CALL.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
