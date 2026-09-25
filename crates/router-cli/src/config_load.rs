@@ -16,6 +16,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use router_core::config::{RootFile, RosterFile, RouterConfig};
+use router_core::prefix::body_sha16;
 
 /// The resolved form handed to `router-proxy` (DESIGN §12.10.2).
 #[derive(Debug, Clone)]
@@ -28,6 +29,51 @@ pub struct ResolvedConfig {
     pub state_db: PathBuf,
     /// The validated file itself.
     pub router: RouterConfig,
+    /// The byte-digest identity of what was loaded (ADR-037 D6): computed
+    /// once here, over the bytes exactly as read, and carried unchanged to
+    /// the trace row, the `config.applied` event and `/health` (spec §6,
+    /// §9.1 — one value, three surfaces).
+    pub identity: ConfigIdentity,
+}
+
+/// Which configuration a process is serving, stated so an outsider can
+/// recompute it from the two files alone (spec §4.14's recipe):
+///
+/// ```text
+/// root_sha16    = sha16(bytes of the root file)
+/// roster_sha16  = sha16(bytes of the roster file); "" when the roster is inline
+/// config_digest = sha16(root_sha16 + ":" + roster_sha16)
+/// ```
+///
+/// `sha16` is the repository's one hash convention (`router-core`'s
+/// `prefix.rs`). A byte digest, deliberately: a comment-only edit moves it,
+/// because the comments are where the price citations live (§4.0). The two
+/// null/empty spellings are §9.1's: a path that does not exist is
+/// `roster_path: None`; a hash input that is not there is `roster_sha16:
+/// ""`.
+#[derive(Debug, Clone)]
+pub struct ConfigIdentity {
+    /// The root file's own path, lexically normalized the way `trace_dir`
+    /// and `state_db` already are — never canonicalized: the spelling the
+    /// §4.12 order selected is the fact reported (a symlink stays a
+    /// symlink; the digest, not the path, identifies the bytes).
+    pub root_path: PathBuf,
+    /// The roster's resolved absolute path when the root names one.
+    pub roster_path: Option<PathBuf>,
+    /// First 16 hex chars of SHA-256 over the root file's bytes.
+    pub root_sha16: String,
+    /// The same over the roster file's bytes; the empty string when the
+    /// roster is inline (the value the recipe hashes).
+    pub roster_sha16: String,
+    /// `sha16(root_sha16 + ":" + roster_sha16)`.
+    pub config_digest: String,
+}
+
+/// The one composition rule (spec §4.14): the digest of the pair of
+/// digests, with the inline roster's empty half. Reproducible by hand:
+/// `printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16`.
+fn compose_digest(root_sha16: &str, roster_sha16: &str) -> String {
+    body_sha16(format!("{root_sha16}:{roster_sha16}").as_bytes())
 }
 
 /// Parse the root's own shape — the first half of every entry point. The
@@ -100,6 +146,10 @@ pub fn validate_pair(
 pub fn load(path: &Path) -> Result<ResolvedConfig, String> {
     let name_err = |reason: &str| format!("config file {}: {reason}", path.display());
     let bytes = std::fs::read(path).map_err(|e| name_err(&format!("cannot be read: {e}")))?;
+    // The identity's root half is hashed from the bytes exactly as read
+    // (spec §4.14) — before any parsing, so the digest describes the file,
+    // never a canonical form of its values (ADR-037 D6).
+    let root_sha16 = body_sha16(&bytes);
     let text = std::str::from_utf8(&bytes).map_err(|_| name_err("is not valid UTF-8"))?;
 
     let root = parse_root(text).map_err(|e| name_err(&e))?;
@@ -126,21 +176,40 @@ pub fn load(path: &Path) -> Result<ResolvedConfig, String> {
         };
         let rbytes = std::fs::read(&resolved)
             .map_err(|e| name_err(&roster_err(&format!("cannot be read: {e}"))))?;
+        // The roster half, from the roster's bytes exactly as read.
+        let roster_sha16 = body_sha16(&rbytes);
         let rtext = std::str::from_utf8(&rbytes)
             .map_err(|_| name_err(&roster_err("is not valid UTF-8")))?;
         let parsed = parse_roster(rtext, &resolved).map_err(|e| name_err(&e))?;
-        Some((parsed, resolved))
+        Some((parsed, resolved, roster_sha16))
     } else {
         None
     };
 
-    let router = finish(root, roster).map_err(|e| name_err(&e))?;
+    // The identity of the loaded pair (spec §4.14): the inline shape's
+    // roster half is the null path and the empty digest input (§9.1's two
+    // spellings of one fact).
+    let (roster_path, roster_sha16) = match &roster {
+        Some((_, resolved, sha)) => (Some(resolved.clone()), sha.clone()),
+        None => (None, String::new()),
+    };
+    let identity = ConfigIdentity {
+        root_path: lexical_absolute(path),
+        roster_path,
+        config_digest: compose_digest(&root_sha16, &roster_sha16),
+        root_sha16,
+        roster_sha16,
+    };
+
+    let router = finish(root, roster.map(|(parsed, resolved, _)| (parsed, resolved)))
+        .map_err(|e| name_err(&e))?;
 
     Ok(ResolvedConfig {
         trace_dir: resolve(&config_dir, &router.trace.dir),
         state_db: resolve(&config_dir, "state/router.db"),
         config_dir,
         router,
+        identity,
     })
 }
 
@@ -483,6 +552,102 @@ fallback: []
             err.contains(&resolved.display().to_string()),
             "the reference error names the roster it failed to resolve in, got: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // The identity (spec §4.14/§6; ADR-037 D6): a byte digest of the
+    // files, computed once here, reproducible from them by one shell
+    // line. The conformance-level cross-surface assertion is CONF-85's
+    // half B; these are the loader's own units over the recipe.
+    // -----------------------------------------------------------------
+
+    /// The recipe's expected value, computed from the files the test
+    /// wrote — the same composition the spec's one-liner states, through
+    /// the repository's one hash convention (never a second spelling).
+    fn expected_identity(root: &Path, roster: Option<&Path>) -> (String, String, String) {
+        let root_sha16 = body_sha16(&std::fs::read(root).unwrap());
+        let roster_sha16 = roster
+            .map(|r| body_sha16(&std::fs::read(r).unwrap()))
+            .unwrap_or_default();
+        let digest = compose_digest(&root_sha16, &roster_sha16);
+        (root_sha16, roster_sha16, digest)
+    }
+
+    #[test]
+    fn identity_of_the_inline_form_hashes_the_root_alone() {
+        let (_g, path) = write_temp("config.yaml", MINIMAL);
+        let rc = load(&path).expect("loads");
+        let (root_sha16, roster_sha16, digest) = expected_identity(&path, None);
+        assert_eq!(rc.identity.root_path, lexical_absolute(&path));
+        assert_eq!(rc.identity.roster_path, None);
+        assert_eq!(rc.identity.root_sha16, root_sha16);
+        assert_eq!(
+            rc.identity.roster_sha16, "",
+            "the inline shape's roster half is the empty string (§9.1)"
+        );
+        assert_eq!(roster_sha16, "");
+        assert_eq!(rc.identity.config_digest, digest);
+        // 16 lowercase hex chars — the one convention's shape.
+        assert_eq!(rc.identity.config_digest.len(), 16);
+        assert!(rc
+            .identity
+            .config_digest
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn identity_of_the_pair_hashes_both_files() {
+        let (_g, root) = write_pair(&split_root_text(), Some(&roster_text()));
+        let roster = root.parent().unwrap().join("providers.yaml");
+        let rc = load(&root).expect("the pair loads");
+        let (root_sha16, roster_sha16, digest) = expected_identity(&root, Some(&roster));
+        assert_eq!(rc.identity.root_path, lexical_absolute(&root));
+        assert_eq!(rc.identity.roster_path, Some(roster));
+        assert_eq!(rc.identity.root_sha16, root_sha16);
+        assert_eq!(rc.identity.roster_sha16, roster_sha16);
+        assert_ne!(
+            rc.identity.roster_sha16, "",
+            "a named roster contributes its own bytes"
+        );
+        assert_eq!(rc.identity.config_digest, digest);
+        // The digest of the pair is not the digest of the root alone.
+        assert_ne!(rc.identity.config_digest, compose_digest(&root_sha16, ""));
+    }
+
+    #[test]
+    fn a_comment_only_roster_edit_moves_the_digest_and_nothing_else() {
+        let commented = format!("# a provenance note, not a value\n{}", roster_text());
+        let (_g1, root1) = write_pair(&split_root_text(), Some(&roster_text()));
+        let (_g2, root2) = write_pair(&split_root_text(), Some(&commented));
+        let a = load(&root1).expect("plain pair loads");
+        let b = load(&root2).expect("commented pair loads");
+        // The byte digest is stricter than a parsed-value digest — and
+        // that is deliberate (ADR-037 D6: the comments carry the price
+        // citations).
+        assert_ne!(a.identity.config_digest, b.identity.config_digest);
+        assert_eq!(a.identity.root_sha16, b.identity.root_sha16);
+        assert_ne!(a.identity.roster_sha16, b.identity.roster_sha16);
+        // …and the edit moves nothing else: the joined config is
+        // deep-equal (Debug form; the config types carry no PartialEq).
+        assert_eq!(
+            format!("{:?}", a.router),
+            format!("{:?}", b.router),
+            "a comment moves the identity, never the parsed config"
+        );
+    }
+
+    #[test]
+    fn the_same_bytes_at_two_paths_share_one_digest() {
+        // The identity names the bytes, not the location: two copies of
+        // one pair at two paths are one configuration (the documented
+        // same-bytes-different-path reading of §4.14).
+        let (_g1, root1) = write_pair(&split_root_text(), Some(&roster_text()));
+        let (_g2, root2) = write_pair(&split_root_text(), Some(&roster_text()));
+        let a = load(&root1).unwrap();
+        let b = load(&root2).unwrap();
+        assert_eq!(a.identity.config_digest, b.identity.config_digest);
+        assert_ne!(a.identity.root_path, b.identity.root_path);
     }
 
     #[test]
