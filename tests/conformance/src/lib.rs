@@ -17,6 +17,7 @@ pub mod testkit {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -511,25 +512,73 @@ pub mod testkit {
     // -----------------------------------------------------------------
 
     pub fn tempdir(tag: &str) -> PathBuf {
+        // R43-F8: on this platform `SystemTime::as_nanos()` ticks at
+        // microsecond resolution, so two arms calling `tempdir` in the
+        // same tick were handed ONE directory and one arm's fixtures
+        // overwrote the other's (74 call sites — a collision can make a
+        // case read another arm's pair and return a false verdict). A
+        // process-wide monotonic counter makes the name unique per call;
+        // the pid and the caller's tag stay in the name.
+        static CALL: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "conf-{}-{}-{tag}",
+            "conf-{}-{}-{}-{tag}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            CALL.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    /// A currently-free loopback port (small TOCTOU window, fine for tests).
+    /// Write a configuration **pair** (spec §4.14; ADR-037): `root_text`
+    /// into `<dir>/config.yaml` and the roster's own text into
+    /// `<dir>/providers.yaml`, returning `(root, roster)` — so a case
+    /// builds a root+roster pair out of its own fixture text without a
+    /// second checked-in fixture (CONF-85).
+    pub fn write_config_pair(
+        dir: &std::path::Path,
+        root_text: &str,
+        roster_text: &str,
+    ) -> (PathBuf, PathBuf) {
+        let root = dir.join("config.yaml");
+        let roster = dir.join("providers.yaml");
+        std::fs::write(&root, root_text).unwrap();
+        std::fs::write(&roster, roster_text).unwrap();
+        (root, roster)
+    }
+
+    /// A currently-free loopback port. The bind-:0/drop/re-bind sequence
+    /// has a TOCTOU window; worse, the OS can hand the SAME port to two
+    /// calls in one process (both see it free in the same instant), so two
+    /// rigs raced onto one port and the loser connected to the winner's
+    /// server — or to nothing once the winner was aborted (R43-F10,
+    /// observed as `ConnectionRefused` in conf_85h after
+    /// `wait_listening` had succeeded). A process-wide registry makes
+    /// every call return a port this process has never handed out,
+    /// closing the intra-process half of the race; the cross-process
+    /// window (parallel test binaries) is the OS's and predates the
+    /// suite.
     pub fn free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        static HANDED_OUT: std::sync::OnceLock<Mutex<std::collections::HashSet<u16>>> =
+            std::sync::OnceLock::new();
+        loop {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            if HANDED_OUT
+                .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+                .lock()
+                .unwrap()
+                .insert(port)
+            {
+                return port;
+            }
+        }
     }
 
     /// Waits (max ~10s) until the address accepts connections.

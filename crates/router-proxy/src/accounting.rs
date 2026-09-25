@@ -487,6 +487,15 @@ impl<'a> Accountant<'a> {
         let mut record = DecisionRecord {
             schema_version: TRACE_SCHEMA_VERSION,
             ts: rfc3339_millis(ctx.now_epoch_s),
+            // The identity of the configuration that priced this record
+            // (ADR-037 D6; spec §6): the one value every record of this
+            // process carries, sourced from the trace writer the record
+            // is written through so the two can never disagree (a
+            // writer-less assembly — tests, tools — stamps nothing).
+            config_digest: self
+                .trace
+                .map(|t| t.config_digest().to_string())
+                .unwrap_or_default(),
             identity: IdentityRec {
                 request_id: ctx.request_id.to_string(),
                 event_id: ctx.received_event.map(|e| e.0).unwrap_or(0),

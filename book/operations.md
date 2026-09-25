@@ -27,10 +27,11 @@ fallback to a default configuration. The `router setup` command writes to the XD
 default (mode `0600`, and any directory it creates at `0700`), which is why the bare `router serve` above works
 after a first run: `--config` becomes unnecessary, not forbidden.
 
-The three paths a config owns all resolve against **the config file's own directory**, never the directory you
-run from: the trace directory it names, a plugin's rule file, and the state store. A config in the XDG location
-therefore keeps its traces and its store beside itself, under `~/.config/router/` — so "back up the config and
-its state together" means copying that one directory. To keep the traces somewhere else, write an **absolute**
+The paths a config owns all resolve against **the config file's own directory**, never the directory you
+run from: the trace directory it names, a plugin's rule file, the state store, and the roster the config names
+([`docs/spec.md` §4.1](../docs/spec.md) and §4.14). A config in the XDG location therefore keeps its traces,
+its store and its roster beside itself, under `~/.config/router/` — so "back up the config and its state
+together" means copying that directory, roster included. To keep the traces somewhere else, write an **absolute**
 `trace.dir` (a leading `~` is not expanded), and see the startup table below for what a config that cannot be
 loaded does.
 
@@ -93,6 +94,16 @@ Back up the store **and** the traces, together, and treat both as operator data:
 - for a consistent copy, **stop `serve` and copy the database together with its `-wal` and
   `-shm` sidecar files** (copying only `router.db` while a WAL is pending loses the tail of
   the log). A SQLite-aware backup taken while stopped is equally fine.
+
+**What "the config" is, and why the count can be three files.** The config file and the roster may be two
+files: the shipped example is that shape, and the roster is named by the config with `providers_file:`
+([`docs/spec.md` §4.14](../docs/spec.md)). Where the roster is named, copy **three** things as a set: the
+config file, **the roster it names**, and the state store above. The pair matters because restoring one without
+the other does not come up degraded — it does not come up: a config naming a roster that is not there is a
+startup refusal that names `providers_file` and the path it looked for. There is no default roster to fall back
+on, by design: a silently empty roster would look like a gateway serving nothing rather than a backup you did
+not finish. Where the roster is written **inline** in the config instead, the config file *is* the whole config
+and this paragraph's only obligation is the one above — copy the store and the traces together.
 
 Nobody else keeps a copy of that state: clients are stateless and resend their whole
 conversation every turn, so the gateway is the only place a request's lifecycle is recorded

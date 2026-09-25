@@ -691,6 +691,24 @@ pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationV
 | secrets | only `api_key_env`; when the env var is missing at startup → that provider is marked unavailable and reported on `/health` (it does not block other providers). `auth_token_env` is the one exception: a missing value there refuses the start (§12.11) |
 | `disabled: true` | that fiber is not loaded (no error); `/health` lists it under `plugins_disabled` |
 | defaults | only those the spec §4 states explicitly (`safety_factor: 1.2`, `sticky`, `over_quota`) have a default; everything else is **not enabled unless written** |
+| `providers` / `providers_file` (spec §4, §4.14) | **exactly one of the two is written.** `providers` is the inline `Vec<ProviderCfg>`; `providers_file` is a path resolved by §4.1's existing rule (`resolve`: absolute wins, else `<config_dir>/<value>`, literally, `~` **not** expanded). *Both* written, or *neither*, is a **load refusal naming both keys**. The check lives in the **loader**, not in `RouterConfig::validate()`: the shape is visible only before the join, and after it the two shapes are one document |
+| the roster file's own shape (spec §4.14) | the **same block**: exactly one top-level key, `providers:`, holding the same entry type under the same `deny_unknown_fields` strictness. A roster whose top-level key is not `providers:` — a `server:` block, a bare sequence, an empty document — a roster with a second top-level key, or an entry breaking an existing per-entry rule, is a load error naming the **roster's own resolved path** |
+| the refusals, and the key each names | (1) both keys; (2) neither key; (3) `providers_file` + the value as written + the **resolved** path, when the roster cannot be read; (4) the roster's resolved path + the offending key, when it is not the roster block; (5) for a root key that references the roster and does not resolve there (`aliases.*`, `fallback[i]`, `plan_policy.primary` / `.overflow`, `quota.models`) the **existing** reference error, which must additionally name the roster file it failed to resolve in. Shape 5 runs in `validate()`, after the join, in the existing message order (spec §4.14's table; ADR-037 D5) |
+
+**The roster's join, in types — and the one rule that keeps the second file out of the serving path.** The
+root file's own shape is every section of `RouterConfig` as it stands above **plus**
+`providers: Option<Vec<ProviderCfg>>` and `providers_file: Option<String>`; the roster file's shape is
+`{ providers: Vec<ProviderCfg> }`; a **pure** join `(root, roster?) -> RouterConfig` yields today's type with
+`providers` always populated. `RouterConfig` is therefore still the only thing `router-proxy` sees: the seven
+`providers` reads in the proxy (`accounting.rs:67`, `availability.rs:109`, `forward.rs:1641`, `:1662`,
+`stream_forward.rs:574`, `:1221`, `:1256`) are untouched, and no second accessor, second resolution rule or
+roster service key is introduced. `validate()` stays the **one** validator and runs **after** the join, so
+cross-file references are checked in one pass with the existing key paths and message order.
+`config_load::load` (`crates/router-cli/src/config_load.rs:41`) is the only I/O — read the root, read the
+roster when the root names one, join, validate — and `validate_text` (`:31`) becomes the pair's entry point so
+`serve`'s startup and `setup`'s candidate gate cannot drift (spec §4.11; ADR-037 D4). The two absolute paths
+and the two file digests are resolved **once**, in `router-cli`, and travel to `router-proxy` exactly as
+`config_dir` / `trace_dir` / `state_db` do (§12.10.2's `ResolvedConfig`).
 
 ### 12.6 DecisionRecord (trace contract, fully covering spec §6)
 
@@ -698,6 +716,12 @@ pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationV
 pub struct DecisionRecord {
     pub schema_version: u16,            // trace version (2 since ADR-018: `cost.currency` / `plan_switch.cost_currency`); the autowork side uses it for compatibility (ADR-005)
     pub ts: String,                     // RFC3339 UTC, milliseconds
+    /// The identity of the **effective configuration** that priced this record (ADR-037; spec §6, §4.14):
+    /// the byte digest `sha16(root_sha16 + ":" + roster_sha16)`, each half the first 16 hex chars of SHA-256
+    /// over that file's own bytes, the roster half the **empty string** when the roster is inline. Written on
+    /// every record this build produces; a record **without** it predates the field, and no `schema_version`
+    /// moves for it (the additive rule below). Computed once by the loader, never on a request path.
+    pub config_digest: String,
     pub identity: IdentityRec,          // identity
     pub protocol: ProtocolRec,          // protocol
     pub decision: DecisionRec,          // decision
@@ -772,6 +796,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 
 | spec §6 field group | Fields | Rust path |
 |---|---|---|
+| config | `config_digest` | `record.config_digest` — a **top-level** field beside `schema_version`, not a nested group (spec §6, §4.14; ADR-037 D6: the byte digest of the root file and the roster, written once by the loader and stamped by every writer) |
 | identity | `request_id` `event_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails; `event_id` is the join anchor into the event log, spec §4.5) |
 | protocol | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
 | decision | `provider` `model` `requested_model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` (`model` = the resolved provider-native id, `requested_model` = the client's own string — spec §6 and §12.10.7) |
@@ -829,6 +854,16 @@ spec §6 field groups → Rust paths (auditable line by line):
   the mode is present on every record and the path list only on a step that changed a payload, so a
   reader that tolerates unknown fields reads an older record unchanged — an added key never moves the
   version (§12.12 lands the rest).
+- `config_digest` is an addition of the same class (ADR-037; spec §6, §4.14). It is the identity of the
+  effective configuration — the byte digest of the root file and the roster, written on every record this
+  build produces — so a decision and its money are attributable to the revision that priced them. It
+  changes how **no** existing field is read, which is the distinction that moved the version to 2
+  (`cost.currency` above), so `schema_version` stays **2**; a record **without** it was written before the
+  field existed and must never be read as an empty digest. The value is computed **once**, by the loader,
+  and reaches the proxy as a value of `AppState` beside `trace_dir` / `state_db` — so the four
+  `DecisionRecord` constructors in `router-proxy` (`body_limit.rs:68`, `accounting.rs:487`, `auth.rs:133`,
+  `forward.rs:124-131`) and the two fixtures that build a record (`trace.rs:402`, `trace_sink.rs:162`) gain
+  one additive line each, and nothing behind a request opens, reads or hashes a file.
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
@@ -974,6 +1009,7 @@ not written).
 | CONF-82 | §4.2·the classification's evidence + §4.6 rule 3 + §12.10.3 R12·the failure head (`R28-F3`) | **the streamed failure head is classified on its own answer** — the *same upstream error bytes* produce the same four facts on the two media, element for element, with the buffered arm as the reference: a plan family whose primary answers `403` with the quota wording — (a) **buffered**: the classification is `quota_exhausted` (the `error.classified` row's `reason`, and its `demotion` member), the provider is demoted (the same fact as the log's own cooldown row, `Query::Cooldown`), `plan.switched` is written once (primary → overflow, `reason = primary_exhausted`) and a session live at the spill gains the handoff's `session.bound` move row (CONF-81's shape); (b) **streamed**: the same bytes → the same four facts element for element, where the pre-fix tree reads `auth`, demotes nothing, writes no `plan.switched` and no move row (the arm was unreachable — a failure head was classified with an empty body); (c) the **discriminant**: a `403` whose body lacks the quota wording is `auth` on **both** media with no demotion, no switch and no re-point, so the case pins that the body is *evidence* rather than a status special-case; (d) the read's own edge: a failure body cut off after its first chunk carries the wording that arrived (what arrived is evidence), while a failure head whose body never arrives classifies exactly as the pre-fix tree did (status and headers alone) — the read is an input, never a fourth fact; (e) the forwarded bytes are unchanged: each candidate's upstream-visible request bytes digest-identical to the pre-fix tree's, on both media | the failure head's own evidence, read under §12.10.3 R4's idle bound (`router-providers/src/stream.rs`) with the classifier and both classification sites (`router-core/src/error_class.rs`, `router-proxy/src/stream_forward.rs`; `forward.rs`'s buffered rule unchanged) |
 | CONF-83 | §4.13·the inbound body bound + §8·its refusal + §6·the boundary record | **the bound is the router's own, and so is the refusal** — on the real `serve` assembly against a loopback mock, with `server.max_body_bytes` at the rig's own value: (a) a body **exactly at** the bound is served, the upstream-visible request bytes are the client's own (the byte control), and its record carries `upstream_ms` present with `usage_missing: false`; (b) a body **one byte above** it is refused `413` in §8's unified shape naming `request_too_large`, with `details.limit_bytes` equal to the rig's own configured value, `X-Router-Request-Id` present, **one** pre-pipeline trace record (`event_id: 0`, `usage_missing: true`, nothing priced) and **zero** requests arriving at the stand-in; (c) the same refusal when the length is **not declared** (a chunked body), so omitting `Content-Length` cannot walk around the bound; (d) a body above the bound in a **streaming** request (`stream: true`) is answered as that same complete, non-SSE `413` — `content-type: application/json`, **no** `details.stream` member, no SSE head ever sent — with the connection closed rather than handed on (spec §4.13); (e) the bound follows the key: the rig's own two values move which body is accepted, and a value below `1024` is a load refusal (exit 2) naming the key | the boundary middleware above the path split and the `ErrorCode` vocabulary (spec §4.13, DESIGN §12.15), with the HTTP framework's own cap **disabled** so exactly one bound exists |
 | CONF-84 | §6·`overhead_ms_p99` + §9.2·the `overhead p99` line | **the printed figure is the router's own overhead, not the upstream's** — over a rig-built trace whose records carry a declared `upstream_ms` beside a distinctly larger `overhead_ms`: (a) `overhead p99` in the text report **and** `overhead_ms_p99` in `--json` both equal the p99 of the **differences**, so raising every record's `upstream_ms` while holding `overhead_ms` fixed **does not move the figure** — the control the raw-field p99 fails today; (b) records whose `upstream_ms` is `null` are excluded from the sample rather than read as `0` ms (a window holding only such records has **no** figure, never `0`); (c) the two print paths agree element for element on one window | `stats`'s collector and both print paths (`router-cli/src/stats.rs`), against spec §6's definition and §9.2's provenance row (DESIGN §12.16; the `R32-F5` repair) |
+| CONF-85 | §4·the roster is its own file + §4.14·the refusal ladder and the identity + §4.12·a named roster is not a candidate | **a named roster, and one identity over the pair — the split's two halves in one case.** *(Half A — the refusal ladder.)* Against the real `serve` loader, each shape of spec §4.14 is refused naming **its own key**, with the inline control green on the same rig: (a) both `providers:` and `providers_file:` written → both keys named; (b) **neither** written → both keys named; (c) `providers_file` naming an unreadable path → `providers_file`, the value as written and the resolved path; (d) a roster file whose top-level key is not `providers:` → the roster's own path and the offending key; (e) a root reference the roster does not define (`aliases`, `fallback[0]`, `plan_policy.primary`) → the key **and the roster file**; (f) the no-candidate arm: with `--config` pinning the root, a `providers.yaml` sitting beside it is never read — §4.12's four-candidate table gained no row — while a fixture pair (root + roster, written into the case's own temp dir) parses and its joined `providers` is **deep-equal** to the inline form's. *(Half B — the identity.)* The pair's bytes hashed **independently of the product** (`shasum -a 256` over each file's bytes, first 16 hex chars, then over `"<root_sha16>:<roster_sha16>"`) equal the `config_digest` on that request's trace row, on the `config.applied` event and on `/health`'s config member — with the discriminators: a **comment-only** roster edit moves the digest and moves **nothing else** on the row (no decision, no byte on the wire, no `Nano` figure), while a **price** edit moves the digest **and** the cost; and the inline shape reports `roster_path: null` / `roster_sha16: ""` while still hashing to a stable digest. Half A is written by the split's card and half B by the identity's — **one file, one writer at a time**, hence the serial chain | the loader's shape check and join (`router-cli/src/config_load.rs`), the roster types (`router-core/src/config.rs`), the trace field and its writers (`router-core/src/trace.rs` + the four `router-proxy` constructors), `/health`'s `config` member (`router-proxy/src/health.rs`) and the `config.applied` payload (`router-cli/src/lib.rs`) |
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1258,7 +1294,7 @@ touched: the five cases are new files over a surface that did not exist, CONF-25
 and the loader's own messages are unchanged (the shared entry point `setup` reaches the parser through is a
 mechanical extraction of the two calls `load` already makes), and CONF-43's docs↔CLI relation is **kept** by the
 round's own chapter rather than by editing that case — its marker requirement is why every `router setup` mention
-in `book/` carries "planned" / "not served" until the command lands (§12.14). Nothing in this allocation touches
+in `book/` carried "planned" / "not served" until the command landed (§12.14). Nothing in this allocation touches
 a gate definition, the corpus or an **existing** assertion (AGENTS 9 / ADR-012).
 
 **Allocation of `CONF-80` (R27, R27-1's freeze — the binding's create-or-move arm and the TTL's unit:
@@ -1381,6 +1417,30 @@ card, `size` criterion), some two orders of magnitude below `CONF-83`'s smallest
 moves a gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 /
 ADR-012).
 
+**Allocation of `CONF-85` (R43 — the roster file and the configuration's identity) — recorded 2026-09-25 by
+the round's contract card, the R9/R10/R17/R22/R28/R29/R32 precedent.** The occupancy check was an `ls` of the
+real directory (`tests/conformance/tests/`, **74** case files, ids `01–47, 53–66, 71–78, 80–84`; the five
+allocated-but-unwritten ids `67–70` and `79` are R22's own file-less allocations, `R22-F4`) cross-read with the
+paragraphs above, which name `CONF-85` as the next free ID; R43 therefore takes **85**, and the row above is
+the allocation record. **One ID carries both halves of the split** — the refusal ladder (half A) and the byte
+identity (half B) — because they pin one contract's two faces over one surface; the file is
+`tests/conformance/tests/conf_85_roster_file.rs`, and because one path may have one writer at a time the two
+cards that fill it are **serial** (`parents`), the split's card landing half A and the identity's adding half
+B. The case is parked `#[ignore = "CONF-85: depends on the named roster and the byte-digest identity"]` for
+whichever half is written ahead of its implementation — the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking
+rule, unchanged — and the ID is spent: not renumbered, not reused. **Every leg is red at this round's base
+(`3db485c`)**: `providers_file` is an unknown field, so a root that writes it does not load at all; a root that
+writes **both** keys loads today (the inline block is legal on its own) and must be refused; and no trace
+record, no `config.applied` payload and no `/health` member carries any digest, so half B has nothing to
+compare against. The inline control is green at base by construction, and it is the arm the change must not
+break. **Occupancy now**: the spent ID set is `01–47, 53–70, 71–85`; `48–51` stay reserved exactly as the
+paragraphs above leave them; the next free ID is **`CONF-86`**. No existing assertion is touched: the **34**
+files under `tests/conformance/**` that carry a top-level `providers:` block (measured at this branch's
+`c4ae04f`) and the maintained harness config (`autowork/harness/live-base.yaml:100`) stay **byte-identical**,
+because the exactly-one-of rule keeps the inline shape legal — which is why R43 edits no fixture, no case file
+and no harness config; and nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md`
+or the L1 envelope (AGENTS 9 / ADR-012).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1427,9 +1487,9 @@ items are written into the spec, unsettled ones stay registered.)
 
 | Q18 | a rule's `match_kind` is declared as a "payload category declaration" (`rules/tool_output.toml`), but nothing says where the category comes from: no wire field carries it and spec §4 defines no tool→kind table | the first rules select on `match_tool` alone, which is sufficient; `match_kind` is resolved by the implementing change (a declared tool→kind table in the plugin's config) | rule selection for the transform pipeline (§12.12); a rule that cannot select its targets must not fall back to guessing content (ADR-003) |
 | Q19 | the failing-rule reporting surface: `rules/tool_output.toml` says a rule that fails its inline tests is "reported in the startup log and `/health`", while spec §9.1's `/health` shape has no member for it | the startup log carries it; `/health` gains nothing until the surface's own contract is written | a documented surface with no shape must be named, not invented (§9.3's rule); the implementing change raises it |
-| Q21 | spec §4.11's section table can only **replace a value on an existing line**: a genuinely new provider entry, a new alias, a new `fallback` entry or a new plugin entry has no anchor, and the command deliberately has no insert | the file is edited by hand for all four (the example's entries are the template to copy from), and `setup`'s own section for that block **says so** instead of pretending to cover it. A guided *insertion* would need a second contract — position, indentation, and the block's own style — inside a code path whose failure mode is a corrupted price table | what "most items take the default" means in practice: the wizard's reach is bounded by the example's own shape. Registered as a boundary, not an oversight; the trigger for revisiting it is a round that wants a wizard-created entry, and that round freezes the insert rule first |
+| Q21 | spec §4.11's section table can only **replace a value on an existing line**: a genuinely new provider entry, a new alias, a new `fallback` entry or a new plugin entry has no anchor, and the command deliberately has no insert | the file is edited by hand for all four (the example's entries are the template to copy from), and `setup`'s own section for that block **says so** instead of pretending to cover it. A guided *insertion* would need a second contract — position, indentation, and the block's own style — inside a code path whose failure mode is a corrupted price table | what "most items take the default" means in practice: the wizard's reach is bounded by the example's own shape. Registered as a boundary, not an oversight; the trigger for revisiting it is a round that wants a wizard-created entry, and that round freezes the insert rule first. **R43 (2026-09-25) adds one clarification and no exception:** replacing a roster as a **unit** — `--from <roster> --force`, spec §4.11's `--from` row, ADR-037 D9 — is a whole-file replacement under ADR-025's own strategy (a template base, then anchored edits), **not** an insertion: no anchor is created for a new entry, no position and no style are chosen for one, and an entry the operator wants *added* is still hand-written against the roster file. The boundary, and its trigger, stand unchanged (the round's authorization says exactly this) |
 | Q22 | the config at the XDG default location (`~/.config/router/config.yaml`) keeps its traces **and its store** beside itself: §4.1's one resolution rule puts every relative path in the file under the config file's own directory, and the store's path is not a config key in v0.1 (fixed at `<config dir>/state/router.db`, spec §4.5, ADR-009 item 6) | the rule stays **one rule**: the store's location moves only when a round adds the additive `state:` key §12.5 already anticipates, never by a second rule that depends on where the config happens to sit. Until then `~/.config/router/` holds the config *and* its state, and whoever wants the traces elsewhere writes an **absolute** `trace.dir` (already supported; `~` is not expanded) | a dotfile-managed or synced `~/.config` carries a WAL database and hourly trace files. Registered as a boundary of the location change, with the trigger: a round that wants the XDG split (config under `~/.config`, state under `$XDG_STATE_HOME`) must promote `state.dir` to a key **and** decide the migration for existing installations — ADR-009 item 6's anchor is asserted by CONF-25 |
-| Q23 | a **layered** configuration (a global file plus a project file plus an admin/managed file, merged key by key — opencode's eight layers, codex's project / `--profile` / managed stack) is not modelled: §4.12 finds **one** file | not in v0.1. One file, found by a documented order, is what keeps four things true at once: "the file is the single source of truth" (§4's usage note), `deny_unknown_fields`'s single place to be wrong (§12.5), the anchored-edit write strategy (**a merge has no single base to edit** — ADR-025), and the "back the config and its state together" story (§4.12's second rule) | registered as a **candidate for a later round**, with its own ADR: it changes the config's identity (which file a key came from), the provenance of every load error, what `/health`'s "what was loaded" means, and `setup`'s whole write strategy — one round cannot land half of it |
+| Q23 | a **layered** configuration (a global file plus a project file plus an admin/managed file, merged key by key — opencode's eight layers, codex's project / `--profile` / managed stack) is not modelled: §4.12 finds **one** file | not in v0.1. One file, found by a documented order, is what keeps four things true at once: "the file is the single source of truth" (§4's usage note), `deny_unknown_fields`'s single place to be wrong (§12.5), the anchored-edit write strategy (**a merge has no single base to edit** — ADR-025), and the "back the config and its state together" story (§4.12's second rule) | registered as a **candidate for a later round**, with its own ADR: it changes the config's identity (which file a key came from), the provenance of every load error, what `/health`'s "what was loaded" means, and `setup`'s whole write strategy — one round cannot land half of it. **R43 (2026-09-25) answers those four minimally and lands no layer** (ADR-037 D9: *one root, at most one roster, named — no second source of equal standing, no precedence ladder and no key-by-key overlay*, so the row's own claim is untouched and the layered config still needs its own ADR and round): **(i) which file a key came from** — the root's own shape decides, exactly one of `providers:` / `providers_file:`; no key is ever looked up in two files, and `/health`'s `config` member plus the `config.applied` event name the files and their digests (spec §4.14, §9.1); **(ii) the provenance of every load error** — each refusal names the file it came from: both keys with the root's path for the shape, `providers_file` with the value as written and the resolved path for an unreadable roster, the **roster's own** resolved path for its content, and the root's path for a reference the roster does not resolve (spec §4.14's table); **(iii) `/health`'s "what was loaded"** — the `config` member: `root_path`, `roster_path` (`null` when the roster is inline), `root_sha16`, `roster_sha16` (`""` when inline) and `config_digest` (spec §9.1); **(iv) `setup`'s write strategy** — every section keeps **one** target file (spec §4.11's new column), the anchored-edit strategy, the refusal ladder and the pair-level candidate gate are reused unchanged, and `--from <roster> --force` replaces a roster as a unit (§12.14, Q21 above). A layer would still need all four decided *again* and differently — which is why this row stays open |
 
 **A note on the numbering: Q17 is not absent by accident.** It belongs to the currency / region / route-tag
 contract that is being written on another branch of this repository, and this tree's table therefore
@@ -3095,6 +3155,41 @@ Modes need no dependency: the temporary file is opened with `OpenOptions::mode(0
 bits, so `0600` is exact whatever the ambient umask — and a directory `create_dir_all` created gets an explicit
 `set_permissions(0o700)` afterwards, because that call cannot express a mode; nothing is re-moded.
 
+**The writer over two files (ADR-037; spec §4.11's *target file* column, §4.14) — one target per section, the
+pair as the candidate.** Where the root names a roster, the writer owns **two** files, and nothing else in the
+strategy moves:
+
+- **The pair is resolved before anything is planned.** `config_path::resolve` finds the **root** exactly as
+  above; the roster's path comes from the root's own `providers_file` through the loader's one resolution rule
+  (`resolve(&config_dir, value)` — absolute wins, `~` literal, otherwise against the config file's directory),
+  so the wizard never invents a location for it, and a root that names no file has exactly one target
+  (today's shape, unchanged).
+- **Every section keeps exactly one target file**, which is the column spec §4.11 gained: six sections own root
+  keys and edit the root; `providers` owns the **roster's** bytes when the root uses the split form and the
+  root's when it does not. The reason the rest is untouched is that an anchor is resolved **in the file that
+  owns the key** — so the anchor walk, the codec, the `EditKind` rows and the refusal/exclusion ladder are
+  reused as they stand, and a key whose anchor does not resolve is the same refusal (or the same warning) it
+  is today.
+- **The candidate is the pair, and the landing is atomic over it.** `--print` / `--check` load the pair; the
+  write path validates the candidate pair through the same two calls `serve` makes **before either file
+  lands**, and a failure lands neither — a run that edits both must not leave a root naming a roster that was
+  not rewritten with it (G4 read for two targets).
+- **The template is per target.** `--from <path>` names the template for the file being replaced, and the
+  binary embeds one per target: today the root example (`EMBEDDED_TEMPLATE`,
+  `crates/router-cli/src/setup/mod.rs:27`) and, from the split, the roster's own. `--from <roster> --force` is
+  therefore how a roster is replaced as a **unit** (ADR-037 D9; §12.9's Q21 — a replacement, never an
+  insertion).
+- **What the split does *not* let the wizard do.** It does not insert a provider entry (Q21 stands), it does
+  not re-serialize a file (`deny_unknown_fields` plus anchored edits remain the whole story), and it creates
+  no key: a root that carries the roster **inline** is not converted to `providers_file:` by `setup` — that
+  edit would be an insertion into a file that never had the key, and it stays hand-work.
+
+All of this landed **together with the shipped example's split and the embedded roster template** — R43-4,
+the card that also gives the section table its *target file* column (`providers.example.yaml`, one roster and
+one shipped copy, §4.0's no-two-copies rule). The shipped example is the split form at HEAD, so the writer
+over the pair is the served behaviour; over an inline root it behaves exactly as it did before R43, which is
+the shape that keeps the admission above free of a behaviour claim.
+
 **What this does not change.** §12.5's types and the parser (`setup` adds no key: `deny_unknown_fields` makes a
 wizard-only key an unservable file); `load()`'s messages and `ResolvedConfig`; the store (no event kind, no
 projection — a setup run leaves no row); the proxy and the byte boundary (nothing here is on a request path);
@@ -3118,12 +3213,12 @@ unchanged.
   decision, and the zero-dependency path is a script.
 - **The docs↔CLI guard is a hand-off, not a footnote.** CONF-43 already asserts, live, that every `router
   <subcommand>` mention in `README.md` and `book/` either resolves in the parser or sits in a paragraph carrying
-  one of its five deferral markers. **This round's own chapter is written to keep that green while the command
-  does not exist** — every `router setup` mention carries "planned" / "not served" — and it was verified at this
+  one of its five deferral markers. **This round's own chapter was written to keep that green while the command
+  did not exist** — every `router setup` mention carried "planned" / "not served" — and it was verified at this
   round's tree (`cargo test -p router-conformance --test conf_43_cli_docs_consistency`: 1 passed). The
   implementing round therefore has **two** obligations beyond the code: add `router setup` to `README.md`'s CLI
   block (CONF-43's direction 2 requires every served subcommand to be mentioned in the docs), and retire the
-  deferral markers this chapter carries once the command is served — stale "planned" text on a served command
+  deferral markers this chapter carried until the command was served — stale "planned" text on a served command
   is not caught by the case (a mention of a served word never enters its whitelist), so it is a documentation
   debt the round must pay by hand.
 

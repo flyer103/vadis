@@ -64,10 +64,12 @@ pub fn too_large_record(
     content_length: Option<u64>,
     now_epoch_s: u64,
     overhead_ms: u32,
+    config_digest: &str,
 ) -> DecisionRecord {
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
         ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        config_digest: config_digest.to_string(),
         identity: IdentityRec {
             request_id: request_id.to_string(),
             // The bound runs before §12.10.5's row 1: the same `0`
@@ -157,8 +159,17 @@ mod tests {
 
     #[test]
     fn the_record_is_the_spec6_pre_pipeline_class() {
-        let rec = too_large_record("req-1", WireApi::Chat, 4096, Some(5000), 1_789_256_462, 2);
+        let rec = too_large_record(
+            "req-1",
+            WireApi::Chat,
+            4096,
+            Some(5000),
+            1_789_256_462,
+            2,
+            "0123456789abcdef",
+        );
         let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(v["config_digest"], "0123456789abcdef");
         assert_eq!(v["identity"]["event_id"], 0);
         assert_eq!(v["usage_missing"], true);
         assert_eq!(v["result"]["status"], 413);
@@ -172,7 +183,7 @@ mod tests {
 
     #[test]
     fn the_chunked_arm_names_the_undeclared_length_as_null() {
-        let rec = too_large_record("req-2", WireApi::Responses, 4096, None, 0, 0);
+        let rec = too_large_record("req-2", WireApi::Responses, 4096, None, 0, 0, "");
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
             v["errors"][0]["details"]["content_length"],

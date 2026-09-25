@@ -1061,6 +1061,213 @@ pub struct RouterConfig {
 }
 
 // ---------------------------------------------------------------------------
+// The roster as its own file (spec §4/§4.14; ADR-037 D1/D3/D4)
+// ---------------------------------------------------------------------------
+
+/// `providers` presence, exact (the R43 opener's 2026-09-25 ruling, STATE.md
+/// "Opener rulings on R43-1b's two findings", limb (i)): the exactly-one-of
+/// rule is about the key's **presence**, so a written `providers: null` is
+/// refused *by `providers:`* — never collapsed into "neither written".
+/// `deserialize_with` fires only when the key is present, so an absent key
+/// still yields `None` while a present null fails here naming the key.
+fn de_roster_key_presence<'de, D, T>(d: D, key: &str) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(d)
+        .map(Some)
+        .map_err(|e| de::Error::custom(format!("{key}: {e}")))
+}
+
+fn de_providers_presence<'de, D>(d: D) -> Result<Option<Vec<ProviderCfg>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    de_roster_key_presence(d, "providers")
+}
+
+/// `providers_file` presence **and type**, exact (R43-2b F1, closed by
+/// R43-4c): the key's value must be a non-empty string — a path. The
+/// generic presence helper cannot see a YAML null for a `String` target:
+/// serde_yaml's plain-scalar fast path hands `providers_file: null` to
+/// `String::deserialize` as the *string* `"null"`, which the loader then
+/// resolved as a relative path — and a file literally named `null` beside
+/// the config silently loaded, a *search* where §4.14 requires a *named*
+/// file. `deserialize_any` forces tag resolution, so a written null
+/// arrives as `visit_unit` and is refused **by `providers_file:`** with
+/// the type-shaped message, before any path resolution; an empty string
+/// is refused the same way (an empty path is not a path). An explicitly
+/// written string — including one spelling `"null"` — is a named path
+/// and still loads.
+fn de_providers_file_presence<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct RosterPath;
+
+    impl<'de> Visitor<'de> for RosterPath {
+        type Value = String;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a path (a non-empty string)")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            if v.is_empty() {
+                Err(E::custom("expected a path, found an empty string"))
+            } else {
+                Ok(v.to_owned())
+            }
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&v)
+        }
+
+        fn visit_unit<E>(self) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Err(E::custom("expected a path, found null"))
+        }
+    }
+
+    d.deserialize_any(RosterPath)
+        .map(Some)
+        .map_err(|e| de::Error::custom(format!("providers_file: {e}")))
+}
+
+/// The root file's own shape (spec §4/§4.14; ADR-037 D1/D4). Every section
+/// of [`RouterConfig`] as it stands, with the roster carried as **exactly
+/// one of two keys** — `providers:` inline or `providers_file:` naming the
+/// roster file — so that presence is observable and the loader can refuse
+/// both-written and neither-written *before* the join. Nothing but the
+/// loader parses this: the serving path sees only the joined
+/// [`RouterConfig`], whose `providers` field is always populated.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RootFile {
+    pub server: ServerCfg,
+    pub session: SessionCfg,
+    pub cache: CacheCfg,
+    pub trace: TraceCfg,
+    /// The inline roster — one of the two shapes. Absent ⇒ `None`; a
+    /// written `providers: []` is `Some(vec![])` (an empty roster is a
+    /// decision, not a default); a written `providers: null` is a parse
+    /// refusal naming `providers:` (see [`de_roster_key_presence`]).
+    #[serde(default, deserialize_with = "de_providers_presence")]
+    pub providers: Option<Vec<ProviderCfg>>,
+    /// The roster's name — the other shape. Required when used, resolved
+    /// by §4.1's rule (absolute wins, else against the config file's own
+    /// directory, `~` not expanded); never discovered, never defaulted.
+    /// A written `providers_file: null` (or an empty string) is a parse
+    /// refusal naming `providers_file:` with the found type, before any
+    /// path resolution — symmetric with `providers:` and enforced by
+    /// [`de_providers_file_presence`], which exists because serde_yaml's
+    /// plain-scalar fast path would otherwise coerce a written null into
+    /// the string `"null"` and resolve it as a path (R43-2b F1).
+    #[serde(default, deserialize_with = "de_providers_file_presence")]
+    pub providers_file: Option<String>,
+    pub aliases: BTreeMap<String, RouteSpec>,
+    pub plugins: Vec<PluginCfg>,
+    pub fallback: Vec<RouteSpec>,
+    #[serde(default)]
+    pub plan_policy: Option<PlanPolicyCfg>,
+    #[serde(default)]
+    pub state: Option<StateKeyForbidden>,
+}
+
+/// The roster file's whole shape (spec §4.14; ADR-037 D3): exactly one
+/// top-level key holding the same block the inline form carries, under the
+/// same `deny_unknown_fields` strictness. It is **not** a config file — no
+/// `server`, no `plugins`, never discovered, never merged — so any other
+/// top-level key is refused here by name, and so is a document with no
+/// `providers:` key at all (an empty file, a bare sequence). A written
+/// `providers: []` is legal — the empty roster, symmetric with the inline
+/// form (the opener's limb (i)).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RosterFile {
+    pub providers: Vec<ProviderCfg>,
+}
+
+impl RootFile {
+    /// The pure join (ADR-037 D4) and the exactly-one-of rule's **one
+    /// home** (spec §4: both written is a refusal, neither written is a
+    /// refusal). The caller — the loader, the only code that knows a
+    /// second file exists — hands the roster's parsed block only when the
+    /// root named one; the result is today's [`RouterConfig`], the only
+    /// representation the serving path ever sees. `validate()` runs
+    /// *after* this, on the joined document, so cross-file references are
+    /// checked in one pass with the existing key paths and message order.
+    pub fn join(self, roster: Option<RosterFile>) -> Result<RouterConfig, ConfigError> {
+        let Self {
+            server,
+            session,
+            cache,
+            trace,
+            providers,
+            providers_file,
+            aliases,
+            plugins,
+            fallback,
+            plan_policy,
+            state,
+        } = self;
+        let providers = match (providers, providers_file, roster) {
+            (Some(_), Some(file), _) => Err(ConfigError::new(
+                "providers / providers_file",
+                format!(
+                    "both keys are written — the roster is inline AND named as '{file}': \
+                     exactly one of `providers:` and `providers_file:` is written \
+                     (spec §4/§4.14, ADR-037 D1)"
+                ),
+            )),
+            (None, None, _) => Err(ConfigError::new(
+                "providers / providers_file",
+                "neither key is written — exactly one of `providers:` and \
+                 `providers_file:` names the roster; an empty roster is a decision, \
+                 written `providers: []` (spec §4/§4.14, ADR-037 D1)"
+                    .to_string(),
+            )),
+            (Some(inline), None, None) => Ok(inline),
+            (Some(_), None, Some(_)) => Err(ConfigError::new(
+                "providers",
+                "an inline roster AND a roster file's parsed block were both handed to \
+                 the join — a loader bug, not a config state (the loader reads the \
+                 roster only when the root names one)",
+            )),
+            (None, Some(_), None) => Err(ConfigError::new(
+                "providers_file",
+                "the root names a roster file but the join was handed no roster — the \
+                 pair is read and validated together (spec §4.14; `config_load`'s \
+                 `load` / `validate_pair` are the pair's entry points)",
+            )),
+            (None, Some(_), Some(roster)) => Ok(roster.providers),
+        }?;
+        Ok(RouterConfig {
+            server,
+            session,
+            cache,
+            trace,
+            providers,
+            aliases,
+            plugins,
+            fallback,
+            plan_policy,
+            state,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Conversion + validation (§12.5 rules + the §12.10.2 load-time table)
 // ---------------------------------------------------------------------------
 

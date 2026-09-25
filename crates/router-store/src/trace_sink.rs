@@ -162,6 +162,7 @@ mod tests {
         DecisionRecord {
             schema_version: TRACE_SCHEMA_VERSION,
             ts: "2026-09-19T07:41:02.123Z".into(),
+            config_digest: "0123456789abcdef".into(),
             identity: IdentityRec {
                 request_id: request_id.into(),
                 event_id,

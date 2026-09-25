@@ -121,6 +121,7 @@ pub fn mode_refused_record(
     failure: &ForwardFailure,
     now_epoch_s: u64,
     overhead_ms: u32,
+    config_digest: &str,
 ) -> router_core::trace::DecisionRecord {
     use router_core::trace::{
         CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec,
@@ -131,6 +132,7 @@ pub fn mode_refused_record(
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
         ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        config_digest: config_digest.to_string(),
         identity: IdentityRec {
             request_id: request_id.to_string(),
             // The mode is decided before §12.10.5's row 1: the same `0`

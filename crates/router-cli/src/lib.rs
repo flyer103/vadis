@@ -89,6 +89,28 @@ pub enum Command {
     },
 }
 
+/// The production trace writer: the hourly sink plus the identity of the
+/// configuration this process loaded (ADR-037 D6; spec §6). The digest is
+/// computed once by the loader and carried here as an immutable value, so
+/// every record the process writes is stamped with the one config identity
+/// by the constructors that read it back off this writer (`TraceWriter::
+/// config_digest`) — the record and its write cannot disagree, and nothing
+/// behind a request opens, reads or hashes a file.
+struct ConfigTraceWriter {
+    inner: router_store::TraceSink,
+    config_digest: String,
+}
+
+impl router_core::TraceWriter for ConfigTraceWriter {
+    fn write(&self, rec: &router_core::DecisionRecord) -> Result<Option<String>, String> {
+        router_core::TraceWriter::write(&self.inner, rec)
+    }
+
+    fn config_digest(&self) -> &str {
+        &self.config_digest
+    }
+}
+
 /// `router serve`: load the config (exit code 2 + reason on any failure),
 /// then serve exactly what it says. Returns the process exit code.
 pub async fn serve(config_path: &str) -> i32 {
@@ -173,6 +195,15 @@ pub async fn serve(config_path: &str) -> i32 {
         payload: serde_json::json!({
             "config_path": config_path,
             "schema_version": store_dyn.schema_version().unwrap_or(0),
+            // Row 13's designed "config digest" half (DESIGN §12.10.5;
+            // ADR-037 D6): the composed digest beside both resolved paths
+            // and both file digests — the same value the trace rows and
+            // /health carry. The "changed keys" half is R44's.
+            "root_path": rc.identity.root_path.to_string_lossy(),
+            "roster_path": rc.identity.roster_path.as_ref().map(|p| p.to_string_lossy()),
+            "root_sha16": rc.identity.root_sha16,
+            "roster_sha16": rc.identity.roster_sha16,
+            "config_digest": rc.identity.config_digest,
         }),
     });
 
@@ -210,6 +241,20 @@ pub async fn serve(config_path: &str) -> i32 {
         config: rc.router.clone(),
         trace_dir: rc.trace_dir.to_string_lossy().into_owned(),
         state_db: rc.state_db.to_string_lossy().into_owned(),
+        // Spec §9.1's `config` member: the loader-computed identity,
+        // handed to the proxy as strings (ADR-037 D4: the proxy never
+        // opens, resolves or hashes a config file).
+        config_identity: router_proxy::ConfigIdentity {
+            root_path: rc.identity.root_path.to_string_lossy().into_owned(),
+            roster_path: rc
+                .identity
+                .roster_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            root_sha16: rc.identity.root_sha16.clone(),
+            roster_sha16: rc.identity.roster_sha16.clone(),
+            config_digest: rc.identity.config_digest.clone(),
+        },
         provider_keys,
         // Spec §9.1: the `plan` section reads the `plan_state` projection
         // (and the probe gate's two projection inputs) through the writer's
@@ -255,7 +300,10 @@ pub async fn serve(config_path: &str) -> i32 {
         }
     };
     let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> =
-        std::sync::Arc::new(trace_sink);
+        std::sync::Arc::new(ConfigTraceWriter {
+            inner: trace_sink,
+            config_digest: rc.identity.config_digest.clone(),
+        });
 
     // The plugin assembly (ADR-036 D1/D8, spec §4.3): the CLI is the
     // launcher, not the assembler. It hands the declared `plugins:` list
@@ -335,8 +383,18 @@ pub async fn serve(config_path: &str) -> i32 {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let record =
-                    router_proxy::mode_refused_record(&request_id, proto_in, &f, now_epoch_s, 0);
+                let record = router_proxy::mode_refused_record(
+                    &request_id,
+                    proto_in,
+                    &f,
+                    now_epoch_s,
+                    0,
+                    forwarder
+                        .trace
+                        .as_ref()
+                        .map(|t| t.config_digest())
+                        .unwrap_or(""),
+                );
                 if let Some(t) = forwarder.trace.as_ref() {
                     let _ = t.write(&record);
                 }
@@ -536,6 +594,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 declared,
                 now_epoch_s,
                 started.elapsed().as_millis() as u32,
+                st.trace.config_digest(),
             );
             // Write, then answer — the same order the auth guard uses;
             // a trace write failure is §8's non-blocking case.
@@ -677,6 +736,7 @@ pub async fn serve(config_path: &str) -> i32 {
                     &verdict,
                     now_epoch_s,
                     started.elapsed().as_millis() as u32,
+                    st.trace.config_digest(),
                 );
                 // Write, then answer — and either way the client is told
                 // 401 (§8's non-blocking case).

@@ -85,6 +85,7 @@ fn empty_record() -> DecisionRecord {
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
         ts: "2026-09-19T12:00:00.000Z".into(),
+        config_digest: "0123456789abcdef".into(),
         identity: IdentityRec {
             request_id: "req-1".into(),
             event_id: 1,

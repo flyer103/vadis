@@ -28,8 +28,8 @@ explicit error** (`400`, `error.type: capability_unsupported`). There is no best
 translation for an undeclared cell: declaring a format your provider does not document is
 how a gateway starts inventing wire formats, and "it usually works" is not a contract.
 
-The shipped example roster (in `config.example.yaml`, which is the file to read for the
-current declarations) is a useful illustration of the rule: the DeepSeek entry declares the
+The shipped example roster (`providers.example.yaml`, named by the shipped config — the pair is the file to
+read for the current declarations) is a useful illustration of the rule: the DeepSeek entry declares the
 `responses` wire format with all three inbound protocols supported, while the other entries
 declare `chat` as their wire format with a narrower `supports` set — so a `responses`
 inbound request aimed at one of those is refused rather than translated on a hunch.

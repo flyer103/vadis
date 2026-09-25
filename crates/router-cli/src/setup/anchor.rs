@@ -926,11 +926,16 @@ plan_policy:
     #[test]
     fn every_row_of_the_real_example_resolves() {
         // The table↔example check (DESIGN §12.14): every static key path
-        // the section table carries must resolve in config.example.yaml.
-        let example = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config.example.yaml"),
-        )
-        .expect("shipped example is readable");
+        // the section table carries must resolve in the shipped example
+        // **of its target file** (spec §4.11's target-file column): the
+        // example is a pair since §4.14's split, so the root's keys are
+        // read from `config.example.yaml` and the roster's from
+        // `providers.example.yaml`.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let example = std::fs::read_to_string(dir.join("config.example.yaml"))
+            .expect("shipped example is readable");
+        let roster = std::fs::read_to_string(dir.join("providers.example.yaml"))
+            .expect("shipped roster example is readable");
         for path in [
             "server.addr",
             "server.upstream_attempt_timeout",
@@ -956,9 +961,12 @@ plan_policy:
                 "the section table's `{path}` must resolve in config.example.yaml"
             );
         }
-        for name in entry_names(&example, "providers", "name") {
+        for name in entry_names(&roster, "providers", "name") {
             let p = format!("providers[name={name}].api_key_env");
-            assert!(resolve(&example, &p).is_ok(), "{p} must resolve");
+            assert!(
+                resolve(&roster, &p).is_ok(),
+                "{p} must resolve in providers.example.yaml"
+            );
         }
         for id in entry_names(&example, "plugins", "id") {
             let p = format!("plugins[id={id}].disabled");
