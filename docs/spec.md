@@ -332,6 +332,8 @@ This file defines only the schema and the convention:
 Config-change semantics (aligned with Cordis's keyed diff, see ADR-002): a `config` change → handed to
 the plugin to diff by itself and reload (the process is not rebuilt); `disabled: true` → unload that
 fiber and fully roll back its effects; an `id`/`kind` change → rebuild that entry.
+**This paragraph describes the contract, not today's binary** — the loader that would act on it is P9,
+whose implementation is R41-2 (ADR-036; §4.3's honesty note above).
 
 ### 4.1 `trace` (the on-disk parameters of the observation medium)
 
@@ -396,6 +398,25 @@ reachable on a buffered one.
 ADR-002/DESIGN §4). While unsatisfied, that fiber stays at **load-waiting** (it does not error, and it
 does not affect other plugins); it goes on loading once the service is ready. Service names are
 product-defined typed slot names (e.g. `cache_ledger`, `session_table`), not arbitrary strings.
+
+**The four keys are declared, parsed and validated; none of them is honoured in v0.1.** `inject`,
+`isolate`, `intercept` and `disabled` are accepted by the parser and checked at load
+(`router-core/src/config.rs:816-840`, `:1232-1261`) and **consumed by nobody**: the runtime that would
+act on them (P9) does not exist — `crates/router-runtime/src/lib.rs` and
+`crates/router-plugin-sdk/src/lib.rs` are stubs. Their meaning, the lifecycle they belong to, and the
+boundary that decides which capabilities may ever be mounted this way are frozen by
+**ADR-036** (`design/decisions/ADR-036-minimal-core-and-plugin-surface.md`; the map is DESIGN §13.6):
+`inject` waits until its slots exist, `isolate` gives one key two realms of bindings, `intercept`
+changes how a binding is used and never the binding itself, and `disabled` unloads a fiber and rolls
+its effects back.
+
+**No plugin can reach the byte boundary.** Whatever the list mounts, the client's bytes and the two
+permitted span mutations of §2 stay the core's (DESIGN §13.1's P1 row; ADR-015): a plugin may propose a
+**path-addressed edit plan** for a payload and nothing else — the parsed view is never what reaches the
+wire (§4.4, ADR-019) — and the primitives that carry the invariants a plugin must not own (admission,
+the decision record, the state write path, the `verified`/`inferred` label, and the loader itself) are
+in the core **by definition, not by configuration**; DESIGN §13.6 lists each one with the constraint
+that forces it.
 
 ### 4.4 Rule files (`rules/*.toml`) and `tee`
 

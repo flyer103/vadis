@@ -63,6 +63,14 @@ data-plane change when it lands.
 
 ## 4. Plugin runtime (aligned with Cordis semantics)
 
+**Status: the contract is frozen; the implementation does not exist.** **ADR-036** adopts this section,
+§12.2's signatures and §13.6's boundary as the contract (**D1–D8**); **R41-2** is the round that would
+land them. `crates/router-runtime/src/lib.rs:1-4` is still four lines of stub, §13.1's row for **P9**
+still reads **`contract-only`**, and the `inject` / `isolate` / `intercept` keys parse and validate and
+are consumed by nobody (`router-core/src/config.rs:816-840`, `:1232-1261`). Read this section as the
+specification of a component that has not been built, not as a description of the binary —
+`book/plugins.md` carries the same sentence for a user.
+
 The mapping from the paper's primitives to this project's implementation (fixed by ADR-002):
 
 | Cordis primitive | This project's Rust form | Purpose |
@@ -289,6 +297,13 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
   `tests/conformance/tests/` (§12.8).
 
 ### 12.2 Runtime primitives (ADR-002 → Rust signature sketch)
+
+**Status: frozen contract, zero implementation.** **ADR-036** adopts the sketch below as the contract
+the loader must satisfy (its **D1**, **D3**, **D5**; §13.6 is the boundary it belongs to) and **R41-2**
+is the round that implements it. `crates/router-runtime/src/lib.rs` and
+`crates/router-plugin-sdk/src/lib.rs` are stubs (`:1-4` each), so every signature here is a
+requirement rather than a description: the landing round asserts the unload order below and the
+deep-equality condition after load → activate → unload.
 
 | Cordis primitive | Rust type (`router-runtime`) | Where the semantics land |
 |---|---|---|
@@ -3348,7 +3363,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `router-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `router-core/src/transform.rs`; composition step `router-proxy/src/forward.rs::compose_transform_stage`; wiring `router-cli/src/lib.rs` (`plugins[].config.rules_file`); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
 | P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
-| P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; §4, §12.2 | **none** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` are stubs; `inject`/`isolate`/`intercept` parse at `config.rs:816-840`, validate at `config.rs:1232-1261`, are consumed by nobody) | **contract-only** |
+| P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; **ADR-036**; §4, §12.2, **§13.6** | **none** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` are stubs; `inject`/`isolate`/`intercept` parse at `config.rs:816-840`, validate at `config.rs:1232-1261`, are consumed by nobody) | **contract-only** — the contract is frozen by **ADR-036** (R41-1); the implementation is **R41-2** |
 
 ### 13.2 Module → primitive map
 
@@ -3446,3 +3461,43 @@ built today?" is answerable without reading a round file.
 | W3 `read the report` | P5, P7, P8, P4 | — (and see L1/L3) |
 | W4 `keep the plan preferred` | P3, P4, P7, P8 | M2 |
 | W5 `iterate a policy` (the loop) | P5, P7 (+ the loop-side artifacts) | M3, M4, M5 (all blocked on L5) |
+
+### 13.6 The minimal-core boundary (ADR-036)
+
+§13.1 answers *"what exists and what is leaked"*. This one answers the question the owner's
+2026-09-25 direction raises — **what may a plugin own, and what may it never own.** The definitions,
+the reasoning and the rejected alternatives are ADR-036's; this is the map, so *"can this be a
+plugin?"* is answerable without reading the ADR.
+
+**The falsifiable definition (ADR-036 D1):** *the core is minimal when the released binary, started
+with an empty `plugins:` list, still serves the passthrough path — and every capability we ship today
+is mountable from that list.* The first half is **R41-3's acceptance**; until it holds, "everything
+else is a plugin" is a direction, not a property.
+
+| primitive | in the core? | the constraint that forces the answer |
+|---|---|---|
+| P1 `byte-fidelity` | **yes** | a plugin holding the byte API could return any body, and no test could distinguish that from a translation (AGENTS 1; ADR-015) |
+| P2 `inbound-admission` | **yes** | it runs above the pipeline; a component mounted inside it cannot be the thing that admits (spec §4.7, §12.11) |
+| P3 `resolution` | surface `Selector` — **blocked** | **L4** (a human decision: define the `plugin` value or delete the slot) and **L2a/L2b** (one implementation, not two) |
+| P4 `policy-guard` | surface `Guard` — **blocked** | **L6**: the answer vocabulary is prose today, so a protocol would freeze `PlanMove` as the interface |
+| P5 `decision-record` | **yes** | the only product → autowork channel; a pluggable observation boundary makes every gate negotiable (ADR-005; AGENTS 3) |
+| P6 `transform-chain` | surface `Transform` | the only content-edit surface, and only as a path-addressed plan; tier-1 wired, `CONF-16` landed with R41-0 |
+| P7 `state-truth` | **yes** | intent-before-effect and "projections are never the truth" are write-path properties (ADR-009/010) |
+| P8 `accounting` | **yes** for the **label**; prices and quota data are plugin-hosted **data** | constraint 4 is a labelling invariant: `verified` has one definition and gates read it alone (ADR-006/018; ADR-021/§12.13 for the data half) |
+| P9 `plugin-runtime` | **yes** | the loader cannot be loaded — otherwise unload order and failure isolation become the loaded thing's promises about itself |
+
+| other surface | mountable | the contract it answers |
+|---|---|---|
+| `Observer` | **yes, and first** | returns nothing that reaches the wire; R41-4's moat measurement (inter-chunk jitter, chunk fidelity) is the first plugin |
+| provider transport | yes | receives a prepared `RawBody`, may add headers, cannot rewrite the body |
+| protocol codecs / mappers | yes, per-cell declared | `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022) — and the owner's 〈暂时不做协议翻译〉 leaves the translation column empty |
+| price tables / tier config | yes, as data | constraint 5: every figure carries its official source URL + date; ADR-021/§12.13 |
+| the four service-key implementations | yes | the binding is replaceable; the semantics stay the core's (the ledger's rules, the table's stickiness, the quota arithmetic, the sink's append-only contract) |
+| semantic / exact-match response cache | yes, but **excluded** | a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, "What this ADR does not decide") |
+
+The type-level half (ADR-036 **D4**): the boundary is enforced by making the alternatives
+unrepresentable rather than forbidden — `RawBody`'s mutators are private to the core, `Nano`
+arithmetic has one path, `verified` has one definition — the same trick ADR-018 uses to make
+cross-currency addition a compile error. And a surface declared before its types exist is a
+documented-but-unreachable defect (spec §9.3), which is why the order above is the **leak register's**
+order and not the order of ambition.
