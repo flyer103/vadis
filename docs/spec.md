@@ -399,13 +399,15 @@ ADR-002/DESIGN §4). While unsatisfied, that fiber stays at **load-waiting** (it
 does not affect other plugins); it goes on loading once the service is ready. Service names are
 product-defined typed slot names (e.g. `cache_ledger`, `session_table`), not arbitrary strings.
 
-**Three of the four keys are declared and validated and nothing acts on them; the fourth is honoured
-today, at start-up.** `inject`, `isolate` and `intercept` are accepted by the parser and checked at load
-(the plugin validation loop, `router-core/src/config.rs:1744-1804`: the `intercept.sample` range and the
-`inject` slot names) and **nothing acts on them** — the runtime that would (P9) exists as machinery and is
-**not wired**: `crates/router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` carry it (R41-2) while
-no configuration mounts a plugin and no request path reaches it, and `crates/router-plugin-sdk/src/lib.rs`
-is still a stub. Their meaning,
+**Two of the four keys are acted on, and in different places; two are still inert.** `disabled` is
+honoured at start-up (§4.4: the rule set is off, `/health` reports it). `inject` is honoured by the
+launcher's assembly: the `plugins:` list **is** the assembly point, so a declared slot that nothing provides
+leaves that plugin in a **named loading wait** rather than failing the boot, and every plugin the launcher
+can mount has its declarations satisfied before the request path is built. `isolate` and `intercept` are
+accepted by the parser and checked at load (the plugin validation loop, `router-core/src/config.rs:1744-1804`:
+the `intercept.sample` range and the `inject` slot names) and **nothing acts on them**: realms and
+interception are the rail features ADR-013 describes, and the surfaces that would use them (`Selector`,
+`Guard`) are still blocked in the leak register (§13.3). Their meaning,
 the lifecycle they belong to, and the boundary that decides which capabilities may ever be mounted this
 way are frozen by **ADR-036** (`design/decisions/ADR-036-minimal-core-and-plugin-surface.md`; the map is
 DESIGN §13.6): `inject` waits until its slots exist, `isolate` gives one key two realms of bindings, and
