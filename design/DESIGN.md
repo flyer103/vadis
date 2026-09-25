@@ -2655,9 +2655,13 @@ Primitive **P6 `transform-chain` is wired for tier 1** (the engine
 acceptance test; `router-cli` wires it from `plugins[].config.rules_file`; the mode channel,
 composition step and invariants I1/I3 landed in R9-2a, I2 + the ledger in R9-2b, pinned by
 CONF-60..63). What remains open is landing order ⑥ (the paired measurement that may turn a rule's
-net into a `verified` figure), ⑤'s CONF-16 half (the un-ignore: the case is still `#[ignore]`d with
-an empty body, and the fixture that would make it non-vacuous now exists in CONF-63), and the P4
-class (excluded by I2 by construction). This section is the
+net into a `verified` figure) and the P4 class (excluded by I2 by construction). ⑤'s CONF-16 half
+landed in R41-0 (owner-authorized 2026-09-25; ADR-019:263 places the un-ignore in "the same change"
+as the mode landing, a human-allocated §12.8 id): the case is un-ignored and implemented —
+parameterized one arm per rule of `rules/tool_output.toml`, driven through the real `serve`
+assembly with the repo's own rule file, each arm's same-session two-turn `prefix.continuity`
+asserted not below a baseline measured on the same rig in the same run, with a forced-failure red
+control (a mid-history edit of a surviving line breaks the prefix). This section is the
 contract the landed code answers to. The
 contract is ADR-019 (mode, edit discipline, three invariants, measurement); spec §2.1/§4.4/§6/§7 is the
 external promise; the rule format is already landed as data (`rules/tool_output.toml`, four rules, 13
