@@ -523,6 +523,23 @@ pub mod testkit {
         dir
     }
 
+    /// Write a configuration **pair** (spec §4.14; ADR-037): `root_text`
+    /// into `<dir>/config.yaml` and the roster's own text into
+    /// `<dir>/providers.yaml`, returning `(root, roster)` — so a case
+    /// builds a root+roster pair out of its own fixture text without a
+    /// second checked-in fixture (CONF-85).
+    pub fn write_config_pair(
+        dir: &std::path::Path,
+        root_text: &str,
+        roster_text: &str,
+    ) -> (PathBuf, PathBuf) {
+        let root = dir.join("config.yaml");
+        let roster = dir.join("providers.yaml");
+        std::fs::write(&root, root_text).unwrap();
+        std::fs::write(&roster, roster_text).unwrap();
+        (root, roster)
+    }
+
     /// A currently-free loopback port (small TOCTOU window, fine for tests).
     pub fn free_port() -> u16 {
         std::net::TcpListener::bind("127.0.0.1:0")
