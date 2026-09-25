@@ -17,7 +17,8 @@
   (the case that pins this ADR's assertions).
 - Numbering note: the register holds **36** ADRs (`ADR-001` … `ADR-036`), so **037** is the next free
   number; DESIGN §12.8's occupancy paragraph names **`CONF-85`** as the next free conformance ID
-  (`design/DESIGN.md:1376`).
+  (`design/DESIGN.md:1412`, the pre-allocation occupancy line; the allocation paragraph that follows it
+  records the spend).
 - Scope note: **this ADR writes no code.** It freezes a contract whose first line of Rust lands in
   R43-2 (the split), R43-3 (the identity) and R43-4 (the wizard and the shipped example). At this commit
   the two-file shape is **specified, not served**, and every sentence below about the tree is a statement
@@ -48,7 +49,7 @@ whose presence must produce a **precise** refusal rather than a generic unknown-
 a type built for it (`StateKeyForbidden`, `config.rs:1026`). The hash convention is fixed: first 16 hex
 of SHA-256, *"the one hash convention … and any future digest"* (`crates/router-core/src/prefix.rs:21`,
 `body_sha16`). And the trace's vocabulary already designs a config identity: DESIGN §12.10.5 row 13
-(`design/DESIGN.md:1876`) specifies `config.applied`'s payload as *"config digest, changed keys"*, while
+(`design/DESIGN.md:1936`) specifies `config.applied`'s payload as *"config digest, changed keys"*, while
 the event as written today carries `{config_path, schema_version}`
 (`crates/router-cli/src/lib.rs:168-176`) and `TRACE_SCHEMA_VERSION` is **2**
 (`crates/router-core/src/trace.rs:28`).
@@ -191,7 +192,7 @@ printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16
    decision and its money are attributable to the revision that priced them.
 2. `config.applied`'s payload — the digest lands beside the two **absolute** paths and the two file
    digests, next to today's `config_path` and `schema_version` (`crates/router-cli/src/lib.rs:168-176`).
-   That is row 13's *designed* "config digest" half (`design/DESIGN.md:1876`); the "changed keys" half
+   That is row 13's *designed* "config digest" half (`design/DESIGN.md:1936`); the "changed keys" half
    is R44's (D7), and the `schema_version` already in that payload is the **store's**, which no part of
    this round moves.
 3. `/health`'s config member (spec §9.1) — both paths, both file digests and the composed digest, so
@@ -252,7 +253,7 @@ a harness change no card of this round needs — the round's arms build their ow
 
 ### D9. What Q23's four consequences get here, and what stays unlanded
 
-DESIGN §12.9's **Q23** row (`design/DESIGN.md:1432`) puts a *layered* configuration behind its own ADR
+DESIGN §12.9's **Q23** row (`design/DESIGN.md:1492`) puts a *layered* configuration behind its own ADR
 **because** it would change four things. R43 merges nothing — one root, at most one roster, no
 precedence ladder, no key-by-key overlay, no second discovery candidate — but it gives those four their
 **first minimal answer**:
@@ -267,7 +268,7 @@ precedence ladder, no key-by-key overlay, no second discovery candidate — but 
 **Q23 stays open, and its row must now say exactly that.** The layering has not landed; what landed is a
 one-root/one-roster shape whose four consequences are answered *minimally*.
 
-**Q21 is not closed either** (`design/DESIGN.md:1430`). Replacing a roster as a **unit** is **not** an
+**Q21 is not closed either** (`design/DESIGN.md:1490`). Replacing a roster as a **unit** is **not** an
 insertion: no anchor is created, no position is chosen and no block style is reproduced — a whole file is
 handed to the command. Q21's trigger stands unchanged: a round that wants a **wizard-created entry**
 must freeze the insert rule first (position, indentation, the block's own style). **What decides:** the

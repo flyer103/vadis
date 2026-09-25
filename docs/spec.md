@@ -1227,7 +1227,7 @@ applies wins.
 - **This rule decides *which file* is read, never what the file says.** The listen address, the plugin set and
   the roster still come only from the file (CONF-25), and the resolution lives in `router-cli`'s argument layer:
   the `serve` / `stats` entry points keep taking a resolved path, so the existing rigs drive them unchanged.
-- **The table below gains no row for the roster, and that is the amendment §4.14 requires.** The four
+- **The table above gains no row for the roster, and that is the amendment §4.14 requires.** The four
   candidates are ways of *finding the config file*; the roster is **named** by a key inside the file they find
   (§4.14), so it is a reference and not a candidate. "Exactly one file is read" is
   true of the root, and — from the split on — the process reads the roster the root *names*, which is the
@@ -1875,7 +1875,7 @@ stats` subcommand. Both are **read-only**; neither is a second source of truth, 
 or extrapolates anything. The metric *formulas* stay in §6 ("Metric definitions"); this section says what is
 printed, from which record, and under which §7 label — it defines no new metric and no new gate.
 
-### 9.1 `GET /health`'s `auth` and `plan` members
+### 9.1 `GET /health`'s `config`, `auth` and `plan` members
 
 `/health` reports what this process loaded (§4.5, `store`). The members below carry what an operator
 reasons about most: **`config`** (the configuration that was loaded — §4.14; **planned, not served yet**, see
