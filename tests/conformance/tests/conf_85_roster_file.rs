@@ -563,6 +563,19 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
     out
 }
 
+/// A trace record's `decision` with `decision_ms` removed: the duration
+/// is a wall-clock measurement, not decision content, and a measurement
+/// is not content (content determinism, AGENTS.md constraint 2) — so the
+/// equality arms of conf_85h compare the deterministic subfields as a
+/// whole and exclude the stopwatch.
+fn decision_content(rec: &serde_json::Value) -> serde_json::Value {
+    let mut d = rec["decision"].clone();
+    d.as_object_mut()
+        .expect("decision is an object")
+        .remove("decision_ms");
+    d
+}
+
 /// The `config.applied` event's payload (DESIGN §12.10.5 row 13), read
 /// from the store after serve has stopped (the writer lock is the
 /// process's own while it runs, CONF-23).
@@ -708,8 +721,17 @@ async fn conf_85h_comment_moves_only_the_digest_and_price_moves_cost() {
     assert_ne!(digest_a, digest_c, "a price edit moves the digest");
 
     // The comment edit moves NOTHING else: same decision, same bytes on
-    // the wire, same Nano figures.
-    assert_eq!(rec_a["decision"], rec_b["decision"], "decision unmoved");
+    // the wire, same Nano figures. `decision_ms` is excluded before the
+    // comparison: it is a wall-clock measurement (DecisionRec,
+    // router-core/src/trace.rs), not decision content — a measurement is
+    // not content (content determinism, AGENTS.md constraint 2), so two
+    // identical decisions may legitimately carry different durations.
+    // Every other subfield is still compared as a whole.
+    assert_eq!(
+        decision_content(&rec_a),
+        decision_content(&rec_b),
+        "decision unmoved"
+    );
     assert_eq!(rec_a["cost"], rec_b["cost"], "no Nano figure moved");
     assert_eq!(rec_a["usage"], rec_b["usage"], "usage unmoved");
     let wire_a = &a.upstream.requests()[0].body;
@@ -719,7 +741,8 @@ async fn conf_85h_comment_moves_only_the_digest_and_price_moves_cost() {
     // The price edit moves the digest AND the cost — the pair
     // discriminates: cost follows the price, not the comment.
     assert_eq!(
-        rec_a["decision"], rec_c["decision"],
+        decision_content(&rec_a),
+        decision_content(&rec_c),
         "decision unmoved by a price"
     );
     let wire_c = &c.upstream.requests()[0].body;
