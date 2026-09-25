@@ -195,6 +195,15 @@ pub async fn serve(config_path: &str) -> i32 {
         payload: serde_json::json!({
             "config_path": config_path,
             "schema_version": store_dyn.schema_version().unwrap_or(0),
+            // Row 13's designed "config digest" half (DESIGN §12.10.5;
+            // ADR-037 D6): the composed digest beside both resolved paths
+            // and both file digests — the same value the trace rows and
+            // /health carry. The "changed keys" half is R44's.
+            "root_path": rc.identity.root_path.to_string_lossy(),
+            "roster_path": rc.identity.roster_path.as_ref().map(|p| p.to_string_lossy()),
+            "root_sha16": rc.identity.root_sha16,
+            "roster_sha16": rc.identity.roster_sha16,
+            "config_digest": rc.identity.config_digest,
         }),
     });
 
@@ -232,6 +241,20 @@ pub async fn serve(config_path: &str) -> i32 {
         config: rc.router.clone(),
         trace_dir: rc.trace_dir.to_string_lossy().into_owned(),
         state_db: rc.state_db.to_string_lossy().into_owned(),
+        // Spec §9.1's `config` member: the loader-computed identity,
+        // handed to the proxy as strings (ADR-037 D4: the proxy never
+        // opens, resolves or hashes a config file).
+        config_identity: router_proxy::ConfigIdentity {
+            root_path: rc.identity.root_path.to_string_lossy().into_owned(),
+            roster_path: rc
+                .identity
+                .roster_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            root_sha16: rc.identity.root_sha16.clone(),
+            roster_sha16: rc.identity.roster_sha16.clone(),
+            config_digest: rc.identity.config_digest.clone(),
+        },
         provider_keys,
         // Spec §9.1: the `plan` section reads the `plan_state` projection
         // (and the probe gate's two projection inputs) through the writer's

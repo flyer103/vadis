@@ -21,6 +21,6 @@ pub use forward::{
     mode_refused_record, resolve_transform_mode, BoxedAttempt, ForwardFailure, ForwardOutcome,
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
-pub use health::{health_json, AppState, ProviderKeyFacts};
+pub use health::{health_json, AppState, ConfigIdentity, ProviderKeyFacts};
 pub use stream_forward::{StreamOutcome, StreamSuccess};
 pub use stubs::protocol_stub;

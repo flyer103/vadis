@@ -14,6 +14,11 @@ pub struct AppState {
     pub trace_dir: String,
     /// `<config dir>/state/router.db` (spec §4.5; fixed in v0.1).
     pub state_db: String,
+    /// Which configuration the process loaded (spec §9.1's `config`
+    /// member, ADR-037 D6): the two resolved paths and the three digests,
+    /// handed to the proxy as strings at startup — the proxy never opens,
+    /// reads, resolves or hashes a config file (ADR-037 D4).
+    pub config_identity: ConfigIdentity,
     /// For each provider: the `api_key_env` name and whether the env var
     /// was present at startup, plus the entry's declared `region` and
     /// `currency` (spec §4.8/§9.1 — reads of the loaded config, never
@@ -25,6 +30,26 @@ pub struct AppState {
     /// own connection. `None` in assemblies without a store; the section
     /// then reports a family that never switched.
     pub store: Option<std::sync::Arc<dyn Store>>,
+}
+
+/// `/health`'s `config` member's data (spec §9.1's five keys): the byte
+/// digest identity of the loaded pair, computed once by the loader.
+/// `roster_path: None` and `roster_sha16: ""` are the two spellings of
+/// one fact — the roster is inline (§9.1: a path that does not exist is
+/// null; a hash input that is not there is the empty string).
+#[derive(Clone)]
+pub struct ConfigIdentity {
+    /// The root file's resolved path, spelled the way §4.12 selected it.
+    pub root_path: String,
+    /// The roster's resolved path, or `None` when the roster is inline.
+    pub roster_path: Option<String>,
+    /// First 16 hex chars of SHA-256 over the root file's bytes.
+    pub root_sha16: String,
+    /// The same over the roster file's bytes; "" when the roster is inline.
+    pub roster_sha16: String,
+    /// `sha16(root_sha16 + ":" + roster_sha16)` — the same value the trace
+    /// rows (§6) and the `config.applied` event carry.
+    pub config_digest: String,
 }
 
 /// One provider entry's operator-facing facts (spec §9.1's provider list,
@@ -82,6 +107,18 @@ pub fn health_json(state: &AppState) -> Value {
         "providers": providers,
         "trace_dir": state.trace_dir,
         "state_db": state.state_db,
+        // Spec §9.1 / ADR-037 D6: which configuration this process loaded
+        // — the two resolved paths and the three digests, so "which
+        // revision is this process serving?" is answered by the surface.
+        // The two spellings of one fact: `roster_path: null` and
+        // `roster_sha16: ""` both mean the roster is inline.
+        "config": {
+            "root_path": state.config_identity.root_path,
+            "roster_path": state.config_identity.roster_path,
+            "root_sha16": state.config_identity.root_sha16,
+            "roster_sha16": state.config_identity.roster_sha16,
+            "config_digest": state.config_identity.config_digest,
+        },
         // Spec §9.1 / §4.7: `{"required": true, "env": "<name>"}` when the
         // key is written, `{"required": false}` — and no other key — when
         // it is not. Derived from the loaded config (the one source; no
@@ -356,10 +393,59 @@ mod tests {
             config: no_policy_config(),
             trace_dir: String::new(),
             state_db: String::new(),
+            config_identity: test_identity(None),
             provider_keys: Vec::new(),
             store: None,
         });
         assert_eq!(v, json!({ "configured": false }));
+    }
+
+    /// A `ConfigIdentity` fixture: the inline shape when `roster` is None,
+    /// the split shape when it names a roster path.
+    fn test_identity(roster: Option<&str>) -> ConfigIdentity {
+        ConfigIdentity {
+            root_path: "/cfg/config.yaml".into(),
+            roster_path: roster.map(str::to_string),
+            root_sha16: "0123456789abcdef".into(),
+            roster_sha16: roster
+                .map(|_| "fedcba9876543210".into())
+                .unwrap_or_default(),
+            config_digest: "0011223344556677".into(),
+        }
+    }
+
+    // Spec §9.1's `config` member: the five keys, with the inline shape's
+    // two spellings of one fact — `roster_path: null` and
+    // `roster_sha16: ""` — and the split shape's named roster.
+    #[test]
+    fn the_config_member_reports_what_was_loaded() {
+        let state = |roster: Option<&str>| AppState {
+            config: no_policy_config(),
+            trace_dir: String::new(),
+            state_db: String::new(),
+            config_identity: test_identity(roster),
+            provider_keys: Vec::new(),
+            store: None,
+        };
+        let inline = health_json(&state(None));
+        assert_eq!(
+            inline["config"],
+            json!({
+                "root_path": "/cfg/config.yaml",
+                "roster_path": Value::Null,
+                "root_sha16": "0123456789abcdef",
+                "roster_sha16": "",
+                "config_digest": "0011223344556677",
+            }),
+            "the inline shape: null path, empty roster half"
+        );
+        let split = health_json(&state(Some("/cfg/providers.yaml")));
+        assert_eq!(split["config"]["roster_path"], "/cfg/providers.yaml");
+        assert_eq!(split["config"]["roster_sha16"], "fedcba9876543210");
+        assert_eq!(
+            split["config"]["config_digest"], inline["config"]["config_digest"],
+            "the member reports the value it is handed, unchanged"
+        );
     }
 
     #[test]
