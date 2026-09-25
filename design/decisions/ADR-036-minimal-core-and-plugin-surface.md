@@ -226,9 +226,10 @@ regardless of its architecture**.
 
 ## Alternatives considered
 
-- **A. Leave the assembly in the CLI and grow it.** Rejected: the declarative list, its four keys,
+- **A. Leave the assembly in the CLI and grow it.** Rejected: the declarative list, its keys,
   the config-diff semantics and the no-rebuild promise are already **published** in
-  `config.example.yaml:1079` and `docs/spec.md` §4, and §13.1 says the parse is consumed by nobody.
+  `config.example.yaml:1079` and `docs/spec.md` §4, and §13.1 says the parse of the three
+  contract-shaping keys is consumed by nobody.
   Continuing to grow a privileged assembly beside a published declarative one is exactly the
   documented-but-unreachable class (§9.3) that this repository treats as a defect — and L4 is the
   precedent for how it is handled: register it, or fix it.
