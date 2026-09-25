@@ -21,6 +21,9 @@ you.
   truth for every price number, and each entry carries a `source` URL plus capture date.
   The served [`router setup`](#your-first-configuration) does the copy and asks you the handful of
   questions that are about your own deployment, leaving everything it cannot know alone.
+  A roster may also live in **a file of its own**, which the config names — a contract
+  ([`docs/spec.md` §4.14](../docs/spec.md)) whose landing, and whose shipped example, come with the round that
+  splits `config.example.yaml`; today the shipped example carries the roster inline, and both shapes are legal.
 - **Secrets stay in the environment**: the config references environment variable names
   only; API keys are never written into YAML. That covers the inbound token too: the key
   `server.auth_token_env` names a variable, and its value is never in the file
@@ -104,6 +107,18 @@ A few things worth knowing before you run it:
   [Operations](operations.md#backup) assumes. To keep your traces somewhere else — a directory you already back
   up, or a drive that is not your dotfiles — write an **absolute** `trace.dir` in the `paths` section: a
   leading `~` is not expanded, so spell the path out in full.
+- **Where the roster lives — a contract, not yet served.** The `providers:` block (its prices, its `source`
+  citations, its key-variable names) may sit **in the config file** or in a file of its own that the config
+  **names** with `providers_file:`. Exactly one of the two keys is written: a file that carries both, or
+  neither, is a load refusal that names both keys — an empty roster (`providers: []`) is a decision you write,
+  never a default the process assumes. The roster is **named, never searched**: there is no default location and
+  no `providers.yaml` picked up because it happens to sit beside the config, and a relative value resolves the
+  way every other path in the file does, against the directory the config file sits in
+  ([`docs/spec.md` §4.14](../docs/spec.md)). Two consequences for your own habits: the roster is part of "the
+  config" when you back it up, and `router setup providers` edits whichever of the two files actually holds the
+  entry ([Operations](operations.md#backup)). The shipped `config.example.yaml` still carries the roster inline,
+  and the split — the example, a `providers.example.yaml`, and the wizard's `providers` section — lands together
+  in one change; until then, a config that writes its roster inline behaves exactly as it does today.
 
 ### Keys: export them, never write them
 

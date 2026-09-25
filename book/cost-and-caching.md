@@ -4,8 +4,9 @@ Status: partly written for v0.1 — the plan-first section, the reporting notes 
 today" section are written; the bullet list below is still an outline. This chapter explains the levers
 and how to verify them, and it is careful about which lever exists: **cache fidelity and plan-first
 routing are served; payload compression is not** (ADR-019, DESIGN §12.12). It does **not** contain price
-numbers or type sketches: prices live in `config.example.yaml` (each entry with its `source` URL and
-capture date), the accounting definitions live in `docs/spec.md` §7.
+numbers or type sketches: prices live in the **roster** — `config.example.yaml`'s `providers:` block today, and
+a file the config names once the roster split lands ([`docs/spec.md` §4](../docs/spec.md), §4.14) — each
+entry with its `source` URL and capture date; the accounting definitions live in [`docs/spec.md` §7](../docs/spec.md).
 
 router's cost model is built on one measured observation: on a real agent session the
 prefix cache is fast and near-total, so the first-order lever is **keeping the prefix
@@ -140,6 +141,26 @@ input, a band priced at zero, a multiplier written inside a band) and the bounda
 from, are in [`config.example.yaml`](../config.example.yaml). One limitation worth knowing: if a page prices
 its bands in a unit that cannot be compared with your prompt's token count, the entry stays **flat** rather
 than guessing — a flat price you can check beats a band the router inferred.
+
+### Where the price table and its citations live
+
+The rule is that a price lives in the **roster** — the `providers:` block — and the citation lives beside it:
+each model's price carries the `source` URL and capture date of the page it was transcribed from, and those
+comments are provenance a reader must treat as part of the file, not decoration
+([`docs/spec.md` §4.0](../docs/spec.md)). What is a contract with a second shape, and what is shipped, is worth
+being precise about:
+
+- **Today (shipped).** The roster is the `providers:` block of your config file — `config.example.yaml` is the
+  shipped copy of it, and it holds every price number in this project.
+- **The split (planned, not shipped).** The roster may be a **file of its own**, named by the config with
+  `providers_file:`; exactly one of `providers:` and `providers_file:` is written, and the roster file carries
+  the same block, comments and all ([`docs/spec.md` §4.14](../docs/spec.md)). When it lands, the shipped example
+  splits with it: the server's own settings in `config.example.yaml`, the roster in a `providers.example.yaml`
+  of its own, and the price table you edit becomes that roster file.
+
+Either way the money is unchanged: the same prices, the same per-model citations, the same refusals at load,
+and this chapter still carries no numbers — the figures and their sources are in the roster, which is one file
+today and one file after the split, never two copies at once.
 
 ## Plan-first routing: the subscription first, the metered account as the spill
 
@@ -305,8 +326,10 @@ numbers are shapes, not savings.
 
 ## Authoritative sources
 
-- [`config.example.yaml`](../config.example.yaml) — the price table and the only place
-  price numbers exist, each with `source`.
+- [`config.example.yaml`](../config.example.yaml) — the shipped roster: the price table and the only place
+  price numbers exist, each with `source`. Once the roster split lands, that table is a `providers.example.yaml`
+  of its own and the config names the roster instead ([`docs/spec.md` §4.14](../docs/spec.md)); the rule — one
+  roster, one shipped copy — does not change.
 - [`docs/spec.md` §4.0](../docs/spec.md) — the price convention (why this document holds
   no numbers, how peak windows are encoded as a multiplier).
 - [`docs/spec.md` §4.10](../docs/spec.md) — banded pricing: the shape a banded entry takes,
