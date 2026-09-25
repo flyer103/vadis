@@ -147,7 +147,9 @@ session:  { key_sources: ["prompt_cache_key", "header:session-id", "header:threa
 cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
 trace:    { dir: "./state/traces", rollover: hourly }
 
-providers:
+providers:                             # §4.14: the roster, written inline here. Exactly one of this key
+                                       #   and `providers_file` (below) is written — both, or neither,
+                                       #   is a load refusal naming both keys
   - name: deepseek
     region: intl                       # cn | intl (absent ⇒ intl, §4.8): the regional deployment this entry's
                                        #   endpoint and key belong to. Display/audit only — it routes nothing
@@ -242,6 +244,13 @@ providers:
         #       the flat shape (§4.10): one price for every input length
         source: "<the CN region's official pricing page> @<fetch date>"
 
+# `providers_file: ./providers.yaml`     # §4.14: … **or** the roster is its own file, named here — the
+                                         #   same `providers:` block, byte for byte. The value is resolved
+                                         #   by §4.1's rule (absolute wins, else against the config file's
+                                         #   own directory; `~` is not expanded), there is no default
+                                         #   location and no discovery (§4.12 gains no candidate). A file
+                                         #   whose top-level key is not `providers:` is refused
+
 aliases:  { coding-fast: deepseek/deepseek-v4-pro }
 
 plugins:
@@ -287,10 +296,25 @@ route or an alias (§3), and router substitutes the resolved id. Pasting a bare 
 therefore **not** a shortcut — the inbound grammar has no bare-model form, so it resolves to nothing and
 the client gets `404 unknown_model`.
 
+**The roster is one block, and exactly one of two keys names it.** `providers:` (inline, the block above)
+and `providers_file:` (§4.14) are **mutually exclusive**: a root file that writes both is refused, and one
+that writes neither is refused too — an empty roster is a decision (`providers: []`), never a default.
+This is not a merge and not a precedence rule: there is still exactly **one** place a given key can be
+written in any one effective config, and the *refusal* is what makes that boundary checkable. The block
+itself is identical in either place, so the roster file is not a second schema and not a second parser.
+
+*What is shipped today, and what is contract:* the shipped `config.example.yaml` still carries the roster
+**inline**, and its own `# Usage:` line (`cp config.example.yaml config.yaml`) is therefore still the
+complete instruction — the split of that example, together with the wizard's embedded roster template and
+the section table's target-file column, is **planned and not yet shipped** (it lands as one change,
+DESIGN §12.14). The two-file shape is exercised before that by the round's own fixtures, not by the
+example; §4.14 is the contract for it either way.
+
 ### 4.0 Price convention (preventing two copies from drifting)
 
 **This file copies no price figure** — the single source of truth for price figures is each model entry
-in `config.example.yaml`, and each of them must carry `source` (official pricing page URL + fetch date).
+**in the roster** (`config.example.yaml`'s `providers:` block today; its own file once the split of §4.14
+lands), and each of them must carry `source` (official pricing page URL + fetch date).
 This file defines only the schema and the convention:
 
 - The four price tiers are **base prices**; the periods matched by `peak.windows` are **multiplied** by
@@ -805,7 +829,8 @@ path composition: the value is used verbatim — nothing is appended and nothing
 - **A value must be an absolute `http(s)` URL containing no whitespace**; anything else is a load error
   naming the path and the value found.
 - **Why the entry, and not the model or the tier.** The endpoint belongs to the **account**, exactly as
-  `api_key_env`, `account` and `currency` do (§4.6, §4.8): every metered vendor in `config.example.yaml`
+  `api_key_env`, `account` and `currency` do (§4.6, §4.8): every metered vendor in the shipped roster
+  (`config.example.yaml`'s `providers:` block today; its own file once §4.14's split lands)
   serves its OpenAI form and its Anthropic form at *different* bases (re-read 2026-09-21), so the fact
   cannot live on a field that does not name a wire.
 - **The router does not verify that a URL is the vendor's URL.** A wrong-yet-absolute URL is a
@@ -984,7 +1009,7 @@ template (the shipped example, §4) into **your** config, with the answers you g
 |---|---|---|
 | `router setup [<section>]` | the guided wizard over one section, or over all of them when the argument is absent (or `all`) | hermes-agent's per-section granularity: someone who wants to change one thing is not dragged through the other six (the comparison and its sources are the survey DESIGN §12.14 names) |
 | `--config <path>` | the file to write; when it is absent the file is resolved by **§4.12's discovery order** (explicit path > the XDG location > `./config.yaml` > the XDG location, created). The absolute path written is **printed**, with the rule that chose it | one rule for the file the gateway reads and the file this command writes: two rules is how "setup wrote it and serve reads something else" begins. The flag keeps the name `serve` / `stats` use; a card proposed `--out` and it is declined — the path is the **same file**, and two names for one path is how a CLI starts contradicting itself |
-| `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary** | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes |
+| `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary** (and, once the example splits by §4.14, the embedded **roster** template for the roster target below) | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes |
 | `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
 | `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
 | `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
@@ -1005,15 +1030,40 @@ ran the command — the opposite of "the file is the single source of truth" (§
 **Sections and the keys they may write.** Seven sections. Each is a group of keys a user answers in one sitting;
 where a group coincides with a file block it takes that block's name.
 
-| Section | Keys it may write | Kind | Default source |
-|---|---|---|---|
-| `server` | `server.addr`, `server.upstream_attempt_timeout`, `server.request_timeout` | value | the file's current value, else the template's |
-| `auth` | `server.auth_token_env` — the **variable name** only, plus whether the key is enabled at all | value / enabled | the file's state (the template ships it commented out) |
-| `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's |
-| `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same |
-| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same |
-| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_monthly_cap_usd` | value / enabled | same |
-| `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same |
+| Section | Keys it may write | Kind | Default source | Target file |
+|---|---|---|---|---|
+| `server` | `server.addr`, `server.upstream_attempt_timeout`, `server.request_timeout` | value | the file's current value, else the template's | the root config file |
+| `auth` | `server.auth_token_env` — the **variable name** only, plus whether the key is enabled at all | value / enabled | the file's state (the template ships it commented out) | the root config file |
+| `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's | the root config file |
+| `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same | the root config file |
+| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same | the **roster file** when the root uses `providers_file:` (§4.14) — the root otherwise |
+| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_monthly_cap_usd` | value / enabled | same | the root config file |
+| `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same | the root config file |
+
+**The target file, and why exactly one section has two of them.** The command writes a key **in the file
+that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
+§4.12 finds. `providers` is the exception after §4.14: when the root names a roster, the provider entry (and
+therefore its `api_key_env`) lives in the roster file, and the edit lands **there**; when the root carries
+the roster inline, it lands in the root, exactly as it does today. Nothing else about the section changes:
+the same key, the same question, the same refusal when the anchor does not resolve.
+
+Two consequences of the target column, both part of this contract:
+
+- **The candidate is the pair.** `--check` / `--print` and the write path load and validate the **root and
+  the roster together** (`providers_file` is resolved first, by §4.1's rule, because it decides which file
+  the `providers` anchors are resolved against). A run whose plan edits both files validates the candidate
+  **pair** before either file lands, and a failure lands neither — G4's rule ("any refusal ⇒ the target is
+  byte-identical to what it was") read for two targets rather than for one.
+- **`--from <path> --force` replaces the file it starts from.** For the `providers` section under the split
+  form that is how a roster is replaced **as a unit** — the operator hands the command a whole file they
+  wrote, no anchor is created, no position is chosen and no style is reproduced (ADR-037 D9; §4.14). It is
+  a replacement, **not** an insertion: the wizard still cannot add a provider entry to a roster, and the
+  section still says so (DESIGN §12.9's Q21).
+
+*Not yet shipped, and stated so here:* the target-file column describes the split shape, which is a contract
+(§4.14) whose landing — together with the second embedded template and the shipped example's own split —
+is one change (DESIGN §12.14). While the root carries its roster inline, that column reads "the root config
+file" for `providers` too, and every sentence above collapses to today's behaviour.
 
 What is deliberately **not** a section:
 
@@ -1177,6 +1227,15 @@ applies wins.
 - **This rule decides *which file* is read, never what the file says.** The listen address, the plugin set and
   the roster still come only from the file (CONF-25), and the resolution lives in `router-cli`'s argument layer:
   the `serve` / `stats` entry points keep taking a resolved path, so the existing rigs drive them unchanged.
+- **The table below gains no row for the roster, and that is the amendment §4.14 requires.** The four
+  candidates are ways of *finding the config file*; the roster is **named** by a key inside the file they find
+  (§4.14), so it is a reference and not a candidate. "Exactly one file is read" is
+  true of the root, and — from the split on — the process reads the roster the root *names*, which is the
+  one place in this section where "one file" must be read as "one **root**, found by one order, plus at
+  most one roster it names": no merge, no precedence, no second search. The shipped example's own `# Usage:`
+  line (§4's usage note) follows the same split: `cp config.example.yaml config.yaml` is the complete
+  instruction while the example carries the roster inline (today), and becomes the pair's copy in the change
+  that splits the example (§4.14's *not yet shipped* note; DESIGN §12.14).
 - **Why the XDG location is the default *write* site**: it is outside the repository — a config there cannot be
   committed by accident nor removed by a `git clean` — it is the convention the user's other tools already
   agree on, and it makes the file `--config`-free for every later command.
@@ -1184,7 +1243,8 @@ applies wins.
   README) is candidate 3, and it is what keeps a repository-local development config working.
 
 **What the file's own relative paths mean** (§4.1's rule, unchanged, restated where a user meets it): every
-relative path in the file — `trace.dir`, every `plugins[*].config.rules_file`, and the fixed `state/router.db` —
+relative path in the file — `trace.dir`, `providers_file` (§4.14), every
+`plugins[*].config.rules_file`, and the fixed `state/router.db` —
 resolves against **the directory containing the config file**, never the CWD; an absolute value wins
 (CONF-25 asserts both halves). So a config at the XDG location keeps its traces and its store beside itself,
 under `~/.config/router/`. That is deliberate — one anchor, and one backup story: the config and its state
@@ -1194,10 +1254,15 @@ written). Moving the *store* is not a second resolution rule: it is the additive
 anticipates, registered as **GAP-Q22** (DESIGN §12.9).
 
 **What this is not: a configuration layer.** There is no merge across locations, no per-project override, no
-remote or managed file. Exactly one file is read, and the four candidates are ways of *finding* it, never
-sources that combine. The layered model (opencode's eight layers, codex's project/`--profile`/managed stack) is
+remote or managed file. Exactly one file is **discovered** — and, from the split on, at most one more is
+**named** by the file that was found (§4.14) — while the four candidates are ways of *finding* the discovered
+file, never sources that combine. Nothing here reads files of equal standing and adjudicates between them: a
+reference is not a layer, and there is no precedence order to get wrong. The layered model (opencode's eight
+layers, codex's project/`--profile`/managed stack) is
 the alternative ADR-025 records and rejects for v0.1, with the reason each layer would need — and with what it
-would cost the "one file, one template, one backup" story this section's second rule depends on.
+would cost the "one file, one template, one backup" story this section's second rule depends on. That story
+becomes "the root and the roster it names, plus its state" (§4.14; book/operations.md) — still a rule, still
+one anchor, and not a search.
 
 ### 4.13 `server.max_body_bytes` (the inbound request-body limit)
 
@@ -1268,6 +1333,77 @@ says nothing about how many requests a client may make (§8's refusal vocabulary
 clause adds no counter, no window and no per-client state). A rate limit is a second admission rule with its
 own contract, and this clause does not create it.
 
+### 4.14 `providers_file` (the roster as its own file)
+
+**One key, no default, no discovery.** A root config may carry `providers_file: <path>` **instead of** its
+inline `providers:` block — exactly one of the two is written (§4's rule above; both, or neither, is a load
+refusal). The value is a **required** path, resolved by §4.1's existing in-file rule, unchanged:
+
+| Value | Resolves to |
+|---|---|
+| an absolute path | itself (lexically normalized) |
+| anything else | `<the directory containing this config file>/<value>` — **never** the CWD |
+| a leading `~` | **not expanded** — it is a literal path component, exactly as `trace.dir` and `rules_file` treat it |
+
+There is **no** default location and **no** discovery: `<config dir>/providers.yaml` is not a candidate,
+and §4.12's four-candidate table gains **no** row. The roster is *named* by the file that is read, never
+*found* — a typo'd reference names itself in the refusal, whereas a hidden default would name nothing
+(the stance §12.5's defaults row takes from the other side: only the three defaults §4 states explicitly
+are defaults).
+
+**What the roster file may contain.** Exactly **one** top-level key — `providers:` — carrying the same
+block the inline form carries, under the same unknown-key strictness and the same per-entry rules (§4.8,
+§4.9, §4.10). It is **not** a config file: it has no `server`, `session`, `cache`, `trace`, `plugins`,
+`aliases`, `fallback` or `plan_policy` — every one of those is a key of the **root**, and a roster file
+that carries one is refused by the same rule that would refuse it inline. A file whose top-level key is
+not `providers:` — a `server:` block, a bare sequence, an empty document — is **refused**, and so is an
+entry that breaks an existing per-entry rule; in both cases the message names the **roster's own path**.
+
+**The refusals, and the key each one names.** Five shapes. The exact wording of each message belongs to
+the implementation; the shapes and the keys below are this contract.
+
+| # | Shape | Refused by a message naming |
+|---|---|---|
+| 1 | **both** `providers:` and `providers_file:` written in the root | **both keys**, and the root path |
+| 2 | **neither** written (an empty roster is a decision: `providers: []`) | **both keys**, and the root path |
+| 3 | `providers_file` naming a path that cannot be read — missing, unreadable, not UTF-8 | **`providers_file`**, the value as written, and its **resolved** path |
+| 4 | a roster file that is not the roster block — top-level key not `providers:`, a second top-level key, an entry breaking a per-entry rule | the **roster's resolved path**, and the offending key or entry |
+| 5 | a root key that references the roster and does not resolve there: `aliases.*`, `fallback[i]`, `plan_policy.primary` / `.overflow`, `quota.models` | the key path, the value found, **and the roster file** the reference failed to resolve in |
+
+**What does not change.** `RouterConfig::providers` stays **the** representation the serving path reads;
+the join of the root with its roster happens **once, at load**, and nothing on a request path learns that
+a second file exists (no second resolution rule, no second accessor, no roster service key). Every
+cross-key rule — `aliases`, `fallback`, `plan_policy`, `quota` — is still checked in one pass, in the
+existing order, by the existing validator.
+
+**The roster is part of "the config" when you back it up.** Where the split form is used the config is a
+**pair**: the root and the roster must travel together, because restoring one without the other refuses to
+start (shape 3, naming `providers_file`). A backup that copies only `config.yaml` is therefore incomplete
+— and the process says so at startup rather than serving without a roster. The state store remains the
+third file, resolved against the config file's own directory as §4.1 and §4.12 already say
+(book/operations.md).
+
+**The identity of the effective configuration.** Which configuration a process is serving is identified by
+a **byte digest** of the two files, not by a canonical form of their parsed values:
+
+```
+root_sha16    = the first 16 hex chars of sha256(the root file's bytes)
+roster_sha16  = the first 16 hex chars of sha256(the roster file's bytes); the empty string when the roster is inline
+config_digest = the first 16 hex chars of sha256(root_sha16 + ":" + roster_sha16)
+```
+
+`sha16` is §6's one hash convention (the same one the prefix block hash uses), so an outsider can recompute
+the value from the two files alone — `printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16`
+— without parsing anything. It is reported by `GET /health` (§9.1), written into the `config.applied`
+event at startup, and carried by every trace record as `config_digest` (§6). A comment edit moves it, and
+that is deliberate: the roster's comments are where the price citations live (§4.0). It is **attribution,
+never a score** — it is not a config key, it enters no gate, and no report total is derived from it.
+
+**Not yet shipped.** This section is the contract: `providers_file` is parsed once the change that lands
+it is in the tree, and until then a root that writes the key is refused as an unknown field by the same
+strictness that makes this file's field set a contract (§4's schema block is the list). Nothing in §4.14
+changes a single byte of the inline form, which stays legal, unchanged and loadable.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -1298,6 +1434,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 
 | Field group | Contents |
 |---|---|
+| config | `config_digest` — a **top-level** field beside `schema_version`, not a nested group (the byte digest of the root file and the roster, §4.14; see below) |
 | identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
 | protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
 | decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
@@ -1413,6 +1550,33 @@ upstream is `result.status`'s answer (a refusal after the chain ran is a differe
 it). A step whose delta cannot be stated is not admissible as a step: an unaccounted content edit is the
 exact failure the mode exists to make impossible.
 
+**`config_digest` identifies the configuration that priced the record, and `schema_version` does not move
+for it.** The value is a **byte digest** of the two files the effective config came from (§4.14):
+
+```
+root_sha16    = the first 16 hex chars of sha256(the root file's bytes)
+roster_sha16  = the first 16 hex chars of sha256(the roster file's bytes); the empty string when the roster is inline
+config_digest = the first 16 hex chars of sha256(root_sha16 + ":" + roster_sha16)
+```
+
+`sha16` is this section's own convention (the prefix block hash is its other user). The value is recomputable
+from the two files by one shell line — `printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16`
+— with no parser, no `Serialize` and no canonical form of the parsed document anywhere in the path.
+
+- **It is an additive field, which is why the version stays `2`.** Every record this build writes carries it;
+  a record **without** it was written before the field existed, and a reader must take that as \"the
+  configuration is not recorded for this request\" — never as an empty digest. No existing field changes
+  meaning, and none changes *how it is read*, which is the distinction that moved the format to 2
+  (`cost.currency`: a consumer that ignores it sums a CNY amount into a USD one). An added key a reader can
+  ignore is exactly the case DESIGN §12.6's additive rule already covers.
+- **Attribution, not a score.** The digest identifies the **inputs**, not a behaviour: identical bytes are one
+  identity (the point), a one-character comment change is two. It is not a config key, it feeds no gate and
+  no report total, and no saving may be attributed to a config revision without the same-run baseline the
+  gates already require (§7; AGENTS constraint 4). A comment edit moving it is the honest reading here —
+  the roster's comments carry the price provenance (§4.0).
+- **One value, three surfaces.** The trace field here; `/health`'s config member (§9.1); and the
+  `config.applied` event written once at startup, beside both absolute paths and both file digests.
+
 **A request refused at the boundary** — by §4.7's auth guard, or by §4.13's body bound — is in a class of its
 own: it never entered the pipeline, so its record carries what is observable at the boundary and invents
 nothing. The table below is that class, instantiated for the guard's `401`; §4.13's `413` is the same class
@@ -1420,6 +1584,7 @@ field for field, with exactly three differences, named under the table.
 
 | Field | Value | Why |
 |---|---|---|
+| `config_digest` | the identity of the **loaded** configuration — the same value every record of this process carries | it is a fact of the config, not of the request: the boundary runs before any decision but *after* the config was loaded, and a record with no configuration behind it would have no creator. Written by the same writer, on this class as on every other |
 | `identity.request_id` | allocated, from the same counter as every request | §8's error body and `X-Router-Request-Id` carry it |
 | `identity.event_id` | **`0`** | no `request.received` row exists: the guard runs before §4.5's row 1, which is *"once per request that entered the pipeline"*. `0` is never a real id (`events.event_id` starts at 1), and it is the same sentinel the parse / route / capability rejections already write |
 | `identity.session` / `thread_id` / `turn_index` | `null` / `null` / `0` | session resolution reads the body and the sticky projection; a refused request has neither, and its body is **never parsed** |
@@ -1712,9 +1877,41 @@ printed, from which record, and under which §7 label — it defines no new metr
 
 ### 9.1 `GET /health`'s `auth` and `plan` members
 
-`/health` reports what this process loaded (§4.5, `store`). Two of its members carry what an operator
-reasons about most: **`auth`** (always present, §4.7) and **`plan`** (present when the loaded config
-declares a `plan_policy`, §4.6).
+`/health` reports what this process loaded (§4.5, `store`). The members below carry what an operator
+reasons about most: **`config`** (the configuration that was loaded — §4.14; **planned, not served yet**, see
+its note below), **`auth`** (always present, §4.7) and **`plan`** (present when the loaded config declares a
+`plan_policy`, §4.6).
+
+**`config`** — which configuration this process loaded. It carries the two files and the digests of §4.14, so
+"which revision is this process serving?" is answered by the surface rather than by the process's argv:
+
+```json
+"config": {
+  "root_path": "/Users/me/.config/router/config.yaml",
+  "roster_path": "/Users/me/.config/router/providers.yaml",
+  "root_sha16": "<16 hex chars>",
+  "roster_sha16": "<16 hex chars>",
+  "config_digest": "<16 hex chars>"
+}
+```
+
+| Key | Type | Semantics |
+|---|---|---|
+| `root_path` | string | the absolute path of the config file this process read — the one §4.12's order selected, resolved the way `trace_dir` and `state_db` already are |
+| `roster_path` | string \| null | the **resolved** absolute path of the roster file when the root names one (§4.14); **`null` when the roster is inline** |
+| `root_sha16` | string | the first 16 hex chars of `sha256` over the root file's bytes |
+| `roster_sha16` | string | the same over the roster file's bytes; **the empty string when the roster is inline** — the value §4.14's recipe hashes, so an outsider recomputing the digest from the two files and one reading this member compute the same bytes |
+| `config_digest` | string | `sha16(root_sha16 + ":" + roster_sha16)` — the same value the trace carries (§6) and the `config.applied` event is written with |
+
+Two spellings of one fact, stated so the member is not read ambiguously: `roster_path: null` means **there is
+no second file**, and the empty string is what that same situation contributes to the digest — a path that
+does not exist is `null`, and a hash input that is not there is the empty string, each in its own type. The
+member is **not** a request fact: it is part of "/health reports what was loaded", it states what the process
+read at startup, and it changes only when the config does.
+
+*Not yet shipped, and stated so here:* the roster half of this member is the contract of §4.14 and lands with
+the split; `root_path`, `root_sha16` and `config_digest` land with the identity. Until then `/health` reports
+none of the five keys, and nothing above may be read as a claim about the running binary.
 
 **`auth`** — whether the process demands a token, and which environment variable holds it. The token
 value itself is a secret and is never here:
