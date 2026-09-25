@@ -66,8 +66,9 @@ data-plane change when it lands.
 **Status: the contract is frozen; the implementation does not exist.** **ADR-036** adopts this section,
 §12.2's signatures and §13.6's boundary as the contract (**D1–D8**); **R41-2** is the round that would
 land them. `crates/router-runtime/src/lib.rs:1-4` is still four lines of stub, §13.1's row for **P9**
-still reads **`contract-only`**, and the `inject` / `isolate` / `intercept` keys parse and validate and
-are consumed by nobody (`router-core/src/config.rs:816-840`, `:1232-1261`). Read this section as the
+still reads **`contract-only`**, and the `inject` / `isolate` / `intercept` keys are parsed and
+validated — and **nothing acts on them** (the plugin validation loop, `router-core/src/config.rs:1782-1803`), while
+`disabled` is honoured at start-up (spec §4.4; `router-cli/src/lib.rs:270`). Read this section as the
 specification of a component that has not been built, not as a description of the binary —
 `book/plugins.md` carries the same sentence for a user.
 

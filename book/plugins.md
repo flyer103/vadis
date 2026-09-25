@@ -14,7 +14,8 @@ fashion.
 
 - **Tier A — builtins**: compiled into the product, declared in your config, and given the runtime's
   lifecycle hooks (load; reload when their config changes; unload with a full rollback of whatever
-  they installed).
+  they installed). *(The hooks are specified, not built: today only the start-up load exists — see
+  "What is specified but not built yet".)*
 - **Tier B — out-of-process**: a separate process reached over a local socket, so a half-finished or
   experimental plugin cannot destabilise the gateway. *(Specified, not built — see below.)*
 
@@ -39,10 +40,13 @@ fashion.
 Named here so that no reader has to discover it from a config file that accepts keys nothing acts on:
 
 - **The plugin runtime itself.** The `plugins:` list is the assembly point it will become; today the
-  wiring lives inside the gateway program. `inject`, `isolate`, `intercept` and `disabled` are accepted
+  wiring lives inside the gateway program. `inject`, `isolate` and `intercept` are accepted
   and validated in your config and **nothing acts on them yet** — one plugin's config change reloading
   it on its own, realms for side-by-side comparison, sampling/interception, and unloading a plugin with
   its effects rolled back are all specified (`ADR-036`, `docs/spec.md` §4.3) and not implemented.
+  **`disabled` is the exception and already works**: a disabled entry is not loaded at start-up (its
+  rule set is off) and `/health` shows it as disabled; what is not implemented is unloading a plugin
+  that is already running.
 - **Tier B.** A plugin in its own process, over a local socket, so that its crash cannot take the
   gateway down.
 - **A retrieval channel for `tee`.** A rule may append a fingerprint line naming what it dropped, but

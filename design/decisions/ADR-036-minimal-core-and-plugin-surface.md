@@ -26,8 +26,9 @@
 - **What this ADR is, and what it is not.** It freezes the **contract**. It writes no code: P9 is
   `contract-only` in §13.1's register (`crates/router-runtime/src/lib.rs:1-4` and
   `crates/router-plugin-sdk/src/lib.rs:1-4` are stubs, verbatim: *"Not yet implemented"*), and
-  `inject` / `isolate` / `intercept` parse (`router-core/src/config.rs:816-840`), validate
-  (`:1232-1261`) and are **consumed by nobody**. Every statement below about the repository is
+  `inject` / `isolate` / `intercept` are parsed (the `PluginCfg` fields, `router-core/src/config.rs`)
+  and validated (the plugin validation loop, `config.rs:1782-1803`) and **nothing acts on them**;
+  `disabled` is the exception — it is honoured at start-up (D6.3). Every statement below about the repository is
   cited to a §13.1 row, a leak-register row, or a `CONFn` id; every statement about intent names the
   round that would land it.
 
@@ -69,8 +70,8 @@ already in the trace contract: `decision.plugin_chain[]` and `decision.decision_
 fields, and §13.4's decision-provider seam (DP-1) already specifies landing an advisor's provenance
 in *fields that already exist*, with *"no dedicated trace field … and no CONF id allocated here"*.
 The four service keys (`CACHE_LEDGER`, `SESSION_TABLE`, `QUOTA_STORE`, `TRACE_SINK`) and the four
-plugin-facing traits (`Transform` §12.3:356/:2692, `Selector` §12.3:371, `Guard` §12.3:372, `Observer`
-§12.3:374) are sketched but not implemented — §13.2's module map says so for `router-runtime/` and
+plugin-facing traits — `Transform` (§12.3's sketch and §12.12's landing), `Selector`, `Guard`,
+`Observer` (§12.3) — are sketched but not implemented — §13.2's module map says so for `router-runtime/` and
 `router-plugin-sdk/`, and §13.3's own *not-a-leak* list already declares the shared helpers between
 the two forwarding paths intentional, which is why L2a/L2b are the only resolution sites in play.
 
@@ -106,10 +107,10 @@ absence from a plugin is forced:
 
 | order | surface | may propose | what blocks it today |
 |---|---|---|---|
-| 1 | **`Observer`** (§12.3:374) | nothing — it receives `&DecisionRecord` and `&RouterError` and returns **no value that reaches the wire** | nothing. This is why R41-4's moat observer (inter-chunk jitter + chunk fidelity) is the first plugin: it proves the surface with a measurement that matters and leaves the byte path untouched |
-| 2 | **`Transform`** (§12.3:356, §12.12, ADR-019) | a **path-addressed edit plan**, applied as value spans over the client's bytes — *"the parsed view is never what reaches the wire"* | nothing structural: P6's tier-1 engine, mode channel and ledger are `wired` (§13.1 P6, R9-2a/2b); `CONF-16` (R41-0) is its cache-regression case. The remaining absence is the paired `verified` measurement (L5), so every ledger figure stays `inferred` |
-| 3 | **`Guard`** (§12.3:372) | `Pass` / `Reject{code}` / `Downgrade(route)` — a pure predicate over (route, projections, stable config, one clock read) | **L6**: the answer vocabulary is prose; a protocol over it would freeze `PlanMove` as the interface |
-| 4 | **`Selector`** (§12.3:371) | a `Decision` over the roster; never sees or produces bytes | **L4** (a human decision: define the `plugin` value or delete the slot) **and** **L2a/L2b** (one resolution implementation, not two) |
+| 1 | **`Observer`** (§12.3's trait sketch) | nothing — it receives `&DecisionRecord` and `&RouterError` and returns **no value that reaches the wire** | nothing. This is why R41-4's moat observer (inter-chunk jitter + chunk fidelity) is the first plugin: it proves the surface with a measurement that matters and leaves the byte path untouched |
+| 2 | **`Transform`** (§12.3's sketch, §12.12, ADR-019) | a **path-addressed edit plan**, applied as value spans over the client's bytes — *"the parsed view is never what reaches the wire"* | nothing structural: P6's tier-1 engine, mode channel and ledger are `wired` (§13.1 P6, R9-2a/2b); `CONF-16` (R41-0) is its cache-regression case. The remaining absence is the paired `verified` measurement (L5), so every ledger figure stays `inferred` |
+| 3 | **`Guard`** (§12.3's sketch) | `Pass` / `Reject{code}` / `Downgrade(route)` — a pure predicate over (route, projections, stable config, one clock read) | **L6**: the answer vocabulary is prose; a protocol over it would freeze `PlanMove` as the interface |
+| 4 | **`Selector`** (§12.3's sketch) | a `Decision` over the roster; never sees or produces bytes | **L4** (a human decision: define the `plugin` value or delete the slot) **and** **L2a/L2b** (one resolution implementation, not two) |
 | — | provider transport (`router-providers`) | receives a prepared `RawBody`, may add headers, **cannot rewrite the body** | — |
 | — | protocol codecs / mappers (`router-protocol`) | per-cell declaration, `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022's wire gate) | the owner's 〈暂时不做协议翻译〉, so the translation column stays empty and no document may imply a mapper exists |
 | — | price tables / tier config | nothing — **data, not code** (constraint 5: source URL + date in the config comment; ADR-021/§12.13) | — |
@@ -153,7 +154,7 @@ than adding to it:
   that entry; a `config` change → the plugin diffs it itself (§4's config-change semantics).
 - **Lifecycle**: `Loading → Active → Unloading → Removed`, `Failed(err)` carrying the error and
   **not affecting other fibers** (ADR-002's failure isolation).
-- **Unload order** (§12.2:336-341), asserted by a test, and the round that lands it is R41-2:
+- **Unload order** (§12.2's four-step paragraph), asserted by a test, and the round that lands it is R41-2:
   ① recursively move dependents into `Unloading` and wait → ② run this fiber's `Effect::undo` in
   reverse LIFO → ③ withdraw the service bindings → ④ `Removed`. After load → activate → unload the
   service table **and** the intercept table must be **deep-equal** to their pre-load state.
@@ -169,8 +170,12 @@ none of them moves early:
    *"aligned with Cordis semantics"*; the round adds a status line naming this ADR as the contract
    and R41-2 as the implementation. (The round's own plan of record had proposed relabelling §4 as
    *landed*; that is refused here for the §9.3 reason above.)
-3. **The `plugins:` keys are declared, parsed and validated — and consumed by nobody.** `docs/spec.md`
-   §4.3 and `book/plugins.md` say so in the same words, and `book/plugins.md` (45 lines today,
+3. **The three contract-shaping keys — `inject`, `isolate`, `intercept` — are declared, parsed and
+   validated, and nothing acts on them.** **`disabled` is not in that set**: it is honoured today, at
+   start-up (a disabled entry's rule set is not loaded — `router-cli/src/lib.rs:270` — and `/health`
+   reports the entry as disabled; spec §4.4), and what stays unimplemented is only its *designed
+   runtime* semantics (unload a live fiber and roll back its effects). `docs/spec.md` §4.3 and
+   `book/plugins.md` say this in the same words, and `book/plugins.md` (45 lines before this round,
    self-described *"outline only"*) is the user-facing half of this ADR so that the update precedes
    R41-2's code (AGENTS 8).
 4. **No saving figure of any kind may be reported from this surface**, and no comparative speed
@@ -187,7 +192,7 @@ Rust, tier-A plugins are **linked at compile time**, so:
 - there is **no module-level HMR**: a code change is a rebuild and a restart. What stays genuinely
   dynamic is **config-level coordination** (a keyed diff: weights, rule TOML, `disabled`) and
   **tier-B out-of-process** plugins over UDS (`router-plugin-sdk`, also `contract-only` today);
-- what we do get is the half that matters operationally: **declarative composition at boot**
+- the contract keeps the half that matters operationally (all of it **specified, none of it built** yet): **declarative composition at boot**
   (`plugins:` as the single assembly point, `inject` satisfied-or-waiting, realms for A/B,
   intercept for sample/timeout/shadow), **per-plugin rollback** (every registration carries its
   inverse, LIFO), **failure isolation**, and **dependency-ordered unload**;
