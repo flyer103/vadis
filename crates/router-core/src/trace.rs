@@ -34,6 +34,16 @@ pub struct DecisionRecord {
     pub schema_version: u16,
     /// RFC3339 UTC with millisecond precision, e.g. `2026-09-19T07:41:02.123Z`.
     pub ts: String,
+    /// The identity of the **effective configuration** that priced this
+    /// record (ADR-037 D6; spec §6, §4.14): the byte digest
+    /// `sha16(root_sha16 + ":" + roster_sha16)`, each half the first 16 hex
+    /// chars of SHA-256 over that file's own bytes, the roster half the
+    /// empty string when the roster is inline. Additive — no existing
+    /// field changes meaning, so `schema_version` stays 2; a record
+    /// **without** the key predates the field and must never be read as an
+    /// empty digest. Computed once by the loader, carried as an immutable
+    /// value; nothing behind a request opens, reads or hashes a file.
+    pub config_digest: String,
     pub identity: IdentityRec,
     pub protocol: ProtocolRec,
     pub decision: DecisionRec,
@@ -360,6 +370,18 @@ pub fn verified_savings_tokens(rec: &DecisionRecord) -> i64 {
 /// (spec §8).
 pub trait TraceWriter: Send + Sync {
     fn write(&self, rec: &DecisionRecord) -> Result<Option<String>, String>;
+
+    /// The identity of the configuration this writer's process loaded
+    /// (ADR-037 D6; spec §6 `config_digest`): every record a process
+    /// writes carries the one value, so the writer — the one sink every
+    /// record passes through — is the constructors' one source for it,
+    /// and a record and its write can never disagree about it. The
+    /// production writer carries the loader-computed digest; a writer
+    /// with no configuration behind it (tests, tools) returns the empty
+    /// string, and its records never land in a served trace.
+    fn config_digest(&self) -> &str {
+        ""
+    }
 }
 
 /// The no-op writer for tests and tools that run without a trace dir.
@@ -402,6 +424,7 @@ mod tests {
         let rec = DecisionRecord {
             schema_version: TRACE_SCHEMA_VERSION,
             ts: "2026-09-19T07:41:02.123Z".into(),
+            config_digest: "0123456789abcdef".into(),
             identity: IdentityRec {
                 request_id: "req-1".into(),
                 event_id: 7,
