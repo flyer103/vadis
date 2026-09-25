@@ -1009,7 +1009,7 @@ template (the shipped example, §4) into **your** config, with the answers you g
 |---|---|---|
 | `router setup [<section>]` | the guided wizard over one section, or over all of them when the argument is absent (or `all`) | hermes-agent's per-section granularity: someone who wants to change one thing is not dragged through the other six (the comparison and its sources are the survey DESIGN §12.14 names) |
 | `--config <path>` | the file to write; when it is absent the file is resolved by **§4.12's discovery order** (explicit path > the XDG location > `./config.yaml` > the XDG location, created). The absolute path written is **printed**, with the rule that chose it | one rule for the file the gateway reads and the file this command writes: two rules is how "setup wrote it and serve reads something else" begins. The flag keeps the name `serve` / `stats` use; a card proposed `--out` and it is declined — the path is the **same file**, and two names for one path is how a CLI starts contradicting itself |
-| `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary** (and, once the example splits by §4.14, the embedded **roster** template for the roster target below) | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes |
+| `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary**, plus the embedded **roster** template (`providers.example.yaml`) for the roster target below | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes. Since the example splits (§4.14), `--from` names the **root** template in every run **except** the roster swap of the `--force` row below: the `providers`-section run over an existing split root, where it names the replacement **roster** |
 | `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
 | `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
 | `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
@@ -1060,10 +1060,11 @@ Two consequences of the target column, both part of this contract:
   a replacement, **not** an insertion: the wizard still cannot add a provider entry to a roster, and the
   section still says so (DESIGN §12.9's Q21).
 
-*Not yet shipped, and stated so here:* the target-file column describes the split shape, which is a contract
-(§4.14) whose landing — together with the second embedded template and the shipped example's own split —
-is one change (DESIGN §12.14). While the root carries its roster inline, that column reads "the root config
-file" for `providers` too, and every sentence above collapses to today's behaviour.
+*Shipped since the example's split (§4.14):* the target-file column above is the behaviour — the shipped
+example is the pair (`config.example.yaml` naming `providers.example.yaml`), the wizard embeds **both**
+templates, and a fresh run writes both files. The inline root stays a legal shape: over an inline root the
+column collapses to "the root config file" for `providers` too, and every sentence above reads as the
+pre-split behaviour.
 
 What is deliberately **not** a section:
 

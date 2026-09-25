@@ -16,14 +16,15 @@ you.
 ## Outline
 
 - **Build** the workspace and run the test suite that guards the protocol contract.
-- **Configure**: copy `config.example.yaml` to `config.yaml` and edit the roster —
-  providers, models, prices, quotas, aliases. The example file is the single source of
+- **Configure**: copy `config.example.yaml` to `config.yaml`, keep `providers.example.yaml` beside it,
+  and edit the roster — providers, models, prices, quotas, aliases. The example pair is the single source of
   truth for every price number, and each entry carries a `source` URL plus capture date.
   The served [`router setup`](#your-first-configuration) does the copy and asks you the handful of
   questions that are about your own deployment, leaving everything it cannot know alone.
-  A roster may also live in **a file of its own**, which the config names — a contract
-  ([`docs/spec.md` §4.14](../docs/spec.md)) whose landing, and whose shipped example, come with the round that
-  splits `config.example.yaml`; today the shipped example carries the roster inline, and both shapes are legal.
+  The roster lives in **a file of its own**, which the config names with `providers_file:`
+  ([`docs/spec.md` §4.14](../docs/spec.md)) — the shipped example is split this way (the server's settings in
+  `config.example.yaml`, the roster in `providers.example.yaml`), and carrying the roster inline instead is
+  equally legal: exactly one of the two shapes is written.
 - **Secrets stay in the environment**: the config references environment variable names
   only; API keys are never written into YAML. That covers the inbound token too: the key
   `server.auth_token_env` names a variable, and its value is never in the file
@@ -71,7 +72,8 @@ router setup --non-interactive  # CI / containers: no questions, every answer at
 A few things worth knowing before you run it:
 
 - **The file comes from the shipped example.** Without `--from`, the starting point is the `config.example.yaml`
-  embedded in your binary — the one of its own commit. Where the result goes is described below; the absolute
+  embedded in your binary — the one of its own commit — together with the embedded `providers.example.yaml` it
+  names: a fresh run writes **both**. Where the result goes is described below; the absolute
   path is always printed. If the file already exists it is the starting point instead, so your own edits are
   what the questions start from.
 - **Your answers edit; they never regenerate.** The command replaces the value you answered on its own line and
@@ -107,18 +109,19 @@ A few things worth knowing before you run it:
   [Operations](operations.md#backup) assumes. To keep your traces somewhere else — a directory you already back
   up, or a drive that is not your dotfiles — write an **absolute** `trace.dir` in the `paths` section: a
   leading `~` is not expanded, so spell the path out in full.
-- **Where the roster lives — a contract, not yet served.** The `providers:` block (its prices, its `source`
-  citations, its key-variable names) may sit **in the config file** or in a file of its own that the config
-  **names** with `providers_file:`. Exactly one of the two keys is written: a file that carries both, or
-  neither, is a load refusal that names both keys — an empty roster (`providers: []`) is a decision you write,
-  never a default the process assumes. The roster is **named, never searched**: there is no default location and
-  no `providers.yaml` picked up because it happens to sit beside the config, and a relative value resolves the
-  way every other path in the file does, against the directory the config file sits in
-  ([`docs/spec.md` §4.14](../docs/spec.md)). Two consequences for your own habits: the roster is part of "the
-  config" when you back it up, and `router setup providers` edits whichever of the two files actually holds the
-  entry ([Operations](operations.md#backup)). The shipped `config.example.yaml` still carries the roster inline,
-  and the split — the example, a `providers.example.yaml`, and the wizard's `providers` section — lands together
-  in one change; until then, a config that writes its roster inline behaves exactly as it does today.
+- **Where the roster lives — its own file, named.** The `providers:` block (its prices, its `source`
+  citations, its key-variable names) sits in `providers.example.yaml`, which the config **names** with
+  `providers_file:` — and it may instead sit **in the config file** inline. Exactly one of the two keys is
+  written: a file that carries both, or neither, is a load refusal that names both keys — an empty roster
+  (`providers: []`) is a decision you write, never a default the process assumes. The roster is **named,
+  never searched**: there is no default location and no `providers.yaml` picked up because it happens to sit
+  beside the config, and a relative value resolves the way every other path in the file does, against the
+  directory the config file sits in ([`docs/spec.md` §4.14](../docs/spec.md)). Two consequences for your own
+  habits: the roster is part of "the config" when you back it up, and `router setup providers` edits
+  whichever of the two files actually holds the entry ([Operations](operations.md#backup)). To swap a roster
+  wholesale, hand the wizard a file you wrote: `router setup providers --from <your-roster.yaml> --force`
+  replaces the roster **as a unit** and touches no other byte — a replacement, not an insertion; the wizard
+  still cannot add a provider entry to a roster.
 
 ### Keys: export them, never write them
 
@@ -208,8 +211,9 @@ providers:
 
 - [`README.md`](../README.md) — quick start (the verified copy-paste path), CLI surface,
   endpoint table.
-- [`config.example.yaml`](../config.example.yaml) — the roster, the price schema and its
-  per-model `source` provenance.
+- [`config.example.yaml`](../config.example.yaml) and
+  [`providers.example.yaml`](../providers.example.yaml) — the shipped pair: the server's own settings in the
+  root, and the roster with the price schema and its per-model `source` provenance in the file it names.
 - [`docs/spec.md` §4](../docs/spec.md) — the config schema as a contract, §4.1 for the
   trace output parameters, §4.7 for the inbound auth key.
 - [`docs/spec.md` §5](../docs/spec.md) — the client-side prerequisite (also covered in
