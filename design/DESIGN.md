@@ -1294,7 +1294,7 @@ touched: the five cases are new files over a surface that did not exist, CONF-25
 and the loader's own messages are unchanged (the shared entry point `setup` reaches the parser through is a
 mechanical extraction of the two calls `load` already makes), and CONF-43's docs↔CLI relation is **kept** by the
 round's own chapter rather than by editing that case — its marker requirement is why every `router setup` mention
-in `book/` carries "planned" / "not served" until the command lands (§12.14). Nothing in this allocation touches
+in `book/` carried "planned" / "not served" until the command landed (§12.14). Nothing in this allocation touches
 a gate definition, the corpus or an **existing** assertion (AGENTS 9 / ADR-012).
 
 **Allocation of `CONF-80` (R27, R27-1's freeze — the binding's create-or-move arm and the TTL's unit:
@@ -3184,11 +3184,11 @@ strategy moves:
   no key: a root that carries the roster **inline** is not converted to `providers_file:` by `setup` — that
   edit would be an insertion into a file that never had the key, and it stays hand-work.
 
-All of this lands **together with the shipped example's split and the embedded roster template** — R43-4,
+All of this landed **together with the shipped example's split and the embedded roster template** — R43-4,
 the card that also gives the section table its *target file* column (`providers.example.yaml`, one roster and
-one shipped copy, §4.0's no-two-copies rule). While the shipped example is inline, the writer behaves exactly
-as it does today, which is what keeps this card's admission free of a behaviour claim (spec §4.14's *not yet
-shipped* note).
+one shipped copy, §4.0's no-two-copies rule). The shipped example is the split form at HEAD, so the writer
+over the pair is the served behaviour; over an inline root it behaves exactly as it did before R43, which is
+the shape that keeps the admission above free of a behaviour claim.
 
 **What this does not change.** §12.5's types and the parser (`setup` adds no key: `deny_unknown_fields` makes a
 wizard-only key an unservable file); `load()`'s messages and `ResolvedConfig`; the store (no event kind, no
@@ -3213,12 +3213,12 @@ unchanged.
   decision, and the zero-dependency path is a script.
 - **The docs↔CLI guard is a hand-off, not a footnote.** CONF-43 already asserts, live, that every `router
   <subcommand>` mention in `README.md` and `book/` either resolves in the parser or sits in a paragraph carrying
-  one of its five deferral markers. **This round's own chapter is written to keep that green while the command
-  does not exist** — every `router setup` mention carries "planned" / "not served" — and it was verified at this
+  one of its five deferral markers. **This round's own chapter was written to keep that green while the command
+  did not exist** — every `router setup` mention carried "planned" / "not served" — and it was verified at this
   round's tree (`cargo test -p router-conformance --test conf_43_cli_docs_consistency`: 1 passed). The
   implementing round therefore has **two** obligations beyond the code: add `router setup` to `README.md`'s CLI
   block (CONF-43's direction 2 requires every served subcommand to be mentioned in the docs), and retire the
-  deferral markers this chapter carries once the command is served — stale "planned" text on a served command
+  deferral markers this chapter carried until the command was served — stale "planned" text on a served command
   is not caught by the case (a mention of a served word never enters its whitelist), so it is a documentation
   debt the round must pay by hand.
 

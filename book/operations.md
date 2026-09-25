@@ -28,11 +28,10 @@ default (mode `0600`, and any directory it creates at `0700`), which is why the 
 after a first run: `--config` becomes unnecessary, not forbidden.
 
 The paths a config owns all resolve against **the config file's own directory**, never the directory you
-run from: the trace directory it names, a plugin's rule file, the state store, and — once the roster may be a
-file of its own — the roster the config names ([`docs/spec.md` §4.1](../docs/spec.md) and §4.14). A config in
-the XDG location therefore keeps its traces and its store beside itself, under `~/.config/router/` — so "back
-up the config and its state together" means copying that directory, plus the roster file when the config names
-one. To keep the traces somewhere else, write an **absolute**
+run from: the trace directory it names, a plugin's rule file, the state store, and the roster the config names
+([`docs/spec.md` §4.1](../docs/spec.md) and §4.14). A config in the XDG location therefore keeps its traces,
+its store and its roster beside itself, under `~/.config/router/` — so "back up the config and its state
+together" means copying that directory, roster included. To keep the traces somewhere else, write an **absolute**
 `trace.dir` (a leading `~` is not expanded), and see the startup table below for what a config that cannot be
 loaded does.
 
@@ -96,17 +95,15 @@ Back up the store **and** the traces, together, and treat both as operator data:
   `-shm` sidecar files** (copying only `router.db` while a WAL is pending loses the tail of
   the log). A SQLite-aware backup taken while stopped is equally fine.
 
-**What "the config" is, and why the count can be three files.** Today the config file and the roster are one
-file; the roster may become a file of its own, named by the config with `providers_file:`
-([`docs/spec.md` §4.14](../docs/spec.md) — a contract whose landing, together with the split example, is one
-change). From that shape on, copy **three** things as a set: the config file, **the roster it names**, and the
-state store above. The pair matters because restoring one without the other does not come up degraded — it does
-not come up: a config naming a roster that is not there is a startup refusal that names `providers_file` and
-the path it looked for, and a config file restored from before the split while the roster is gone is the same
-refusal. There is no default roster to fall back on, by design: a silently empty roster would look like a
-gateway serving nothing rather than a backup you did not finish. Until the split lands, the config file *is*
-the whole config and this paragraph's only obligation is the one above — copy the store and the traces
-together.
+**What "the config" is, and why the count can be three files.** The config file and the roster may be two
+files: the shipped example is that shape, and the roster is named by the config with `providers_file:`
+([`docs/spec.md` §4.14](../docs/spec.md)). Where the roster is named, copy **three** things as a set: the
+config file, **the roster it names**, and the state store above. The pair matters because restoring one without
+the other does not come up degraded — it does not come up: a config naming a roster that is not there is a
+startup refusal that names `providers_file` and the path it looked for. There is no default roster to fall back
+on, by design: a silently empty roster would look like a gateway serving nothing rather than a backup you did
+not finish. Where the roster is written **inline** in the config instead, the config file *is* the whole config
+and this paragraph's only obligation is the one above — copy the store and the traces together.
 
 Nobody else keeps a copy of that state: clients are stateless and resend their whole
 conversation every turn, so the gateway is the only place a request's lifecycle is recorded

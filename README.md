@@ -28,7 +28,7 @@ records every decision and every cent into a replayable trace.
 ## Quick Start
 
 ```bash
-cp config.example.yaml config.yaml     # edit the roster: provider / model / price / quota
+cp config.example.yaml config.yaml     # edit the roster: providers.example.yaml, named by this file
 set -a && source .env && set +a        # provider keys are read from env only, never written into yaml
 cargo run --locked -p router-cli -- serve --config config.yaml
 ```
@@ -249,15 +249,15 @@ router setup      [--non-interactive] [--config <path>] # guided config: copy th
 three find the file by one rule ([`docs/spec.md` §4.12](docs/spec.md)): the XDG location
 (`${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`), else `./config.yaml` — and when
 neither exists, `serve`/`stats` refuse and name `router setup`, which writes the XDG file
-(mode `0600`; any directory it creates `0700`). `setup` copies `config.example.yaml` verbatim
-and asks only about the keys that are yours, editing them by anchored single-line edits; see
-[the book](book/getting-started.md). A contract whose landing is planned, not shipped: the roster
-(`providers:`) may live in a file of its own that the config **names** with `providers_file:` — exactly one of
-the two keys is written, both written or neither is a load refusal, the roster is named rather than searched,
-and `setup providers` edits whichever of the two files holds the entry
-([`docs/spec.md` §4.14](docs/spec.md), [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)).
-The shipped example still carries the roster inline, and the split — the example, a `providers.example.yaml`
-of its own, and the wizard's `providers` section — lands as one change. `stats` reads the traces in the window and
+(mode `0600`; any directory it creates `0700`). `setup` writes the pair from the two templates embedded in the
+binary — `config.example.yaml` and the roster it names, `providers.example.yaml` — byte for byte, and asks only
+about the keys that are yours, editing them by anchored single-line edits; `setup --check` validates the pair
+without writing; see [the book](book/getting-started.md). The roster may live in a file of its own that the
+config **names** with `providers_file:` — exactly one of the two keys is written, both written or neither is a
+load refusal, the roster is named rather than searched, and `setup providers` edits whichever of the two files
+holds the entry — or it may stay **inline** as `providers:`, which is equally legal ([`docs/spec.md`
+§4.14](docs/spec.md), [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)).
+`stats` reads the traces in the window and
 prints the cost and cache report, the plan family's switches and their verified cost, and the requests
 whose outcome is unknown; every figure carries its `verified` / `inferred` label, `--window` is required
 (a saving that does not state its window cannot be checked), and `--json` prints the same report for a
@@ -319,7 +319,7 @@ autowork/                 the iteration loop side (Python orchestration; replay 
 
 - No server-side session state: session identity is the client's own key (`prompt_cache_key`, then the configured headers, spec §4), never `store` / `previous_response_id`. v0.1 does not inspect those two fields — they are forwarded byte-for-byte like every other client field and take no part in routing, so `state.stateful_inbound` in the trace is `false` on every request. Detecting inbound state and marking the trace record is planned, not implemented (known gap G-F).
 - Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005) and no request or response body is stored.
-- The config is one file today and, once the roster split lands, a **pair**: the config file plus the roster it names (spec §4.14) — back up the pair and the store together, and see [Operations](book/operations.md#backup) for what a restore does when one half is missing.
+- The config is a **pair**: the config file plus the roster it names (spec §4.14) — back up the pair and the store together, and see [Operations](book/operations.md#backup) for what a restore does when one half is missing. A root that carries the roster inline is one file again; exactly one of the two shapes is written.
 - Cache is the first-order cost lever: every rewrite must be **content-deterministic** (same content → same upstream bytes).
 - Metrics are described by the observation contract in `docs/spec.md`; the trace is the authoritative record of what each request cost, and `router stats` reads it back (`router replay`, the offline same-code-path recomputation, is planned — `docs/spec.md` §9.3).
 

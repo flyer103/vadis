@@ -303,18 +303,20 @@ This is not a merge and not a precedence rule: there is still exactly **one** pl
 written in any one effective config, and the *refusal* is what makes that boundary checkable. The block
 itself is identical in either place, so the roster file is not a second schema and not a second parser.
 
-*What is shipped today, and what is contract:* the shipped `config.example.yaml` still carries the roster
-**inline**, and its own `# Usage:` line (`cp config.example.yaml config.yaml`) is therefore still the
-complete instruction — the split of that example, together with the wizard's embedded roster template and
-the section table's target-file column, is **planned and not yet shipped** (it lands as one change,
-DESIGN §12.14). The two-file shape is exercised before that by the round's own fixtures, not by the
-example; §4.14 is the contract for it either way.
+*What is shipped today, and what is contract:* the shipped example is the **pair** — `config.example.yaml`
+names the roster at its `providers_file:` line, and `providers.example.yaml` is that roster (the `providers:`
+block that used to be inline, moved byte for byte, comments and citations included) — so the example's own
+`# Usage:` line (`cp config.example.yaml config.yaml`, with `providers.example.yaml` kept beside it) is the
+complete instruction. The wizard's embedded roster template and the section table's target-file column are
+served with it: `router setup` writes **both** files from the templates embedded in its binary, and
+`--check` validates the pair (DESIGN §12.14). The inline shape is not deprecated — a root that carries the
+roster itself loads exactly as it always did (§4.14), and §4.14 is the contract for both.
 
 ### 4.0 Price convention (preventing two copies from drifting)
 
 **This file copies no price figure** — the single source of truth for price figures is each model entry
-**in the roster** (`config.example.yaml`'s `providers:` block today; its own file once the split of §4.14
-lands), and each of them must carry `source` (official pricing page URL + fetch date).
+**in the roster** (`providers.example.yaml`, the file the shipped root names at `providers_file:`; §4.14),
+and each of them must carry `source` (official pricing page URL + fetch date).
 This file defines only the schema and the convention:
 
 - The four price tiers are **base prices**; the periods matched by `peak.windows` are **multiplied** by
@@ -830,7 +832,7 @@ path composition: the value is used verbatim — nothing is appended and nothing
   naming the path and the value found.
 - **Why the entry, and not the model or the tier.** The endpoint belongs to the **account**, exactly as
   `api_key_env`, `account` and `currency` do (§4.6, §4.8): every metered vendor in the shipped roster
-  (`config.example.yaml`'s `providers:` block today; its own file once §4.14's split lands)
+  (`providers.example.yaml`, the file the shipped root names; §4.14)
   serves its OpenAI form and its Anthropic form at *different* bases (re-read 2026-09-21), so the fact
   cannot live on a field that does not name a wire.
 - **The router does not verify that a URL is the vendor's URL.** A wrong-yet-absolute URL is a
@@ -993,11 +995,12 @@ not prices — the boundary rows are the unit tests' source, DESIGN §12.13):
 
 ### 4.11 `router setup` — the guided first configuration, and the boundary of what it may write
 
-*Status: the contract. `router setup` is not served yet; it lands with the change that implements this section.
-Until then the working path is the one §4 and §5 already document: copy `config.example.yaml`, edit the roster,
-export the keys — and leave the copy in the repository root, where §4.12's third candidate finds it for every
-command below. The rationale and the rejected alternatives are ADR-025; the landing is DESIGN §12.14; the
-location rule this command's default obeys is **§4.12**.*
+*Status: shipped, and this section is its contract. `router setup` is a served subcommand — one of the three
+the binary has (README's CLI block; CONF-43 keeps the two in step). The path that needs no command is the one
+§4 and §5 already document and it is unchanged: copy `config.example.yaml` with `providers.example.yaml` kept
+beside it, edit the roster, export the keys — and leave the copy in the repository root, where §4.12's third
+candidate finds it for every command below. The rationale and the rejected alternatives are ADR-025; the
+landing is DESIGN §12.14; the location rule this command's default obeys is **§4.12**.*
 
 `router setup` is a **file-writing command that is not in the serving path**: it handles no request, and nothing
 on the request path reads anything it wrote other than the config file itself. Its whole job is to turn the
@@ -1044,7 +1047,7 @@ where a group coincides with a file block it takes that block's name.
 that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
 §4.12 finds. `providers` is the exception after §4.14: when the root names a roster, the provider entry (and
 therefore its `api_key_env`) lives in the roster file, and the edit lands **there**; when the root carries
-the roster inline, it lands in the root, exactly as it does today. Nothing else about the section changes:
+the roster inline, it lands in the root, exactly as it always has. Nothing else about the section changes:
 the same key, the same question, the same refusal when the anchor does not resolve.
 
 Two consequences of the target column, both part of this contract:
@@ -1234,9 +1237,10 @@ applies wins.
   true of the root, and — from the split on — the process reads the roster the root *names*, which is the
   one place in this section where "one file" must be read as "one **root**, found by one order, plus at
   most one roster it names": no merge, no precedence, no second search. The shipped example's own `# Usage:`
-  line (§4's usage note) follows the same split: `cp config.example.yaml config.yaml` is the complete
-  instruction while the example carries the roster inline (today), and becomes the pair's copy in the change
-  that splits the example (§4.14's *not yet shipped* note; DESIGN §12.14).
+  line (§4's usage note) states it: `cp config.example.yaml config.yaml` with `providers.example.yaml` kept
+  beside it is the complete instruction, because the shipped example is the pair (§4.14; DESIGN §12.14). A
+  root that carries the roster inline is copied on its own and is unchanged — that shape reads one file, and
+  always did.
 - **Why the XDG location is the default *write* site**: it is outside the repository — a config there cannot be
   committed by accident nor removed by a `git clean` — it is the convention the user's other tools already
   agree on, and it makes the file `--config`-free for every later command.
@@ -1371,7 +1375,7 @@ the implementation; the shapes and the keys below are this contract.
 | 4 | a roster file that is not the roster block — top-level key not `providers:`, a second top-level key, an entry breaking a per-entry rule | the **roster's resolved path**, and the offending key or entry |
 | 5 | a root key that references the roster and does not resolve there: `aliases.*`, `fallback[i]`, `plan_policy.primary` / `.overflow`, `quota.models` | the key path, the value found, **and the roster file** the reference failed to resolve in |
 
-A written `providers_file:` whose value is not a path — a null, or the empty string — is **not** shape 3: it never reaches resolution. It is refused at parse time by `providers_file` itself, naming the key and the type found (a null coerced into a path would be a *search* for a file named `null`, the one thing this section forbids).
+A written `providers_file:` whose value is not a path — a null, or the empty string — is **not** shape 3: it never reaches resolution. It is refused at parse time by `providers_file` itself, naming the key and the type found (a null coerced into a path would be a *search* for a file named `null`, the one thing this section forbids). The refusal is about the value's **shape**, not about the name it spells: a string is still a string, so `./null` names and loads a roster file called `null`.
 
 **What does not change.** `RouterConfig::providers` stays **the** representation the serving path reads;
 the join of the root with its roster happens **once, at load**, and nothing on a request path learns that
@@ -1402,10 +1406,12 @@ event at startup, and carried by every trace record as `config_digest` (§6). A 
 that is deliberate: the roster's comments are where the price citations live (§4.0). It is **attribution,
 never a score** — it is not a config key, it enters no gate, and no report total is derived from it.
 
-**Not yet shipped.** This section is the contract: `providers_file` is parsed once the change that lands
-it is in the tree, and until then a root that writes the key is refused as an unknown field by the same
-strictness that makes this file's field set a contract (§4's schema block is the list). Nothing in §4.14
-changes a single byte of the inline form, which stays legal, unchanged and loadable.
+**Shipped.** `providers_file` is parsed and resolved at load, and the shipped example is the split form:
+`config.example.yaml` names `providers.example.yaml`. `router setup` writes both files from its embedded
+templates, `--check` validates the pair — a root naming a roster that is not there exits 2, naming the
+resolved path — and `GET /health` reports the identity above (§9.1). Nothing in §4.14 changed a single byte
+of the inline form, which stays legal, unchanged and loadable: exactly one of `providers:` and
+`providers_file:` is written, and a root that writes both or neither is refused (§4's rule).
 
 ## 5. Onboarding prerequisite (mandatory)
 
@@ -1881,9 +1887,8 @@ printed, from which record, and under which §7 label — it defines no new metr
 ### 9.1 `GET /health`'s `config`, `auth` and `plan` members
 
 `/health` reports what this process loaded (§4.5, `store`). The members below carry what an operator
-reasons about most: **`config`** (the configuration that was loaded — §4.14; **planned, not served yet**, see
-its note below), **`auth`** (always present, §4.7) and **`plan`** (present when the loaded config declares a
-`plan_policy`, §4.6).
+reasons about most: **`config`** (the configuration that was loaded — §4.14), **`auth`** (always present,
+§4.7) and **`plan`** (present when the loaded config declares a `plan_policy`, §4.6).
 
 **`config`** — which configuration this process loaded. It carries the two files and the digests of §4.14, so
 "which revision is this process serving?" is answered by the surface rather than by the process's argv:
@@ -1912,9 +1917,12 @@ does not exist is `null`, and a hash input that is not there is the empty string
 member is **not** a request fact: it is part of "/health reports what was loaded", it states what the process
 read at startup, and it changes only when the config does.
 
-*Not yet shipped, and stated so here:* the roster half of this member is the contract of §4.14 and lands with
-the split; `root_path`, `root_sha16` and `config_digest` land with the identity. Until then `/health` reports
-none of the five keys, and nothing above may be read as a claim about the running binary.
+*Shipped, and measurable.* A running binary reports this member. Over the shipped pair `/health` answers all
+five keys — `roster_path` the resolved roster, the two `sha16` halves, and the `config_digest` built from
+them — and over an inline root it answers `roster_path: null` with `roster_sha16` the empty string, so both
+spellings above are observable on a live boot. The same digest is written into the `config.applied` event at
+startup and carried by every trace record (§6), which is what makes "which revision is this process serving?"
+answerable from the records as well as from this member.
 
 **`auth`** — whether the process demands a token, and which environment variable holds it. The token
 value itself is a secret and is never here:

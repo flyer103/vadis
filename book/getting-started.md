@@ -87,7 +87,7 @@ A few things worth knowing before you run it:
   its value is written in a shape the wizard does not edit — it stops, names the key and writes nothing. Your
   file is never left half-edited; nothing lands unless the result still loads as a config.
 - **It never touches a price, an endpoint or a citation.** Those are transcriptions of the providers' own
-  pages, and they are yours to edit by hand ([`config.example.yaml`](../config.example.yaml),
+  pages, and they are yours to edit by hand ([`providers.example.yaml`](../providers.example.yaml),
   [`docs/spec.md` §4](../docs/spec.md)). `aliases`, `fallback` and `plugins` entries — anything whose edit would
   mean *adding* or *removing* a line — are shown for reference and edited in the file too.
 
@@ -149,8 +149,8 @@ router stats --window 24h        # the figures, once requests have gone through
 ```
 
 If `serve` exits instead of starting, the message names the key — most often a variable the config names that
-your shell does not have. The **planned** `--check` mode above answers the same question without starting
-anything.
+your shell does not have. The `--check` mode above answers the same question without starting anything: it
+loads the config the way `serve` does.
 
 ## Two deployments of one vendor, and what currency means
 
