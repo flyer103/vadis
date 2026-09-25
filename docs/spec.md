@@ -1371,6 +1371,8 @@ the implementation; the shapes and the keys below are this contract.
 | 4 | a roster file that is not the roster block — top-level key not `providers:`, a second top-level key, an entry breaking a per-entry rule | the **roster's resolved path**, and the offending key or entry |
 | 5 | a root key that references the roster and does not resolve there: `aliases.*`, `fallback[i]`, `plan_policy.primary` / `.overflow`, `quota.models` | the key path, the value found, **and the roster file** the reference failed to resolve in |
 
+A written `providers_file:` whose value is not a path — a null, or the empty string — is **not** shape 3: it never reaches resolution. It is refused at parse time by `providers_file` itself, naming the key and the type found (a null coerced into a path would be a *search* for a file named `null`, the one thing this section forbids).
+
 **What does not change.** `RouterConfig::providers` stays **the** representation the serving path reads;
 the join of the root with its roster happens **once, at load**, and nothing on a request path learns that
 a second file exists (no second resolution rule, no second accessor, no roster service key). Every
