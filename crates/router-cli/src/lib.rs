@@ -257,61 +257,26 @@ pub async fn serve(config_path: &str) -> i32 {
     let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> =
         std::sync::Arc::new(trace_sink);
 
-    // The transform rule engine (spec §4.4 `builtin/transform_rules`,
-    // ADR-019): loaded from the first enabled `kind: builtin/transform_rules`
-    // plugin's `config.rules_file`. A rule that fails to load, compile or
-    // pass its inline tests does not load — the failure is named on the
-    // startup log (a countable, declared state), and the rest of the set
-    // serves. The mode is a request fact: this engine never edits a request
-    // that did not ask (I3 — the closed-mode byte equality).
-    let mut transform_engine: Option<std::sync::Arc<dyn router_core::transform::TransformEngine>> =
-        None;
-    for plug in &rc.router.plugins {
-        if plug.disabled || plug.kind != "builtin/transform_rules" {
-            continue;
-        }
-        let rules_file = plug
-            .config
-            .as_ref()
-            .and_then(|c| c.get("rules_file"))
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string());
-        let Some(rules_file) = rules_file else {
-            eprintln!(
-                "router: plugins[{}] (kind builtin/transform_rules) has no config.rules_file: \
-                 not loaded (an engine that cannot find its rules is a named absence, \
-                 not a silent empty one)",
-                plug.id
-            );
-            continue;
-        };
-        let path = config_load::resolve(&rc.config_dir, &rules_file);
-        match router_plugins::load_path(&path) {
-            Ok((engine, report)) => {
-                for line in report.failure_lines() {
-                    eprintln!("router: {line}");
-                }
-                if report.loaded.is_empty() && report.failed.is_empty() {
-                    eprintln!(
-                        "router: transform_rules: rule file {} has no rules; \
-                         transform mode will ask-but-not-apply",
-                        path.display()
-                    );
-                }
-                transform_engine = Some(std::sync::Arc::new(engine));
-                // First hit wins (the three-level override is a later
-                // card's lookup ladder; v0.1 has one file).
-                break;
-            }
-            Err(e) => {
-                eprintln!(
-                    "router: transform_rules: rule file {}: {e}; not loaded \
-                     (a request that asks for transform mode runs with an empty ledger)",
-                    path.display()
-                );
-            }
-        }
+    // The plugin assembly (ADR-036 D1/D8, spec §4.3): the CLI is the
+    // launcher, not the assembler. It hands the declared `plugins:` list
+    // to the loader-driven assembly exactly once — with the config dir's
+    // path resolution as the only wiring — prints the assembly's
+    // start-up notes verbatim (named absences, rule-load failures, named
+    // loading waits), and reads the Forwarder's engine from the assembled
+    // context's typed slot. Resolution happens here, at boot: nothing on
+    // the serving path touches the loader (D8). The transform engine is
+    // the rule set of spec §4.4 (`builtin/transform_rules`, ADR-019), or
+    // `None` when no entry mounted one — a request that asks for
+    // transform mode then runs with an empty ledger ("asked, not
+    // applied" — a countable state, spec §6). The mode is a request
+    // fact: the engine never edits a request that did not ask (I3).
+    let assembly = router_plugins::assemble(&rc.router.plugins, &|file| {
+        config_load::resolve(&rc.config_dir, file)
+    });
+    for line in assembly.notes() {
+        eprintln!("router: {line}");
     }
+    let transform_engine = assembly.transform_engine();
 
     let forwarder = std::sync::Arc::new(Forwarder {
         config: rc.router.clone(),
@@ -320,8 +285,10 @@ pub async fn serve(config_path: &str) -> i32 {
         store: Some(store_dyn.clone()),
         trace: Some(trace_writer.clone()),
         // The transform rule engine (spec §4.4 `builtin/transform_rules`,
-        // ADR-019): the loaded rule set, or `None` when no plugin declared
-        // one / the file failed to read — a request that asks for
+        // ADR-019): read from the assembled context's typed slot above —
+        // the mounted rule set, or `None` when no plugin entry mounted
+        // one (none declared, every declaration failed, or the winner is
+        // waiting on an `inject` slot) — a request that asks for
         // transform mode then runs with an empty ledger ("asked, not
         // applied" — a countable state, spec §6). The mode is a request
         // fact: this field never decides anything on the passthrough

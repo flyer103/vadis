@@ -1,7 +1,9 @@
 # Plugins
 
-Status: **the contract is decided and nothing drives the runtime yet** — the machinery exists as code, no
-configuration mounts a plugin, and no capability below is in service because of it. The contract is
+Status: **the contract is decided and the `plugins:` list is now the assembly point** — the launcher mounts
+what your list declares, and `inject` is honoured (a plugin whose declared service nothing provides waits in
+a named loading state instead of failing). Two keys are still accepted and still do nothing: `isolate` and
+`intercept`. The contract is
 [`ADR-036`](../design/decisions/ADR-036-minimal-core-and-plugin-surface.md), the where-things-live map
 is [`design/DESIGN.md` §13.6](../design/DESIGN.md), and the configuration schema is
 [`docs/spec.md` §4](../docs/spec.md). This chapter tells you what a plugin can do for you, what the
@@ -38,17 +40,16 @@ fashion.
 
 ## What is specified but not built yet
 
-Named here so that no reader has to discover it from a config file that accepts keys nothing acts on:
+Named here so that no reader has to discover it from the config file itself:
 
-- **The plugin runtime itself.** The `plugins:` list is the assembly point it will become; today the
-  wiring lives inside the gateway program. `inject`, `isolate` and `intercept` are accepted
-  and validated in your config and **nothing acts on them yet** — one plugin's config change reloading
-  it on its own, realms for side-by-side comparison, sampling/interception, and unloading a plugin with
-  its effects rolled back are all specified (`ADR-036`, `docs/spec.md` §4.3) and **not in service**: the
-  runtime machinery for them exists, and nothing mounts it yet.
-  **`disabled` is the exception and already works**: a disabled entry is not loaded at start-up (its
-  rule set is off) and `/health` shows it as disabled; what is not implemented is unloading a plugin
-  that is already running.
+- **The plugin runtime, in part.** The `plugins:` list **is** the assembly point now: the launcher mounts
+  what your list declares, and `inject` is honoured — a declaration nothing provides leaves that plugin
+  waiting in a named state rather than failing. What is still missing: reloading a plugin when its config
+  changes, unloading one that is already running and rolling its effects back, realms for side-by-side
+  comparison, and sampling/interception. `isolate` and `intercept` are still accepted and still do nothing
+  (`ADR-036`, `docs/spec.md` §4.3).
+  **`disabled` works, and always did at start-up**: a disabled entry is not loaded (its rule set is off)
+  and `/health` shows it as disabled.
 - **Tier B.** A plugin in its own process, over a local socket, so that its crash cannot take the
   gateway down.
 - **A retrieval channel for `tee`.** A rule may append a fingerprint line naming what it dropped, but

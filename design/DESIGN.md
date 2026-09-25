@@ -31,10 +31,11 @@ the observation boundary.
 ## 2. crate dependency direction
 
 ```
-router-cli → router-proxy → router-protocol → router-core ← router-plugins
-                    ↘ router-runtime ↗                 ↑
-                          router-providers        router-plugin-sdk (tier-B protocol types)
-                    router-store ──→ router-core  (trait Store implementation, ADR-009)
+router-cli      → router-proxy → router-protocol → router-core
+                → router-plugins → router-runtime → router-core
+                → router-store → router-core            (trait Store implementation, ADR-009)
+router-proxy    → router-providers → router-core
+router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 ```
 
 - `router-core`: the domain model of request/decision, the cost engine, the cache ledger, the plugin
@@ -274,9 +275,11 @@ implementation order is given by each row's "Lands in".
 ### 12.1 crate list, dependency direction and the third-party dependency allowlist
 
 ```
-router-cli → router-proxy → router-protocol → router-core ← router-plugins
-                    ↘ router-runtime ↗                 ↑
-                          router-providers        router-plugin-sdk
+router-cli      → router-proxy → router-protocol → router-core
+                → router-plugins → router-runtime → router-core
+                → router-store → router-core            (trait Store implementation, ADR-009)
+router-proxy    → router-providers → router-core
+router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 ```
 
 | crate | Public surface (what is usable outside) | Permitted third-party dependencies | Lands in |
@@ -285,7 +288,7 @@ router-cli → router-proxy → router-protocol → router-core ← router-plugi
 | `router-protocol` | codec for the 3 protocols, translation matrix, `Usage` normalization, `raw_json` (span-faithful editing) | `serde_json` | 2026-09-19 |
 | `router-providers` | `ProviderClient` (wire capabilities, authentication, retry, SSE parsing) | `reqwest` (with a TLS feature — all real providers are https), `tokio`, `futures` | 2026-09-19 |
 | `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
-| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky | `toml`, `regex` | 2026-09-19 / 2026-09-20 |
+| `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky; and the **assembly** that mounts them from the `plugins:` list (`assemble`, R41-3) | `toml`, `regex` | 2026-09-19 / 2026-09-20 / 2026-09-25 |
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
 | `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2) | 2026-09-19 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
@@ -3369,14 +3372,14 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | id | primitive | one-line invariant | contract home | code home | state |
 |---|---|---|---|---|---|
 | P1 | `byte-fidelity` | upstream bytes == client bytes modulo ADR-015's exactly two span mutations | AGENTS 1; ADR-007; ADR-015; spec §2; §12.3.1, §12.10.7 | `router-core/src/body.rs:29,56,90,197`; `router-proxy/src/forward.rs:223,528`; `stream_forward.rs:365` | wired |
-| P2 | `inbound-admission` | one guard above the path split and the pipeline; headers only; a refusal leaves one pre-pipeline record and no store row | spec §4.7, §9.1; §12.11 | `router-proxy/src/auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:314,344-375` | wired |
+| P2 | `inbound-admission` | one guard above the path split and the pipeline; headers only; a refusal leaves one pre-pipeline record and no store row | spec §4.7, §9.1; §12.11 | `router-proxy/src/auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:438,714-742` | wired |
 | P3 | `resolution` | exactly one route per request from the roster (explicit/alias); the native id is what the outbound body carries; `auto` → 400, undeclared capability → 400 | spec §3, §4, §8; §3, §7, §12.3 | `router-core/src/config.rs:226,746,872`; `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | wired, with L2/L3/L4 |
 | P4 | `policy-guard` | the route/refusal decision is a pure predicate over (route, projections, stable config, one clock read) with a normative order; transitions follow upstream evidence only | spec §4.2, §4.6, §8; ADR-011; ADR-014; §12.3, §12.4, §12.10.8 | `router-core/src/plan.rs:109,151,183`; `error_class.rs:226`; `quota.rs:113`; `breakeven.rs:70`; `forward.rs:1121-1200` | wired, with L1/L6 |
 | P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → autowork channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
-| P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `router-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `router-core/src/transform.rs`; composition step `router-proxy/src/forward.rs::compose_transform_stage`; wiring `router-cli/src/lib.rs` (`plugins[].config.rules_file`); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) |
+| P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `router-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `router-core/src/transform.rs`; composition step `router-proxy/src/forward.rs::compose_transform_stage`; assembly `router-plugins/src/assembly.rs` (mounts the engine from the `plugins:` list, **R41-3**); wiring `router-cli/src/lib.rs:273` (one `assemble` call); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) — and **mounted from the `plugins:` list since R41-3** (the first migration: the launcher mounts what the list declares, `inject`/`disabled` honoured) |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
 | P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
-| P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; **ADR-036**; §4, §12.2, **§13.6** | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (R41-2); `router-plugin-sdk/src/lib.rs:1-4` still a stub; `inject`/`isolate`/`intercept` parse at `config.rs:1004-1019`, validate at `config.rs:1744-1804`, are consumed by nobody | **implemented, not wired** — the contract is frozen by **ADR-036** (R41-1), the machinery landed in **R41-2** (minus the four service-key constants, whose traits do not exist; §12.2's status says why), and nothing consumes the runtime yet |
+| P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; **ADR-036**; §4, §12.2, **§13.6** | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (R41-2); the assembly `router-plugins/src/assembly.rs` (**R41-3**) drives the loader from the `plugins:` list; `router-plugin-sdk/src/lib.rs:1-4` still a stub; `inject`/`isolate`/`intercept` parse at `config.rs:1004-1019`, validate at `config.rs:1744-1804` — `inject` is consumed by the assembly (an unmet declaration is a named loading wait), `isolate`/`intercept` by nobody | **the mechanism is wired** — the contract is frozen by **ADR-036** (R41-1), the machinery landed in **R41-2** (minus the four service-key constants, whose traits do not exist; §12.2's status says why), and **R41-3**'s assembly drives it from the `plugins:` list with exactly one mountable kind (`builtin/transform_rules`); `inject` and `disabled` are live, `isolate`/`intercept` stay inert, the keyed config diff and live reload stay out (specified-not-in-service), and the other surfaces are **not** migrated — the three always-resident builtins stay resident |
 
 ### 13.2 Module → primitive map
 
@@ -3399,12 +3402,12 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | `router-proxy/src/stream_forward.rs` | the same pipeline over the streaming medium (the shared helpers are the point: `plan_guard`, `record_classification`, `resolve_session_key`, `turn_index_for`, `rewrite_outbound_model`) | its own resolution (`resolve_route :981`) or its own capability check (`:332-345`) |
 | `router-proxy/src/accounting.rs` | P5 (the record's single writer, `Accountant::commit :358`) + P8 (the five-tier pricing) | a second writer of the trace: with the tier-1 chain wired, `transforms` carries the composition step's real ledger (`ctx.transforms`, `:509`); the closed mode still yields the empty list |
 | `router-proxy/src/health.rs` | **consumer** of P4/P7 for `/health` (spec §9.1) | a second implementation of the guard (L1): it reports what the policy says, it does not re-decide |
-| `router-cli/src/lib.rs` | the `serve` assembly: P2's wiring (`:314` `/health` outside the guarded set, `:344-375` the per-route gate), the startup prerequisites | a place where a route's guard is applied by path comparison |
+| `router-cli/src/lib.rs` | the `serve` launcher: P2's wiring (`:438` `/health` outside the guarded set, `:714-742` the per-route gate), the startup prerequisites, and **one** `assemble` call (`:273`) — the plugin pipeline is built by `router-plugins`' assembly, not here | a place where a route's guard is applied by path comparison — or the assembler of the plugin pipeline (that is `router-plugins/src/assembly.rs`, R41-3) |
 | `router-cli/src/stats.rs` | **consumer** of P5/P7/P8 for `router stats` (spec §9.2; `report :188`, the read-only store open `:221`, the window scan `:366`) | a writer, or a reader that estimates what it cannot compute |
 | `router-store/src/lib.rs` | P7's SQLite/WAL implementation (migrations, the writer lock `:218`) | a second domain model |
 | `router-store/src/trace_sink.rs` | P5's on-disk sink (`TraceSink :40`, `write :73`) | a place that decides the record's content |
-| `router-plugins/` | P6's rule engine (`transform_rules.rs`: loads `rules/tool_output.toml`, runs its inline tests at load, serves the composition step) — the other tier-A plugins remain stubs | a claim that cache_guard / cost_ledger / quota_guard / sticky exist today |
-| `router-runtime/` | P9 — **implemented** in R41-2: `service.rs` (identities + `ServiceKey<T>`), `effect.rs` (the inverse stack), `ctx.rs` (the fiber scope: tables, realms, intercept), `fiber.rs` (the state machine + `trait Plugin`), `loader.rs` (load-time resolution, the four-step unload); consumed by nobody | a claim that the assembly drives it from `plugins:` (that is R41-3), or that the four product service keys exist (their traits do not) |
+| `router-plugins/` | P6's rule engine (`transform_rules.rs`: loads `rules/tool_output.toml`, runs its inline tests at load, serves the composition step) + **the assembly** (`assembly.rs`, R41-3: the registry maps `plugins:` entries to P9 `Plugin` instances and drives the loader) — the other tier-A plugins remain stubs | a claim that cache_guard / cost_ledger / quota_guard / sticky exist today — or that more than one kind is mountable from the list |
+| `router-runtime/` | P9 — **implemented** in R41-2 (`service.rs` identities + `ServiceKey<T>`, `effect.rs` the inverse stack, `ctx.rs` the fiber scope, `fiber.rs` the state machine + `trait Plugin`, `loader.rs` load-time resolution and the four-step unload) and **driven** since R41-3 by `router-plugins`' assembly from the `plugins:` list | a claim that every shipped capability is mounted from `plugins:` (one kind is; the three residents stay resident), or that the four product service keys exist (their traits do not) |
 | `router-plugin-sdk/` | P9's tier-B half — **contract-only** (`src/lib.rs:1-4` stub) | a claim that a realm exists today |
 | `tests/conformance/` | the assertions that pin P1/P3/P5/P7 (and the ones that will pin the others; §12.8 is the table) | a place to move an invariant in order to pass (AGENTS 9; ADR-012) |
 | `autowork/` | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
@@ -3421,7 +3424,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | **L2b** | P3 | the `supports` capability check and its 400 body | `router-proxy/src/forward.rs:491-507` | `router-proxy/src/stream_forward.rs:332-345` | spec §8's `capability_unsupported` is a contract; two renderings can drift in `details`/message | **open** |
 | **L3** | P7/P5 | the two reporting consumers read the same state by **different mechanisms** | `/health` reads through the writer's own connection (`router-proxy/src/health.rs:104-135` via `AppState::store`, `:24-28`) | `router stats` scans the trace directory and opens the store read-only (`router-cli/src/stats.rs:188-283`, `:221`, `:366`) | only one of them works while the other is true: the read-only open is refused while `serve` holds `PRAGMA locking_mode = EXCLUSIVE` (`router-store/src/lib.rs:218`, R6-G3), so the "same fact, two views" is really "two facts, one of them unavailable" | **open**; a read seam must state which figures each consumer can honestly obtain |
 | **L4** | P3 | the reserved `auto`/`Selector` slot | prose says reserved (`docs/spec.md:78-79`; `design/DESIGN.md:14,367`, §3's closing paragraph) | code has no slot: the refusal is a literal comparison (`router-proxy/src/forward.rs:403-407`), there is no `trait Selector`, and `decision.selection_source` is a `String` (`router-core/src/trace.rs:88`) whose third value is absent from spec §3's own list | the repository's own rule forbids this shape ("a documented-but-unreachable surface is a defect", spec §9.3); the honest options are to define the value or delete it — **a human decision** | **open, by design**; recorded rather than silently kept |
-| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (**R41-2**: the machinery landed and **nothing consumes it**), `router-plugin-sdk/src/lib.rs:1-4` (still a stub) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
+| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (**R41-2** the machinery landed; **R41-3** the launcher's assembly consumes it — the pipeline is built from the `plugins:` list — while `isolate`/`intercept` are consumed by nobody), `router-plugin-sdk/src/lib.rs:1-4` (still a stub) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | P9's machinery exists (R41-2) and R41-3 mounts plugins through it, but **`isolate`/`intercept` are still consumed by nobody** and ADR-013's rails compose exactly those; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
 | **L6** | P4 | the guard's answer vocabulary: `GuardOutcome` is named as existing vocabulary (`router-core/src/plan.rs:3-5`) and sketched in `design/DESIGN.md:368-369`, but no such type exists | the code answers with a plan-specific `PlanMove` (`router-core/src/plan.rs:52-69`) | the caller is a hand-written method with its own outcome struct (`router-proxy/src/forward.rs:156,1121-1200`) | a second rule would invent a second move type, so "the guard chain" is a paragraph rather than an interface — which is exactly what a decision provider needs | **open** (becomes real when a second rule lands) |
 
 Three shapes that are **not** leaks, listed so the register is not re-litigated:
@@ -3485,8 +3488,10 @@ plugin?"* is answerable without reading the ADR.
 
 **The falsifiable definition (ADR-036 D1):** *the core is minimal when the released binary, started
 with an empty `plugins:` list, still serves the passthrough path — and every capability we ship today
-is mountable from that list.* The first half is **R41-3's acceptance**; until it holds, "everything
-else is a plugin" is a direction, not a property.
+is mountable from that list.* The first half **holds since R41-3** (the launcher mounts nothing and
+the byte suite passes; the measured run is `autowork/harness/r41-3/`). The second half stays **false**:
+the three always-resident builtins remain resident, and the `Selector`/`Guard` surfaces stay blocked
+(L4/L6) — "everything else is a plugin" is still a direction, not a property.
 
 | primitive | in the core? | the constraint that forces the answer |
 |---|---|---|
@@ -3495,7 +3500,7 @@ else is a plugin" is a direction, not a property.
 | P3 `resolution` | surface `Selector` — **blocked** | **L4** (a human decision: define the `plugin` value or delete the slot) and **L2a/L2b** (one implementation, not two) |
 | P4 `policy-guard` | surface `Guard` — **blocked** | **L6**: the answer vocabulary is prose today, so a protocol would freeze `PlanMove` as the interface |
 | P5 `decision-record` | **yes** | the only product → autowork channel; a pluggable observation boundary makes every gate negotiable (ADR-005; AGENTS 3) |
-| P6 `transform-chain` | surface `Transform` | the only content-edit surface, and only as a path-addressed plan; tier-1 wired, `CONF-16` landed with R41-0 |
+| P6 `transform-chain` | surface `Transform` | the only content-edit surface, and only as a path-addressed plan; tier-1 wired, `CONF-16` landed with R41-0; **mountable from the `plugins:` list since R41-3** — the first migration, and the only one so far |
 | P7 `state-truth` | **yes** | intent-before-effect and "projections are never the truth" are write-path properties (ADR-009/010) |
 | P8 `accounting` | **yes** for the **label**; prices and quota data are plugin-hosted **data** | constraint 4 is a labelling invariant: `verified` has one definition and gates read it alone (ADR-006/018; ADR-021/§12.13 for the data half) |
 | P9 `plugin-runtime` | **yes** | the loader cannot be loaded — otherwise unload order and failure isolation become the loaded thing's promises about itself |
