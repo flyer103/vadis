@@ -550,13 +550,35 @@ pub mod testkit {
         (root, roster)
     }
 
-    /// A currently-free loopback port (small TOCTOU window, fine for tests).
+    /// A currently-free loopback port. The bind-:0/drop/re-bind sequence
+    /// has a TOCTOU window; worse, the OS can hand the SAME port to two
+    /// calls in one process (both see it free in the same instant), so two
+    /// rigs raced onto one port and the loser connected to the winner's
+    /// server — or to nothing once the winner was aborted (R43-F10,
+    /// observed as `ConnectionRefused` in conf_85h after
+    /// `wait_listening` had succeeded). A process-wide registry makes
+    /// every call return a port this process has never handed out,
+    /// closing the intra-process half of the race; the cross-process
+    /// window (parallel test binaries) is the OS's and predates the
+    /// suite.
     pub fn free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        static HANDED_OUT: std::sync::OnceLock<Mutex<std::collections::HashSet<u16>>> =
+            std::sync::OnceLock::new();
+        loop {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            if HANDED_OUT
+                .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+                .lock()
+                .unwrap()
+                .insert(port)
+            {
+                return port;
+            }
+        }
     }
 
     /// Waits (max ~10s) until the address accepts connections.
