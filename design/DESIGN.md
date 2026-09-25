@@ -63,14 +63,18 @@ data-plane change when it lands.
 
 ## 4. Plugin runtime (aligned with Cordis semantics)
 
-**Status: the contract is frozen; the implementation does not exist.** **ADR-036** adopts this section,
-§12.2's signatures and §13.6's boundary as the contract (**D1–D8**); **R41-2** is the round that would
-land them. `crates/router-runtime/src/lib.rs:1-4` is still four lines of stub, §13.1's row for **P9**
-still reads **`contract-only`**, and the `inject` / `isolate` / `intercept` keys are parsed and
-validated — and **nothing acts on them** (the plugin validation loop, `router-core/src/config.rs:1782-1803`), while
-`disabled` is honoured at start-up (spec §4.4; `router-cli/src/lib.rs:270`). Read this section as the
-specification of a component that has not been built, not as a description of the binary —
-`book/plugins.md` carries the same sentence for a user.
+**Status: the contract is frozen and the machinery exists — implemented, not wired.** **ADR-036** adopts
+this section, §12.2's signatures and §13.6's boundary as the contract (**D1–D8**), and **R41-2** landed the
+implementation: `crates/router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` carry the identities,
+`ServiceKey<T>`, the `Effect` inverse stack, the `Ctx` fiber scope (service table, realms, intercept),
+`FiberState`, `trait Plugin`, and the load-time-resolving loader — **minus the four service-key
+constants**, whose traits (`dyn CacheLedger` / `dyn SessionTable` / `dyn QuotaStore` / `dyn TraceSink`)
+exist nowhere yet (§12.2's status says why); §13.1's row for **P9** therefore reads **`implemented, not
+wired`**. The `inject` / `isolate` / `intercept` keys are parsed and validated (the plugin validation loop,
+`router-core/src/config.rs:1744-1804`) and **still nothing acts on them** — no configuration mounts a
+plugin and no request path reaches the runtime — while `disabled` is honoured at start-up (spec §4.4;
+`router-cli/src/lib.rs:270`). Read this section as the contract of machinery that exists and is not wired
+into the assembly (R41-3), and `book/plugins.md` for the user-facing sentence.
 
 The mapping from the paper's primitives to this project's implementation (fixed by ADR-002):
 
@@ -3417,7 +3421,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | **L2b** | P3 | the `supports` capability check and its 400 body | `router-proxy/src/forward.rs:491-507` | `router-proxy/src/stream_forward.rs:332-345` | spec §8's `capability_unsupported` is a contract; two renderings can drift in `details`/message | **open** |
 | **L3** | P7/P5 | the two reporting consumers read the same state by **different mechanisms** | `/health` reads through the writer's own connection (`router-proxy/src/health.rs:104-135` via `AppState::store`, `:24-28`) | `router stats` scans the trace directory and opens the store read-only (`router-cli/src/stats.rs:188-283`, `:221`, `:366`) | only one of them works while the other is true: the read-only open is refused while `serve` holds `PRAGMA locking_mode = EXCLUSIVE` (`router-store/src/lib.rs:218`, R6-G3), so the "same fact, two views" is really "two facts, one of them unavailable" | **open**; a read seam must state which figures each consumer can honestly obtain |
 | **L4** | P3 | the reserved `auto`/`Selector` slot | prose says reserved (`docs/spec.md:78-79`; `design/DESIGN.md:14,367`, §3's closing paragraph) | code has no slot: the refusal is a literal comparison (`router-proxy/src/forward.rs:403-407`), there is no `trait Selector`, and `decision.selection_source` is a `String` (`router-core/src/trace.rs:88`) whose third value is absent from spec §3's own list | the repository's own rule forbids this shape ("a documented-but-unreachable surface is a defect", spec §9.3); the honest options are to define the value or delete it — **a human decision** | **open, by design**; recorded rather than silently kept |
-| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4` (stubs) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
+| **L5** | P9 (P6 graduated: its tier-1 engine, mode channel and ledger are wired, R9-2a/2b) | primitives whose absence is load-bearing for accepted modes | `router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (**R41-2**: the machinery landed and **nothing consumes it**), `router-plugin-sdk/src/lib.rs:1-4` (still a stub) | ADR-013 items 1–4 (shadow/canary compose `isolate`/`intercept`) | ADR-013's rails cannot be built without P9; P6's remaining absence (the paired `verified` measurement, order ⑥) means **no saving may be reported from it yet** — every ledger figure is `inferred` | **open, known**; ADR-016 item 5 marks M3/M4/M5 contract-only |
 | **L6** | P4 | the guard's answer vocabulary: `GuardOutcome` is named as existing vocabulary (`router-core/src/plan.rs:3-5`) and sketched in `design/DESIGN.md:368-369`, but no such type exists | the code answers with a plan-specific `PlanMove` (`router-core/src/plan.rs:52-69`) | the caller is a hand-written method with its own outcome struct (`router-proxy/src/forward.rs:156,1121-1200`) | a second rule would invent a second move type, so "the guard chain" is a paragraph rather than an interface — which is exactly what a decision provider needs | **open** (becomes real when a second rule lands) |
 
 Three shapes that are **not** leaks, listed so the register is not re-litigated:

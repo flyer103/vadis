@@ -401,9 +401,11 @@ product-defined typed slot names (e.g. `cache_ledger`, `session_table`), not arb
 
 **Three of the four keys are declared and validated and nothing acts on them; the fourth is honoured
 today, at start-up.** `inject`, `isolate` and `intercept` are accepted by the parser and checked at load
-(the plugin validation loop, `router-core/src/config.rs:1782-1803`: the `intercept.sample` range and the
-`inject` slot names) and **nothing acts on them** — the runtime that would (P9) does not exist:
-`crates/router-runtime/src/lib.rs` and `crates/router-plugin-sdk/src/lib.rs` are stubs. Their meaning,
+(the plugin validation loop, `router-core/src/config.rs:1744-1804`: the `intercept.sample` range and the
+`inject` slot names) and **nothing acts on them** — the runtime that would (P9) exists as machinery and is
+**not wired**: `crates/router-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` carry it (R41-2) while
+no configuration mounts a plugin and no request path reaches it, and `crates/router-plugin-sdk/src/lib.rs`
+is still a stub. Their meaning,
 the lifecycle they belong to, and the boundary that decides which capabilities may ever be mounted this
 way are frozen by **ADR-036** (`design/decisions/ADR-036-minimal-core-and-plugin-surface.md`; the map is
 DESIGN §13.6): `inject` waits until its slots exist, `isolate` gives one key two realms of bindings, and
