@@ -1087,11 +1087,61 @@ where
     de_roster_key_presence(d, "providers")
 }
 
+/// `providers_file` presence **and type**, exact (R43-2b F1, closed by
+/// R43-4c): the key's value must be a non-empty string — a path. The
+/// generic presence helper cannot see a YAML null for a `String` target:
+/// serde_yaml's plain-scalar fast path hands `providers_file: null` to
+/// `String::deserialize` as the *string* `"null"`, which the loader then
+/// resolved as a relative path — and a file literally named `null` beside
+/// the config silently loaded, a *search* where §4.14 requires a *named*
+/// file. `deserialize_any` forces tag resolution, so a written null
+/// arrives as `visit_unit` and is refused **by `providers_file:`** with
+/// the type-shaped message, before any path resolution; an empty string
+/// is refused the same way (an empty path is not a path). An explicitly
+/// written string — including one spelling `"null"` — is a named path
+/// and still loads.
 fn de_providers_file_presence<'de, D>(d: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    de_roster_key_presence(d, "providers_file")
+    struct RosterPath;
+
+    impl<'de> Visitor<'de> for RosterPath {
+        type Value = String;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a path (a non-empty string)")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            if v.is_empty() {
+                Err(E::custom("expected a path, found an empty string"))
+            } else {
+                Ok(v.to_owned())
+            }
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&v)
+        }
+
+        fn visit_unit<E>(self) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Err(E::custom("expected a path, found null"))
+        }
+    }
+
+    d.deserialize_any(RosterPath)
+        .map(Some)
+        .map_err(|e| de::Error::custom(format!("providers_file: {e}")))
 }
 
 /// The root file's own shape (spec §4/§4.14; ADR-037 D1/D4). Every section
@@ -1117,8 +1167,12 @@ pub struct RootFile {
     /// The roster's name — the other shape. Required when used, resolved
     /// by §4.1's rule (absolute wins, else against the config file's own
     /// directory, `~` not expanded); never discovered, never defaulted.
-    /// A written `providers_file: null` is a parse refusal naming
-    /// `providers_file:`, symmetric with `providers:`.
+    /// A written `providers_file: null` (or an empty string) is a parse
+    /// refusal naming `providers_file:` with the found type, before any
+    /// path resolution — symmetric with `providers:` and enforced by
+    /// [`de_providers_file_presence`], which exists because serde_yaml's
+    /// plain-scalar fast path would otherwise coerce a written null into
+    /// the string `"null"` and resolve it as a path (R43-2b F1).
     #[serde(default, deserialize_with = "de_providers_file_presence")]
     pub providers_file: Option<String>,
     pub aliases: BTreeMap<String, RouteSpec>,

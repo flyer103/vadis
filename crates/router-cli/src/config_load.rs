@@ -498,13 +498,49 @@ fallback: []
         assert!(err.contains("providers"), "got: {err}");
         assert!(!err.contains("neither"), "got: {err}");
 
-        // providers_file: null, symmetric.
+        // providers_file: null, symmetric — and the F1 control: a valid
+        // roster file literally named `null` sits beside the config and
+        // must change NOTHING (at the fix's base the written null was
+        // coerced to the path "null" and that file was silently loaded —
+        // R43-2b F1). The refusal below, with no read attempted, is the
+        // proof the sentinel is never touched.
         let null_file =
             rosterless_root_text().replace("aliases:", "providers_file: null\naliases:");
         let (_g2, path2) = write_temp("config.yaml", &null_file);
+        std::fs::write(path2.parent().unwrap().join("null"), roster_text()).unwrap();
         let err2 = load(&path2).unwrap_err();
         assert!(err2.contains("providers_file"), "got: {err2}");
+        assert!(err2.contains("found null"), "got: {err2}");
+        assert!(
+            !err2.contains("cannot be read"),
+            "no path resolution is attempted, got: {err2}"
+        );
         assert!(!err2.contains("neither"), "got: {err2}");
+
+        // providers_file: "" — an empty path is not a path; refused by
+        // the key in the same shape, never resolved.
+        let empty_file =
+            rosterless_root_text().replace("aliases:", "providers_file: \"\"\naliases:");
+        let (_g3, path3) = write_temp("config.yaml", &empty_file);
+        let err3 = load(&path3).unwrap_err();
+        assert!(err3.contains("providers_file"), "got: {err3}");
+        assert!(err3.contains("empty"), "got: {err3}");
+        assert!(
+            !err3.contains("cannot be read"),
+            "no path resolution is attempted, got: {err3}"
+        );
+        assert!(!err3.contains("neither"), "got: {err3}");
+
+        // The positive discriminator: an explicitly written string
+        // "./null" is a named path, not a null — it loads the sentinel
+        // file. The refusal above is a type check on the VALUE, not a
+        // ban on a spelling.
+        let named = rosterless_root_text().replace("aliases:", "providers_file: ./null\naliases:");
+        let (_g4, path4) = write_temp("config.yaml", &named);
+        std::fs::write(path4.parent().unwrap().join("null"), roster_text()).unwrap();
+        let rc = load(&path4).expect("an explicit './null' names the file");
+        assert_eq!(rc.router.providers.len(), 1);
+        assert_eq!(rc.router.providers[0].name, "p");
     }
 
     #[test]

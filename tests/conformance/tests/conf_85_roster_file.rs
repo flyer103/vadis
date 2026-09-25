@@ -306,6 +306,70 @@ fn conf_85f_named_not_discovered_and_the_pair_joins_deep_equal() {
     );
 }
 
+// (b2) F1 pinned shut (R43-4c; the round's only registered finding):
+// `providers_file: null` and `providers_file: ""` are refused **by the
+// key**, with a type-shaped message, and never reach path resolution —
+// proven by the sentinel control: a valid roster file literally named
+// `null` beside the root changes NOTHING. At the fix's base that file
+// was silently LOADED (serde_yaml coerces a plain YAML null handed to a
+// `String` target into the string "null" — R43-2b F1), and a coerced
+// path is a search, the one thing §4.14 forbids. The positive arm shows
+// the check is on the value's type, not on a spelling: an explicitly
+// written "./null" still names the file.
+#[test]
+fn conf_85b2_nullish_providers_file_is_refused_by_key_never_searched() {
+    let dir = testkit::tempdir("85b2");
+    let root = dir.join("config.yaml");
+    std::fs::write(
+        &root,
+        rosterless_root().replace("aliases:", "providers_file: null\naliases:"),
+    )
+    .unwrap();
+    // The sentinel: a valid roster under the name the coercion would
+    // resolve to. If the written null became a path, this file would be
+    // read and the config would LOAD — the refusal below is the proof
+    // it is never touched.
+    std::fs::write(dir.join("null"), ROSTER).unwrap();
+    let err = router_cli::config_load::load(&root).unwrap_err();
+    assert!(
+        err.contains("providers_file"),
+        "the key is named, got: {err}"
+    );
+    assert!(err.contains("null"), "the found value is named, got: {err}");
+    assert!(
+        !err.contains("neither"),
+        "a written null never reads as 'neither written', got: {err}"
+    );
+    assert!(
+        !err.contains("cannot be read"),
+        "no path resolution is attempted, got: {err}"
+    );
+
+    // providers_file: "" — an empty path is not a path: refused by the
+    // key in the same shape, never resolved.
+    let err = load_err(
+        &rosterless_root().replace("aliases:", "providers_file: \"\"\naliases:"),
+        None,
+    );
+    assert!(err.contains("providers_file"), "got: {err}");
+    assert!(err.contains("empty"), "got: {err}");
+    assert!(!err.contains("cannot be read"), "got: {err}");
+    assert!(!err.contains("neither"), "got: {err}");
+
+    // The positive discriminator: an explicitly written string "./null"
+    // is a named path — it loads the sentinel file, proving the refusal
+    // above is a type check on the VALUE, not a ban on a spelling.
+    let named = dir.join("config-named.yaml");
+    std::fs::write(
+        &named,
+        rosterless_root().replace("aliases:", "providers_file: ./null\naliases:"),
+    )
+    .unwrap();
+    let rc = router_cli::config_load::load(&named).expect("an explicit './null' names the file");
+    assert_eq!(rc.router.providers.len(), 1);
+    assert_eq!(rc.router.providers[0].name, "p");
+}
+
 // =========================================================================
 // Half B — the identity (spec §4.14/§6/§9.1; ADR-037 D6; DESIGN §12.8's
 // CONF-85 row): one byte digest over the pair, recomputed here
