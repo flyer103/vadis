@@ -79,10 +79,16 @@ relative to the config file's directory, so the state can live outside the repos
   exclusively. A second `serve` pointed at the same state directory is **refused at
   startup** with a stated reason, rather than becoming a second writer on one file.
 - **Consequence for inspection:** you cannot casually open the file with a SQLite tool while
-  the gateway is running (and you will get a busy error rather than a corrupt read). Stop
-  `serve` first, inspect, then start it again. Two read-only surfaces do run against a live
-  gateway: `GET /health` and `router stats`, which opens the store read-only on purpose (see
-  [Observability](observability-and-accounting.md)). A dedicated `router state`-style surface is a
+  the gateway is running (and you will get a busy error rather than a corrupt read): while
+  `serve` runs it holds the store exclusively, and a second process's open — a read-only one
+  included — is refused. Stop `serve` first, inspect, then start it again. The read-only
+  surfaces split the same way: `GET /health` answers against a live gateway because it is
+  served by the running process itself, while `router stats`' own read-only open is refused
+  there too — against a live gateway its report comes out with the one store-derived figure,
+  `unknown outcome requests`, **omitted** and a one-line note on stderr naming the refusal,
+  every other figure printed unchanged (see
+  [Observability](observability-and-accounting.md)). To read that figure, run `stats` with
+  `serve` stopped. A dedicated `router state`-style surface is a
   separate change, not part of v0.1.
 - **The store is a startup prerequisite** (see the table above). An unreadable file is a
   permissions problem to fix, not a mode to run in.
