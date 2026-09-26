@@ -1481,11 +1481,11 @@ of the inline form, which stays legal, unchanged and loadable: exactly one of `p
 
 ### 4.15 The reload — a configuration change takes effect without a restart
 
-*Status: **specified, not served.** The mechanism is decided (ADR-039) and the semantics below are
-ADR-040; the watcher, the publish and the keyed diff land with the reload's own implementation cards.
-Until they do, a process still serves the configuration it loaded — nothing on this page is observable
-yet. Nothing here adds a flag, a signal or a key: the reload is default behaviour, like `setup`'s pair
-write.*
+*Status: **served.** The mechanism is ADR-039 and the semantics below are ADR-040; the watcher, the
+publish and the keyed diff are landed, and everything on this page is observable on a running process.
+Nothing here adds a flag, a signal or a key: the reload is default behaviour, like `setup`'s pair
+write. The one item on this page still undecided is the session-level question of the "Pending"
+paragraph below — it remains the owner's ruling, and no session-level policy is implemented.*
 
 A running process **notices that the pair changed and serves the new configuration**, with no restart and
 nothing for the operator to remember. The change is noticed by a file watcher and *decided* by the

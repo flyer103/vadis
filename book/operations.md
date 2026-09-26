@@ -51,14 +51,32 @@ variable's **name**, never its value), the resolved state path, and the state st
 refusal, see the table above). A plugin listed as `disabled` in the config appears as
 disabled rather than missing.
 
-**A change to the config takes effect at the next start, not while the process runs.** `serve` reads
-the file — and the roster it names — **once, at startup**, and serves that: v0.1 has no file watcher and
-no reload, so editing `config.yaml` does not change a running gateway; restart it. A change to the listen
-address is the same story. Nothing in the serving path depends on wall-clock time or turn order, so a
-restart does not change what a request looks like upstream. (A reload is a **planned** change, and the
-decision that opens it — the file-watch mechanism — is recorded in
-[`design/decisions/ADR-039-file-watch-crate-for-the-reload.md`](../design/decisions/ADR-039-file-watch-crate-for-the-reload.md);
-**nothing of it is shipped**, and a gateway that reloads itself will be described here when it does.)
+**A change to the config takes effect while the process runs.** `serve` reads the file — and the
+roster it names — at startup, and then keeps watching both: edit `config.yaml` (or the roster a
+split config names) and a running gateway notices, re-reads the pair, and serves the new
+configuration without a restart ([`docs/spec.md` §4.15](../docs/spec.md)). Three things are worth
+knowing:
+
+- **Only a real change is a reload.** The decision is the digest of the two files' bytes, so a touch
+  or a same-bytes rewrite is no reload at all — nothing happens, and that is observable only as
+  *nothing* happening.
+- **You can see a reload happen.** `GET /health`'s `config_digest` moves to the new revision; the
+  state store gains one `config.applied` row naming the revision it applied, the one it replaced,
+  and the keys whose values moved; and a candidate the loader refuses is reported as exactly one
+  line on the process's stderr — `router: reload refused (…, still serving revision <digest>): <reason>`
+  — while the gateway keeps serving the revision it already had and writes nothing to the store.
+- **Some keys still need a restart.** The keys the process builds once and holds — the listen
+  address (`server.addr`), `trace.dir`, the upstream-attempt timeout, the inbound body bound — are
+  refused under a reload with the key named; the process keeps serving, and such a change takes
+  effect at the next start.
+
+Nothing in the serving path depends on wall-clock time or turn order, and the reload adds no
+normalization: a request's outbound bytes stay a function of the client's own bytes and the revision
+in force. (The mechanism and the reasoning are recorded in
+[`design/decisions/ADR-039-file-watch-crate-for-the-reload.md`](../design/decisions/ADR-039-file-watch-crate-for-the-reload.md)
+and
+[`design/decisions/ADR-040-the-revision-switch-and-the-state-store.md`](../design/decisions/ADR-040-the-revision-switch-and-the-state-store.md);
+the contract is [`docs/spec.md` §4.15](../docs/spec.md).)
 
 ## What it persists
 
