@@ -512,9 +512,13 @@ that wants it, with its own ADR.
 
 ## Evidence (all re-runnable; none of it is an estimate)
 
+The readings that ask *"is the number free?"* (the register, §4.15, §12.20) were taken at the round's
+**base** `9e4b65e`, before this ADR's own commit existed — re-running them at this commit returns the
+post-landing state, which is why `probe.out` labels each probe with what it expects at which commit.
+
 ```
-# the facts this ADR rests on, at this ADR's commit
-bash autowork/harness/r47-0a/probe.sh > autowork/harness/r47-0a/probe.out   # P1..P17, raw output tracked
+# the facts this ADR rests on; the raw output is tracked, and probe.sh re-runs it anywhere
+bash autowork/harness/r47-0a/probe.sh > autowork/harness/r47-0a/probe.out   # P1..P19
 
 # the register's last number (040 is free) and the two free section numbers
 ls design/decisions/ | sort | tail -1              -> ADR-039-file-watch-crate-for-the-reload.md   (39 ADRs)
