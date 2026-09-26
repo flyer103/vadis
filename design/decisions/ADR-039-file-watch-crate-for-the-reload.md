@@ -65,7 +65,7 @@ choice. Measured 2026-09-26 against crates.io and against a scratch consumer cra
 | MSRV of the **whole resolved set** | **1.85** (the highest: `notify-types` 2.1.0) | the floor is decided by the tree's maximum, not by the crate: `1.85 ≤ 1.88` holds today, three minors of head-room, and the reload round re-measures it with `cargo +1.88.0 build --workspace --locked` |
 | licence | `notify` **CC0-1.0** (a public-domain dedication); the rest of the set MIT / Apache-2.0 / ISC / `Unlicense OR MIT` | all permissive; nothing in the tree is copyleft, and the product's own licence (Apache-2.0) is unaffected |
 | resolved tree, macOS | **8 packages** (notify + bitflags, fsevent-sys, libc, log, notify-types, walkdir, same-file) | the platform backend on the development machine is FSEvents, via `fsevent-sys` |
-| resolved tree, `x86_64-unknown-linux-gnu` | **12 packages** (that set with `inotify`, `inotify-sys`, `mio` replacing the macOS pair) | the CI/container side is inotify; the two backends are the crate's, not a second code path of ours |
+| resolved tree, `x86_64-unknown-linux-gnu` | **10 packages** (that set with `inotify`, `inotify-sys` and `mio` in place of `fsevent-sys`) | the CI/container side is inotify; the two backends are the crate's, not a second code path of ours |
 | default feature | **`macos_fsevent`** (on macOS); the Linux arm needs no feature | taking the crate with its defaults is the choice; `macos_kqueue` is the crate's own alternative backend and is **not** taken |
 | `unsafe` in the resolved sources | `notify` **26** occurrences (2 of 9 files), `fsevent-sys` **1** (1 of 3), `libc` **676** (66 of 389), `notify-types` / `walkdir` **0**; on Linux `inotify` 24, `mio` 176, `inotify-sys` 0 | the unsafe is the platform-call boundary, and `libc` is **already in this workspace's tree** (measured: `cargo tree -p router-cli --locked -i libc`), so the marginal unsafe is the binding crate plus `notify`'s own FFI calls |
 | crate_size / edition | 39 067 B / edition 2021 | the crate is small and does not move the workspace's edition |
@@ -196,7 +196,7 @@ GET https://crates.io/api/v1/crates/notify/8.2.0/dependencies -> 15 normal deps,
 
 # the resolved tree, from a scratch consumer crate (`notify = "8"`, nothing to do with the workspace)
 cargo tree -e normal                              -> 8 packages on macOS (notify 8.2.0 + 7)
-cargo tree -e normal --target x86_64-unknown-linux-gnu -> 12 packages (inotify/mio replace fsevent-sys)
+cargo tree -e normal --target x86_64-unknown-linux-gnu -> 10 packages (inotify/inotify-sys/mio in place of fsevent-sys)
 
 # the MSRV of the whole set, per package, read from the resolved Cargo.lock -> max 1.85 (notify-types 2.1.0)
 
@@ -210,6 +210,23 @@ cargo tree -p router-cli --locked -i libc          -> libc v0.2.189 (via sha2/cp
 git grep -n notify Cargo.toml crates/*/Cargo.toml  -> (no output)
 ```
 
-The probe scripts and their raw output are the R46-0 card's attachments; the numbers above are also
-reproducible from the commands, which is the point of writing them down (`autowork/work-mode.md`'s
-evidence rule).
+The probe scripts and their raw output are tracked at **`autowork/harness/r46-0/`** (flat names, one
+`git ls-files` away in a fresh clone); the numbers above are also reproducible from the commands, which is
+the point of writing them down (`autowork/work-mode.md`'s evidence rule).
+
+## Dated note — 2026-09-26 (the R46-0b audit, card `t_d8a3e014`)
+
+Two corrections, both re-measured against live sources on the same day rather than trusted:
+
+1. **The resolved Linux tree is 10 packages, not 12.** Re-measured with a fresh scratch consumer crate
+   (`notify = "8"`): `cargo tree -e normal --target x86_64-unknown-linux-gnu` resolves `notify` + `bitflags`,
+   `inotify`, `inotify-sys`, `libc`, `log`, `mio`, `notify-types`, `same-file`, `walkdir`. Every *other*
+   crate fact in D1 reproduced exactly — 8.2.0 as max_stable against a `9.0.0-rc.5` line, licence
+   **CC0-1.0**, `rust_version` **1.77**, the set's MSRV max **1.85** (`notify-types` 2.1.0), `crate_size`
+   39 067, edition 2021, **15** normal deps, default feature `macos_fsevent`, and every `unsafe` count
+   (notify 26 in 2 of 9 files, fsevent-sys 1, libc 676, inotify 24, mio 176, inotify-sys / notify-types /
+   walkdir 0).
+2. **The bundle sentence above originally read "the R46-0 card's attachments" — and that card has none.**
+   The orchestrator's attach attempt was stopped by the approval gate, so the raw bundle (which lived only
+   in a pruned scratch directory) was landed here in the tree by the audit instead, per
+   `autowork/work-mode.md`'s rule that a fresh clone must resolve every number's evidence.
