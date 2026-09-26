@@ -1481,11 +1481,11 @@ of the inline form, which stays legal, unchanged and loadable: exactly one of `p
 
 ### 4.15 The reload — a configuration change takes effect without a restart
 
-*Status: **specified, not served.** The mechanism is decided (ADR-039) and the semantics below are
-ADR-040; the watcher, the publish and the keyed diff land with the reload's own implementation cards.
-Until they do, a process still serves the configuration it loaded — nothing on this page is observable
-yet. Nothing here adds a flag, a signal or a key: the reload is default behaviour, like `setup`'s pair
-write.*
+*Status: **served.** The mechanism is ADR-039 and the semantics below are ADR-040; the watcher, the
+publish and the keyed diff are landed, and everything on this page is observable on a running process.
+Nothing here adds a flag, a signal or a key: the reload is default behaviour, like `setup`'s pair
+write. The one item on this page still undecided is the session-level question of the "Pending"
+paragraph below — it remains the owner's ruling, and no session-level policy is implemented.*
 
 A running process **notices that the pair changed and serves the new configuration**, with no restart and
 nothing for the operator to remember. The change is noticed by a file watcher and *decided* by the
@@ -2188,11 +2188,12 @@ router stats [--config <config path>] --window <duration> [--json]
 - The window is `[now - window, now]` in UTC. A trace file is read when its hourly range (§4.1) intersects the
   window; a record is counted when **its own `ts`** falls inside it — never by which file it happens to be in.
 - **Read-only by construction.** `stats` never writes and never migrates: it reads the trace files directly and
-  opens the state store **read-only** (so it cannot create a state file, and it does not take the writer role
-  that `serve` holds — a read-only connection is not the exclusive writer, §4.5). When the store cannot be opened
-  read-only (no state directory yet, an unreadable file, a schema newer than this binary), the one figure that
-  only the log holds — `unknown outcome requests` — is **omitted** with a one-line note on stderr, and the rest
-  of the report is printed unchanged.
+  opens the state store **read-only** (so it cannot create a state file, and it never takes the writer role
+  `serve` holds, §4.5). While `serve` runs it holds the store exclusively, and a second process's open — a
+  read-only one included — is refused: against a live gateway the store open is the **normal** failure, not an
+  edge. When the store cannot be opened read-only (a live `serve` holding it, no state directory yet, an
+  unreadable file, a schema newer than this binary), the one figure that only the log holds — `unknown outcome
+  requests` — is **omitted** with a one-line note on stderr, and the rest of the report is printed unchanged.
 - **Exit codes**: `0` a report was produced; `2` the invocation itself is unusable (unreadable or invalid
   config, an unparsable window, a trace directory that does not exist). A partial report is never presented as
   a complete one.

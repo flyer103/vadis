@@ -3596,16 +3596,23 @@ loop-side and is never read by the serving path (AGENTS 3). **No threshold** —
 transform band stay `autowork/STATE.md`'s waiting-on-human **row 1** — and neither the ledger nor the pruning
 report mints a `verified` figure (ADR-033 D6, D7).
 
-### 12.20 The reload: the revision, the publish and the invariants (ADR-040; **specified, not landed**)
+### 12.20 The reload: the revision, the publish and the invariants (ADR-040; **specified and landed — R47, merge `db2ac77`**)
 
 **What this section is.** spec **§4.15** is the promise; **ADR-040** is the decision and the reasoning;
 this is the landing — the sequence, the seam the request path touches, what a revision may change, and
 the assertions a card is held to. The mechanism is ADR-039's (`notify`, `router-cli` only, §12.1's row):
 the watcher decides *when to look*; the digest (ADR-037 D6) decides *whether anything changed*; this
-section decides *what happens next*. **Nothing here is in the tree at this commit** — there is no
-watcher, no second `load` entry point, no published handle and no keyed diff (measured: Background of
-ADR-040; `crates/router-plugins/src/assembly.rs:276-277` records the absence in its own words, and
-`apply_config_diff` exists in §12.2's sketch and nowhere in `crates/`).
+section decides *what happens next*. **All of it is in the tree since R47** (the merge `db2ac77`;
+R47-3's independent verification returned **NO BLOCKING FINDING**, `autowork/harness/r47-3/VERDICT.md`):
+the watcher is `crates/router-cli/src/reload.rs` (`Watcher` registered on the pair's two directories
+with an exact-path filter; the leading-edge `Coalescer` over the one `COALESCE_WINDOW` constant), the
+second `load` entry point is `reload::look` running the same `config_load::load` `serve` starts with,
+the published handle is `router_proxy`'s `RevisionCell` (`crates/router-proxy/src/revision.rs` — its
+one writer is `reload::Publisher`, a request `capture`s it once), and the keyed diff is
+`crates/router-core/src/config_diff.rs` (`router_core::changed_keys`, D10's value diff — §12.2's
+`apply_config_diff` sketch name still exists nowhere in `crates/`; the landing took D10's own name).
+**Still not in the tree, on purpose:** the session-level arm of the two-revision window (below) —
+ADR-040's second owner question stays the owner's ruling, exactly as spec §4.15's status line records.
 
 **A revision.** The immutable value one successful load of the pair produces: the validated `RouterConfig`,
 the resolved paths and the identity (§12.10.2's `ResolvedConfig`, `crates/router-cli/src/config_load.rs`),

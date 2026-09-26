@@ -51,14 +51,32 @@ variable's **name**, never its value), the resolved state path, and the state st
 refusal, see the table above). A plugin listed as `disabled` in the config appears as
 disabled rather than missing.
 
-**A change to the config takes effect at the next start, not while the process runs.** `serve` reads
-the file — and the roster it names — **once, at startup**, and serves that: v0.1 has no file watcher and
-no reload, so editing `config.yaml` does not change a running gateway; restart it. A change to the listen
-address is the same story. Nothing in the serving path depends on wall-clock time or turn order, so a
-restart does not change what a request looks like upstream. (A reload is a **planned** change, and the
-decision that opens it — the file-watch mechanism — is recorded in
-[`design/decisions/ADR-039-file-watch-crate-for-the-reload.md`](../design/decisions/ADR-039-file-watch-crate-for-the-reload.md);
-**nothing of it is shipped**, and a gateway that reloads itself will be described here when it does.)
+**A change to the config takes effect while the process runs.** `serve` reads the file — and the
+roster it names — at startup, and then keeps watching both: edit `config.yaml` (or the roster a
+split config names) and a running gateway notices, re-reads the pair, and serves the new
+configuration without a restart ([`docs/spec.md` §4.15](../docs/spec.md)). Three things are worth
+knowing:
+
+- **Only a real change is a reload.** The decision is the digest of the two files' bytes, so a touch
+  or a same-bytes rewrite is no reload at all — nothing happens, and that is observable only as
+  *nothing* happening.
+- **You can see a reload happen.** `GET /health`'s `config_digest` moves to the new revision; the
+  state store gains one `config.applied` row naming the revision it applied, the one it replaced,
+  and the keys whose values moved; and a candidate the loader refuses is reported as exactly one
+  line on the process's stderr — `router: reload refused (…, still serving revision <digest>): <reason>`
+  — while the gateway keeps serving the revision it already had and writes nothing to the store.
+- **Some keys still need a restart.** The keys the process builds once and holds — the listen
+  address (`server.addr`), `trace.dir`, the upstream-attempt timeout, the inbound body bound — are
+  refused under a reload with the key named; the process keeps serving, and such a change takes
+  effect at the next start.
+
+Nothing in the serving path depends on wall-clock time or turn order, and the reload adds no
+normalization: a request's outbound bytes stay a function of the client's own bytes and the revision
+in force. (The mechanism and the reasoning are recorded in
+[`design/decisions/ADR-039-file-watch-crate-for-the-reload.md`](../design/decisions/ADR-039-file-watch-crate-for-the-reload.md)
+and
+[`design/decisions/ADR-040-the-revision-switch-and-the-state-store.md`](../design/decisions/ADR-040-the-revision-switch-and-the-state-store.md);
+the contract is [`docs/spec.md` §4.15](../docs/spec.md).)
 
 ## What it persists
 
@@ -79,10 +97,16 @@ relative to the config file's directory, so the state can live outside the repos
   exclusively. A second `serve` pointed at the same state directory is **refused at
   startup** with a stated reason, rather than becoming a second writer on one file.
 - **Consequence for inspection:** you cannot casually open the file with a SQLite tool while
-  the gateway is running (and you will get a busy error rather than a corrupt read). Stop
-  `serve` first, inspect, then start it again. Two read-only surfaces do run against a live
-  gateway: `GET /health` and `router stats`, which opens the store read-only on purpose (see
-  [Observability](observability-and-accounting.md)). A dedicated `router state`-style surface is a
+  the gateway is running (and you will get a busy error rather than a corrupt read): while
+  `serve` runs it holds the store exclusively, and a second process's open — a read-only one
+  included — is refused. Stop `serve` first, inspect, then start it again. The read-only
+  surfaces split the same way: `GET /health` answers against a live gateway because it is
+  served by the running process itself, while `router stats`' own read-only open is refused
+  there too — against a live gateway its report comes out with the one store-derived figure,
+  `unknown outcome requests`, **omitted** and a one-line note on stderr naming the refusal,
+  every other figure printed unchanged (see
+  [Observability](observability-and-accounting.md)). To read that figure, run `stats` with
+  `serve` stopped. A dedicated `router state`-style surface is a
   separate change, not part of v0.1.
 - **The store is a startup prerequisite** (see the table above). An unreadable file is a
   permissions problem to fix, not a mode to run in.
