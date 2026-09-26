@@ -1251,10 +1251,7 @@ fallback: []
 
         // The publish: the cell serves the new revision, and the head is
         // re-armed — a second look at the same bytes finds no change (D1).
-        assert_eq!(
-            cell.capture().config_identity.config_digest,
-            new_digest
-        );
+        assert_eq!(cell.capture().config_identity.config_digest, new_digest);
         assert_eq!(publisher.head().0, new_digest);
         match look(&root, &publisher.head().0, None) {
             Verdict::NoChange => {}
@@ -1450,6 +1447,80 @@ fallback: []
             ],
             "a changed entry is unloaded, then loaded"
         );
+    }
+
+    /// The in-flight half of the capture-once rule (ADR-040 D2/D3, and
+    /// the digest-honesty note): a request that captured revision A at
+    /// receive finishes AFTER the publish of B — and its record is still
+    /// stamped with A's digest, because the digest travels WITH the
+    /// captured revision's own writer. A writer shared one level up and
+    /// stamped at commit time would stamp B: that shape fails this test.
+    #[test]
+    fn a_request_finishing_after_a_switch_is_stamped_by_the_revision_that_served_it() {
+        use router_core::TraceWriter as _;
+
+        let (_g, root) = tempdir("in-flight");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let (sink, _lines) = capture();
+        let (publisher, _store, cell, _sink_handle) = publisher_for(&root, &sink);
+
+        // The request captures at receive (D2's one rule)…
+        let in_flight = cell.capture();
+        let served_digest = in_flight.config_identity.config_digest.clone();
+
+        // …the reload publishes mid-flight…
+        apply_landing(&publisher, &root, &MINIMAL.replace("ttl: 12h", "ttl: 6h"))
+            .expect("the switch applies");
+        let in_force = cell.capture().config_identity.config_digest.clone();
+        assert_ne!(in_force, served_digest, "the publish happened");
+
+        // …and the request finishes on the revision it captured: the
+        // digest its record carries is read off THAT revision's writer.
+        let writer = in_flight
+            .forwarder
+            .trace
+            .as_ref()
+            .expect("the rig wires a writer");
+        let stamped = writer.config_digest().to_string();
+        assert_eq!(stamped, served_digest, "stamped by the serving revision");
+        assert_ne!(stamped, in_force, "…not by the one now in force");
+
+        // The record itself — the guard's own constructor, the same write
+        // call the request path makes — lands in the trace stamped with A
+        // even though the cell already serves B.
+        let verdict = match router_proxy::AuthGate::new("t".to_string()).admits(&[]) {
+            v @ router_proxy::AuthVerdict::Refused { .. } => v,
+            router_proxy::AuthVerdict::Admitted => panic!("a presented-less request is refused"),
+        };
+        let record = router_proxy::refused_record(
+            "req-in-flight",
+            router_core::config::WireApi::Chat,
+            &verdict,
+            1_800_000_000,
+            0,
+            &stamped,
+        );
+        writer.write(&record).expect("the write lands");
+        let dir = root.parent().unwrap().join("state/traces");
+        let mut found = false;
+        for entry in std::fs::read_dir(&dir).expect("the trace dir exists") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                let v: serde_json::Value = serde_json::from_str(line).unwrap();
+                if v["identity"]["request_id"] == "req-in-flight" {
+                    assert_eq!(
+                        v["config_digest"],
+                        serde_json::json!(served_digest),
+                        "the record is stamped with the digest that served it"
+                    );
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "the in-flight record is in the trace");
     }
 
     // -------------------------------------------------------------
@@ -1726,6 +1797,110 @@ fallback: []
             .to_string()
     }
 
+    /// The accepted half through the real process (RV-1 and RV-8 end to
+    /// end): a one-key landing on a running serve moves /health's digest
+    /// to the new bytes' own digest, the process keeps serving, and the
+    /// log holds exactly two `config.applied` rows — the startup's (both
+    /// switch members null) and the switch's (the predecessor named,
+    /// exactly the moved path listed).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_accepted_landing_switches_the_served_revision() {
+        let (_g, root) = tempdir("accepted-serve");
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let config = MINIMAL.replace("127.0.0.1:8790", &addr);
+        std::fs::write(&root, &config).unwrap();
+        let startup = load_identity(&root).config_digest;
+
+        let cfg = root.to_string_lossy().into_owned();
+        let serve_task = tokio::spawn(async move { crate::serve(&cfg).await });
+        until(
+            || std::net::TcpStream::connect(&addr).is_ok(),
+            Duration::from_secs(10),
+            "serve to listen",
+        );
+        assert_eq!(health_digest(&addr), startup);
+
+        // The registration is asynchronous and its readiness is not
+        // visible from outside the process — a landing that arrives
+        // before it is an event nobody heard (D12.6: the next event is
+        // the next look). So land, and if the switch has not happened,
+        // land again: each landing is a fresh event, and once the
+        // registration is live one of them delivers. (A fixed sleep here
+        // lost to the backend's stream start under test parallelism.)
+        land(&root, &config.replace("ttl: 12h", "ttl: 6h"));
+        let expected = load_identity(&root).config_digest;
+        assert_ne!(expected, startup, "the landing moved the bytes");
+
+        // The switch, delivered: poll /health for the new digest rather
+        // than sleeping a fixed window (delivery + coalesce + the
+        // publish, all off the request path).
+        let mut switched = false;
+        for _ in 0..15 {
+            for _ in 0..10 {
+                if health_digest(&addr) == expected {
+                    switched = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            if switched {
+                break;
+            }
+            // Not yet: either the registration is still starting or the
+            // coalescer is mid-burst — a fresh event either way.
+            land(&root, &config.replace("ttl: 12h", "ttl: 6h"));
+        }
+        assert!(
+            switched,
+            "RV-1: /health answers for the revision in force after the publish"
+        );
+        assert!(
+            !serve_task.is_finished(),
+            "an accepted switch never stops the process"
+        );
+        serve_task.abort();
+        let _ = serve_task.await;
+
+        // The log: exactly the two config.applied rows, nothing else (no
+        // request was served, no plugin edge was crossed).
+        let store =
+            router_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
+                .unwrap();
+        use router_core::store::{Query, QueryRow, Store as _};
+        let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
+            panic!("events")
+        };
+        let applied: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind_raw == "config.applied")
+            .collect();
+        assert_eq!(applied.len(), 2, "one row per revision: {events:?}");
+        assert!(
+            applied[0].payload["previous_config_digest"].is_null(),
+            "RV-8's startup state: no predecessor to name"
+        );
+        assert!(
+            applied[0].payload["changed_keys"].is_null(),
+            "RV-8's startup state: nothing to diff against"
+        );
+        assert_eq!(
+            applied[1].payload["previous_config_digest"],
+            serde_json::json!(startup),
+            "the switch's row names the revision it replaced"
+        );
+        assert_eq!(
+            applied[1].payload["config_digest"],
+            serde_json::json!(expected)
+        );
+        assert_eq!(
+            applied[1].payload["changed_keys"],
+            serde_json::json!([{ "path": "session.ttl", "change": "changed" }]),
+            "a one-key revision lists exactly that path"
+        );
+        assert_eq!(events.len(), 2, "no other row of any kind: {events:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rv9_a_refused_candidate_leaves_a_running_process_unchanged() {
         let (_g, root) = tempdir("rv9");
@@ -1792,5 +1967,19 @@ fallback: []
             "RV-9: the store gains no row — only the boot's config.applied exists: {events:?}"
         );
         assert_eq!(events[0].kind_raw, "config.applied");
+        // RV-8's startup state, on the row the real process wrote: the
+        // two switch members are null — there is no predecessor to name
+        // and nothing to diff against (ADR-040 D10: one flat object on
+        // every row 13, so a reader never asks which vintage it holds).
+        assert!(
+            events[0].payload["previous_config_digest"].is_null(),
+            "startup carries no predecessor: {:?}",
+            events[0].payload
+        );
+        assert!(
+            events[0].payload["changed_keys"].is_null(),
+            "startup carries no diff: {:?}",
+            events[0].payload
+        );
     }
 }
