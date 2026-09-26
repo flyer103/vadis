@@ -5,6 +5,7 @@
 
 pub mod config_load;
 pub mod config_path;
+pub mod reload;
 pub mod setup;
 pub mod stats;
 
@@ -867,6 +868,32 @@ pub async fn serve(config_path: &str) -> i32 {
             "none"
         }
     );
+    // The reload's watcher (ADR-039's mechanism; ADR-040 D1/D11/D12;
+    // DESIGN §12.20's step 1): default behaviour — no flag, no key, no
+    // signal (the owner's standing R44 ruling; D8). The watcher decides
+    // when to look, the digest decides whether anything changed, and the
+    // same loader `serve` started with is the gate. This round's scope
+    // ends at the verdict: a refused candidate is reported in exactly one
+    // line on stderr and the revision in force keeps serving (D11/RV-9);
+    // an accepted candidate's publish (the `config.applied` row, the
+    // handle swap, the capture-once seam) is R47-2's and is deliberately
+    // not applied here. The watcher builds and runs on its own thread
+    // (reload::Watcher's doc: the backend's start is slow and its
+    // teardown blocks, so neither may sit on serve's paths). A watcher
+    // that cannot start degrades to the pre-reload behaviour — a change
+    // then takes effect on restart, D12.6's named fallback — announced
+    // once, never silent: the thread's own setup failure reports through
+    // the same sink; a spawn failure is the Err arm here.
+    let _reload_watcher = match reload::Watcher::start(
+        &rc.identity,
+        std::sync::Arc::new(|line| eprintln!("{line}")),
+    ) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("router: {e}");
+            None
+        }
+    };
     match axum::serve(listener, app).await {
         Ok(()) => 0,
         Err(e) => {
