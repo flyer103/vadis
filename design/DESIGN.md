@@ -3158,12 +3158,24 @@ never touches a line it has no edit for.
 7. Sort the edits, assert disjoint, `apply` → candidate bytes.
 8. **`config_load::validate_text(&candidate)`** — the shared entry point extracted from `load()`, so the
    deserializer and `validate()` `serve` runs are literally the same two calls. The messages `load()` prints
-   today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged).
-9. Empty plan → `no change: <path> left as it is`, exit 0 (this is what makes a second run a no-op).
+   today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged). **Every run
+   that reaches a plan reaches this step, including a run whose plan is empty** — there the candidate is the
+   base itself. The loader is the gate, so a base it refuses is refused here (exit 2, the loader's reason,
+   nothing written), and the four shapes spec §4.14's ladder names — both keys written, neither written, an
+   unparsable text, and a present-but-not-the-roster-block roster — are refused on the writing surface exactly
+   as `--check` refuses them, instead of being reported as a no-op. (spec §4.11's *the loader is the gate*
+   bullet; **R43-F7**, whose shipped site let the empty plan sweep past this step, on the write path and on
+   `--dry-run` alike.)
+9. Empty plan **over a base that loads** → `no change: <path> left as it is`, exit 0 (this is what makes a
+   second run a no-op).
 10. `--backup` (or `--force`, which implies it) → copy the existing target to `<target>.bak`.
 11. Write candidate bytes to `<target>.setup.tmp` in the target's directory, `sync_all`, `rename` over the
     target; on any failure remove the temporary file and exit with the reason (`1` for I/O). Print the absolute
-    path and the number of edits applied.
+    path and the number of edits applied. **The replacement carries the target's own mode** (step 1's rule): the
+    temporary file's `0600` is a creation mode, and a target that already exists comes out of a landing with the
+    mode it had — a `rename` needs the target's directory to be writable, never the file. (**R43-F6**, measured
+    at `e72e406`: a `0444` pair landed at `0600` with both files byte-identical and the report reading
+    `0 edits applied`.)
 
 **`--check`'s probes** are the two `serve` already makes, and nothing else (the roster fact of step 2 is a
 rendering of step 1b's span, not a probe: it decides no state and moves no exit code): for each
@@ -3181,7 +3193,18 @@ matches `Serve { .. }`, tolerates). Absence resolves instead of erroring at the 
 in the writer mode**, so a reader that finds nothing refuses (exit 2) naming `router setup` and `--config`.
 Modes need no dependency: the temporary file is opened with `OpenOptions::mode(0o600)` — a umask can only clear
 bits, so `0600` is exact whatever the ambient umask — and a directory `create_dir_all` created gets an explicit
-`set_permissions(0o700)` afterwards, because that call cannot express a mode; nothing is re-moded.
+`set_permissions(0o700)` afterwards, because that call cannot express a mode.
+
+**A target that is already there keeps its own mode.** The `0600` above is the **creation** mode of the
+temporary file, never the landed file's: the landing must carry the **target's** mode onto the replacement — set
+it on the temporary file before the `rename`, or on the target after it; the first is the one to prefer, because
+it leaves no window in which the target's name carries the wrong mode. `0644` stays `0644`; a target the operator
+made read-only (`0444`) stays `0444` and is written all the same, because a `rename` needs the target's
+**directory** to be writable and never the file. So no run of this command changes a mode the operator set, and
+the report's `0 edits applied` is true of the mode as well as of the bytes (spec §4.11's *Landing* bullet, `G8`).
+What the rule covers is the mode: the replace is a new inode, so the file is owned by the user who ran the
+command, and a hard link, an ACL or an xattr on the old inode does not travel. A `<target>.bak` copy keeps the
+mode it copied.
 
 **The writer over two files (ADR-037; spec §4.11's *target file* column, §4.14) — one target per section, the
 pair as the candidate.** Where the root names a roster, the writer owns **two** files, and nothing else in the
@@ -3243,7 +3266,14 @@ unchanged.
 - **Integration, the file contract** (the G1–G8 table in spec §4.11, plus the location case CONF-79): byte
   identity on the all-defaults path,
   locality of *k* changes, idempotence (a second run's hash **and** mtime unchanged), the refusal ladder
-  leaving the target's hash unchanged, the `--check` exit codes, and the secret canary.
+  leaving the target's hash unchanged, the `--check` exit codes, and the secret canary. Two obligations the
+  two findings of R46-0 add to that list: **the mode rule, both ways** — a `0444` target that a landing
+  replaces is `0444` afterwards and carries the run's bytes, and a file the run creates is `0600` (`G8`; the
+  `0444` `--force` arm is the one that must read the mode off the file system *and* the bytes' hash off the
+  file, because R43-F6's whole shape is "the hash did not move and something did") — and **the empty-plan
+  gate**: a base the loader refuses (both keys, neither key, an unparsable text, a present-but-not-the-roster
+  roster) is refused at exit 2 on the write path **and** on `--dry-run`, with the target's hash and mode
+  unchanged, exactly as `--check` refuses it (`R43-F7`).
 - **The shape step's own rig** (spec §4.11; ADR-038): over an inline root — the roster file's bytes are the
   moved block's bytes and the root loses exactly the span while gaining exactly the template's line (every
   other byte equal); the root's answer to a `providers` question lands in the **roster**, not in the root; a

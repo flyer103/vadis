@@ -1180,6 +1180,16 @@ recall one: it shows what the file carries and what the file cites. A list- or f
 - **Landing.** The candidate goes to a temporary file **in the target's directory**, is flushed, and is then
   `rename`d over the target (one atomic replace on one filesystem); the temporary file is removed on any failure.
   Nothing lands partially, and no other process can observe a half-written config.
+  **The mode of a target that is already there is the operator's, and the landing keeps it.** The temporary
+  file is created `0600` (below) — that is a **creation** mode, not the landed file's. When the run replaces a
+  file that exists, the file that is there afterwards carries **the mode that file had**: `0644` stays `0644`,
+  and a target the operator made **read-only** (`0444`) stays `0444` — the `rename` needs write permission on
+  the target's **directory** and never on the file, so a read-only config is written rather than refused, and
+  it is read-only again when the run returns. A landing therefore changes no attribute the operator set, and
+  the run's own report (`0 edits applied`) is true of the mode as well as of the bytes. What this rule covers
+  is the **mode**; the replace itself is a new inode, so the file is owned by the user who ran the command and
+  a hard link, an ACL or an extended attribute attached to the old inode does not travel with it. A
+  `<target>.bak` copy keeps the mode of the file it copied.
 - **The target's directory is created when it is missing** (`mkdir -p`), because the default location is
   `~/.config/router/`, which does not exist on a fresh machine. The file this command creates is mode **`0600`**
   and every directory **it** creates is **`0700`** — set explicitly rather than left to the umask, and a no-op
@@ -1192,8 +1202,17 @@ recall one: it shows what the file carries and what the file cites. A list- or f
 - **An existing target is the normal case, not a conflict.** No `--force` is needed to reconfigure the file that
   is there — the base is its own bytes and only the answered keys move. `--force` is the operation that
   *replaces* it (base = the template), and it keeps the previous file as `<target>.bak`.
-- **Nothing to change ⇒ nothing is written.** With an empty plan the command prints
+- **Nothing to change ⇒ nothing is written — over a target that loads.** With an empty plan the command prints
   `no change: <path> left as it is` and exits 0. That is what makes a second run a no-op rather than a rewrite.
+- **The loader is the gate on every run that reaches a plan, and an empty plan does not skip it.** The candidate
+  — and when nothing was planned the candidate **is** the base — is parsed and validated before the run may
+  report a no-op, so a file the loader **refuses** is refused by this command too: `exit 2`, naming the loader's
+  reason, nothing written. The plan's emptiness is a statement about the operator's answers, never about the
+  file. The four shapes §4.14's ladder names are therefore refused here too, rather than told `left as it is`
+  while `--check` (the row above) refuses them: a root that writes **both** `providers:` and `providers_file:`
+  (shape 1), one that writes **neither** (shape 2), a text that does not parse, and a pair whose **roster** is
+  present but is not the roster block (shape 4). `--dry-run` reports the refusal rather than printing a plan of
+  nothing. A no-op run is a no-op over a config that works.
 
 **Determinism — the frozen, assertable properties.** The written bytes are a function of (base bytes, answers,
 template) **only** — never of the clock, the CWD, the answer order or the environment's contents (the environment
@@ -1208,14 +1227,14 @@ affects the *check* output and the exit code, never a byte of the file).
 | G5 | no environment **value** appears in the command's stdout, its stderr, its `--json`, or any file it wrote — only names, statuses and paths |
 | G6 | the target is modified only after the candidate has passed the loader |
 | G7 | the run reproduces under a different CWD — the **bytes written** are a function of (base bytes, answers, template) only — and no file it writes carries a timestamp. The one CWD-dependent step is §4.12's `./config.yaml` candidate, and it is reported rather than silent (G8) |
-| G8 | the path the command reports and writes is exactly the one §4.12's discovery order selects from (`--config`, `$XDG_CONFIG_HOME`, `$HOME`, the CWD); the `--json` selection member names the rule that chose it; a file or directory the run **created** carries mode `0600` / `0700`; and an existing directory is not re-moded |
+| G8 | the path the command reports and writes is exactly the one §4.12's discovery order selects from (`--config`, `$XDG_CONFIG_HOME`, `$HOME`, the CWD); the `--json` selection member names the rule that chose it; a file or directory the run **created** carries mode `0600` / `0700`; an existing directory is not re-moded **and neither is an existing file** — a target that is already there keeps the mode it had across the landing (`0444` stays `0444`), so no run of this command changes a mode the operator set |
 
 **Exit codes** (the vocabulary `serve` already uses).
 
 | Code | Meaning |
 |---|---|
 | `0` | the file was written; or `no change`; or `--print` / `--dry-run` printed; or `--check` found every named variable present |
-| `2` | **refused, nothing written**: an unknown section; stdin not a terminal without `--non-interactive`; an unresolvable or ambiguous anchor; a requested change on a key that is not settable here; a candidate that does not load; a missing template; a target that is a directory, or a target whose directory cannot be created because a path component is not a directory |
+| `2` | **refused, nothing written**: an unknown section; stdin not a terminal without `--non-interactive`; an unresolvable or ambiguous anchor; a requested change on a key that is not settable here; a candidate that does not load — **including the base itself, on a run whose plan is empty**; a missing template; a target that is a directory, or a target whose directory cannot be created because a path component is not a directory |
 | `4` | `--check`: the file loads, but a variable it names is missing — or, for the token, empty — the same class `serve` refuses the start on (§12.10.2) |
 | `1` | an unexpected I/O failure, with the reason printed |
 
