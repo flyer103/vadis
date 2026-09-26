@@ -58,3 +58,8 @@ http = "1"
 bytes = "1"
 # futures: named in the same allowlist row (the SSE relay).
 futures = "0.3"
+# notify (the file-watch mechanism): DESIGN §12.1's allowlist row for router-cli,
+# added by ADR-039 — the watcher decision ADR-037 D7 left to the owner's ruling
+# (2026-09-26). The reload re-reads the pair spec §4.14 names and decides by the
+# byte digest (ADR-037 D6); this crate decides only when to look.
+notify = "8"

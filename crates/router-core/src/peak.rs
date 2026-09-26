@@ -7,7 +7,7 @@ pub type Timestamp = u64;
 
 /// Fixed time zone. v0.1 only needs UTC offsets declared by windows; the IANA
 /// database is deliberately not pulled in (dependency discipline).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Tz {
     Utc,
     /// Offset in minutes relative to UTC (e.g. +08:00 = 480; Hawaii = -600).

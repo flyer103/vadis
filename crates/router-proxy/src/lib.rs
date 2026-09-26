@@ -8,6 +8,7 @@ mod availability;
 mod body_limit;
 mod forward;
 mod health;
+mod revision;
 mod stream_forward;
 mod stubs;
 
@@ -22,5 +23,6 @@ pub use forward::{
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
 pub use health::{health_json, AppState, ConfigIdentity, ProviderKeyFacts};
+pub use revision::{Revision, RevisionCell, SharedRevision};
 pub use stream_forward::{StreamOutcome, StreamSuccess};
 pub use stubs::protocol_stub;

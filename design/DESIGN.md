@@ -309,6 +309,13 @@ router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
   comment records the 2026-09-20 measurement and that a raised dependency can raise it), and the
   `[workspace.dependencies]` comment shape the landing round writes is ADR-039 D3's, verbatim (§12.1
   states the boundary; the ADR states the reason — one copy of each).
+- **No second watch-related dependency is taken (ADR-040 D12).** The reload's debounce is a constant in its
+  own module, not a crate. `notify-debouncer-full` (the debouncing wrapper ADR-039 D4 names) would be a
+  **second** row in the table above, and `Cargo.toml:30-31` makes a new dependency a decision reconciled
+  against this section *before* it lands — not something a round spends on a coalescing timer whose whole job
+  is a bound on how often two small files are read. The row that a later round wants is the owner's to open;
+  until then `router-cli`'s cell gains **one** crate for the reload (`notify`) and nothing else, and the
+  window's behaviour is pinned by a unit test of a pure function instead of by a third-party policy.
 - Every crate root adds `#![forbid(unsafe_code)]`; `router-core` additionally adds
   `#![deny(clippy::float_arithmetic)]` (money only takes the fixed-point path of §12.4).
 - Test placement: unit tests use `#[cfg(test)] mod tests` in place; conformance lives in
@@ -1954,7 +1961,7 @@ follows ADR-009 item 4's single question (*may this fact be recomputed?*).
 | 10 | cost | `cost.computed` | once usage is known, **after** the trace line was appended (note R2) | FULL | the five-tier cost **and the `currency` its amounts are in** (§4.8), `trace_ref` |
 | 11 | quota | `quota.charged` | with `cost.computed`, before a buffered response is released | FULL | provider, plan, tokens charged, remaining, `trace_ref` |
 | 12 | loader (not a request step) | `plugin.loaded` / `plugin.unloaded` | at each load/unload edge | NORMAL | plugin id, kind, tier, effective config digest |
-| 13 | loader (not a request step) | `config.applied` | at startup after validation, and on every accepted config diff | FULL | config digest, changed keys (keyed diff, ADR-002) |
+| 13 | loader (not a request step) | `config.applied` | at startup after validation, and on every accepted config diff | FULL | config digest, changed keys (keyed diff, ADR-002); **note R10** fixes the payload's two variant members — the predecessor's digest and the value diff — and their three states |
 | 14 | startup (not a request step) | `restart.marked` | at process start, before the store serves reads | FULL | the marker `unknown_outcome` accounting reconciles against (ADR-010 item 4: intents left unpaired by the previous process are found by pairing, never by fabricated closure events) |
 | 15 | the family's account state (ADR-014; written from the guard at a session boundary, or right after the classification that declares the primary exhausted) | `plan.switched` | after the evidence that moved the family (`error.classified` at row 7, or a successful probe) and **before** the next `upstream.submitted` — the position rows 5 and 8 already occupy (note R5); the account handoff this row enables then writes row 4's move arm for every live binding of the abandoned route, **after** this row (note R7) | **FULL** | `family`, `from_account` / `to_account`, `from_route` / `to_route`, `reason` (`primary_exhausted` / `primary_recovered`), `probe`, `reprefill_tokens` + `switch_cost_nano` (both inferred) **and the `currency` that denominates `switch_cost_nano`** (§4.8), the `session` that carried the evidence (null when it was a sessionless request) |
 
@@ -2230,6 +2237,56 @@ is no answer body to read and the transport kind is the whole evidence (spec §4
   L1-envelope value, no transform and no `verified` figure. What the round does not fix is registered as a
   finding in `autowork/harness/r29-1/FREEZE.md` §8 — a byte cap would have to land on both media, and the
   buffered path's own post-head read-failure arm (`unknown_outcome`) is a different question.
+
+**R9 — row 13's second trigger is the reload's publish, and only an *accepted* diff is an application
+(ADR-040).** *(`§12.10.5`'s own note series runs R1…R9; §12.10.3's R1…R12 is a separate series and its own
+R9 is unrelated.)* Row 13 has said *"at startup after validation, **and on every accepted config diff**"* since
+it was written, and the tree has had no caller for the second half: `config.applied` is appended at
+exactly one site, the startup path (`crates/router-cli/src/lib.rs:210-231`). ADR-040 makes that half live
+— a revision switch is a **publish**, and the row is its intent commit, written **before** the new
+revision can serve (step 3 of §12.20's sequence, the same order the startup path uses). Three
+consequences a reader must not have to infer:
+
+- **A refused candidate writes no row.** The row's meaning is *"this process is serving this revision"*;
+  a candidate the loader refuses is not served, so a row for it would be a false statement in the truth
+  store. A refusal is observable **on the process's own surface** — **ADR-040 D11** fixes that surface and
+  its four content requirements (one line per refused candidate, naming the reload, the revision still
+  served, the loader's reason verbatim and the resolved path(s) read).
+- **One look that finds no change writes nothing.** The digest decides (ADR-037 D6 / ADR-039 D2): row 13's
+  trigger is a *diff*, so a watcher event whose digest matches the current one produces no row, no plugin
+  edge and no observable change at all.
+- **Row 12 stays an *edge* witness.** A switch mounts only the delta (ADR-002's keyed identity), so
+  `plugin.loaded`/`plugin.unloaded` are written only where an entry's `id` / `kind` / `disabled` / config
+  actually moved; a revision that changes only the roster writes row 13 and no row 12. The payload keeps
+  its `effective config digest` member, which on a switch is the **new** revision's.
+
+The changed-keys half of row 13's payload, and the emission point of the refusal's own surface, stay
+**R47-0b's axis**; this note fixes the trigger, the order and the two absences. **Note R10 below is that
+axis's landing** and fixes the payload itself.
+
+**R10 — row 13's payload on a switch: two variant members, and a value diff against a named predecessor
+(ADR-040 D10).** Row 13's payload is one flat object on every row, so a reader never has to ask which
+vintage it holds. Beside the digest half (`root_path` / `roster_path` / `root_sha16` / `roster_sha16` /
+`config_digest`, unchanged) it carries two members:
+
+- **`previous_config_digest`** — the digest of the revision this process was serving immediately before
+  this application; `null` on the startup row (there is no predecessor). It is what makes the row read
+  *from which revision to which* and the diff beside it unambiguous when two switches land inside one window.
+  Attribution, never a key (RV-6).
+- **`changed_keys`** — the **value** diff between the revision being replaced and the revision being
+  applied. `null` at startup (no predecessor to diff against); `[]` when a predecessor exists whose *value*
+  equals the new one (**a comment-only edit is exactly this**: it moves `config_digest`, because §4.14 hashes
+  bytes, and moves no value); otherwise a list of `{path, change}` entries, `change ∈ {added, changed,
+  removed}`, **sorted by `path`** so the payload is a pure function of the two revisions (AGENTS 2).
+
+A `path` is written in the configuration's own key space: object members join with `.` (`session.ttl`,
+`server.auth_token_env`); an array element is named by its **identity key** when it has one — `providers[zai]`,
+`providers[zai].models[glm-4.6]`, `plugins[transform_rules]` — and by 0-based index otherwise (`fallback[0]`);
+and the descent **stops at the deepest path that differs**, carrying a whole added/removed/retyped subtree as
+one entry rather than enumerating its leaves. The diff runs over the validated, **joined** configuration
+(ADR-037 D4), is computed off the request path in step 3 of §12.20's sequence, and is written **before** the
+publish (ADR-010). The **assertion** is RV-8 (§12.20's list, ADR-040 D8); the trace gains no counterpart by
+decision (ADR-040 D10's medium argument), and the trace's field set and `TRACE_SCHEMA_VERSION` are unmoved.
 
 **`turn_index`** is `requests_seen` for that session from the projection, read at receive time
 and incremented by the binding write; with no session, or on the session's first request, it is
@@ -3538,6 +3595,159 @@ product rule.
 loop-side and is never read by the serving path (AGENTS 3). **No threshold** — the L1 envelope and the
 transform band stay `autowork/STATE.md`'s waiting-on-human **row 1** — and neither the ledger nor the pruning
 report mints a `verified` figure (ADR-033 D6, D7).
+
+### 12.20 The reload: the revision, the publish and the invariants (ADR-040; **specified, not landed**)
+
+**What this section is.** spec **§4.15** is the promise; **ADR-040** is the decision and the reasoning;
+this is the landing — the sequence, the seam the request path touches, what a revision may change, and
+the assertions a card is held to. The mechanism is ADR-039's (`notify`, `router-cli` only, §12.1's row):
+the watcher decides *when to look*; the digest (ADR-037 D6) decides *whether anything changed*; this
+section decides *what happens next*. **Nothing here is in the tree at this commit** — there is no
+watcher, no second `load` entry point, no published handle and no keyed diff (measured: Background of
+ADR-040; `crates/router-plugins/src/assembly.rs:276-277` records the absence in its own words, and
+`apply_config_diff` exists in §12.2's sketch and nowhere in `crates/`).
+
+**A revision.** The immutable value one successful load of the pair produces: the validated `RouterConfig`,
+the resolved paths and the identity (§12.10.2's `ResolvedConfig`, `crates/router-cli/src/config_load.rs`),
+and whatever the runtime mounted for it. Two revisions are the same revision **iff their `config_digest`
+is equal**; a look that finds the same digest ends with no revision, no row, no plugin edge and nothing
+observable.
+
+**The publish sequence, in order** (every step before the publish is invisible to a request):
+
+| # | step | where | what makes it safe |
+|---|---|---|---|
+| 1 | a look is triggered (a watcher event, or startup) | `router-cli` (ADR-039 D3's crate) | the trigger is a hint; nothing is decided by it |
+| 2 | **read + gate** the pair — `config_load::load(root)` | `router-cli` (`config_load.rs:146`) | the same parse → join → `validate()` chain `serve` starts with, and the same refusals (§4.14's ladder, §12.10.2's table). A refusal ends the attempt here: keep serving, report, write nothing |
+| 3 | **commit** one `config.applied` row (row 13, `FULL`, intent class) | `router-store`, through the one `Store` handle | intent precedes effect (ADR-010), the order the startup path already uses (`crates/router-cli/src/lib.rs:210-231`); the payload's *changed keys* half is **note R10** |
+| 4 | **build and mount the delta**, off the request path | `router-cli` / `router-plugins`' assembly | a plugin entry unchanged under ADR-002's keyed identity is left mounted; an edge crossed writes row 12 (`plugin.loaded`/`unloaded`). A revision that changes only the roster crosses no edge |
+| 5 | **publish** the new revision (one value, one store) | the handle the serving path reads | steps 1–4 are done, so a reader either sees the whole new revision or the whole old one — there is no half-mounted state to roll back |
+
+**The seam the request path touches, and the one rule about it.** The request path takes the published
+revision **once, at receive**, and reads that revision for its whole lifetime; nothing behind a request
+opens, reads or hashes a configuration file, and nothing re-reads the revision per stage. The existing
+`ConfigTraceWriter` is the worked example of the same discipline (`crates/router-cli/src/lib.rs:99-135`
+holds the digest beside the sink it wraps and refuses an empty one at construction): a value that must
+agree with the record is carried *with* the writer rather than re-derived. **The mechanism is the
+implementer's within that rule** (`Arc` swap, an epoch, a `RwLock` read once — a code shape, as ADR-037's
+own note about the join's typing); what is fixed is that the request's view is a value it took once
+(AGENTS 2), and that the publish is the only writer of what the path reads.
+
+**What a revision may change.** The criterion is the **read site**: a key is reloadable iff its read site
+is per request or per revision. On that criterion the reloadable side is everything the request path reads
+from the revision it holds — the roster and every provider-entry key, `aliases`, `fallback`, `plan_policy`,
+`quota`, `session.*` (read at binding time), `cache.*`, the `plugins` list including `disabled` and each
+entry's own config, and `server.auth_token_env`'s *name*. The refused side is every key whose only consumer
+is an object the **process** builds once and holds, and each refusal names the key: **`server.addr`** (the
+listener is bound once, `crates/router-cli/src/lib.rs:854`), **`trace.dir`** (held by the trace writer —
+which is why `trace.rollover` is the unit that may move), the **state store's path** (fixed, spec §4.5), and
+— measured, not assumed — **`server.upstream_attempt_timeout`** (consumed when the provider transports are
+built: `crates/router-cli/src/lib.rs:299-304`) and **`server.max_body_bytes`** (consumed by the
+inbound-body layer, §12.15). A refusal here is the ordinary refusal of step 2: keep serving, name the key,
+the remedy is a restart. An implementing card may **promote** a refused key by rebuilding its object as
+part of the revision — cheap for a layer, not free for a connection pool — and **the direction is one way
+on purpose**: widening the set later is smaller and safer than tightening it.
+
+**The assertions (ADR-040 D8; `RV-1`…`RV-9`, and the matrix is what a card is held to).**
+
+| # | invariant | assertable from |
+|---|---|---|
+| **RV-1** | one revision per request, attributable | every `DecisionRecord.config_digest` has a `config.applied` row of the same process, the last such row preceding its `identity.event_id` (the CONF-24 join, one field wider) |
+| **RV-2** | never a partial revision | no `config.applied` row for a candidate the loader refused; no record's digest is composed of two files never loaded together |
+| **RV-3** | a reload never stops serving | a refused reload: same process (no exit 2/4 attributable to a reload), `/health`'s digest unchanged, no new `config.applied` row, the reason reported |
+| **RV-4** | a published revision is immutable | no in-place mutation of a loaded config or a mounted rule set; a correction is a new digest |
+| **RV-5** | the store is untouched by a switch | `sessions` / `cache_ledger` / `quota_counters` / `provider_cooldown` / `plan_state` row-for-row identical across the switch; the only new row is `config.applied` (§12.10.5 row 13) |
+| **RV-6** | the digest never becomes a key | no store column, no config key, no gate input holds `config_digest` (ADR-037 D6; the seven tables' keys are unchanged, §12.10.4) |
+| **RV-7** | a dangling binding is a miss, never a route | a request whose sticky binding names a route the serving revision no longer declares: `sticky_hit: false` on its record, re-resolved (or refused by the existing unknown-route path) |
+| **RV-8** | a switch's row is a value diff against a named predecessor | a **comment-only** revision: exactly one new `config.applied`, its digest ≠ the predecessor's, `previous_config_digest` == the predecessor row's `config_digest`, `changed_keys == []`; a one-key revision lists exactly that path (the rig derives the list from the two files it wrote); startup carries `null` for both members (ADR-040 D10, §12.10.5 note R10) |
+| **RV-9** | a refused candidate is observable and inert | the process is the same process (no exit), `/health`'s digest is the pre-attempt value, the store gains **no** row, and the process's own output carries exactly one line naming the reload, the revision still served and the loader's reason (ADR-040 D11) |
+
+**A binding the new revision cannot resolve is a miss, not a route.** `sessions` holds
+`(provider, model)`; a switch can make that pair dangle. The binding is always checked against the
+revision that serves the request, and one it cannot resolve is re-resolved from the request itself (a
+stateless client resends everything, ADR-004) — never routed to a model the configuration no longer
+declares. The trace says so: `sticky_hit: false` on that request (RV-7).
+
+**The bound on the two-revision window, and the arm it depends on.** Within a request there is never a
+window (RV-1). Across requests the window is bounded by **the last holder of the old revision**: the last
+in-flight request, or — if the owner rules for the pin arm (ADR-040's question) — the last live pinned
+session, i.e. up to `session.ttl`. No deadline, no timer, no drain window, nothing configured; whichever
+arm holds, the bound is derived from state the process already has. **Nothing about the arm may be
+implemented before the owner rules** (spec §4.15's pending paragraph).
+
+**What this section did not decide, and where each remainder landed.** The `config.applied` *changed keys*
+payload, its emission point, the refusal's own surface and the debounce window were **R47-0b's** on this
+section's first draft, and they are **landed below** (ADR-040 D10–D12, §12.10.5 note R10, §12.1's second
+note). The fresh p99 ladder and any gate-side consequence remain the **owner's** (AGENTS 9 / ADR-012) —
+ADR-040's second owner question states the one line the owner must answer and the three measured facts it
+decides about. The watcher's survival of the landing's `rename` and what the *next look* is after a missed
+event are landed below as well (ADR-040 D12.4–D12.6). What stays open on purpose: any conformance **ID**.
+
+**Conformance intent, and no ID.** §12.8's rule makes an ID a human allocation, so no case is named here.
+The intent a round would turn into cases: (i) an accepted switch — one new `config.applied` row, delta-only
+plugin rows, later records carrying the new digest; (ii) a refused candidate — RV-3's four observable
+facts, plus the base-arm control that nothing was written; (iii) a **torn pair** (root new, roster old)
+that loads, and the same pair made to refuse — the loader's two verdicts on one intermediate state;
+(iv) a **prefix-neutral switch** (ADR-040 D7's statement 2: identical `prefix.blocks[].hash`, `cache_control_breaks
+== 0` across a switch that moves no outbound-visible key); (v) RV-5's projection snapshot across a live
+switch; (vi) **RV-8** (the payload: a comment-only revision's `[]` beside a moved digest, a one-key
+revision's single sorted path, `null` at startup); (vii) **RV-9** (a refused landing: same process,
+unchanged `/health`, no new row, exactly one output line); (viii) the **watcher's own rig** — a landing
+performed by the rig (`temp` + `rename`) observed through the registration, including the *hot-directory*
+arm: store and trace writes in the watched directory produce no look and no row. A rig that hand-edits a
+file does **not** exercise (i)–(iii) or (viii): the landing is a `temp` + `rename`
+(spec §4.11) and the reload's rig must perform it (ADR-039's own consequence).
+
+**What a reload reports: the landing of ADR-040 D10–D12 (added by R47-0b).**
+
+*The medium.* `config.applied` stays **row 13 of the event log** and gains **no trace counterpart**: the
+trace is one `DecisionRecord` per request and a switch is not a request (no `request_id`, no `event_id` to
+anchor, no bytes, no usage — spec §4.5's two-record table), the event log is the log's own home for the row
+and its siblings (row 12, row 15), and the list therefore stays on the operator's side of the observation
+boundary (§4.5 marks the log **internal — autowork never reads it**, ADR-005) — what the analysis channel
+sees about a switch is the **digest on each record** (RV-1) and a window carrying both digests
+(ADR-040 D3). Consequence: **no new trace field, no new record, `TRACE_SCHEMA_VERSION` stays 2.**
+
+*The payload* is **§12.10.5 note R10** (the row's own home): row 13 carries `previous_config_digest` and
+`changed_keys` on every row, `null` at startup, `[]` for a predecessor whose *value* equals the new one
+(a comment-only revision — the case that separates the byte digest from the value diff), otherwise a
+`sorted` list of `{path, change}` with `change ∈ {added, changed, removed}` and paths in the configuration's
+own key space (`session.ttl`, `providers[zai].models[glm-4.6]`). The **emission point is step 3** of the
+sequence table above — after the gate, before the publish — computed off the request path, once per
+**accepted application**, so a look that finds no change emits nothing and a refused candidate emits
+nothing (D1, note R9's two absences, RV-2/RV-3). A consequence worth naming: **a refused key can never
+appear in a `changed_keys` list** — spec §4.15's refused set is refused at step 2, before the row exists,
+and the key is named by the refusal's report instead.
+
+*The refusal's surface (D11).* One line on the **process's own output**, the medium `serve`'s startup
+refusals already use (`crates/router-cli/src/lib.rs`'s `eprintln!`, the surface `CONF-23` and `CONF-45`
+assert by spawning the binary): it marks the refusal as a **reload**, names the **revision still being
+served**, carries the **loader's own reason verbatim** (§4.14's ladder already names the file, the key and
+the value found) and names the **resolved path(s) the candidate was read from**. Not a store row (a
+`config.refused` kind would be non-transition vocabulary in a log of state transitions), not a `/health`
+member (that surface answers *what was loaded* — state, not an instant), not a trace line (D10's argument).
+One line per refused candidate; no de-duplication, no rate limit. The **revision in force keeps serving**,
+unmodified, and no exit code is attributable to a reload (RV-3).
+
+*The watcher (D12).* The debounce lives **at the watcher** — the side that decides *when to look* — never at
+the publish door, and it is a **cost control**, not a correctness mechanism, because D1 makes any number of
+looks harmless. It is a **leading-edge, one named constant** in the reload's module: the first event of a
+burst starts a look at once, events inside the following window fold into it, and one further look runs when
+the burst ends — so a reload's latency is the *load*, never a timer (ADR-039 D2's criterion 1, which is what
+keeps A4's ladder meaningful). The constant's lower bound is the landing's own write gap, measured on this
+machine at **max 0.258 ms** (N = 200, `autowork/harness/r47-0b/probe.out` P18), so the proposed **200 ms**
+sits orders of magnitude above it; the implementing card pins the value with its own measurement. **No
+second crate** (§12.1's note): the coalescer is a pure function of (event times, window), unit-testable with
+no filesystem and no watcher. The **registration is on the two directories** (the root's, the roster's) with
+a look triggered **only** by an event whose path is exactly one of the two resolved paths — which is what
+survives the landing's `rename` (a directory's inode is not the thing replaced) **and** what keeps the
+reload from reading the pair on every request: the config directory is **hot**, holding the state store
+(`<config dir>/state/router.db`, spec §4.5) and the shipped trace dir (`./state/traces`,
+`config.example.yaml:96`). The two events of one landing are folded by the window when it can, and are
+harmless when it cannot (D1); the watcher **never** binds to the target's inode. After a missed event the
+next look is **the next event, and nothing else** — no timer, no reconciliation pass, no per-request
+re-check: the reload does not promise delivery of a change that produced no event, and the operator's
+fallback is a restart, which is today's behaviour.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
