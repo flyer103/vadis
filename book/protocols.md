@@ -53,12 +53,19 @@ bytes are byte-for-byte the client's, and neither edit changes a prefix block's 
 
 ## Deterministic translation second
 
-When inbound and outbound protocols differ, the translation is a pure function of content
-and stable config: the same content always produces the same upstream bytes, and nothing
-depends on wall-clock time, turn number or randomness. That determinism is what keeps the
-upstream prefix cache alive across turns — a translation that reshuffles its output between
-turns destroys the cache and *raises* cost. (It is also why a rule or translation that is
-not deterministic is a defect, not a tuning question.)
+Translation is the design's second mode, and it is **not implemented in v0.1**: router
+serves only the native diagonal of the 3×3 matrix — the cells where the inbound protocol
+is the provider's own `wire_api`. The other six cells refuse with a typed
+`501 not_implemented` whose message names the cell that is missing. What follows is the
+contract those cells are held to when one lands: it is written here and in
+[`docs/spec.md` §2](../docs/spec.md), and no code path implements it yet.
+
+When a translation cell lands, the translation must be a pure function of content and
+stable config: the same content always produces the same upstream bytes, and nothing may
+depend on wall-clock time, turn number or randomness. That determinism is what keeps the
+upstream prefix cache alive across turns — a translation that reshuffles its output
+between turns destroys the cache and *raises* cost. (It is also why a rule or translation
+that is not deterministic is a defect, not a tuning question.)
 
 The lossy points a translation must handle explicitly, one by one:
 
@@ -69,8 +76,10 @@ The lossy points a translation must handle explicitly, one by one:
 - **cache breakpoints** — injected on the target's own signal, by a stable rule;
 - **usage shape** — normalized into router's internal usage so numbers stay comparable.
 
-Whenever something is dropped, the response carries the `X-Router-Lossy` header and the
-decision record lists it. Silent loss is the one outcome that is not allowed.
+Whenever a translation drops something, the response must carry the `X-Router-Lossy`
+header and the decision record must list it; silent loss is the one outcome that is not
+allowed. No v0.1 code path emits that header — it becomes real together with the first
+translation cell.
 
 ## Streaming
 
