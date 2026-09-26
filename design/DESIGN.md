@@ -3131,7 +3131,10 @@ never touches a line it has no edit for.
    step is part of the run's candidate: the roster lane lands first, the root second, both validated as a
    pair before either lands (D8). The insertion is labelled `1b` so that no step number below and no
    cross-reference elsewhere in this document moves.
-2. `--print` and `--check` print and return here (no prompt, no write). `--dry-run` runs the plan and prints it
+2. `--print` and `--check` print and return here (no prompt, no write; over a base root that carries the roster
+   inline, both prepend the same one-line fact, naming the file a writing run would move it to, and a `roster`
+   member in either `--json` — and nothing else on those surfaces moves, the exit codes included).
+   `--dry-run` runs the plan and prints it
    in place of step 9.
 3. Build the section list (bare / `all` = all seven, in the order spec §4.11's table lists them).
 4. For each key of each section: resolve the anchor against the **base**; the shown default is the file's
@@ -3152,7 +3155,9 @@ never touches a line it has no edit for.
     target; on any failure remove the temporary file and exit with the reason (`1` for I/O). Print the absolute
     path and the number of edits applied.
 
-**`--check`'s probes** are the two `serve` already makes, and nothing else: for each `providers[*].api_key_env`,
+**`--check`'s probes** are the two `serve` already makes, and nothing else (the roster fact of step 2 is a
+rendering of step 1b's span, not a probe: it decides no state and moves no exit code): for each
+`providers[*].api_key_env`,
 `std::env::var_os(name).is_some()` → present / absent; for `server.auth_token_env` when the key is enabled,
 `std::env::var(name)` → value (non-empty) / **empty** / **absent**, the distinction `lib.rs:81-98` refuses the
 start on. Both probes are presence-only: no value is stored, formatted or printed by any branch — including

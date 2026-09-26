@@ -1022,7 +1022,7 @@ template (the shipped example, §4) into **your** config, with the answers you g
 | `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
 | `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
 | `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such. A file that carries the roster **inline** is reported as such, naming the file a writing run would move it to (the shape step below; ADR-038) | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
-| `--check [--json]` | load the file with the **same loader** `serve` runs, then check every environment variable the file **names** and print them; no prompt, no write. No target ⇒ exit 2 | the read-only surface a script calls |
+| `--check [--json]` | load the file with the **same loader** `serve` runs, then check every environment variable the file **names** and print them; no prompt, no write. A file that carries the roster **inline** is reported as such — one line above the names (a `roster` member in `--json`), naming the file a writing run would move it to (the shape step below; ADR-038 D9) — and it is the *only* thing the inline shape adds: the names, the export snippets and the exit codes are the same over both shapes. No target ⇒ exit 2 | the read-only surface a script calls |
 | `--dry-run` | print the edits the run would make (`<anchor>: <old> → <new>`, with the edit kind), in application order, plus the shape step's span when the base root carries the roster inline (`split: providers: lines 100-1058 (959 lines, 71069 bytes) → <roster>`); no write | the write strategy's safety story: a change is inspectable **before** it lands |
 | `--force` | the **base** becomes the template instead of the file that is there: the target is replaced by the template plus your answers | this is both the escape hatch and the recovery from an unusable file. It is **not** `hermes setup --reset`: router has no in-code default set to reset to (§12.5: only the three defaults §4 states are defaults), so the shipped example **is** the default set and "reset" and "start from the template" are one operation. What it discards is any note **you** wrote into your own file, since the base becomes the template again; the `source:` provenance comments survive, because the base is a **file** and never a serializer (ADR-025). It is therefore the explicit hatch, not the routine path — a routine reconfigure is a bare `router setup`, and `--dry-run` prints the replacement first |
 | `--backup` | before a write, copy the target to `<target>.bak` (one fixed name, replaced each run) | rollback for the anchored-edit path. `--force` **implies** it: the wholesale replace is the operation that can lose content, while an anchored edit's edits are bounded and printable with `--dry-run` |
@@ -1077,7 +1077,10 @@ alike:
 - the root takes **no** automatic backup from this step (its block *is* the new file's content);
   `--backup` and `--force` are unchanged;
 - the move is **reported**, never silent: the run's report, `--dry-run` and `--print` each state the span
-  and the file it goes to (ADR-038 D9).
+  and the file it goes to (ADR-038 D9). **Since R45 (2026-09-26)** the same fact is stated on the fourth
+  surface, the one D9 did not name: over an inline root `--check` carries it too — one line before its
+  names, a `roster` member in `--json` (the row above) — and states nothing of the kind for a root that
+  already names its roster.
 
 Three consequences of the target column and the shape step, all part of this contract:
 
@@ -1102,7 +1105,10 @@ templates, and a fresh run writes both files. Since **ADR-038** an existing inli
 same run: a bare `router setup`, or any section-scoped one, moves the block into the roster file and writes
 `providers_file:` in its place, so the shape a run produces is the pair whatever the file's history. The
 inline root stays a legal shape **for the reader** — `serve`, `stats` and `--check` load it exactly as they
-always did (§4.14) — but no run of this command produces one.
+always did (§4.14) — but no run of this command produces one. **The load is the whole of what is
+unchanged:** an inline root adds the one roster-fact line the `--check` row names (and a `roster` member
+to its `--json`), and moves nothing else on that surface — not a name, not an export snippet, not an exit
+code.
 
 What is deliberately **not** a section:
 
