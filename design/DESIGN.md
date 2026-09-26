@@ -290,7 +290,7 @@ router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 | `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
 | `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky; and the **assembly** that mounts them from the `plugins:` list (`assemble`, R41-3) | `toml`, `regex` | 2026-09-19 / 2026-09-20 / 2026-09-25 |
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
-| `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2) | 2026-09-19 (serve stub) |
+| `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2), **`notify`** (**ADR-039**: the reload's file-watch mechanism, ADR-037 D7's mechanism half, ruled by the owner 2026-09-26 — the row is the contract and it lands **now**; the dependency, the code and the tests land with the reload round's own cards) | 2026-09-19 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
 | `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | 2026-09-19 (ADR-009) |
 | `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | 2026-09-19, as an empty shell |
@@ -299,6 +299,16 @@ router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
   dependency set of `cargo tree -p router-core` must be ⊆ the allowlist.
 - Dependency discipline: **a new dependency must have its reason written in the commit message**
   (consistent with this round's task constraint). Any dependency outside the allowlist is discussed first.
+- **The `notify` row is declared and not yet used (ADR-039).** `router-cli` may take `notify` for the
+  reload's file-watch mechanism — ADR-037 D7's mechanism half, decided by the owner on 2026-09-26 — and
+  **no other crate may**: `router-core`'s cell does not gain it (the domain is I/O-free and
+  `cargo tree -p router-core` must stay ⊆ its allowlist, the spot-check above), and no crate may reach the
+  platform backends directly (the crate holds `inotify` / FSEvents / `kqueue` behind one API). The row is
+  the contract; **the `Cargo.toml` line, the code and the tests land with the reload round's own cards**,
+  the dependency's MSRV is re-measured there against `Cargo.toml`'s floor (`rust-version = "1.88"`, whose
+  comment records the 2026-09-20 measurement and that a raised dependency can raise it), and the
+  `[workspace.dependencies]` comment shape the landing round writes is ADR-039 D3's, verbatim (§12.1
+  states the boundary; the ADR states the reason — one copy of each).
 - Every crate root adds `#![forbid(unsafe_code)]`; `router-core` additionally adds
   `#![deny(clippy::float_arithmetic)]` (money only takes the fixed-point path of §12.4).
 - Test placement: unit tests use `#[cfg(test)] mod tests` in place; conformance lives in
@@ -864,6 +874,17 @@ spec §6 field groups → Rust paths (auditable line by line):
   `DecisionRecord` constructors in `router-proxy` (`body_limit.rs:68`, `accounting.rs:487`, `auth.rs:133`,
   `forward.rs:124-131`) and the two fixtures that build a record (`trace.rs:402`, `trace_sink.rs:162`) gain
   one additive line each, and nothing behind a request opens, reads or hashes a file.
+- **The value is never the empty string, and forgetting it is loud (`R43-F4`).** The trait's default —
+  `fn config_digest(&self) -> &str { "" }`, `crates/router-core/src/trace.rs:382-384` — exists for the writer
+  that has **no configuration behind it**: a test or a tool whose records never land in a served trace. That
+  is the whole of its justification, and it is not a value a served writer may return. The one writer wired
+  into the serving path carries the loader's digest (`ConfigTraceWriter`, `crates/router-cli/src/lib.rs:104-112`);
+  a writer that cannot produce a non-empty digest is a **defect that fails loudly** — at construction or at
+  its first write, the mechanism is deliberately the implementation's to choose — and what it may never do is
+  stamp a record with an identity of `""` (spec §6's empty-string bullet and §9.1's member rule state the same
+  invariant on the contract side). Nothing about the **format** moves for it: `schema_version` stays 2, and a
+  record with no digest is still read as "not recorded" (the additive rule above) — a statement about a
+  vintage, never an invitation to write one.
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
@@ -3148,12 +3169,30 @@ never touches a line it has no edit for.
 7. Sort the edits, assert disjoint, `apply` → candidate bytes.
 8. **`config_load::validate_text(&candidate)`** — the shared entry point extracted from `load()`, so the
    deserializer and `validate()` `serve` runs are literally the same two calls. The messages `load()` prints
-   today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged).
-9. Empty plan → `no change: <path> left as it is`, exit 0 (this is what makes a second run a no-op).
+   today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged). **Every run
+   that reaches a plan reaches this step, including a run whose plan is empty** — there the candidate is the
+   base itself. The loader is the gate, so a base it refuses is refused here (exit 2, the loader's reason,
+   nothing written), and the shapes the ladder refuses are refused on the writing surface exactly as `--check`
+   refuses them, instead of being reported as a no-op. (spec §4.11's *the loader is the gate*
+   bullet; **R43-F7**, whose shipped site let the empty plan sweep past this step, on the write path and on
+   `--dry-run` alike.) The shapes it covers are the ladder's own refusals — 1 (both keys), 2 (neither),
+   4 (the roster is present and is not the roster block), 5 (a reference the roster does not resolve) — plus
+   the coarser case that precedes the ladder, a root that does not parse. **Shape 3 is not this step's**:
+   a root whose `providers_file` names a path that is **not there** is the arm the writing run *creates* the
+   roster for (measured 2026-09-26: 71 070 B at `0600`, the shipped roster's bytes, the root untouched),
+   while `--check` over that same root refuses it at exit 2 on ladder row 3 — so this contract does not
+   settle whether the create is a repair the command may perform or a refusal (**R46-0-F1**, the round's
+   register; it is not this step's decision, and a coder must not read this step as deciding it).
+9. Empty plan **over a base that loads** → `no change: <path> left as it is`, exit 0 (this is what makes a
+   second run a no-op).
 10. `--backup` (or `--force`, which implies it) → copy the existing target to `<target>.bak`.
 11. Write candidate bytes to `<target>.setup.tmp` in the target's directory, `sync_all`, `rename` over the
     target; on any failure remove the temporary file and exit with the reason (`1` for I/O). Print the absolute
-    path and the number of edits applied.
+    path and the number of edits applied. **The replacement carries the target's own mode** (step 1's rule): the
+    temporary file's `0600` is a creation mode, and a target that already exists comes out of a landing with the
+    mode it had — a `rename` needs the target's directory to be writable, never the file. (**R43-F6**, measured
+    at `e72e406`: a `0444` pair landed at `0600` with both files byte-identical and the report reading
+    `0 edits applied`.)
 
 **`--check`'s probes** are the two `serve` already makes, and nothing else (the roster fact of step 2 is a
 rendering of step 1b's span, not a probe: it decides no state and moves no exit code): for each
@@ -3171,7 +3210,18 @@ matches `Serve { .. }`, tolerates). Absence resolves instead of erroring at the 
 in the writer mode**, so a reader that finds nothing refuses (exit 2) naming `router setup` and `--config`.
 Modes need no dependency: the temporary file is opened with `OpenOptions::mode(0o600)` — a umask can only clear
 bits, so `0600` is exact whatever the ambient umask — and a directory `create_dir_all` created gets an explicit
-`set_permissions(0o700)` afterwards, because that call cannot express a mode; nothing is re-moded.
+`set_permissions(0o700)` afterwards, because that call cannot express a mode.
+
+**A target that is already there keeps its own mode.** The `0600` above is the **creation** mode of the
+temporary file, never the landed file's: the landing must carry the **target's** mode onto the replacement — set
+it on the temporary file before the `rename`, or on the target after it; the first is the one to prefer, because
+it leaves no window in which the target's name carries the wrong mode. `0644` stays `0644`; a target the operator
+made read-only (`0444`) stays `0444` and is written all the same, because a `rename` needs the target's
+**directory** to be writable and never the file. So no run of this command changes a mode the operator set, and
+the report's `0 edits applied` is true of the mode as well as of the bytes (spec §4.11's *Landing* bullet, `G8`).
+What the rule covers is the mode: the replace is a new inode, so the file is owned by the user who ran the
+command, and a hard link, an ACL or an xattr on the old inode does not travel. A `<target>.bak` copy keeps the
+mode it copied.
 
 **The writer over two files (ADR-037; spec §4.11's *target file* column, §4.14) — one target per section, the
 pair as the candidate.** Where the root names a roster, the writer owns **two** files, and nothing else in the
@@ -3233,7 +3283,14 @@ unchanged.
 - **Integration, the file contract** (the G1–G8 table in spec §4.11, plus the location case CONF-79): byte
   identity on the all-defaults path,
   locality of *k* changes, idempotence (a second run's hash **and** mtime unchanged), the refusal ladder
-  leaving the target's hash unchanged, the `--check` exit codes, and the secret canary.
+  leaving the target's hash unchanged, the `--check` exit codes, and the secret canary. Two obligations the
+  two findings of R46-0 add to that list: **the mode rule, both ways** — a `0444` target that a landing
+  replaces is `0444` afterwards and carries the run's bytes, and a file the run creates is `0600` (`G8`; the
+  `0444` `--force` arm is the one that must read the mode off the file system *and* the bytes' hash off the
+  file, because R43-F6's whole shape is "the hash did not move and something did") — and **the empty-plan
+  gate**: a base the loader refuses (both keys, neither key, an unparsable text, a present-but-not-the-roster
+  roster) is refused at exit 2 on the write path **and** on `--dry-run`, with the target's hash and mode
+  unchanged, exactly as `--check` refuses it (`R43-F7`).
 - **The shape step's own rig** (spec §4.11; ADR-038): over an inline root — the roster file's bytes are the
   moved block's bytes and the root loses exactly the span while gaining exactly the template's line (every
   other byte equal); the root's answer to a `providers` question lands in the **roster**, not in the root; a

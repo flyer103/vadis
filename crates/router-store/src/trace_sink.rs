@@ -147,6 +147,15 @@ impl router_core::trace::TraceWriter for TraceSink {
             None => Ok(None),
         }
     }
+
+    /// The explicit empty (R43-F4; DESIGN §12.6): the sink is the
+    /// store-side half and has no configuration behind it. On the
+    /// serving path the CLI wraps it in `ConfigTraceWriter`, which
+    /// carries the loader's digest and is the value every constructor
+    /// reads — this one is never consulted there.
+    fn config_digest(&self) -> &str {
+        ""
+    }
 }
 
 #[cfg(test)]

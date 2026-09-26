@@ -101,6 +101,29 @@ struct ConfigTraceWriter {
     config_digest: String,
 }
 
+impl ConfigTraceWriter {
+    /// The served writer's one constructor — and the empty digest's
+    /// tripwire (R43-F4; spec §6's empty-string bullet: "a writer wired
+    /// into the serving path that cannot produce a non-empty digest is a
+    /// defect, and forgetting it is loud, not silent"). The loader's
+    /// digest is never empty (spec §4.14's recipe hashes the root's half
+    /// always), so an empty value here is a *code defect*, and it fails
+    /// AT CONSTRUCTION, naming the writer — what may never happen is a
+    /// record stamped with an identity of `""`.
+    fn new(inner: router_store::TraceSink, config_digest: String) -> Self {
+        assert!(
+            !config_digest.is_empty(),
+            "ConfigTraceWriter: an empty config_digest on the serving path is a defect \
+             (R43-F4; spec §6) — the writer fails at construction rather than stamping \
+             a record with an empty identity"
+        );
+        Self {
+            inner,
+            config_digest,
+        }
+    }
+}
+
 impl router_core::TraceWriter for ConfigTraceWriter {
     fn write(&self, rec: &router_core::DecisionRecord) -> Result<Option<String>, String> {
         router_core::TraceWriter::write(&self.inner, rec)
@@ -299,11 +322,9 @@ pub async fn serve(config_path: &str) -> i32 {
             return 4;
         }
     };
-    let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> =
-        std::sync::Arc::new(ConfigTraceWriter {
-            inner: trace_sink,
-            config_digest: rc.identity.config_digest.clone(),
-        });
+    let trace_writer: std::sync::Arc<dyn router_core::TraceWriter> = std::sync::Arc::new(
+        ConfigTraceWriter::new(trace_sink, rc.identity.config_digest.clone()),
+    );
 
     // The plugin assembly (ADR-036 D1/D8, spec §4.3): the CLI is the
     // launcher, not the assembler. It hands the declared `plugins:` list
@@ -861,4 +882,42 @@ fn request_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     format!("req-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace_sink(tag: &str) -> router_store::TraceSink {
+        let dir = std::env::temp_dir().join(format!("router-cli-lib-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sink = router_store::TraceSink::open(&dir).expect("a temp trace dir opens");
+        let _ = std::fs::remove_dir_all(&dir);
+        sink
+    }
+
+    /// R43-F4, the served half that keeps working: the one writer wired
+    /// into the serving path carries the loader-computed digest, and
+    /// every constructor reads exactly that value back off it.
+    #[test]
+    fn the_served_writer_carries_the_loaders_digest() {
+        let w = ConfigTraceWriter::new(trace_sink("f4-ok"), "0123456789abcdef".to_string());
+        assert_eq!(
+            router_core::TraceWriter::config_digest(&w),
+            "0123456789abcdef"
+        );
+    }
+
+    /// R43-F4, the forgotten case failing loudly: a writer wired into the
+    /// serving path that cannot produce a non-empty digest fails AT
+    /// CONSTRUCTION, with a message naming the writer — what may never
+    /// happen is a record stamped with an identity of `""` (spec §6's
+    /// empty-string bullet). The compile-time half of the same rule is
+    /// the trait's required method (`router-core/src/trace.rs`): a writer
+    /// that never implements `config_digest` does not compile.
+    #[test]
+    #[should_panic(expected = "ConfigTraceWriter: an empty config_digest on the serving path")]
+    fn the_forgotten_digest_fails_at_construction_naming_the_writer() {
+        let _ = ConfigTraceWriter::new(trace_sink("f4-empty"), String::new());
+    }
 }

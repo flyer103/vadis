@@ -375,13 +375,21 @@ pub trait TraceWriter: Send + Sync {
     /// (ADR-037 D6; spec §6 `config_digest`): every record a process
     /// writes carries the one value, so the writer — the one sink every
     /// record passes through — is the constructors' one source for it,
-    /// and a record and its write can never disagree about it. The
-    /// production writer carries the loader-computed digest; a writer
-    /// with no configuration behind it (tests, tools) returns the empty
-    /// string, and its records never land in a served trace.
-    fn config_digest(&self) -> &str {
-        ""
-    }
+    /// and a record and its write can never disagree about it.
+    ///
+    /// **Required, on purpose (R43-F4; spec §6's empty-string bullet;
+    /// DESIGN §12.6's writer seam): there is no default to fall into, so
+    /// a writer cannot *forget* the identity — forgetting is a compile
+    /// error, never a silent `""`.** A writer with no configuration
+    /// behind it (tests, tools — `NullTraceWriter`; the store's bare
+    /// sink) states the empty string *explicitly*, and its records never
+    /// land in a served trace: the empty string means "the configuration
+    /// is not recorded for this request", never an identity. The one
+    /// writer wired into the serving path (`router-cli`'s
+    /// `ConfigTraceWriter`) carries the loader-computed digest — never
+    /// empty, spec §4.14's recipe hashes the root's half always — and
+    /// refuses construction with an empty one.
+    fn config_digest(&self) -> &str;
 }
 
 /// The no-op writer for tests and tools that run without a trace dir.
@@ -391,11 +399,39 @@ impl TraceWriter for NullTraceWriter {
     fn write(&self, _: &DecisionRecord) -> Result<Option<String>, String> {
         Ok(None)
     }
+
+    /// The explicit empty (R43-F4): there is no configuration behind
+    /// this writer and its records never land in a served trace, so the
+    /// empty string is *stated here* — never defaulted into.
+    fn config_digest(&self) -> &str {
+        ""
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R43-F4: the empty digest is **explicit and confined to unserved
+    /// writers**. The trait method is required — a writer that forgets
+    /// the identity does not compile (there is no default to fall into;
+    /// the RED probe at the round's base showed the forgotten override
+    /// compiling and silently returning `""`). What remains expressible
+    /// is the *stated* empty, and it is confined to writers with no
+    /// configuration behind them, whose records never land in a served
+    /// trace (spec §6's empty-string bullet).
+    #[test]
+    fn the_empty_digest_is_explicit_and_confined_to_unserved_writers() {
+        assert_eq!(
+            NullTraceWriter.config_digest(),
+            "",
+            "the sanctioned exception: no configuration behind this writer, stated explicitly"
+        );
+        // The compile-time half is the trait's shape itself: the probe
+        // writer at the fix's base (`struct ForgottenWriter; impl
+        // TraceWriter for ForgottenWriter { write only }`) compiled and
+        // returned "" — against this seam it does not compile.
+    }
 
     #[test]
     fn kind_for_covers_the_spec8_table() {
