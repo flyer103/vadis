@@ -591,7 +591,8 @@ store's event log (DESIGN §12.10.5); on a switch it is written there and nowher
 that a decision rather than an inheritance:
 
 1. **A switch is not a request, and the trace is one record per request.** spec §4.5's two-record table
-   (`docs/spec.md:517-518`) and §6's first line both state it (`:1558`): the trace is "one `DecisionRecord`
+   (`docs/spec.md:517-518`) and §6's first line both state it (`:1584`: the line moved when this card's
+   spec §4.15 append landed above it — re-measured at this commit): the trace is "one `DecisionRecord`
    per request". A revision switch has no `request_id`, no `event_id` to anchor, no inbound bytes and no
    usage — the fields a record is made of — and §4.5's pairing rule (*"paired exactly, never by
    timestamp"*) would have nothing to join.
@@ -819,9 +820,9 @@ window, or must a fresh p99 ladder be run — and if so, which gate consumes it?
 
 | # | What the ruling decides | The measured fact it decides about |
 |---|---|---|
-| 1 | whether a switch's own cost is inside the gate quantity or outside it | the L1 quantity is `result.overhead_ms − result.upstream_ms` (DESIGN §12.16, `design/DESIGN.md:3403-3405`; `autowork/program.md:41`'s blocking Latency row), and a reload's load + gate + publish happens **off the request path** (D2) — so the quantity is **blind to a reload by construction**. The ruling says whether that blindness is intended. |
+| 1 | whether a switch's own cost is inside the gate quantity or outside it | the L1 quantity is `result.overhead_ms − result.upstream_ms` (DESIGN §12.16, `design/DESIGN.md:3439-3441`; `autowork/program.md:41`'s blocking Latency row), and a reload's load + gate + publish happens **off the request path** (D2) — so the quantity is **blind to a reload by construction**. The ruling says whether that blindness is intended. |
 | 2 | whether the first turn that crosses an outbound-visible change belongs in the sample | such a turn re-prefills (D7.3), and the re-prefill lands in `upstream_ms` — the **subtracted** term — so it *lowers* the measured router overhead. In the sample, excluded, or a quantity of its own: the ruling's. |
-| 3 | whether a new instrument is needed at all | the quantity a ladder would most naturally read (a publish → the first request served by the new revision) is **derivable today** from the two media the repo already has: the `config.applied` row's `ts_us` (store, microseconds) and the `ts` of the first record carrying the new `config_digest` (trace, **RFC3339 UTC at millisecond precision**, `crates/router-core/src/trace.rs:36`). Millisecond resolution, no new instrument; anything finer is a gate-side decision. |
+| 3 | whether a new instrument is needed at all | the quantity a ladder would most naturally read (a publish → the first request served by the new revision) is **derivable today** from the two media the repo already has: the `config.applied` row's `ts_us` (store, microseconds) and the `ts` of the first record carrying the new `config_digest` (trace, **RFC3339 UTC at millisecond precision**, `crates/router-core/src/trace.rs:35-36`). Millisecond resolution, no new instrument; anything finer is a gate-side decision. |
 
 **Nothing is decided here, and nothing may be measured as a gate input before the ruling** — AGENTS 9 /
 ADR-012 put the L1 envelope and the gate definitions outside the mutable scope, and AGENTS 4 forbids
