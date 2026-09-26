@@ -874,6 +874,17 @@ spec §6 field groups → Rust paths (auditable line by line):
   `DecisionRecord` constructors in `router-proxy` (`body_limit.rs:68`, `accounting.rs:487`, `auth.rs:133`,
   `forward.rs:124-131`) and the two fixtures that build a record (`trace.rs:402`, `trace_sink.rs:162`) gain
   one additive line each, and nothing behind a request opens, reads or hashes a file.
+- **The value is never the empty string, and forgetting it is loud (`R43-F4`).** The trait's default —
+  `fn config_digest(&self) -> &str { "" }`, `crates/router-core/src/trace.rs:382-384` — exists for the writer
+  that has **no configuration behind it**: a test or a tool whose records never land in a served trace. That
+  is the whole of its justification, and it is not a value a served writer may return. The one writer wired
+  into the serving path carries the loader's digest (`ConfigTraceWriter`, `crates/router-cli/src/lib.rs:104-112`);
+  a writer that cannot produce a non-empty digest is a **defect that fails loudly** — at construction or at
+  its first write, the mechanism is deliberately the implementation's to choose — and what it may never do is
+  stamp a record with an identity of `""` (spec §6's empty-string bullet and §9.1's member rule state the same
+  invariant on the contract side). Nothing about the **format** moves for it: `schema_version` stays 2, and a
+  record with no digest is still read as "not recorded" (the additive rule above) — a statement about a
+  vintage, never an invitation to write one.
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused

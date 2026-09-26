@@ -1645,6 +1645,19 @@ from the two files by one shell line — `printf '%s:%s' <root_sha16> <roster_sh
   the roster's comments carry the price provenance (§4.0).
 - **One value, three surfaces.** The trace field here; `/health`'s config member (§9.1); and the
   `config.applied` event written once at startup, beside both absolute paths and both file digests.
+- **The empty string is not a value any served surface reports.** The digest identifies the configuration a
+  process **loaded**, and a served process has one — it found a config file, and the load is what the process
+  is — so the value it writes on every record, reports on `/health` (§9.1) and writes into `config.applied` is
+  **non-empty**, over both shapes of §4.14: `root_sha16` is never empty, and an inline roster contributes the
+  empty `roster_sha16` *as an input* which the recipe hashes together with the root's half, so the composed
+  value is non-empty there too. The empty string exists only where there is **no configuration behind a
+  record** — a test or a tool that builds one directly — and such a record is not a served record: it may not
+  appear in a served trace. **A writer wired into the serving path that cannot produce a non-empty digest is a
+  defect, and forgetting it is loud, not silent**: it fails at construction or at its first write, and what it
+  may never do is stamp a record with an identity of `""` (DESIGN §12.6 states the same invariant at the
+  writer seam). The **reader** half is unchanged and is what that phrase keeps true: a record that carries no
+  digest was written before the field existed, and a reader takes it — and the empty string with it — as *"the
+  configuration is not recorded for this request"*, never as an identity.
 
 **A request refused at the boundary** — by §4.7's auth guard, or by §4.13's body bound — is in a class of its
 own: it never entered the pipeline, so its record carries what is observable at the boundary and invents
@@ -1969,13 +1982,25 @@ reasons about most: **`config`** (the configuration that was loaded — §4.14),
 | `roster_path` | string \| null | the **resolved** absolute path of the roster file when the root names one (§4.14); **`null` when the roster is inline** |
 | `root_sha16` | string | the first 16 hex chars of `sha256` over the root file's bytes |
 | `roster_sha16` | string | the same over the roster file's bytes; **the empty string when the roster is inline** — the value §4.14's recipe hashes, so an outsider recomputing the digest from the two files and one reading this member compute the same bytes |
-| `config_digest` | string | `sha16(root_sha16 + ":" + roster_sha16)` — the same value the trace carries (§6) and the `config.applied` event is written with |
+| `config_digest` | string | `sha16(root_sha16 + ":" + roster_sha16)` — the same value the trace carries (§6) and the `config.applied` event is written with; **never the empty string** (a served process always loaded a configuration, and the writer side of the same invariant is §6's — the paragraph below) |
 
 Two spellings of one fact, stated so the member is not read ambiguously: `roster_path: null` means **there is
 no second file**, and the empty string is what that same situation contributes to the digest — a path that
 does not exist is `null`, and a hash input that is not there is the empty string, each in its own type. The
 member is **not** a request fact: it is part of "/health reports what was loaded", it states what the process
 read at startup, and it changes only when the config does.
+
+**The member is never the empty string, over either shape — and the writer side is the same rule.** A served
+process loaded a configuration, so it always has an identity to report: `config_digest` is **non-empty** on
+every boot, and so is `root_sha16`. `roster_sha16` is the one member that may legitimately be `""` — the
+roster is inline, there is no second file to hash — and the composed `config_digest` is non-empty even then,
+because the recipe hashes the root's half beside it (§4.14). The identical value is written into
+`config.applied` and carried by every trace record (§6), and §6 states the rule that keeps the three surfaces
+in step from the writing side: a writer wired into the serving path that cannot produce a non-empty digest
+**fails loudly** rather than stamping a record with an empty identity. Read from the other direction, a record
+that carries no digest — or the empty string — is taken as *"the configuration is not recorded for this
+request"*: that is the vintage reading the field's additive rule gives it, and it is why an empty value is
+never evidence that a process served with no configuration.
 
 *Shipped, and measurable.* A running binary reports this member. Over the shipped pair `/health` answers all
 five keys — `roster_path` the resolved roster, the two `sha16` halves, and the `config_digest` built from
