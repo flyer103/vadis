@@ -1529,7 +1529,7 @@ recommendation recorded there is the pin arm, held in memory only and bounded by
 
 The landing is DESIGN §12.20; the reasoning, the rejected alternatives and the state the process ends in
 after each kind of failed swap are ADR-040; the file-watch crate and the dependency row it spends are
-ADR-039. The observable facts a reader can check are named there as `RV-1`…`RV-6`.
+ADR-039. The observable facts a reader can check are named there as `RV-1`…`RV-7`.
 
 ## 5. Onboarding prerequisite (mandatory)
 

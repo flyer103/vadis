@@ -124,7 +124,7 @@ and refuses to construct with an empty one) and the same discipline ADR-037's co
 (*"nothing behind a request opens, reads or hashes a file"*).
 
 *Observable outcomes* (each assertable from the trace plus the event log; the assertion list is
-`RV-1`…`RV-6`, stated once in D8):
+`RV-1`…`RV-7`, stated once in D8):
 - **RV-1.** Every `DecisionRecord` carries a `config_digest` that some `config.applied` row of the same
   process also carries, and the last such row precedes the record's `identity.event_id`. A record whose
   digest has no such row is a defect, not an edge case.
@@ -186,7 +186,7 @@ only writer of what the request path reads. That is what keeps AGENTS 2 true acr
 - **RV-3.** After a refused reload: the process is the same process (no exit code 2/4 attributable to a
   reload — a restart is the only way to see one), `/health`'s `config_digest` is the pre-attempt value,
   and no new `config.applied` row exists. The refusal itself is visible on the process's surface.
-- **RV-4.** After a **torn pair** (root new, roster old) that loads: it *is* a revision — the loader is
+- **RV-2's torn-pair limb.** After a **torn pair** (root new, roster old) that loads: it *is* a revision — the loader is
   the only judge of what a configuration is, and a mixed pair that validates is a configuration the
   operator landed. What never happens is the *other* thing: a record carrying digest `D` while the
   process serves structures belonging to `D'`.
@@ -272,7 +272,7 @@ consequences, each following from a decision already made elsewhere:
   tables are **row-for-row identical before and after a switch**; the switch's only new row is a
   `config.applied`. (Assert by snapshotting the five tables around a live switch, or by re-running
   CONF-21's rebuild oracle across one.)
-- **RV-6.** A request whose sticky binding the new revision cannot resolve carries `sticky_hit: false`
+- **RV-7.** A request whose sticky binding the new revision cannot resolve carries `sticky_hit: false`
   and is served by the new revision's resolution (or refused with the existing unknown-route error) —
   never routed to a route the revision does not declare.
 
@@ -328,6 +328,7 @@ reversibility note anticipates exactly that).
 | **RV-4** | a published revision is immutable | no in-place mutation of a loaded config; corrections appear as a new digest |
 | **RV-5** | the store's projections are untouched | the five projection tables are row-for-row identical across a switch; the only new row is `config.applied` |
 | **RV-6** | the digest never becomes a key | no store column, no config key and no gate input holds `config_digest`; a record's digest is attribution |
+| **RV-7** | a dangling binding is a miss, never a route | a request whose sticky binding names a route the serving revision no longer declares carries `sticky_hit: false` and is re-resolved (or refused by the existing unknown-route path) — never routed to a route the revision does not declare |
 
 Three further invariants are inherited and restated only so a reader holds them while reading this ADR:
 **the byte boundary** (AGENTS 1) is untouched by definition — a reload moves no request byte, and the
@@ -469,7 +470,7 @@ session-level policy may land** — a card that needs it blocks on the owner.
   configuration does to a request. The byte-identity arm a verification card can run is therefore the
   narrow one D7.2 names (a same-bytes-serving revision is prefix-neutral), not a new byte assertion.
 - **No gate, no corpus, no conformance assertion and no L1-envelope value moves** (AGENTS 9 / ADR-012).
-  §12.8's allocation is untouched: this ADR names assertion *intent* (RV-1…RV-6) and allocates no ID.
+  §12.8's allocation is untouched: this ADR names assertion *intent* (RV-1…RV-7) and allocates no ID.
 - **STATE.md's waiting-on-human row 17 is now fully answered at the contract level**, and this ADR does
   not edit `STATE.md` — the round's close-out records it. The row's remaining live part is the owner's
   ruling on the question above.

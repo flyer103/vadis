@@ -3613,7 +3613,7 @@ the remedy is a restart. An implementing card may **promote** a refused key by r
 part of the revision — cheap for a layer, not free for a connection pool — and **the direction is one way
 on purpose**: widening the set later is smaller and safer than tightening it.
 
-**The assertions (ADR-040 D8; `RV-1`…`RV-6`, and the matrix is what a card is held to).**
+**The assertions (ADR-040 D8; `RV-1`…`RV-7`, and the matrix is what a card is held to).**
 
 | # | invariant | assertable from |
 |---|---|---|
@@ -3623,12 +3623,13 @@ on purpose**: widening the set later is smaller and safer than tightening it.
 | **RV-4** | a published revision is immutable | no in-place mutation of a loaded config or a mounted rule set; a correction is a new digest |
 | **RV-5** | the store is untouched by a switch | `sessions` / `cache_ledger` / `quota_counters` / `provider_cooldown` / `plan_state` row-for-row identical across the switch; the only new row is `config.applied` (§12.10.5 row 13) |
 | **RV-6** | the digest never becomes a key | no store column, no config key, no gate input holds `config_digest` (ADR-037 D6; the seven tables' keys are unchanged, §12.10.4) |
+| **RV-7** | a dangling binding is a miss, never a route | a request whose sticky binding names a route the serving revision no longer declares: `sticky_hit: false` on its record, re-resolved (or refused by the existing unknown-route path) |
 
 **A binding the new revision cannot resolve is a miss, not a route.** `sessions` holds
 `(provider, model)`; a switch can make that pair dangle. The binding is always checked against the
 revision that serves the request, and one it cannot resolve is re-resolved from the request itself (a
 stateless client resends everything, ADR-004) — never routed to a model the configuration no longer
-declares. The trace says so: `sticky_hit: false` on that request (RV-6's sibling assertion in ADR-040).
+declares. The trace says so: `sticky_hit: false` on that request (RV-7).
 
 **The bound on the two-revision window, and the arm it depends on.** Within a request there is never a
 window (RV-1). Across requests the window is bounded by **the last holder of the old revision**: the last
@@ -3649,7 +3650,7 @@ The intent a round would turn into cases: (i) an accepted switch — one new `co
 plugin rows, later records carrying the new digest; (ii) a refused candidate — RV-3's four observable
 facts, plus the base-arm control that nothing was written; (iii) a **torn pair** (root new, roster old)
 that loads, and the same pair made to refuse — the loader's two verdicts on one intermediate state;
-(iv) a **prefix-neutral switch** (RV's D7.2 claim: identical `prefix.blocks[].hash`, `cache_control_breaks
+(iv) a **prefix-neutral switch** (ADR-040 D7's statement 2: identical `prefix.blocks[].hash`, `cache_control_breaks
 == 0` across a switch that moves no outbound-visible key); (v) RV-5's projection snapshot across a live
 switch. A rig that hand-edits a file does **not** exercise (i)–(iii): the landing is a `temp` + `rename`
 (spec §4.11) and the reload's rig must perform it (ADR-039's own consequence).
