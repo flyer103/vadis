@@ -309,8 +309,14 @@ block that used to be inline, moved byte for byte, comments and citations includ
 `# Usage:` line (`cp config.example.yaml config.yaml`, with `providers.example.yaml` kept beside it) is the
 complete instruction. The wizard's embedded roster template and the section table's target-file column are
 served with it: `router setup` writes **both** files from the templates embedded in its binary, and
-`--check` validates the pair (DESIGN §12.14). The inline shape is not deprecated — a root that carries the
-roster itself loads exactly as it always did (§4.14), and §4.14 is the contract for both.
+`--check` validates the pair (DESIGN §12.14). The inline shape is not deprecated **on the reading side** — a
+root that carries the roster itself loads exactly as it always did, and §4.14 is the contract for both
+shapes. On the **writing** side there is one shape: since **ADR-038** a writing run never leaves the roster
+inline. A root whose parsed shape is inline-with-`providers` is normalized by that run — the block's bytes
+become `providers.example.yaml`'s, the embedded template's own `providers_file:` line takes the header
+line's place, and a file already at that name is kept at `<roster>.bak` first (§4.11's shape step) — so the
+wizard's output is the pair whatever the file's history, and the hand-written inline root stays a shape the
+reader serves, not one this command produces.
 
 ### 4.0 Price convention (preventing two copies from drifting)
 
@@ -1015,9 +1021,9 @@ template (the shipped example, §4) into **your** config, with the answers you g
 | `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary**, plus the embedded **roster** template (`providers.example.yaml`) for the roster target below | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes. Since the example splits (§4.14), `--from` names the **root** template in every run **except** the roster swap of the `--force` row below: the `providers`-section run over an existing split root, where it names the replacement **roster** |
 | `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
 | `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
-| `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
+| `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such. A file that carries the roster **inline** is reported as such, naming the file a writing run would move it to (the shape step below; ADR-038) | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
 | `--check [--json]` | load the file with the **same loader** `serve` runs, then check every environment variable the file **names** and print them; no prompt, no write. No target ⇒ exit 2 | the read-only surface a script calls |
-| `--dry-run` | print the edits the run would make (`<anchor>: <old> → <new>`, with the edit kind), in application order; no write | the write strategy's safety story: a change is inspectable **before** it lands |
+| `--dry-run` | print the edits the run would make (`<anchor>: <old> → <new>`, with the edit kind), in application order, plus the shape step's span when the base root carries the roster inline (`split: providers: lines 100-1058 (959 lines, 71069 bytes) → <roster>`); no write | the write strategy's safety story: a change is inspectable **before** it lands |
 | `--force` | the **base** becomes the template instead of the file that is there: the target is replaced by the template plus your answers | this is both the escape hatch and the recovery from an unusable file. It is **not** `hermes setup --reset`: router has no in-code default set to reset to (§12.5: only the three defaults §4 states are defaults), so the shipped example **is** the default set and "reset" and "start from the template" are one operation. What it discards is any note **you** wrote into your own file, since the base becomes the template again; the `source:` provenance comments survive, because the base is a **file** and never a serializer (ADR-025). It is therefore the explicit hatch, not the routine path — a routine reconfigure is a bare `router setup`, and `--dry-run` prints the replacement first |
 | `--backup` | before a write, copy the target to `<target>.bak` (one fixed name, replaced each run) | rollback for the anchored-edit path. `--force` **implies** it: the wholesale replace is the operation that can lose content, while an anchored edit's edits are bounded and printable with `--dry-run` |
 
@@ -1039,7 +1045,7 @@ where a group coincides with a file block it takes that block's name.
 | `auth` | `server.auth_token_env` — the **variable name** only, plus whether the key is enabled at all | value / enabled | the file's state (the template ships it commented out) | the root config file |
 | `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's | the root config file |
 | `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same | the root config file |
-| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same | the **roster file** when the root uses `providers_file:` (§4.14) — the root otherwise |
+| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same | the **roster file** — one the root names with `providers_file:` (§4.14), or one this run creates by moving the root's inline block (the *shape step* below, ADR-038) |
 | `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_monthly_cap_usd` | value / enabled | same | the root config file |
 | `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same | the root config file |
 
@@ -1047,10 +1053,33 @@ where a group coincides with a file block it takes that block's name.
 that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
 §4.12 finds. `providers` is the exception after §4.14: when the root names a roster, the provider entry (and
 therefore its `api_key_env`) lives in the roster file, and the edit lands **there**; when the root carries
-the roster inline, it lands in the root, exactly as it always has. Nothing else about the section changes:
-the same key, the same question, the same refusal when the anchor does not resolve.
+the roster inline, the run first **moves** that block into the roster file (the *shape step* below) and then
+edits it there — so the column resolves to the roster for `providers` in every run, and to the root for the
+other six. Nothing else about the section changes: the same key, the same question, the same refusal when
+the anchor does not resolve.
 
-Two consequences of the target column, both part of this contract:
+**The shape step: a writing run never leaves the roster inline (ADR-038).** A root whose **parsed** shape is
+inline-with-`providers` is normalized **before anything is planned** — the normalization is part of the
+run's candidate like every other change, and it happens for a bare run, an `all` run and a one-section run
+alike:
+
+- the moved span is the `providers:` **header line through the last line the block owns** (the last
+  non-blank line before the next top-level key; comment lines never terminate a block, and trailing blank
+  lines stay in the root, where they separate its remaining keys), and that span's bytes **are** the roster
+  file's bytes verbatim — entries, comments and their `source:` citations included;
+- in the root, the header line's place is taken by the **embedded template's own `providers_file:` line**,
+  terminator and all, and every other byte of the root is untouched: the wizard moves the file's own bytes
+  and composes no prose (ADR-025's write strategy, ADR-038 D3);
+- the roster file's **name** is the embedded template's own value — `providers.example.yaml`, the file the
+  shipped root names — so a fresh run and a normalized run name one file. The wizard never invents a name;
+- a file already present at that name is copied to `<roster>.bak` **unconditionally** and then overwritten:
+  the operator's bytes are kept by name, and the run does not stop for a condition it can make safe;
+- the root takes **no** automatic backup from this step (its block *is* the new file's content);
+  `--backup` and `--force` are unchanged;
+- the move is **reported**, never silent: the run's report, `--dry-run` and `--print` each state the span
+  and the file it goes to (ADR-038 D9).
+
+Three consequences of the target column and the shape step, all part of this contract:
 
 - **The candidate is the pair.** `--check` / `--print` and the write path load and validate the **root and
   the roster together** (`providers_file` is resolved first, by §4.1's rule, because it decides which file
@@ -1062,12 +1091,18 @@ Two consequences of the target column, both part of this contract:
   wrote, no anchor is created, no position is chosen and no style is reproduced (ADR-037 D9; §4.14). It is
   a replacement, **not** an insertion: the wizard still cannot add a provider entry to a roster, and the
   section still says so (DESIGN §12.9's Q21).
+- **Only the inline-with-`providers` shape is normalized.** A root that writes **both** keys, one that
+  writes **neither**, and one that does not parse are left exactly as they are, and the loader's refusal is
+  the run's outcome (exit 2, nothing written). The wizard configures a file; it does not repair one that
+  does not load (§4.14's ladder).
 
 *Shipped since the example's split (§4.14):* the target-file column above is the behaviour — the shipped
 example is the pair (`config.example.yaml` naming `providers.example.yaml`), the wizard embeds **both**
-templates, and a fresh run writes both files. The inline root stays a legal shape: over an inline root the
-column collapses to "the root config file" for `providers` too, and every sentence above reads as the
-pre-split behaviour.
+templates, and a fresh run writes both files. Since **ADR-038** an existing inline root is normalized by the
+same run: a bare `router setup`, or any section-scoped one, moves the block into the roster file and writes
+`providers_file:` in its place, so the shape a run produces is the pair whatever the file's history. The
+inline root stays a legal shape **for the reader** — `serve`, `stats` and `--check` load it exactly as they
+always did (§4.14) — but no run of this command produces one.
 
 What is deliberately **not** a section:
 

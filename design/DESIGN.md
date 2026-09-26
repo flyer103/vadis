@@ -1489,7 +1489,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q19 | the failing-rule reporting surface: `rules/tool_output.toml` says a rule that fails its inline tests is "reported in the startup log and `/health`", while spec §9.1's `/health` shape has no member for it | the startup log carries it; `/health` gains nothing until the surface's own contract is written | a documented surface with no shape must be named, not invented (§9.3's rule); the implementing change raises it |
 | Q21 | spec §4.11's section table can only **replace a value on an existing line**: a genuinely new provider entry, a new alias, a new `fallback` entry or a new plugin entry has no anchor, and the command deliberately has no insert | the file is edited by hand for all four (the example's entries are the template to copy from), and `setup`'s own section for that block **says so** instead of pretending to cover it. A guided *insertion* would need a second contract — position, indentation, and the block's own style — inside a code path whose failure mode is a corrupted price table | what "most items take the default" means in practice: the wizard's reach is bounded by the example's own shape. Registered as a boundary, not an oversight; the trigger for revisiting it is a round that wants a wizard-created entry, and that round freezes the insert rule first. **R43 (2026-09-25) adds one clarification and no exception:** replacing a roster as a **unit** — `--from <roster> --force`, spec §4.11's `--from` row, ADR-037 D9 — is a whole-file replacement under ADR-025's own strategy (a template base, then anchored edits), **not** an insertion: no anchor is created for a new entry, no position and no style are chosen for one, and an entry the operator wants *added* is still hand-written against the roster file. The boundary, and its trigger, stand unchanged (the round's authorization says exactly this) |
 | Q22 | the config at the XDG default location (`~/.config/router/config.yaml`) keeps its traces **and its store** beside itself: §4.1's one resolution rule puts every relative path in the file under the config file's own directory, and the store's path is not a config key in v0.1 (fixed at `<config dir>/state/router.db`, spec §4.5, ADR-009 item 6) | the rule stays **one rule**: the store's location moves only when a round adds the additive `state:` key §12.5 already anticipates, never by a second rule that depends on where the config happens to sit. Until then `~/.config/router/` holds the config *and* its state, and whoever wants the traces elsewhere writes an **absolute** `trace.dir` (already supported; `~` is not expanded) | a dotfile-managed or synced `~/.config` carries a WAL database and hourly trace files. Registered as a boundary of the location change, with the trigger: a round that wants the XDG split (config under `~/.config`, state under `$XDG_STATE_HOME`) must promote `state.dir` to a key **and** decide the migration for existing installations — ADR-009 item 6's anchor is asserted by CONF-25 |
-| Q23 | a **layered** configuration (a global file plus a project file plus an admin/managed file, merged key by key — opencode's eight layers, codex's project / `--profile` / managed stack) is not modelled: §4.12 finds **one** file | not in v0.1. One file, found by a documented order, is what keeps four things true at once: "the file is the single source of truth" (§4's usage note), `deny_unknown_fields`'s single place to be wrong (§12.5), the anchored-edit write strategy (**a merge has no single base to edit** — ADR-025), and the "back the config and its state together" story (§4.12's second rule) | registered as a **candidate for a later round**, with its own ADR: it changes the config's identity (which file a key came from), the provenance of every load error, what `/health`'s "what was loaded" means, and `setup`'s whole write strategy — one round cannot land half of it. **R43 (2026-09-25) answers those four minimally and lands no layer** (ADR-037 D9: *one root, at most one roster, named — no second source of equal standing, no precedence ladder and no key-by-key overlay*, so the row's own claim is untouched and the layered config still needs its own ADR and round): **(i) which file a key came from** — the root's own shape decides, exactly one of `providers:` / `providers_file:`; no key is ever looked up in two files, and `/health`'s `config` member plus the `config.applied` event name the files and their digests (spec §4.14, §9.1); **(ii) the provenance of every load error** — each refusal names the file it came from: both keys with the root's path for the shape, `providers_file` with the value as written and the resolved path for an unreadable roster, the **roster's own** resolved path for its content, and the root's path for a reference the roster does not resolve (spec §4.14's table); **(iii) `/health`'s "what was loaded"** — the `config` member: `root_path`, `roster_path` (`null` when the roster is inline), `root_sha16`, `roster_sha16` (`""` when inline) and `config_digest` (spec §9.1); **(iv) `setup`'s write strategy** — every section keeps **one** target file (spec §4.11's new column), the anchored-edit strategy, the refusal ladder and the pair-level candidate gate are reused unchanged, and `--from <roster> --force` replaces a roster as a unit (§12.14, Q21 above). A layer would still need all four decided *again* and differently — which is why this row stays open |
+| Q23 | a **layered** configuration (a global file plus a project file plus an admin/managed file, merged key by key — opencode's eight layers, codex's project / `--profile` / managed stack) is not modelled: §4.12 finds **one** file | not in v0.1. One file, found by a documented order, is what keeps four things true at once: "the file is the single source of truth" (§4's usage note), `deny_unknown_fields`'s single place to be wrong (§12.5), the anchored-edit write strategy (**a merge has no single base to edit** — ADR-025), and the "back the config and its state together" story (§4.12's second rule) | registered as a **candidate for a later round**, with its own ADR: it changes the config's identity (which file a key came from), the provenance of every load error, what `/health`'s "what was loaded" means, and `setup`'s whole write strategy — one round cannot land half of it. **R43 (2026-09-25) answers those four minimally and lands no layer** (ADR-037 D9: *one root, at most one roster, no precedence ladder, no key-by-key overlay, no second discovery candidate*, so the row's own claim is untouched and the layered config still needs its own ADR and round): **(i) which file a key came from** — the root's own shape decides, exactly one of `providers:` / `providers_file:`; no key is ever looked up in two files, and `/health`'s `config` member plus the `config.applied` event name the files and their digests (spec §4.14, §9.1); **(ii) the provenance of every load error** — each refusal names the file it came from: both keys with the root's path for the shape, `providers_file` with the value as written and the resolved path for an unreadable roster, the **roster's own** resolved path for its content, and the root's path for a reference the roster does not resolve (spec §4.14's table); **(iii) `/health`'s "what was loaded"** — the `config` member: `root_path`, `roster_path` (`null` when the roster is inline), `root_sha16`, `roster_sha16` (`""` when inline) and `config_digest` (spec §9.1); **(iv) `setup`'s write strategy** — every section keeps **one** target file (spec §4.11's new column), the anchored-edit strategy, the refusal ladder and the pair-level candidate gate are reused unchanged, and `--from <roster> --force` replaces a roster as a unit (§12.14, Q21 above). A layer would still need all four decided *again* and differently — which is why this row stays open |
 
 **A note on the numbering: Q17 is not absent by accident.** It belongs to the currency / region / route-tag
 contract that is being written on another branch of this repository, and this tree's table therefore
@@ -3043,6 +3043,7 @@ file's §2, and "anti-pattern N" its §4.
 | `setup/edit.rs` | the two edit kinds, the value codec, `Plan`, `apply` |
 | `setup/prompt.rs` | the answer channel: `std::io::IsTerminal` on stdin, line reads, the `[default]` rendering |
 | `setup/report.rs` | the `--print` / `--check` / `--dry-run` renderings, human and `--json` |
+| `setup/split.rs` | **the shape step** (ADR-038): the inline `providers:` block's span, the byte move into the roster file's bytes, and the root's replacement line — a pure function of (the root's text, the template's own `providers_file:` line), no I/O and no YAML document |
 | `config_path` (**not** under `setup/`) | the location rule both sides call: spec §4.12's order, the `selected_by` member, the `mkdir -p` / `0600` / `0700` rules. `main` resolves once and passes an **absolute path** to `serve` / `stats` / `setup`, whose signatures are unchanged — which is what keeps CONF-23's, CONF-25's and CONF-43's rigs driving the same code path they always did |
 
 **Types** (sketch; the shapes whose *stability* matters, not the bodies):
@@ -3118,6 +3119,18 @@ never touches a line it has no edit for.
    not a directory, is a refusal (exit 2). If the target exists and `--force` is absent, the base is the
    target's own bytes, else the template's (`--from`, else the embedded example); a missing template is a
    refusal.
+1b. **The shape step (ADR-038).** A base root whose parsed shape is inline-with-`providers` is normalized
+   here, before any question and before any plan: `setup/split.rs` locates the block's span (the header line
+   through the last line the block owns — trailing blank lines stay in the root, comment lines never
+   terminate a block), that span's bytes become the roster file's bytes, and the shipped root template's own
+   `providers_file:` line takes the header line's place, terminator and all. The roster file's **name** is
+   that same template's own value, so a fresh run and a normalized run name one file (ADR-038 D2/D3/D4). A
+   file already present at that name is copied to `<roster>.bak` unconditionally and then overwritten (D6);
+   the root takes no automatic backup (D7). A root that writes **both** keys, one that writes **neither**,
+   and one that does not parse are **not** normalized — the loader's refusal is the run's outcome (D5). The
+   step is part of the run's candidate: the roster lane lands first, the root second, both validated as a
+   pair before either lands (D8). The insertion is labelled `1b` so that no step number below and no
+   cross-reference elsewhere in this document moves.
 2. `--print` and `--check` print and return here (no prompt, no write). `--dry-run` runs the plan and prints it
    in place of step 9.
 3. Build the section list (bare / `all` = all seven, in the order spec §4.11's table lists them).
@@ -3162,11 +3175,13 @@ strategy moves:
 - **The pair is resolved before anything is planned.** `config_path::resolve` finds the **root** exactly as
   above; the roster's path comes from the root's own `providers_file` through the loader's one resolution rule
   (`resolve(&config_dir, value)` — absolute wins, `~` literal, otherwise against the config file's directory),
-  so the wizard never invents a location for it, and a root that names no file has exactly one target
-  (today's shape, unchanged).
+  so the wizard never invents a location for it. A root that names no file is step 1b's case: the shape
+  step gives it the embedded template's own roster name (ADR-038 D2), and the writer owns **two** files
+  from that step on.
 - **Every section keeps exactly one target file**, which is the column spec §4.11 gained: six sections own root
-  keys and edit the root; `providers` owns the **roster's** bytes when the root uses the split form and the
-  root's when it does not. The reason the rest is untouched is that an anchor is resolved **in the file that
+  keys and edit the root; `providers` owns the **roster's** bytes in every run — a root that carries the
+  roster inline is normalized by step 1b before any anchor is resolved (ADR-038), so planning only ever
+  sees the split form. The reason the rest is untouched is that an anchor is resolved **in the file that
   owns the key** — so the anchor walk, the codec, the `EditKind` rows and the refusal/exclusion ladder are
   reused as they stand, and a key whose anchor does not resolve is the same refusal (or the same warning) it
   is today.
@@ -3179,16 +3194,19 @@ strategy moves:
   `crates/router-cli/src/setup/mod.rs:27`) and, from the split, the roster's own. `--from <roster> --force` is
   therefore how a roster is replaced as a **unit** (ADR-037 D9; §12.9's Q21 — a replacement, never an
   insertion).
-- **What the split does *not* let the wizard do.** It does not insert a provider entry (Q21 stands), it does
-  not re-serialize a file (`deny_unknown_fields` plus anchored edits remain the whole story), and it creates
-  no key: a root that carries the roster **inline** is not converted to `providers_file:` by `setup` — that
-  edit would be an insertion into a file that never had the key, and it stays hand-work.
+- **What the split does *not* let the wizard do.** It does not insert a provider entry (Q21 stands), and it
+  does not re-serialize a file (`deny_unknown_fields` plus anchored edits remain the whole story). Its
+  **shape step** (ADR-038, step 1b above) is the one structural edit the wizard performs, and it is a
+  **move**: the `providers_file:` line it writes is the shipped template's own, and the roster file it
+  creates carries the root's own bytes. It never composes a key, a value or a comment of its own, and it
+  never repairs a file that does not load (ADR-038 D5).
 
 All of this landed **together with the shipped example's split and the embedded roster template** — R43-4,
 the card that also gives the section table its *target file* column (`providers.example.yaml`, one roster and
 one shipped copy, §4.0's no-two-copies rule). The shipped example is the split form at HEAD, so the writer
-over the pair is the served behaviour; over an inline root it behaves exactly as it did before R43, which is
-the shape that keeps the admission above free of a behaviour claim.
+over the pair is the served behaviour. Over an inline root R43 kept the pre-split behaviour exactly; **R44
+(ADR-038) ends that preservation**: the same run normalizes the file (step 1b), so the writer's output is the
+pair whatever the input was, and the inline shape survives only for the **reader** (spec §4.14).
 
 **What this does not change.** §12.5's types and the parser (`setup` adds no key: `deny_unknown_fields` makes a
 wizard-only key an unservable file); `load()`'s messages and `ResolvedConfig`; the store (no event kind, no
@@ -3200,14 +3218,24 @@ unchanged.
 
 **The rig** (the shape the implementing round builds; assertions and IDs in spec §4.11 and §12.8):
 
-- **Unit, pure, no I/O** (`setup/anchor.rs`, `setup/edit.rs`): the anchor grammar table above row by row,
-  including each refusal (`NoSuchKey` / `Ambiguous` / `NotSettable`); the codec's quoting; the plan's
-  sort-and-disjoint assertion; and the table↔example check (every `KeySpec.path` resolves in
-  `config.example.yaml`).
+- **Unit, pure, no I/O** (`setup/anchor.rs`, `setup/edit.rs`, `setup/split.rs`): the anchor grammar table
+  above row by row, including each refusal (`NoSuchKey` / `Ambiguous` / `NotSettable`); the codec's quoting;
+  the plan's sort-and-disjoint assertion; the table↔example check (every `KeySpec.path` resolves in
+  `config.example.yaml`); and, for the shape step, the span rule (the header line through the last line the
+  block owns, comment lines never terminating it, trailing blank lines staying in the root), the byte
+  equality of the moved span with the roster file's bytes, the root's replacement line being the embedded
+  template's own, and the `providers_file` value being read from that template rather than written in code.
 - **Integration, the file contract** (the G1–G8 table in spec §4.11, plus the location case CONF-79): byte
   identity on the all-defaults path,
   locality of *k* changes, idempotence (a second run's hash **and** mtime unchanged), the refusal ladder
   leaving the target's hash unchanged, the `--check` exit codes, and the secret canary.
+- **The shape step's own rig** (spec §4.11; ADR-038): over an inline root — the roster file's bytes are the
+  moved block's bytes and the root loses exactly the span while gaining exactly the template's line (every
+  other byte equal); the root's answer to a `providers` question lands in the **roster**, not in the root; a
+  second run is a no-op over the pair; `--dry-run` names the span and writes nothing; a file already at the
+  roster's name is kept at `<roster>.bak` before it is overwritten; a root writing **both** keys, one writing
+  **neither** and one that does not parse are refused with nothing written; and a roster whose bytes already
+  equal the moved block is neither written nor backed up.
 - **The interactive path is driven by a PTY script** (the survey's own technique for `docker init`), not by a
   Rust test harness: a PTY test dependency would be a dependency-allowlist change (§12.1) and therefore a human
   decision, and the zero-dependency path is a script.

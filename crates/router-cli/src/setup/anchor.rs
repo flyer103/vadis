@@ -712,6 +712,66 @@ pub fn seq_len(text: &str, root_key: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// The line span a **top-level** key owns: the key's own line and the last
+/// line its block holds (0-based, **inclusive**) — the shape step's unit
+/// (ADR-038; spec §4.11). The rules are this module's own: comment lines
+/// never terminate a block (rule of `children_block`, so an annotation
+/// travels with what it annotates), **trailing blank lines are not part
+/// of the span** (they separate the block from the next key, and they
+/// stay where they are), a trailing **comment run** is the block's own
+/// only when it is attached to it — a blank line between the block and
+/// the run makes the run the next section's banner, and it stays too —
+/// and a key whose value sits on its own line (`providers: []`, a flow
+/// collection) spans that line alone.
+///
+/// Refusals are the locator's (`NoSuchKey` when no line carries the key,
+/// `Ambiguous` when more than one does — a commented copy beside an
+/// enabled one is two lines, and the shape step refuses rather than
+/// guessing which block to move).
+pub fn block_span(text: &str, key: &str) -> Result<(usize, usize), AnchorError> {
+    let lines = split_lines(text);
+    let root = Block {
+        start: 0,
+        end: lines.len(),
+        indent: 0,
+        dash_line: None,
+    };
+    let header = find_key(&lines, &root, key)?;
+    let last = match children_block(&lines, header) {
+        None => header,
+        Some(b) => {
+            let mut end = b.end;
+            loop {
+                // The last owned line is the last non-blank one.
+                let Some(i) = lines[b.start..end]
+                    .iter()
+                    .rposition(|l| !l.content.trim().is_empty())
+                    .map(|i| b.start + i)
+                else {
+                    break header;
+                };
+                if !is_comment(&lines[i]) {
+                    break i;
+                }
+                // The trailing run of comment lines ending at `i`:
+                // attached to the block (no blank line above it) it is
+                // the block's own annotation and travels; detached, it
+                // is the next section's banner and stays.
+                let run_start = (b.start..i)
+                    .rev()
+                    .take_while(|&j| is_comment(&lines[j]))
+                    .last()
+                    .unwrap_or(i);
+                if run_start == b.start || !lines[run_start - 1].content.trim().is_empty() {
+                    break i;
+                }
+                end = run_start;
+            }
+        }
+    };
+    Ok((header, last))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +799,7 @@ providers:
         context: 1m
   - name: zai
     api_key_env: ZAI_API_KEY
+
 plugins:
   - id: cache-guard
     kind: builtin/cache_guard
@@ -921,6 +982,55 @@ plan_policy:
         );
         assert_eq!(seq_len(DOC, "fallback"), 2);
         assert_eq!(block_keys(DOC, "aliases"), vec!["coding-fast", "glm-plan"]);
+    }
+
+    /// The shape step's unit (ADR-038; spec §4.11): the span is the header
+    /// line through the last line the block owns — comment lines do not
+    /// terminate it, trailing blank lines are not part of it, and a key
+    /// whose value sits on its own line spans that line alone.
+    #[test]
+    fn block_spans_are_the_header_through_the_last_owned_line() {
+        let (h, l) = block_span(DOC, "providers").unwrap();
+        let lines: Vec<&str> = DOC.lines().collect();
+        assert_eq!(lines[h], "providers:");
+        assert_eq!(lines[l].trim(), "api_key_env: ZAI_API_KEY");
+        // The blank line before `plugins:` stays outside the span.
+        assert_eq!(lines[l + 1].trim(), "");
+        assert_eq!(lines[l + 2], "plugins:");
+
+        // A comment line at the block's own indent never terminates it: it
+        // is part of what gets moved.
+        let commented = DOC.replace("plugins:\n", "# review before shipping\nplugins:\n");
+        let (h2, l2) = block_span(&commented, "providers").unwrap();
+        assert_eq!((h2, l2), (h, l), "the span ends before the new comment");
+
+        // A single-line value spans that line alone.
+        let flow = "trace:\n  dir: ./traces\nproviders: []\naliases:\n  a: b\n";
+        assert_eq!(block_span(flow, "providers"), Ok((2, 2)));
+
+        // Refusals: no such line, and two lines claiming the same key.
+        assert_eq!(
+            block_span("trace:\n  dir: ./traces\n", "providers"),
+            Err(AnchorError::NoSuchKey)
+        );
+        let two = format!("{DOC}# providers:\n");
+        assert_eq!(
+            block_span(&two, "providers"),
+            Err(AnchorError::Ambiguous(2))
+        );
+    }
+
+    /// A block's **own comment** travels with it: the example annotates
+    /// prices and endpoints, so a span that stopped at a comment would
+    /// leave those lines behind (and the price table would lose its
+    /// citations).
+    #[test]
+    fn block_span_keeps_the_blocks_own_comments() {
+        let doc = "server:\n  addr: \"127.0.0.1:8790\"\nproviders:\n  # source: https://example.com @2026-09-26\n  - name: p\n    api_key_env: K\n# a section banner\nplugins: []\n";
+        let (h, l) = block_span(doc, "providers").unwrap();
+        let lines: Vec<&str> = doc.lines().collect();
+        assert_eq!(lines[h], "providers:");
+        assert_eq!(lines[l], "# a section banner");
     }
 
     #[test]

@@ -71,11 +71,15 @@ router setup --non-interactive  # CI / containers: no questions, every answer at
 
 A few things worth knowing before you run it:
 
-- **The file comes from the shipped example.** Without `--from`, the starting point is the `config.example.yaml`
+- **The file comes from the shipped example, and what you get is always the pair.** Without `--from`, the
+  starting point is the `config.example.yaml`
   embedded in your binary — the one of its own commit — together with the embedded `providers.example.yaml` it
   names: a fresh run writes **both**. Where the result goes is described below; the absolute
-  path is always printed. If the file already exists it is the starting point instead, so your own edits are
-  what the questions start from.
+  path is always printed. If the file already exists it is the starting point
+  instead, so your own edits are what the questions start from — and if that file carries the roster
+  **inline** (`providers:` in the config itself, the shape every config written before the example split
+  has), the run **moves** it into `providers.example.yaml` for you instead of leaving you a two-shape
+  config ([ADR-038](../design/decisions/ADR-038-setup-writes-the-pair.md)).
 - **Your answers edit; they never regenerate.** The command replaces the value you answered on its own line and
   touches nothing else, so every comment, every `source` citation and every note you wrote survives verbatim.
   That is deliberate: the example's comments carry the provenance of each price, and a command that rewrote the
@@ -113,15 +117,23 @@ A few things worth knowing before you run it:
   citations, its key-variable names) sits in `providers.example.yaml`, which the config **names** with
   `providers_file:` — and it may instead sit **in the config file** inline. Exactly one of the two keys is
   written: a file that carries both, or neither, is a load refusal that names both keys — an empty roster
-  (`providers: []`) is a decision you write, never a default the process assumes. The roster is **named,
-  never searched**: there is no default location and no `providers.yaml` picked up because it happens to sit
-  beside the config, and a relative value resolves the way every other path in the file does, against the
-  directory the config file sits in ([`docs/spec.md` §4.14](../docs/spec.md)). Two consequences for your own
-  habits: the roster is part of "the config" when you back it up, and `router setup providers` edits
-  whichever of the two files actually holds the entry ([Operations](operations.md#backup)). To swap a roster
-  wholesale, hand the wizard a file you wrote: `router setup providers --from <your-roster.yaml> --force`
-  replaces the roster **as a unit** and touches no other byte — a replacement, not an insertion; the wizard
-  still cannot add a provider entry to a roster.
+  (`providers: []`) is a decision you write, never a default the process assumes. A run of `router setup`
+  never leaves the roster inline: if your config carries it that way, the **block moves into
+  `providers.example.yaml` byte for byte** — entries, comments and every `source` citation included — and
+  the config keeps a `providers_file:` line where the block was, so the wizard's output is one shape
+  whatever your file's history ([ADR-038](../design/decisions/ADR-038-setup-writes-the-pair.md)). Three
+  details worth knowing: the run says so when it happens (and `--dry-run` shows the span before anything
+  is written); a `providers.example.yaml` that is already there is copied to `.bak` **before** it is
+  overwritten, so nothing of yours is lost; and a config that writes both keys or neither is left exactly
+  as it is — the wizard configures your file, it does not repair one that does not load. The roster is
+  **named, never searched**: there is no default location and no `providers.yaml` picked up because it
+  happens to sit beside the config, and a relative value resolves the way every other path in the file does,
+  against the directory the config file sits in ([`docs/spec.md` §4.14](../docs/spec.md)). Two consequences
+  for your own habits: the roster is part of "the config" when you back it up, and `router setup providers`
+  edits whichever of the two files actually holds the entry ([Operations](operations.md#backup)). To swap a
+  roster wholesale, hand the wizard a file you wrote: `router setup providers --from <your-roster.yaml>
+  --force` replaces the roster **as a unit** and touches no other byte — a replacement, not an insertion; the
+  wizard still cannot add a provider entry to a roster.
 
 ### Keys: export them, never write them
 
