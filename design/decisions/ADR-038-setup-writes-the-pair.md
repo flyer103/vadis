@@ -5,8 +5,9 @@
 - Related: **ADR-025** (the write strategy this ADR extends without contradicting: the anchored edit on a
   verbatim template — decision 1/7's *no insertion, no deletion, no reformatting* is about **the wizard's
   answers**, and D3 below states exactly which bytes of the file the shape step may move); **ADR-037** (the
-  pair this ADR completes: D9's *one root, at most one roster, named — no second source of equal standing*,
-  and the identity digest whose value changes **once**, at the migration); AGENTS hard constraints **1**
+  pair this ADR completes: D9's *one root, at most one roster, no precedence ladder, no key-by-key
+  overlay, no second discovery candidate*, and the identity digest whose value changes **once**, at the
+  migration); AGENTS hard constraints **1**
   (the byte boundary), **2** (content determinism), **8** (docs before code) and **9** / ADR-012 (the
   measure is not the search space — this ADR changes no gate, no corpus and no conformance assertion);
   spec §4.11 (the *target file* column), **§4.14** (the two shapes); DESIGN §12.14 (the writer);
@@ -73,7 +74,8 @@ planned**, and the normalization is part of the run's candidate like every other
 **D2 — The roster file's name is the shipped root's own.** When the root carries the roster inline there is
 no `providers_file` value to obey, so the name comes from the **embedded template's own line** — the value
 `config.example.yaml` itself carries (`providers.example.yaml`), read at run time and never written as a
-constant in code (spec §4.11's *"never a constant in code"* rule for the wizard's defaults). Fresh run and
+constant in code (ADR-025's decision 4: the default a question shows is the file's own value, else the
+template's — *never a constant in code*). Fresh run and
 migration therefore name **one** file, and `G1`'s byte identity for a fresh target is unaffected.
 
 **D3 — The move is a byte move, and the wizard writes no prose.** The moved span is the `providers:` header
@@ -125,7 +127,7 @@ equal the moved block is not written and not backed up at all.
 
 | Alternative | Why it is not the decision |
 |---|---|
-| `router setup --split`, the migration as an explicit flag (this ADR's first draft) | **Owner-declined**: it makes the user carry a shape distinction the tool exists to decide. ADR-025 already argues the class: *"a flag that merely restates the default is a lie in a help text."* A wizard that writes two shapes needs a paragraph to explain which one you are in; one that writes one shape needs a sentence |
+| `router setup --split`, the migration as an explicit flag (this ADR's first draft) | **Owner-declined**: it makes the user carry a shape distinction the tool exists to decide. ADR-025 already argues the class (its `--reconfigure` lesson: no flags that restate behaviour), and spec §4.11 states it in terms: *"a flag that merely restates the default is a lie in a help text."* A wizard that writes two shapes needs a paragraph to explain which one you are in; one that writes one shape needs a sentence |
 | Split only on a bare `router setup` / only when the run includes the `providers` section | **Owner-declined**: the shape must not depend on which section you happened to ask for. Two runs over one file would leave two shapes, and "did my config get split?" would become a question about argv |
 | Keep the shape, document the hand-split in `book/` | The measured problem is that the roster file never appears; documenting the ceremony does not produce it. The wizard's whole job is to turn the template into your config, and the template has been a pair since R43 |
 | Refuse when a roster file already exists beside an inline root | Declined by the owner in favour of D6's backup-and-continue: refusing turns a condition the run can make safe into a manual chore, and the operator's bytes are kept by name either way |
@@ -138,7 +140,7 @@ equal the moved block is not written and not backed up at all.
   section-scoped run) prints a `split:` line and lands two files where it previously printed `no change`.
   `--dry-run` reports a write where it reported none. This is the decision, not a regression: the wizard's
   output shape is now a function of the tool, not of the file's history.
-- **One operator-visible identity event.** `config_digest` (ADR-037 D4) and both files' `sha256` change at
+- **One operator-visible identity event.** `config_digest` (ADR-037 D6) and both files' `sha256` change at
   the migration and never again unless the content does. An operator tracking the digest sees exactly one
   step, on the run that migrated them.
 - **The failure modes stay loadable.** Roster-first landing means every partial state still loads: root
