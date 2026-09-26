@@ -33,3 +33,9 @@ serde_yaml = "0.9"
 # futures: the serve endpoint maps the SSE relay stream into axum's body
 # (the SSE relay); allowlisted alongside router-providers/router-proxy.
 futures = { workspace = true }
+# notify: DESIGN §12.1's allowlist row for router-cli only (ADR-039) — the
+# reload's file-watch mechanism. The watcher decides when to look; the byte
+# digest decides whether anything changed. No second watch-related crate is
+# taken (ADR-040 D12.3): the coalescing window is a constant in the reload's
+# own module, not a dependency (`notify-debouncer-full` refused).
+notify = { workspace = true }
