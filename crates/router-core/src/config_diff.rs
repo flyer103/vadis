@@ -167,6 +167,10 @@ fn identity_key_for(path: &str) -> Option<&'static str> {
     None
 }
 
+/// One array keyed by an identity field: the element's own value for the
+/// key, beside the element.
+type KeyedArray<'a> = BTreeMap<String, &'a Value>;
+
 /// Both arrays keyed by `key` — or `None` (the caller falls back to the
 /// positional walk) when any element lacks a string value for the key or a
 /// key repeats. A validated config cannot produce either (the loader
@@ -175,7 +179,7 @@ fn keyed_arrays<'a>(
     key: &str,
     old: &'a [Value],
     new: &'a [Value],
-) -> Option<(BTreeMap<String, &'a Value>, BTreeMap<String, &'a Value>)> {
+) -> Option<(KeyedArray<'a>, KeyedArray<'a>)> {
     let collect = |arr: &'a [Value]| {
         let mut map = BTreeMap::new();
         for v in arr {
