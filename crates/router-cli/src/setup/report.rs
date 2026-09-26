@@ -6,8 +6,16 @@
 //! occupy (spec §4.11's secret boundary; CONF-70's canary).
 
 use crate::setup::edit::{Edit, EditKind, Plan};
+use crate::setup::split::Split;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// How the run came to write the roster — spec §4.11's target-file
+/// column, and the two labels the landing line says aloud: a file the
+/// root **named** (`providers_file:`, §4.14) or one this run created by
+/// **moving** the root's own inline block into it (ADR-038).
+pub const NAMED_BY_PROVIDERS_FILE: &str = "named by providers_file";
+pub const MOVED_FROM_INLINE: &str = "the root's inline roster, moved";
 
 /// One `--check` row: a variable the file names, and its presence state.
 /// For the token, "absent" and "empty" are distinct states — the
@@ -63,9 +71,14 @@ pub fn check_rows(cfg: &router_core::config::RouterConfig) -> Vec<(String, KeySt
 /// The human `--check` rendering: names and states, plus the export
 /// snippet for each missing one — the boundary is names, and the snippet
 /// is where the help stops (spec §4.11: "it prints the export snippet for
-/// each missing name and stops there").
-pub fn check_text(rows: &[(String, KeyState)]) -> String {
+/// each missing name and stops there"). `inline` is the roster note for a
+/// root that carries the roster inline, and heads the rows: the fact is
+/// about the file, not about a key.
+pub fn check_text(rows: &[(String, KeyState)], inline: Option<&str>) -> String {
     let mut out = String::new();
+    if let Some(name) = inline {
+        out.push_str(&inline_roster_text(name));
+    }
     for (name, state) in rows {
         out.push_str(&format!("{name}: {}\n", state.as_str()));
         if *state != KeyState::Present {
@@ -85,8 +98,9 @@ pub fn check_json(
     path: &Path,
     selected_by: &str,
     rows: &[(String, KeyState)],
+    inline: Option<&str>,
 ) -> serde_json::Value {
-    json!({
+    let mut v = json!({
         "config": path.display().to_string(),
         "selected_by": selected_by,
         "keys": rows
@@ -94,7 +108,23 @@ pub fn check_json(
             .map(|(n, s)| json!({ "name": n, "state": s.as_str() }))
             .collect::<Vec<_>>(),
         "all_present": rows.iter().all(|(_, s)| *s == KeyState::Present),
-    })
+    });
+    if let Some(name) = inline {
+        v["roster"] = inline_roster_json(name);
+    }
+    v
+}
+
+/// A read-only surface's statement about an **inline** root (ADR-038 D9):
+/// the run changes nothing, so it says what a *writing* run would do with
+/// the file — the sentence that turns "no roster file appeared" from a
+/// silent absence into a stated fact, without a flag to remember.
+pub fn inline_roster_text(name: &str) -> String {
+    format!("roster: inline in this file — a writing run moves it to {name}\n")
+}
+
+pub fn inline_roster_json(name: &str) -> serde_json::Value {
+    json!({ "inline": true, "splits_on_write_to": name })
 }
 
 /// One `--print` row.
@@ -109,7 +139,12 @@ pub struct PrintRow {
     pub from_template: bool,
 }
 
-pub fn print_text(rows: &[PrintRow], path: &Path, from_template: bool) -> String {
+pub fn print_text(
+    rows: &[PrintRow],
+    path: &Path,
+    from_template: bool,
+    inline: Option<&str>,
+) -> String {
     let mut out = String::new();
     if from_template {
         out.push_str(&format!(
@@ -118,6 +153,9 @@ pub fn print_text(rows: &[PrintRow], path: &Path, from_template: bool) -> String
         ));
     } else {
         out.push_str(&format!("# {}\n", path.display()));
+    }
+    if let Some(name) = inline {
+        out.push_str(&inline_roster_text(name));
     }
     for r in rows {
         let state = if r.enabled { "" } else { " (commented out)" };
@@ -129,8 +167,13 @@ pub fn print_text(rows: &[PrintRow], path: &Path, from_template: bool) -> String
     out
 }
 
-pub fn print_json(rows: &[PrintRow], path: &Path, selected_by: &str) -> serde_json::Value {
-    json!({
+pub fn print_json(
+    rows: &[PrintRow],
+    path: &Path,
+    selected_by: &str,
+    inline: Option<&str>,
+) -> serde_json::Value {
+    let mut v = json!({
         "config": path.display().to_string(),
         "selected_by": selected_by,
         "from_template": rows.iter().any(|r| r.from_template),
@@ -142,7 +185,11 @@ pub fn print_json(rows: &[PrintRow], path: &Path, selected_by: &str) -> serde_js
                 "enabled": r.enabled,
             }))
             .collect::<Vec<_>>(),
-    })
+    });
+    if let Some(name) = inline {
+        v["roster"] = inline_roster_json(name);
+    }
+    v
 }
 
 /// `--dry-run`: each edit as `<anchor>: <old> → <new>`, with the edit
@@ -171,11 +218,66 @@ fn key_of(e: &Edit) -> String {
     e.path.rsplit('.').next().unwrap_or(&e.path).to_string()
 }
 
+/// The shape step's facts, for the surfaces that name it (ADR-038 D9):
+/// the lines that moved out of the root, how many bytes they were, and
+/// where they went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitFacts {
+    pub first_line: usize,
+    pub last_line: usize,
+    pub lines: usize,
+    pub bytes: usize,
+    pub roster: PathBuf,
+}
+
+impl SplitFacts {
+    pub fn of(s: &Split, roster: &Path) -> SplitFacts {
+        SplitFacts {
+            first_line: s.span.first_line(),
+            last_line: s.span.last_line(),
+            lines: s.span.lines(),
+            bytes: s.roster.len(),
+            roster: roster.to_path_buf(),
+        }
+    }
+}
+
+/// `split: providers: lines 100-1058 (959 lines, 71069 bytes) → <roster>` —
+/// one line, so a run's report says the roster moved rather than leaving
+/// the operator to diff two files (ADR-038 D9: silent is the one thing
+/// this must not be).
+pub fn split_note(f: &SplitFacts) -> String {
+    format!(
+        "split: providers: lines {first}-{last} ({lines} line{s}, {bytes} bytes) → {roster}\n",
+        first = f.first_line,
+        last = f.last_line,
+        lines = f.lines,
+        s = if f.lines == 1 { "" } else { "s" },
+        bytes = f.bytes,
+        roster = f.roster.display()
+    )
+}
+
+pub fn split_json(f: &SplitFacts) -> serde_json::Value {
+    json!({
+        "moved": {
+            "lines": [f.first_line, f.last_line],
+            "count": f.lines,
+            "bytes": f.bytes,
+            "to": f.roster.display().to_string(),
+        }
+    })
+}
+
 /// The `--dry-run` JSON form: the same facts, machine-shaped. Under a
 /// split root the roster lane's edits ride in an additive `roster`
 /// member, labelled with its path — an edit's target file is never
 /// ambiguous (spec §4.11's target-file column).
-pub fn dry_run_json(plan: &Plan, roster: Option<(&Path, &Plan)>) -> serde_json::Value {
+pub fn dry_run_json(
+    plan: &Plan,
+    roster: Option<(&Path, &str, &Plan)>,
+    split: Option<&SplitFacts>,
+) -> serde_json::Value {
     let edits = |p: &Plan| {
         p.edits
             .iter()
@@ -191,12 +293,15 @@ pub fn dry_run_json(plan: &Plan, roster: Option<(&Path, &Plan)>) -> serde_json::
             .collect::<Vec<_>>()
     };
     let mut v = json!({ "edits": edits(plan) });
-    if let Some((path, rplan)) = roster {
+    if let Some((path, named_by, rplan)) = roster {
         v["roster"] = json!({
             "path": path.display().to_string(),
-            "named_by": "providers_file",
+            "named_by": named_by,
             "edits": edits(rplan),
         });
+    }
+    if let Some(f) = split {
+        v["split"] = split_json(f);
     }
     v
 }
@@ -212,36 +317,42 @@ pub fn landed_text(path: &Path, selected_by: &str, n: usize) -> String {
 }
 
 /// The roster lane's landing line: the roster is **named** by the root's
-/// `providers_file`, never selected by §4.12's order — the line says so
-/// rather than borrowing the root's rule (spec §4.14: named, never
-/// searched).
-pub fn landed_roster_text(path: &Path, n: usize) -> String {
+/// `providers_file` — never selected by §4.12's order — or it **is** the
+/// block this run moved out of the root (ADR-038). Either way the line
+/// says which, rather than borrowing the root's rule (spec §4.14: named,
+/// never searched).
+pub fn landed_roster_text(path: &Path, named_by: &str, n: usize) -> String {
     format!(
-        "wrote {path} (named by providers_file; {n} edit{s} applied)\n",
+        "wrote {path} ({named_by}; {n} edit{s} applied)\n",
         path = path.display(),
         s = if n == 1 { "" } else { "s" }
     )
 }
 
 /// The landing JSON: the root's facts as today, plus an additive
-/// `roster` member when the run also landed the roster.
+/// `roster` member when the run also landed the roster, and an additive
+/// `split` when this run performed the shape step.
 pub fn landed_json(
     path: &Path,
     selected_by: &str,
     n: usize,
-    roster: Option<(&Path, usize)>,
+    roster: Option<(&Path, &str, usize)>,
+    split: Option<&SplitFacts>,
 ) -> serde_json::Value {
     let mut v = json!({
         "wrote": path.display().to_string(),
         "selected_by": selected_by,
         "edits_applied": n,
     });
-    if let Some((rpath, m)) = roster {
+    if let Some((rpath, named_by, m)) = roster {
         v["roster"] = json!({
             "wrote": rpath.display().to_string(),
-            "named_by": "providers_file",
+            "named_by": named_by,
             "edits_applied": m,
         });
+    }
+    if let Some(f) = split {
+        v["split"] = split_json(f);
     }
     v
 }
@@ -254,12 +365,13 @@ pub fn no_change_text(path: &Path) -> String {
 
 /// The `--dry-run` companion of a landing that has no edits to print:
 /// the plan is empty but the base is not the file that is there (a
-/// fresh target, or `--force`), so the run would write — the outcome is
-/// stated without performing it (spec §4.11's `--dry-run` row: an
-/// empty plan is not silence).
-pub fn dry_run_would_write_text(path: &Path, selected_by: &str) -> String {
+/// fresh target, `--force`, or a base the shape step moved), so the run
+/// would write — the outcome is stated without performing it (spec
+/// §4.11's `--dry-run` row: an empty plan is not silence). `because` is
+/// the whole clause, so each lane says its own reason.
+pub fn dry_run_would_write_text(path: &Path, because: &str) -> String {
     format!(
-        "would write {path} (selected by {selected_by}; 0 edits applied)\n",
+        "would write {path} ({because}; 0 edits applied)\n",
         path = path.display()
     )
 }
