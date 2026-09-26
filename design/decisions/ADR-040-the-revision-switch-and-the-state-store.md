@@ -200,7 +200,7 @@ key whose only consumer is an object the **process** builds once at startup and 
 and the refusal names the key.
 
 **Refused — the named set, and it is the process's own resources.** `server.addr` (the listener is bound
-once, `crates/router-cli/src/lib.rs:854` names the bind failure), the resolved `trace.dir` (resolved at
+once, `crates/router-cli/src/lib.rs:853-854` names the bind failure), the resolved `trace.dir` (resolved at
 load and held by the trace writer, which is also why `trace.rollover` is the unit that may move, not the
 directory) and the state store's path (fixed at `<config dir>/state/router.db`, spec §4.5). Measured, and
 in the same class though less obviously so: **`server.upstream_attempt_timeout`** is read to build each
@@ -459,9 +459,10 @@ session-level policy may land** — a card that needs it blocks on the owner.
   the invariants) and DESIGN §12.10.5 gains **note R9** beside row 13, which is the row whose second
   trigger the reload is.
 - **ADR-039's D4 rows close.** Its row 1 (the atomic-swap semantics) is D2–D4; its row 2 (the state store
-  across a switch) is D6; its row 4 (*which module owns the watcher, and whether it debounces*) stays
-  open for 0b. Its row 3 (the fresh p99 ladder) and row 5 (how the watcher survives the `rename`) remain
-  where they were: the owner's and 0b's respectively.
+  across a switch) is D6; its row 4 (the *changed keys* half of row 13's payload) and its row 5 (*which
+  module owns the watcher, and whether it debounces*) stay open for 0b. Its row 3 (the fresh p99 ladder)
+  and row 6 (how the watcher survives the `rename`) remain where they were: the owner's and 0b's
+  respectively.
 - **What the implementing round inherits as work, not as invention:** the reload's own loop and its
   second `load` entry point in `router-cli`; the published handle and the capture-once seam in
   `router-proxy`; the delta-only plugin mount, which needs the keyed diff DESIGN §12.2 sketches and
@@ -580,7 +581,8 @@ homing rule all hold as stated.
 *What this section is, and why it is appended here rather than filed as ADR-041: D9's own table assigns
 these items to "R47-0b", they share this ADR's subject (what a revision switch **means** — now extended to
 what it **reports**), and every sentence below stands on D1–D9. A companion ADR would have had to restate
-the vocabulary this file already fixed (revision, look, publish, revision in force, refused candidate) —
+the vocabulary already fixed (revision, look, publish, refused candidate — and *revision in force*, which
+is spec §4.15 rule 3's word for what D2 publishes) —
 the one thing this card forbids. Nothing in D1–D9 changes; two rows join D8's list (RV-8, RV-9) and the
 Status line records the extension.*
 
@@ -758,8 +760,10 @@ ladder is meant to measure the load (ADR-039 D2's criterion 1 — *the p99 belon
 timer*). The value is a **constant** (no `server.reload_window`, no flag — D8's last paragraph and the
 owner's standing no-new-parameter ruling), and its **lower bound is the landing's own write gap**: measured
 on this machine, spec §4.11's writer sequence (`temp` create + write + fsync + `rename`-over) takes **min
-0.126 ms / median 0.135 ms / p95 0.174 ms / max 0.185 ms** (N = 200; the probe below), so a window of
-**200 ms** sits ~3 orders of magnitude above the gap it must not be shorter than and far below anything an
+0.128 ms / median 0.138 ms / p95 0.182 ms / max 0.258 ms** (N = 200; the tracked run is
+`autowork/harness/r47-0b/probe.out` P18, re-runnable by its `gap.py`), so a window of
+**200 ms** sits ~3 orders of magnitude above the gap it must not be shorter than (776× on that run) and
+far below anything an
 operator could perceive. The implementing card pins the constant with its own measurement; what is decided
 here is the **shape** (a constant, leading-edge, window-only coalescing) and its ceiling of ambition — it is
 a look-count control, so a shorter window that produces extra looks is *correct*, merely more expensive.

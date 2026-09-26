@@ -3735,7 +3735,7 @@ looks harmless. It is a **leading-edge, one named constant** in the reload's mod
 burst starts a look at once, events inside the following window fold into it, and one further look runs when
 the burst ends — so a reload's latency is the *load*, never a timer (ADR-039 D2's criterion 1, which is what
 keeps A4's ladder meaningful). The constant's lower bound is the landing's own write gap, measured on this
-machine at **max 0.185 ms** (N = 200, `autowork/harness/r47-0b/probe.out` P18), so the proposed **200 ms**
+machine at **max 0.258 ms** (N = 200, `autowork/harness/r47-0b/probe.out` P18), so the proposed **200 ms**
 sits orders of magnitude above it; the implementing card pins the value with its own measurement. **No
 second crate** (§12.1's note): the coalescer is a pure function of (event times, window), unit-testable with
 no filesystem and no watcher. The **registration is on the two directories** (the root's, the roster's) with
