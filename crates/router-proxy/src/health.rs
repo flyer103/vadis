@@ -8,22 +8,19 @@ use serde_json::{json, Map, Value};
 /// `router-cli` at startup after validation, read by `/health`.
 #[derive(Clone)]
 pub struct AppState {
-    /// The validated config itself (roster, aliases, fallback, plugins).
-    pub config: RouterConfig,
+    /// The published revision's handle (ADR-040 D2; DESIGN §12.20):
+    /// `/health` captures it **once per call** and reports the revision
+    /// **in force** — after an accepted reload, this surface answers for
+    /// the configuration actually serving, not the one the process
+    /// started with. The per-revision facts (the config itself, its
+    /// identity, the provider key facts) live on the `Revision`; the
+    /// members below are the process-level facts a revision switch
+    /// refuses to move (D5).
+    pub revision: crate::revision::SharedRevision,
     /// `<config dir>/<trace.dir>` (spec §4.1 resolution rule).
     pub trace_dir: String,
     /// `<config dir>/state/router.db` (spec §4.5; fixed in v0.1).
     pub state_db: String,
-    /// Which configuration the process loaded (spec §9.1's `config`
-    /// member, ADR-037 D6): the two resolved paths and the three digests,
-    /// handed to the proxy as strings at startup — the proxy never opens,
-    /// reads, resolves or hashes a config file (ADR-037 D4).
-    pub config_identity: ConfigIdentity,
-    /// For each provider: the `api_key_env` name and whether the env var
-    /// was present at startup, plus the entry's declared `region` and
-    /// `currency` (spec §4.8/§9.1 — reads of the loaded config, never
-    /// inferences). Key values never travel here (§12.10.2).
-    pub provider_keys: Vec<ProviderKeyFacts>,
     /// The store `serve` opened: spec §9.1's `plan` section reads the
     /// `plan_state` projection (and the two inputs of the probe gate that
     /// are projections) through it — read-only queries on the writer's
@@ -70,8 +67,14 @@ pub struct ProviderKeyFacts {
 /// could not open it refuses to serve, CONF-23). Spec §9.1 adds the `plan`
 /// member.
 pub fn health_json(state: &AppState) -> Value {
+    // One capture per call (the capture-once rule, ADR-040 D2): the whole
+    // body below answers for the revision in force at this request's
+    // arrival — the config member and the plan section cannot disagree
+    // about which revision they describe.
+    let rev = state.revision.capture();
+    let config = &rev.forwarder.config;
     let mut plugins = Vec::new();
-    for p in &state.config.plugins {
+    for p in &config.plugins {
         let mut entry = Map::new();
         entry.insert("id".into(), json!(p.id));
         entry.insert("kind".into(), json!(p.kind));
@@ -81,7 +84,7 @@ pub fn health_json(state: &AppState) -> Value {
         plugins.push(Value::Object(entry));
     }
 
-    let providers: Vec<Value> = state
+    let providers: Vec<Value> = rev
         .provider_keys
         .iter()
         .map(|f| {
@@ -102,7 +105,7 @@ pub fn health_json(state: &AppState) -> Value {
 
     json!({
         "status": "ok",
-        "addr": state.config.server.addr,
+        "addr": config.server.addr,
         "plugins": plugins,
         "providers": providers,
         "trace_dir": state.trace_dir,
@@ -113,18 +116,18 @@ pub fn health_json(state: &AppState) -> Value {
         // The two spellings of one fact: `roster_path: null` and
         // `roster_sha16: ""` both mean the roster is inline.
         "config": {
-            "root_path": state.config_identity.root_path,
-            "roster_path": state.config_identity.roster_path,
-            "root_sha16": state.config_identity.root_sha16,
-            "roster_sha16": state.config_identity.roster_sha16,
-            "config_digest": state.config_identity.config_digest,
+            "root_path": rev.config_identity.root_path,
+            "roster_path": rev.config_identity.roster_path,
+            "root_sha16": rev.config_identity.root_sha16,
+            "roster_sha16": rev.config_identity.roster_sha16,
+            "config_digest": rev.config_identity.config_digest,
         },
         // Spec §9.1 / §4.7: `{"required": true, "env": "<name>"}` when the
         // key is written, `{"required": false}` — and no other key — when
         // it is not. Derived from the loaded config (the one source; no
         // second copy of the resolution logic to drift). The variable's
         // NAME may be reported; its value is printed nowhere, ever.
-        "auth": auth_member(&state.config.server),
+        "auth": auth_member(&config.server),
         // The store is a startup prerequisite: if it could not open, serve
         // would have exited non-zero (CONF-23), so a running process reports
         // "open" — the refusal reason never reaches /health.
@@ -133,7 +136,7 @@ pub fn health_json(state: &AppState) -> Value {
         // loaded config declares no `plan_policy`: with no policy there is
         // no family to name, and inventing one would be the "a state nobody
         // can see" error in reverse.
-        "plan": plan_section_value(state),
+        "plan": plan_section_value(state, &rev),
     })
 }
 
@@ -155,11 +158,11 @@ pub(crate) struct PlanHealthInputs {
     pub deferred_by_window: bool,
 }
 
-fn plan_section_value(state: &AppState) -> Value {
-    let Some(policy) = state.config.plan_policy.as_ref() else {
+fn plan_section_value(state: &AppState, rev: &crate::revision::Revision) -> Value {
+    let Some(policy) = rev.forwarder.config.plan_policy.as_ref() else {
         return json!({ "configured": false });
     };
-    let inputs = gather_plan_inputs(state, policy);
+    let inputs = gather_plan_inputs(state, &rev.forwarder.config, policy);
     plan_section(policy, &inputs)
 }
 
@@ -169,7 +172,11 @@ fn plan_section_value(state: &AppState) -> Value {
 /// two are `availability`'s single-owner reads (ADR-016 §13.3 L1c/L1d,
 /// fixed R10) — this surface consumes them, it does not re-derive them —
 /// both evaluated against the section's one clock read below.
-fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInputs {
+fn gather_plan_inputs(
+    state: &AppState,
+    config: &RouterConfig,
+    policy: &PlanPolicyCfg,
+) -> PlanHealthInputs {
     let now = now_us();
     let (account, since_us) = match state.store.as_ref().map(|s| {
         s.query(Query::PlanState {
@@ -197,7 +204,7 @@ fn gather_plan_inputs(state: &AppState, policy: &PlanPolicyCfg) -> PlanHealthInp
         ),
         deferred_by_window: crate::availability::probe_deferred_by_window(
             state.store.as_ref(),
-            &state.config,
+            config,
             policy,
             (now.max(0) as u64) / 1_000_000,
         ),
@@ -386,17 +393,35 @@ mod tests {
         }
     }
 
+    /// An AppState fixture around a `RevisionCell` — the shape `serve`
+    /// builds: the config and its identity inside the published revision.
+    fn app_state(config: RouterConfig, identity: ConfigIdentity) -> AppState {
+        AppState {
+            revision: crate::revision::RevisionCell::new(crate::revision::Revision {
+                forwarder: crate::forward::Forwarder {
+                    config,
+                    transports: Default::default(),
+                    api_keys: Default::default(),
+                    store: None,
+                    trace: None,
+                    transform_engine: None,
+                    session_ttl_us: 0,
+                },
+                config_identity: identity,
+                provider_keys: Vec::new(),
+                auth_gate: None,
+            }),
+            trace_dir: String::new(),
+            state_db: String::new(),
+            store: None,
+        }
+    }
+
     // §9.1's `configured: false` row: NO other key is present.
     #[test]
     fn no_policy_is_exactly_configured_false() {
-        let v = plan_section_value(&AppState {
-            config: no_policy_config(),
-            trace_dir: String::new(),
-            state_db: String::new(),
-            config_identity: test_identity(None),
-            provider_keys: Vec::new(),
-            store: None,
-        });
+        let state = app_state(no_policy_config(), test_identity(None));
+        let v = plan_section_value(&state, &state.revision.capture());
         assert_eq!(v, json!({ "configured": false }));
     }
 
@@ -419,14 +444,7 @@ mod tests {
     // `roster_sha16: ""` — and the split shape's named roster.
     #[test]
     fn the_config_member_reports_what_was_loaded() {
-        let state = |roster: Option<&str>| AppState {
-            config: no_policy_config(),
-            trace_dir: String::new(),
-            state_db: String::new(),
-            config_identity: test_identity(roster),
-            provider_keys: Vec::new(),
-            store: None,
-        };
+        let state = |roster: Option<&str>| app_state(no_policy_config(), test_identity(roster));
         let inline = health_json(&state(None));
         assert_eq!(
             inline["config"],

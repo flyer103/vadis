@@ -1,30 +1,39 @@
-//! The reload's watcher plumbing (ADR-039's mechanism; ADR-040 D1/D11/D12;
-//! DESIGN §12.20's sequence, step 1): **event → coalesced look → gate
-//! verdict**.
+//! The reload's watcher plumbing and publish (ADR-039's mechanism; ADR-040
+//! D1/D2/D5/D10/D11/D12; DESIGN §12.20): **event → coalesced look → gate
+//! verdict → publish**.
 //!
-//! The scope line, stated once: this module decides *when to look* (the
-//! watcher), *whether anything changed* (the digest, via the same
-//! [`config_load::load`] `serve` starts with) and *what a refused candidate
-//! reports* (one line, RV-9). What it deliberately does **not** do is apply
-//! an accepted candidate — the publish (the `config.applied` row, the
-//! handle swap, the capture-once seam) is R47-2's, and an
-//! [`Verdict::Accepted`] is handed back unapplied.
+//! The module decides *when to look* (the watcher), *whether anything
+//! changed* (the digest, via the same [`config_load::load`] `serve` starts
+//! with), *what a refused candidate reports* (one line, RV-9) and — R47-2's
+//! half — *what an accepted candidate becomes*: the [`Publisher`] runs
+//! DESIGN §12.20's steps 3–5 (the `config.applied` row with D10's value
+//! diff, the delta-only plugin edges, the publish of one immutable
+//! revision), on the watcher's own thread, off the request path.
 //!
-//! The three decisions this module lands: **D12.2** — the window is ours and
-//! it is a constant ([`COALESCE_WINDOW`], leading edge, never a config key;
-//! the pure policy is [`Coalescer`], a function of (event times, window) with
-//! no filesystem and no clock of its own, so a unit test pins it); **D12.3** —
-//! no second dependency (`notify-debouncer-full` is refused; the coalescing is
-//! the few lines below, not a crate); **D12.4** — the registration is on the
-//! directories with an exact-path filter. The landing replaces the target's
-//! inode (spec §4.11: `temp` + `rename`), so a registration bound to the
-//! target's inode could go silent; a directory's inode is not the thing being
-//! replaced. The filter is required, not cosmetic: the pair's own directory is
-//! *hot* (the store is `<config dir>/state/router.db`, the shipped
-//! `trace.dir` is `./state/traces`, and the macOS backend delivers
-//! sub-directory events), so without exact-path equality the reload would
-//! re-read the pair once per request — the per-request check ADR-039 refused
-//! outright.
+//! The three watcher decisions this module lands: **D12.2** — the window is
+//! ours and it is a constant ([`COALESCE_WINDOW`], leading edge, never a
+//! config key; the pure policy is [`Coalescer`], a function of (event times,
+//! window) with no filesystem and no clock of its own, so a unit test pins
+//! it); **D12.3** — no second dependency (`notify-debouncer-full` is
+//! refused; the coalescing is the few lines below, not a crate); **D12.4** —
+//! the registration is on the directories with an exact-path filter. The
+//! landing replaces the target's inode (spec §4.11: `temp` + `rename`), so
+//! a registration bound to the target's inode could go silent; a
+//! directory's inode is not the thing being replaced. The filter is
+//! required, not cosmetic: the pair's own directory is *hot* (the store is
+//! `<config dir>/state/router.db`, the shipped `trace.dir` is
+//! `./state/traces`, and the macOS backend delivers sub-directory events),
+//! so without exact-path equality the reload would re-read the pair once
+//! per request — the per-request check ADR-039 refused outright.
+//!
+//! One honest boundary, stated rather than discovered: the **registration
+//! follows the startup pair's paths**. A revision whose root names a
+//! *different* roster file is applied (the loader reads what the root
+//! names), and the refusal report's roster path is re-armed to the serving
+//! pair — but edits to the newly-named roster file alone produce no event
+//! (its directory was never registered). The next event on the registration
+//! — any edit of the root — reads it correctly (D12.6), and the operator's
+//! remedy for the gap is the same fallback: a restart.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -249,6 +258,369 @@ pub fn look(root_path: &Path, serving_digest: &str, watched_roster: Option<&Path
 }
 
 // ---------------------------------------------------------------------
+// The publish (R47-2; ADR-040 D2/D5/D10; DESIGN §12.20 steps 3–5): an
+// accepted candidate becomes the revision the request path serves.
+// ---------------------------------------------------------------------
+
+/// D5's refused set (spec §4.15's "keys the reload refuses"): every key
+/// whose only consumer is an object the **process** builds once and holds.
+/// Each entry is the diff's exact path beside the reason the refusal
+/// names; these are scalar leaves, so the value diff always reports them
+/// at exactly these paths. The direction of travel is one way (D5): a
+/// later card may promote a key by rebuilding its object with the
+/// revision; nothing here tightens.
+const REFUSED_KEYS: &[(&str, &str)] = &[
+    ("server.addr", "the listener is bound once at startup"),
+    (
+        "server.upstream_attempt_timeout",
+        "the provider transports are built once at startup",
+    ),
+    (
+        "server.max_body_bytes",
+        "the inbound body bound is built once for the process (spec §4.13)",
+    ),
+    (
+        "trace.dir",
+        "the resolved trace directory is held by the trace writer",
+    ),
+];
+
+/// The serving head: the facts a look judges against (the digest decides,
+/// D1) and a refusal names (D11). Re-armed by every accepted publish — the
+/// watcher's "serving digest" is this value, never one fixed at start.
+struct ServingHead {
+    digest: String,
+    roster_path: Option<PathBuf>,
+}
+
+/// The publish half of the reload (R47-2; DESIGN §12.20's steps 3–5, run
+/// on the watcher's thread — off the request path by construction). One
+/// accepted candidate, in order:
+///
+/// 1. **the value diff** against the revision in force (D10), computed
+///    here and never by a request;
+/// 2. **D5's refused set** — a candidate touching a process-held key is
+///    refused with the key named, before any row exists (D10's "a refused
+///    key can never appear in a `changed_keys` list");
+/// 3. **the auth resolution** (D5's honesty note): an unchanged
+///    `auth_token_env` name reuses the startup's one read (spec §4.7); a
+///    new name is read now, and an unset one refuses the switch with the
+///    startup refusal's own reason;
+/// 4. **the build** — the same assembly `serve` starts with, off the
+///    request path, so the published revision is complete before it is
+///    visible (D2: all-or-nothing);
+/// 5. **one `config.applied` row, committed before the publish**
+///    (ADR-010's order; RV-1): if the intent row cannot commit, the
+///    revision never serves — the refusal keeps the process honest at
+///    exactly the point RV-1 names a defect;
+/// 6. **row 12 at the crossed plugin edges only** (D5's delta: unchanged
+///    entries stay mounted; a roster-only change writes none);
+/// 7. **the publish and the re-arm**: the cell's readers see the whole
+///    new revision or the whole old one, and the next look judges against
+///    the new digest.
+///
+/// One ownership rule, learned from R47-1's two regressions: the
+/// publisher is owned by the watcher's **detached** thread (its `Drop` is
+/// deliberately non-blocking — the backend's teardown latency must never
+/// sit in `serve`'s drop), so it must not own the serving assembly's
+/// *lifetimes*. The cell, the store and the trace sink are held **weak**:
+/// their strong owners are `serve`'s own frame (and the axum state), so
+/// the store's writer lock is released exactly when `serve` is torn down,
+/// never on the watcher thread's schedule. An upgrade that fails means
+/// the process is exiting — a reload into a dying process is a no-op,
+/// not a refusal.
+pub struct Publisher {
+    /// The published handle the request path captures (D2 step 5). Weak:
+    /// see the struct's ownership rule.
+    cell: std::sync::Weak<router_proxy::RevisionCell>,
+    /// The one store handle (D6: one ledger — the switch's rows land in
+    /// the same log the startup row lives in). Weak: this handle carries
+    /// the writer lock, whose lifetime is `serve`'s, not this thread's.
+    store: std::sync::Weak<dyn router_core::store::Store>,
+    /// The process's one trace sink (`trace.dir` is refused, D5); every
+    /// revision's writer shares it, stamped with that revision's digest.
+    /// Weak, same rule.
+    trace_sink: std::sync::Weak<router_store::TraceSink>,
+    /// The watched root's resolved path — fixed: it is where the pair is
+    /// re-read from, and no revision can move it (a different root is a
+    /// different process).
+    root_path: PathBuf,
+    /// The startup auth facts (spec §4.7's "read once"): the env var the
+    /// startup config named and the token read from it. A revision naming
+    /// the SAME variable reuses this read; one naming a different
+    /// variable is read at the switch (ADR-040 D5's honesty note).
+    startup_auth: Option<(String, String)>,
+    /// The reload's own report channel (the watcher's sink): the plugin
+    /// assembly's notes print here, exactly as startup's print to stderr.
+    sink: Arc<dyn Fn(String) + Send + Sync>,
+    /// The serving head, re-armed by each accepted publish.
+    head: std::sync::Mutex<ServingHead>,
+}
+
+impl Publisher {
+    /// The publisher is born knowing the startup revision — the cell
+    /// already holds it and its `config.applied` row has already
+    /// committed (the startup row, `previous_config_digest: null`). The
+    /// three assembly handles are borrowed and held **weak** (the
+    /// struct's ownership rule): the caller keeps the strong refs.
+    pub fn new(
+        cell: &router_proxy::SharedRevision,
+        store: &Arc<dyn router_core::store::Store>,
+        trace_sink: &Arc<router_store::TraceSink>,
+        identity: &ConfigIdentity,
+        startup_auth: Option<(String, String)>,
+        sink: Arc<dyn Fn(String) + Send + Sync>,
+    ) -> Self {
+        Self {
+            cell: Arc::downgrade(cell),
+            store: Arc::downgrade(store),
+            trace_sink: Arc::downgrade(trace_sink),
+            root_path: identity.root_path.clone(),
+            startup_auth,
+            sink,
+            head: std::sync::Mutex::new(ServingHead {
+                digest: identity.config_digest.clone(),
+                roster_path: identity.roster_path.clone(),
+            }),
+        }
+    }
+
+    /// The facts one look judges against (D1) and a refusal names (D11).
+    fn head(&self) -> (String, Option<PathBuf>) {
+        let h = self.head.lock().expect("the serving head is poisoned");
+        (h.digest.clone(), h.roster_path.clone())
+    }
+
+    /// Steps 3–5 for one accepted candidate. `Err` is a refusal: the
+    /// revision in force keeps serving and the caller reports D11's one
+    /// line, indistinguishable in kind from the loader's own refusals.
+    pub fn apply(&self, candidate: ResolvedConfig) -> Result<(), Refusal> {
+        // The serving assembly, upgraded from the weak holds. A failed
+        // upgrade is possible only while `serve`'s frame is being torn
+        // down — the process is exiting, the switch is meaningless, and
+        // there is no refusal to report (D11's surface is for a process
+        // that keeps serving). This is a no-op, not a defect.
+        let (Some(cell), Some(store), Some(trace_sink)) = (
+            self.cell.upgrade(),
+            self.store.upgrade(),
+            self.trace_sink.upgrade(),
+        ) else {
+            return Ok(());
+        };
+        let serving = cell.capture();
+        let serving_digest = serving.config_identity.config_digest.clone();
+        let refuse = |reason: String| {
+            let (_, roster_path) = self.head();
+            Refusal {
+                serving_digest: serving_digest.clone(),
+                root_path: self.root_path.clone(),
+                roster_path,
+                reason,
+            }
+        };
+
+        // 1. The value diff (D10). A serialization failure is a refusal,
+        // not a panic: the row cannot be written honestly, so the
+        // revision is not served.
+        let changes = match router_core::changed_keys(&serving.forwarder.config, &candidate.router)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(refuse(format!(
+                    "the changed_keys diff could not be computed: {e}"
+                )))
+            }
+        };
+        // 2. D5's refused set — named per key, before any row exists.
+        for change in &changes {
+            for (key, why) in REFUSED_KEYS {
+                if change.path == *key {
+                    return Err(refuse(format!(
+                        "a reload may not change {key} ({why}); the remedy is a restart"
+                    )));
+                }
+            }
+        }
+        // 3. The auth resolution (D5's honesty note).
+        let gate = match self.resolve_gate(&candidate) {
+            Ok(g) => g,
+            Err(reason) => return Err(refuse(reason)),
+        };
+
+        // 4. The build — the same assembly `serve` starts with.
+        let note = |line: String| (self.sink)(format!("router: {line}"));
+        let revision = crate::build_revision(&candidate, &store, &trace_sink, gate, &note);
+
+        // 5. Row 13, committed BEFORE the publish (ADR-010's order, the
+        // startup path's own order). The payload is one flat object on
+        // every row (DESIGN §12.10.5 note R10): the digest half plus
+        // `previous_config_digest` and `changed_keys` — on a switch both
+        // are present and non-null (a comment-only revision's `[]` is the
+        // sharpest case: the digest moved, the values did not).
+        let payload = serde_json::json!({
+            "config_path": candidate.identity.root_path.to_string_lossy(),
+            "schema_version": store.schema_version().unwrap_or(0),
+            "root_path": candidate.identity.root_path.to_string_lossy(),
+            "roster_path": candidate.identity.roster_path.as_ref().map(|p| p.to_string_lossy()),
+            "root_sha16": candidate.identity.root_sha16,
+            "roster_sha16": candidate.identity.roster_sha16,
+            "config_digest": candidate.identity.config_digest,
+            "previous_config_digest": serving_digest,
+            "changed_keys": changes,
+        });
+        if let Err(e) = store.append(router_core::NewEvent::store_level(
+            router_core::EventKind::ConfigApplied,
+            payload,
+        )) {
+            return Err(refuse(format!(
+                "the config.applied row could not be committed: {e}"
+            )));
+        }
+
+        // 6. Row 12's edges — only the edges actually crossed (D5; a
+        // roster-only change writes none). NORMAL class: a write failure
+        // here is observation loss, never a publish blocker (RV-1
+        // constrains row 13 alone).
+        for ev in plugin_edges(
+            &serving.forwarder.config.plugins,
+            &candidate.router.plugins,
+            &candidate.identity.config_digest,
+        ) {
+            let _ = store.append(ev);
+        }
+
+        // 7. The publish — and the watcher's re-arm: the next look judges
+        // against the revision now serving (D1), and a refusal names the
+        // serving pair's own paths.
+        let head = ServingHead {
+            digest: candidate.identity.config_digest.clone(),
+            roster_path: candidate.identity.roster_path.clone(),
+        };
+        cell.publish(revision);
+        *self.head.lock().expect("the serving head is poisoned") = head;
+        Ok(())
+    }
+
+    /// D5's `auth_token_env` honesty note: the *name* is per-revision.
+    /// An unchanged name reuses the startup's one read (spec §4.7's
+    /// contract is untouched — the value is not re-read); a changed or
+    /// newly-added name is read now, and an unset or empty variable
+    /// refuses the switch with the startup refusal's own reason rather
+    /// than quietly serving without a gate.
+    fn resolve_gate(
+        &self,
+        candidate: &ResolvedConfig,
+    ) -> Result<Option<router_proxy::AuthGate>, String> {
+        let name = candidate.router.server.auth_token_env.as_deref();
+        match name {
+            None => Ok(None),
+            Some(n) if Some(n) == self.startup_auth.as_ref().map(|(name, _)| name.as_str()) => {
+                Ok(self
+                    .startup_auth
+                    .as_ref()
+                    .map(|(_, token)| router_proxy::AuthGate::new(token.clone())))
+            }
+            Some(n) => match std::env::var(n) {
+                Ok(v) if !v.is_empty() => Ok(Some(router_proxy::AuthGate::new(v))),
+                other => {
+                    let state = match other {
+                        Ok(_) => "empty",
+                        Err(_) => "unset",
+                    };
+                    Err(format!(
+                        "server.auth_token_env names {n}, which is {state}: refusing the switch \
+                         (a token-less revision would serve unauthenticated)"
+                    ))
+                }
+            },
+        }
+    }
+}
+
+/// D5's mount-the-delta as row 12's edges, keyed by the plugin entry's
+/// own identity (`id`, which the loader guarantees unique). An entry
+/// unchanged under that identity is left mounted and writes nothing; a
+/// `disabled` entry is not mounted, so only its *transitions* across the
+/// mount line are edges. A changed mounted entry is a rebuild — the
+/// `unloaded` row then the `loaded` row, in that order. The list is
+/// deterministic (sorted by id) so two processes applying the same pair
+/// write the same rows (AGENTS 2).
+fn plugin_edges(
+    old: &[router_core::config::PluginCfg],
+    new: &[router_core::config::PluginCfg],
+    digest: &str,
+) -> Vec<router_core::NewEvent<'static>> {
+    use router_core::config::PluginCfg;
+    use std::collections::BTreeMap;
+
+    fn keyed(list: &[PluginCfg]) -> BTreeMap<&str, &PluginCfg> {
+        list.iter().map(|p| (p.id.as_str(), p)).collect()
+    }
+    fn row(
+        kind: router_core::EventKind,
+        p: &PluginCfg,
+        digest: &str,
+    ) -> router_core::NewEvent<'static> {
+        router_core::NewEvent::store_level(
+            kind,
+            serde_json::json!({
+                "id": p.id,
+                "kind": p.kind,
+                // DESIGN §12.10.5 row 12's "tier": derivable from the kind
+                // (`builtin/<name>` is tier-A, `process` is tier-B) — the
+                // loader has already refused anything else.
+                "tier": if p.kind.starts_with("builtin/") { "A" } else { "B" },
+                // The *effective config digest* member (note R10's table):
+                // on a switch, the new revision's.
+                "config_digest": digest,
+            }),
+        )
+    }
+    let differs = |a: &PluginCfg, b: &PluginCfg| {
+        // Both entries are mounted here (`disabled` transitions are the
+        // mount-line arms below), so the whole serialized entry is the
+        // comparison — kind, config, url, inject, isolate, intercept.
+        match (serde_json::to_value(a), serde_json::to_value(b)) {
+            (Ok(a), Ok(b)) => a != b,
+            // A value that cannot serialize cannot be compared: treat it
+            // as changed (rebuild) rather than silently left mounted.
+            _ => true,
+        }
+    };
+
+    let old_map = keyed(old);
+    let new_map = keyed(new);
+    let ids: std::collections::BTreeSet<&str> =
+        old_map.keys().chain(new_map.keys()).copied().collect();
+    let mut rows = Vec::new();
+    for id in ids {
+        match (old_map.get(id), new_map.get(id)) {
+            (None, Some(n)) if !n.disabled => {
+                rows.push(row(router_core::EventKind::PluginLoaded, n, digest));
+            }
+            (Some(o), None) if !o.disabled => {
+                rows.push(row(router_core::EventKind::PluginUnloaded, o, digest));
+            }
+            (Some(o), Some(n)) => match (o.disabled, n.disabled) {
+                (false, true) => {
+                    rows.push(row(router_core::EventKind::PluginUnloaded, o, digest));
+                }
+                (true, false) => {
+                    rows.push(row(router_core::EventKind::PluginLoaded, n, digest));
+                }
+                (false, false) if differs(o, n) => {
+                    rows.push(row(router_core::EventKind::PluginUnloaded, o, digest));
+                    rows.push(row(router_core::EventKind::PluginLoaded, n, digest));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    rows
+}
+
+// ---------------------------------------------------------------------
 // The registration (ADR-040 D12.4): directories, exact-path filter.
 // ---------------------------------------------------------------------
 
@@ -363,13 +735,17 @@ impl Watcher {
     /// the mechanism cannot be set up at all, one line saying so (the
     /// process serves on; a change then takes effect on restart, D12.6's
     /// named fallback). `serve` wires the sink to the process's own
-    /// stderr, test rigs to a capture.
+    /// stderr, test rigs to a capture. The `publisher` owns the accepted
+    /// half (DESIGN §12.20 steps 3–5) and the serving head the looks
+    /// judge against — the digest a look compares is re-armed by every
+    /// accepted publish (D1).
     ///
     /// An `Err` here means the thread itself could not be spawned; the
     /// caller reports and serves on, same fallback.
     pub fn start(
         identity: &ConfigIdentity,
         sink: Arc<dyn Fn(String) + Send + Sync>,
+        publisher: Arc<Publisher>,
     ) -> Result<Self, String> {
         let filter = WatchFilter::for_identity(identity);
         let (tx, rx) = std::sync::mpsc::channel::<Msg>();
@@ -389,7 +765,6 @@ impl Watcher {
                 let events = tx.clone();
                 let root_path = identity.root_path.clone();
                 let roster_path = identity.roster_path.clone();
-                let serving_digest = identity.config_digest.clone();
                 move || {
                     let mut imp = match notify::recommended_watcher(move |res| {
                         let _ = events.send(Msg::Event(res));
@@ -410,9 +785,8 @@ impl Watcher {
                     let target = LookTarget {
                         root_path,
                         roster_path,
-                        serving_digest,
                     };
-                    run(rx, imp, filter, target, sink, looks);
+                    run(rx, imp, filter, target, publisher, sink, looks);
                 }
             })
             .map_err(|e| unavailable(format!("cannot spawn the watcher thread: {e}")))?;
@@ -448,13 +822,14 @@ impl Drop for Watcher {
     }
 }
 
-/// What one look reads and judges against: the serving revision's facts,
-/// fixed at the watcher's construction (this card's scope has no publish,
-/// so nothing re-arms it — see [`Watcher`]'s doc).
+/// What one look reads and names: the watched pair's resolved paths,
+/// fixed at the watcher's construction (the registration follows the
+/// startup pair — see the module doc's boundary note). The *serving
+/// digest* is deliberately NOT here: it moves with every accepted
+/// publish, so the look reads it off the [`Publisher`] instead.
 struct LookTarget {
     root_path: PathBuf,
     roster_path: Option<PathBuf>,
-    serving_digest: String,
 }
 
 /// The loop: events in, looks out, per the pure policy. Timing is the
@@ -470,6 +845,7 @@ fn run(
     _imp: notify::RecommendedWatcher,
     filter: WatchFilter,
     target: LookTarget,
+    publisher: Arc<Publisher>,
     sink: Arc<dyn Fn(String) + Send + Sync>,
     looks: Arc<AtomicU64>,
 ) {
@@ -499,7 +875,7 @@ fn run(
             // the window, so one further look runs and the burst closes.
             None => {
                 coalescer.burst_closed();
-                one_look(&target, &mut reporter, &sink, &looks);
+                one_look(&target, &publisher, &mut reporter, &sink, &looks);
             }
             Some(Msg::Shutdown) => break,
             // A notify error names no path fact worth a look; the next
@@ -512,30 +888,49 @@ fn run(
                 }
                 if coalescer.on_event(rel_ms()) == EventDecision::LookNow {
                     reporter.burst_started();
-                    one_look(&target, &mut reporter, &sink, &looks);
+                    one_look(&target, &publisher, &mut reporter, &sink, &looks);
                 }
             }
         }
     }
 }
 
-/// One look through the gate, then through the reporting rule. The load
-/// reads two small files — microseconds of work on the watcher's own
-/// thread, off the request path by construction.
+/// One look through the gate, then — for an accepted candidate — through
+/// the publish, and finally through the reporting rule. The load reads
+/// two small files and the publish diffs two in-memory values — all of it
+/// on the watcher's own thread, off the request path by construction.
+/// A refusal at EITHER stage (the loader's, or the publish's D5/auth
+/// gates) lands in the same report: one line, the revision still served,
+/// the reason verbatim (D11; RV-9).
 fn one_look(
     target: &LookTarget,
+    publisher: &Arc<Publisher>,
     reporter: &mut Reporter,
     sink: &Arc<dyn Fn(String) + Send + Sync>,
     looks: &AtomicU64,
 ) {
     looks.fetch_add(1, Ordering::Relaxed);
+    let (serving_digest, _) = publisher.head();
     let verdict = look(
         &target.root_path,
-        &target.serving_digest,
+        &serving_digest,
         target.roster_path.as_deref(),
     );
-    if let Some(line) = reporter.report(&verdict) {
-        sink(line);
+    match verdict {
+        // The accepted half: apply, and route an apply-stage refusal
+        // through the same reporting rule as a loader refusal.
+        Verdict::Accepted(rc) => {
+            if let Err(refusal) = publisher.apply(*rc) {
+                if let Some(line) = reporter.report(&Verdict::Refused(refusal)) {
+                    sink(line);
+                }
+            }
+        }
+        other => {
+            if let Some(line) = reporter.report(&other) {
+                sink(line);
+            }
+        }
     }
 }
 
@@ -809,6 +1204,255 @@ fallback: []
     }
 
     // -------------------------------------------------------------
+    // The publish (R47-2): the accepted half's contract, on a real
+    // cell and a real store (RV-1's order, RV-8's payload, D5's
+    // refused set, the auth note, row 12's edges).
+    // -------------------------------------------------------------
+
+    /// Land `content` over the fixture and hand the publisher the
+    /// candidate, exactly as `one_look` does for a digest that moved.
+    fn apply_landing(publisher: &Publisher, root: &Path, content: &str) -> Result<(), Refusal> {
+        land(root, content);
+        let candidate = config_load::load(root).expect("the candidate loads");
+        publisher.apply(candidate)
+    }
+
+    /// RV-1's order and RV-8's one-key case: the row commits before the
+    /// publish, names its predecessor, and lists exactly the moved path;
+    /// the cell then serves the new revision and the head is re-armed.
+    #[test]
+    fn an_accepted_switch_commits_the_row_then_publishes_then_re_arms() {
+        let (_g, root) = tempdir("apply");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let (sink, _lines) = capture();
+        let (publisher, store, cell, _sink_handle) = publisher_for(&root, &sink);
+        let startup_digest = publisher.head().0;
+
+        apply_landing(&publisher, &root, &MINIMAL.replace("ttl: 12h", "ttl: 6h"))
+            .expect("a one-key change applies");
+
+        // The row: one config.applied, its payload the value diff against
+        // the named predecessor (D10 / note R10).
+        let rows = committed(&store, router_core::EventKind::ConfigApplied);
+        assert_eq!(rows.len(), 1, "one row per accepted application");
+        let payload = &rows[0];
+        assert_eq!(
+            payload["previous_config_digest"],
+            serde_json::json!(startup_digest),
+            "the row names the revision it replaced"
+        );
+        assert_eq!(
+            payload["changed_keys"],
+            serde_json::json!([{ "path": "session.ttl", "change": "changed" }]),
+            "a one-key revision lists exactly that path"
+        );
+        let new_digest = payload["config_digest"].as_str().unwrap().to_string();
+        assert_ne!(new_digest, startup_digest);
+
+        // The publish: the cell serves the new revision, and the head is
+        // re-armed — a second look at the same bytes finds no change (D1).
+        assert_eq!(
+            cell.capture().config_identity.config_digest,
+            new_digest
+        );
+        assert_eq!(publisher.head().0, new_digest);
+        match look(&root, &publisher.head().0, None) {
+            Verdict::NoChange => {}
+            other => panic!("the re-armed digest makes the same bytes a no-op, got {other:?}"),
+        }
+        // And a roster-only change crossed no plugin edge (D5).
+        assert!(
+            committed(&store, router_core::EventKind::PluginLoaded).is_empty(),
+            "a revision with no plugin edge writes no row 12"
+        );
+    }
+
+    /// RV-8's sharpest case: a comment-only revision — the digest moves
+    /// (the identity hashes bytes), `changed_keys` is `[]`, and the
+    /// predecessor is named. The two halves of row 13 measure different
+    /// things, and this is the case that separates them.
+    #[test]
+    fn a_comment_only_revision_reports_no_changed_keys_beside_a_moved_digest() {
+        let (_g, root) = tempdir("comment");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let (sink, _lines) = capture();
+        let (publisher, store, _cell, _sink_handle) = publisher_for(&root, &sink);
+        let startup_digest = publisher.head().0;
+
+        apply_landing(
+            &publisher,
+            &root,
+            &format!("# a price citation note\n{MINIMAL}"),
+        )
+        .expect("a comment-only revision applies");
+
+        let rows = committed(&store, router_core::EventKind::ConfigApplied);
+        assert_eq!(rows.len(), 1);
+        let payload = &rows[0];
+        assert_eq!(
+            payload["changed_keys"],
+            serde_json::json!([]),
+            "no VALUE moved"
+        );
+        assert_eq!(
+            payload["previous_config_digest"],
+            serde_json::json!(startup_digest)
+        );
+        assert_ne!(
+            payload["config_digest"].as_str().unwrap(),
+            startup_digest,
+            "the digest is a byte measurement — it moved"
+        );
+    }
+
+    /// D5 / RV-9's store half: a candidate touching a process-held key is
+    /// refused with the key named, the revision in force keeps serving,
+    /// and the store gains NO row (a refused key can never appear in a
+    /// `changed_keys` list — the refusal names it instead).
+    #[test]
+    fn a_refused_key_is_named_and_nothing_is_committed_or_published() {
+        let (_g, root) = tempdir("refused-key");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let (sink, _lines) = capture();
+        let (publisher, store, cell, _sink_handle) = publisher_for(&root, &sink);
+        let startup_digest = publisher.head().0;
+
+        let refusal = apply_landing(
+            &publisher,
+            &root,
+            &MINIMAL.replace("127.0.0.1:8790", "127.0.0.1:8791"),
+        )
+        .expect_err("server.addr is refused");
+        assert!(
+            refusal.reason.contains("server.addr"),
+            "the refusal names the key: {}",
+            refusal.reason
+        );
+        assert!(
+            refusal.reason.contains("restart"),
+            "the remedy is named: {}",
+            refusal.reason
+        );
+        assert_eq!(
+            refusal.serving_digest, startup_digest,
+            "the refusal names the revision still served"
+        );
+        assert!(
+            committed(&store, router_core::EventKind::ConfigApplied).is_empty(),
+            "a refused candidate writes no row"
+        );
+        assert_eq!(
+            cell.capture().config_identity.config_digest,
+            startup_digest,
+            "the revision in force keeps serving"
+        );
+        // The refusal did not re-arm: the same landing, looked at again,
+        // is refused again (not mistaken for already-applied).
+        assert_eq!(publisher.head().0, startup_digest);
+    }
+
+    /// D5's honesty note: a revision that renames `server.auth_token_env`
+    /// to a variable that is unset refuses the switch with the startup
+    /// refusal's own reason — never quietly serving without a gate.
+    #[test]
+    fn a_revision_naming_an_unset_auth_var_is_refused_with_the_startup_reason() {
+        std::env::remove_var("RELOAD_TEST_TOKEN_NEVER_SET");
+        let (_g, root) = tempdir("auth-unset");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let (sink, _lines) = capture();
+        let (publisher, store, cell, _sink_handle) = publisher_for(&root, &sink);
+
+        let with_auth = MINIMAL.replace(
+            "upstream_attempt_timeout: 60s",
+            "upstream_attempt_timeout: 60s, auth_token_env: RELOAD_TEST_TOKEN_NEVER_SET",
+        );
+        let refusal = apply_landing(&publisher, &root, &with_auth)
+            .expect_err("an unset newly-named variable refuses the switch");
+        assert!(
+            refusal.reason.contains(
+                "server.auth_token_env names RELOAD_TEST_TOKEN_NEVER_SET, which is unset"
+            ),
+            "the startup refusal's own reason: {}",
+            refusal.reason
+        );
+        assert!(
+            refusal.reason.contains("refusing"),
+            "got: {}",
+            refusal.reason
+        );
+        assert!(
+            committed(&store, router_core::EventKind::ConfigApplied).is_empty(),
+            "a refused candidate writes no row"
+        );
+        assert!(cell.capture().auth_gate.is_none());
+    }
+
+    /// Row 12's delta (D5): edges fire only where an entry's mount state
+    /// or mounted value actually moved — add, remove, disable, enable,
+    /// rebuild — and an unchanged entry writes nothing.
+    #[test]
+    fn plugin_edges_fire_only_at_crossed_edges() {
+        use router_core::config::PluginCfg;
+        let entry = |id: &str, kind: &str, disabled: bool| PluginCfg {
+            id: id.into(),
+            kind: kind.into(),
+            config: None,
+            url: None,
+            inject: vec![],
+            isolate: false,
+            intercept: None,
+            disabled,
+        };
+        let kinds: Vec<router_core::EventKind> = plugin_edges(
+            &[
+                entry("keep", "builtin/transform_rules", false),
+                entry("gone", "builtin/transform_rules", false),
+                entry("off", "builtin/transform_rules", false),
+                entry("rebuilt", "builtin/transform_rules", false),
+            ],
+            &[
+                entry("keep", "builtin/transform_rules", false),
+                entry("off", "builtin/transform_rules", true), // disabled: an unload edge
+                entry("rebuilt", "builtin/transform_rules", false), // same value: no edge
+                entry("new", "process", false),
+            ],
+            "dddd5555eeee6666",
+        )
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+        // Sorted by id: gone (unloaded), new (loaded), off (unloaded);
+        // `keep` crossed nothing. `rebuilt` is value-identical: nothing.
+        assert_eq!(
+            kinds,
+            vec![
+                router_core::EventKind::PluginUnloaded, // gone
+                router_core::EventKind::PluginLoaded,   // new
+                router_core::EventKind::PluginUnloaded, // off
+            ]
+        );
+        // A changed mounted entry is a rebuild: unloaded then loaded.
+        let mut changed = entry("rebuilt", "builtin/transform_rules", false);
+        changed.config = Some(serde_json::json!({"rules": "other.toml"}));
+        let kinds: Vec<router_core::EventKind> = plugin_edges(
+            &[entry("rebuilt", "builtin/transform_rules", false)],
+            &[changed],
+            "d",
+        )
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                router_core::EventKind::PluginUnloaded,
+                router_core::EventKind::PluginLoaded
+            ],
+            "a changed entry is unloaded, then loaded"
+        );
+    }
+
+    // -------------------------------------------------------------
     // The rigs: the real watcher on real directories (the platform
     // backend included), the landing performed by temp+rename.
     // -------------------------------------------------------------
@@ -820,6 +1464,58 @@ fallback: []
             Arc::new(move |line| lines2.lock().unwrap().push(line)),
             lines,
         )
+    }
+
+    /// A publisher over a real cell, store and sink — the shape `serve`
+    /// wires (the startup revision is built by the same `build_revision`,
+    /// its row committed by the caller where the contract wants one).
+    /// The strong refs come back with the rig: the publisher holds them
+    /// weak (its ownership rule), so the fixture must keep them alive for
+    /// the upgrades a `apply` performs.
+    #[allow(clippy::type_complexity)]
+    fn publisher_for(
+        root: &Path,
+        sink: &Arc<dyn Fn(String) + Send + Sync>,
+    ) -> (
+        Arc<Publisher>,
+        Arc<dyn router_core::store::Store>,
+        router_proxy::SharedRevision,
+        Arc<router_store::TraceSink>,
+    ) {
+        let rc = config_load::load(root).expect("the fixture loads");
+        let store: Arc<dyn router_core::store::Store> =
+            Arc::new(router_store::SqliteStore::open(&rc.state_db).expect("the store opens"));
+        let trace_sink =
+            Arc::new(router_store::TraceSink::open(&rc.trace_dir).expect("the trace sink opens"));
+        let note = |_: String| {};
+        let revision = crate::build_revision(&rc, &store, &trace_sink, None, &note);
+        let cell = router_proxy::RevisionCell::new(revision);
+        let publisher = Arc::new(Publisher::new(
+            &cell,
+            &store,
+            &trace_sink,
+            &rc.identity,
+            None,
+            sink.clone(),
+        ));
+        (publisher, store, cell, trace_sink)
+    }
+
+    /// The committed rows of one kind, in log order (the CONF-85 pattern:
+    /// the payload is read back out of the store, never inferred).
+    fn committed(
+        store: &Arc<dyn router_core::store::Store>,
+        kind: router_core::EventKind,
+    ) -> Vec<serde_json::Value> {
+        use router_core::store::{Query, QueryRow, Store as _};
+        match store.query(Query::AllEvents).expect("the log reads") {
+            QueryRow::Events(rows) => rows
+                .into_iter()
+                .filter(|r| r.kind == Some(kind))
+                .map(|r| r.payload)
+                .collect(),
+            other => panic!("AllEvents reads events, got {other:?}"),
+        }
     }
 
     /// Poll until `cond` holds or the budget runs out. The platform
@@ -849,7 +1545,8 @@ fallback: []
         let dir = root.parent().unwrap().to_path_buf();
 
         let (sink, lines) = capture();
-        let watcher = Watcher::start(&identity, sink).expect("watcher starts");
+        let (publisher, store, _cell, _sink_handle) = publisher_for(&root, &sink);
+        let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
         // Registration is asynchronous (the backend's stream start is
         // slow; see Watcher's doc) — wait it out so the noise below is
         // genuinely delivered to the filter, not lost before it.
@@ -863,8 +1560,9 @@ fallback: []
         // at <dir>/state/router.db, trace files under <dir>/state/
         // traces/, and a stray temp file directly in the watched
         // directory (the landing's own first half, filtered by name).
-        use router_core::store::Store as _;
-        let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+        // The store write goes through the publisher's own connection —
+        // the file (and its WAL) moves exactly as a serving process's
+        // write moves it.
         store
             .append(router_core::NewEvent {
                 kind: router_core::EventKind::ConfigApplied,
@@ -911,7 +1609,8 @@ fallback: []
         let identity = load_identity(&root);
 
         let (sink, lines) = capture();
-        let watcher = Watcher::start(&identity, sink).expect("watcher starts");
+        let (publisher, _store, _cell, _sink_handle) = publisher_for(&root, &sink);
+        let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
         until(
             || watcher.is_ready(),
             Duration::from_secs(15),
@@ -963,7 +1662,8 @@ fallback: []
         let identity = load_identity(&root);
 
         let (sink, lines) = capture();
-        let watcher = Watcher::start(&identity, sink).expect("watcher starts");
+        let (publisher, _store, _cell, _sink_handle) = publisher_for(&root, &sink);
+        let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
         until(
             || watcher.is_ready(),
             Duration::from_secs(15),
