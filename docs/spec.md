@@ -1520,6 +1520,28 @@ process's memory and is re-derived from the files at the next start, where one `
 written exactly as it always was. That is what keeps the stateless-client boundary of §4.5 intact — a
 restarted process serves one revision to every client, and no stored state has to be reconciled.
 
+**What a reload reports.** An applied change is recorded once, in the same state store the rest of the
+process's state lives in (§4.5), as a `config.applied` row naming the revision it applied **and** the
+revision it replaced, together with the keys whose **values** moved. Two consequences worth knowing:
+
+- A revision that changed only a **comment** reports **no** changed keys at all — and it is still a revision,
+  because the identity of §4.14 is computed over the files' bytes, comments included. "The digest moved and
+  nothing else did" is therefore a readable outcome, not an anomaly.
+- The keys are named the way the configuration names them — `session.ttl`, or
+  `providers[zai].models[glm-4.6]` when a single route moved — so a change can be read without diffing the
+  two files by hand. A key the reload **refuses** (above) can never appear in that list: it is named by the
+  refusal instead.
+
+A running process reports each refused candidate as **one line on its own output**, naming the reason the
+loader gave and the revision it is still serving — the way `serve` already reports a refusal at startup,
+except that the process keeps running. `router setup`'s refusal is the same gate answering differently
+(exit 2, nothing written, §4.11), because nothing is serving there yet.
+
+**There is nothing to configure.** The reload has one implementation constant — the brief interval it uses
+to fold a burst of filesystem events into a single look — and it is not a config key, not a flag and not a
+signal. No behaviour depends on its value: a look that finds no change does nothing at all, so the window
+only bounds how often two small files are read.
+
 **Pending (an owner's ruling, not a card's): what a conversation that spans a switch sees.** Rule 3
 settles the *request*: one revision, arrival to answer. Whether a **conversation** keeps the revision it
 began on until its binding expires, or whether its next request is served by (or refused under) the new
@@ -1529,7 +1551,11 @@ recommendation recorded there is the pin arm, held in memory only and bounded by
 
 The landing is DESIGN §12.20; the reasoning, the rejected alternatives and the state the process ends in
 after each kind of failed swap are ADR-040; the file-watch crate and the dependency row it spends are
-ADR-039. The observable facts a reader can check are named there as `RV-1`…`RV-7`.
+ADR-039. The observable facts a reader can check are named there as `RV-1`…`RV-9`. The reload leaves one
+further question open that is **not** user-facing and is therefore stated where it belongs — in ADR-040's
+observability section: whether a switch invalidates the L1 latency envelope, and which gate consumes a fresh
+ladder. AGENTS 9 / ADR-012 put the envelope and the gate definitions outside the mutable scope, so that is
+the owner's, and nothing measures it before the ruling.
 
 ## 5. Onboarding prerequisite (mandatory)
 
