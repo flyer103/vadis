@@ -400,11 +400,56 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
         args,
     )?;
 
+    // Step 7: apply → candidate bytes, per lane. An empty plan's
+    // candidate is the base itself (no edits moved it).
+    let root_candidate = if root_lane.plan.is_empty() {
+        root_lane.base.clone()
+    } else {
+        edit::apply(&root_lane.base, &root_lane.plan)
+    };
+    let roster_candidate = roster_lane.as_ref().map(|l| {
+        if l.plan.is_empty() {
+            l.base.clone()
+        } else {
+            edit::apply(&l.base, &l.plan)
+        }
+    });
+
+    // Step 8: the same loader, on the candidate, before anything lands —
+    // and before ANY outcome may be reported (R43-F7; spec §4.11's *the
+    // loader is the gate* bullet): **every run that reaches a plan reaches
+    // this step, including a run whose plan is empty** — there the
+    // candidate is the base itself. The plan's emptiness is a statement
+    // about the operator's answers, never about the file, so a base the
+    // loader refuses is refused here (exit 2, the loader's reason, nothing
+    // written) rather than told `no change` — on the write path and on
+    // `--dry-run` alike. The candidate is the **pair** (the two files are
+    // validated together), and a candidate that does not load is never
+    // written — a failure lands neither file, G4 read for two targets.
+    // Shape 3 of §4.14's ladder (a `providers_file` whose path is not
+    // there) is NOT this step's: the roster lane's base is the embedded
+    // roster template then, the pair validates from it, and the run
+    // creates the roster — what that arm *is* stays the register's
+    // (R46-0-F1); this step decides nothing about it.
+    let gate = match (&roster_lane, &roster_candidate) {
+        (Some(lane), Some(roster)) => {
+            crate::config_load::validate_pair(&root_candidate, roster, &lane.path)
+        }
+        _ => crate::config_load::validate_text(&root_candidate),
+    };
+    if let Err(reason) = gate {
+        return Err(Failure::Refused(format!(
+            "the candidate does not load: {reason}"
+        )));
+    }
+
     // `--dry-run`: the plan in place of any landing — checked before the
     // empty-plan branches and before the write itself, so "no write"
     // holds whatever the plan's size and whatever the target's state
     // (spec §4.11's `--dry-run` row; R22-F2: this used to sit below the
-    // empty-plan landing, so a fresh target was really written).
+    // empty-plan landing, so a fresh target was really written). A base
+    // the loader refuses never reaches this branch: step 8 above reports
+    // the refusal instead of a plan of nothing (R43-F7).
     if args.dry_run {
         if args.json {
             println!(
@@ -477,49 +522,20 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     }
 
     // Step 9: an empty plan over a base that **is** the file that is
-    // there writes nothing — this is what makes a second run a no-op
-    // rather than a rewrite (G3; spec §4.11: "Nothing to change ⇒
-    // nothing is written"). Read for the pair: nothing lands only when
-    // **neither** lane has a reason to land, and each file of the pair
-    // says its own no-change line — a roster that silently did nothing
-    // is how "no roster file appeared" reads as a bug (ADR-038 D9).
+    // there — and that step 8 above has just proven LOADS (R43-F7) —
+    // writes nothing: this is what makes a second run a no-op rather
+    // than a rewrite (G3; spec §4.11: "Nothing to change ⇒ nothing is
+    // written — over a target that loads"). Read for the pair: nothing
+    // lands only when **neither** lane has a reason to land, and each
+    // file of the pair says its own no-change line — a roster that
+    // silently did nothing is how "no roster file appeared" reads as a
+    // bug (ADR-038 D9).
     if !root_lane.lands() && !roster_lane.as_ref().is_some_and(|l| l.lands()) {
         print!("{}", report::no_change_text(&target.path));
         if let Some(roster) = &roster_lane {
             print!("{}", report::no_change_text(&roster.path));
         }
         return Ok(EXIT_OK);
-    }
-
-    // Step 7: apply → candidate bytes, per lane. An empty plan's
-    // candidate is the base itself (no edits moved it).
-    let root_candidate = if root_lane.plan.is_empty() {
-        root_lane.base.clone()
-    } else {
-        edit::apply(&root_lane.base, &root_lane.plan)
-    };
-    let roster_candidate = roster_lane.as_ref().map(|l| {
-        if l.plan.is_empty() {
-            l.base.clone()
-        } else {
-            edit::apply(&l.base, &l.plan)
-        }
-    });
-
-    // Step 8: the same loader, on the candidate, before anything lands.
-    // The candidate is the **pair** (spec §4.11: the two files are
-    // validated together), and a candidate that does not load is never
-    // written — a failure lands neither file, G4 read for two targets.
-    let gate = match (&roster_lane, &roster_candidate) {
-        (Some(lane), Some(roster)) => {
-            crate::config_load::validate_pair(&root_candidate, roster, &lane.path)
-        }
-        _ => crate::config_load::validate_text(&root_candidate),
-    };
-    if let Err(reason) = gate {
-        return Err(Failure::Refused(format!(
-            "the candidate does not load: {reason}"
-        )));
     }
 
     // Step 10: `--backup` (or `--force`, which implies it) copies the
@@ -1557,6 +1573,131 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// R43-F7 / spec §4.11's *the loader is the gate* bullet: an empty
+    /// plan does not skip the candidate gate — when nothing was planned
+    /// the candidate **is** the base, and a base the loader refuses is
+    /// refused by this command too (exit 2, the loader's own message,
+    /// nothing written), on the write path **and** on `--dry-run`. The
+    /// shipped site let the empty plan sweep past step 8 and printed
+    /// `no change`, exit 0, over a pair `--check` refuses.
+    #[test]
+    fn an_unloadable_pair_is_refused_even_with_an_empty_plan() {
+        let dir = temp_root("f7-gate");
+
+        // Shape 4 (spec §4.14's ladder): a roster that is present but is
+        // not the roster block. The root itself is the shipped split
+        // template — valid — and the plan is empty (zero answers).
+        let target = dir.join("config.yaml");
+        std::fs::write(&target, EMBEDDED_TEMPLATE).unwrap();
+        let roster = dir.join("providers.example.yaml");
+        let bad_roster = "server: {}\n";
+        std::fs::write(&roster, bad_roster).unwrap();
+        let root_mtime = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let roster_mtime = std::fs::metadata(&roster).unwrap().modified().unwrap();
+
+        let reason = match run_inner(&args(&target), &non_interactive()) {
+            Err(Failure::Refused(reason)) => reason,
+            Err(Failure::Io(reason)) => panic!("an I/O failure is not this refusal: {reason}"),
+            Ok(code) => {
+                panic!("a present-but-unloadable roster must refuse; the run exited {code}")
+            }
+        };
+        assert!(
+            reason.contains("does not load"),
+            "the refusal is the candidate gate's, got: {reason}"
+        );
+        assert!(
+            reason.contains("providers.example.yaml"),
+            "the loader's own message names the roster's own path, got: {reason}"
+        );
+        // Nothing written, to either file: no bytes, no mtimes, no
+        // backups, no temporary files (G4 read for two targets).
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            EMBEDDED_TEMPLATE.as_bytes()
+        );
+        assert_eq!(std::fs::read(&roster).unwrap(), bad_roster.as_bytes());
+        assert_eq!(
+            root_mtime,
+            std::fs::metadata(&target).unwrap().modified().unwrap()
+        );
+        assert_eq!(
+            roster_mtime,
+            std::fs::metadata(&roster).unwrap().modified().unwrap()
+        );
+        assert!(!dir.join("config.yaml.bak").exists());
+        assert!(!dir.join("providers.example.yaml.bak").exists());
+        assert!(!dir.join("config.yaml.setup.tmp").exists());
+        assert!(!dir.join("providers.example.setup.tmp").exists());
+
+        // `--dry-run` reports the refusal rather than printing a plan of
+        // nothing (the same bullet's last sentence).
+        let code = run_with_prompt(
+            &SetupArgs {
+                dry_run: true,
+                ..args(&target)
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 2, "--dry-run reports the refusal");
+        assert_eq!(std::fs::read(&roster).unwrap(), bad_roster.as_bytes());
+
+        // The other shapes the gate covers, over the same empty plan:
+        // shape 1 (both keys written), shape 2 (neither written), and the
+        // pre-ladder case (a root that does not parse at all) — each
+        // refused at exit 2, nothing written.
+        let both = dir.join("both.yaml");
+        let both_text = format!("{EMBEDDED_TEMPLATE}providers: []\n");
+        std::fs::write(&both, &both_text).unwrap();
+        let reason = match run_inner(&args(&both), &non_interactive()) {
+            Err(Failure::Refused(reason)) => reason,
+            Err(Failure::Io(reason)) => panic!("an I/O failure is not this refusal: {reason}"),
+            Ok(code) => panic!("shape 1 (both keys) must refuse; the run exited {code}"),
+        };
+        assert!(
+            reason.contains("both"),
+            "the loader's reason, got: {reason}"
+        );
+        assert_eq!(std::fs::read(&both).unwrap(), both_text.as_bytes());
+
+        let line = EMBEDDED_TEMPLATE
+            .lines()
+            .find(|l| l.starts_with("providers_file:"))
+            .unwrap();
+        let neither = dir.join("neither.yaml");
+        let neither_text = EMBEDDED_TEMPLATE.replace(&format!("{line}\n"), "");
+        std::fs::write(&neither, &neither_text).unwrap();
+        let code = run_with_prompt(&args(&neither), &non_interactive());
+        assert_eq!(code, 2, "shape 2 (neither key) refuses on an empty plan");
+        assert_eq!(std::fs::read(&neither).unwrap(), neither_text.as_bytes());
+
+        let broken = dir.join("broken.yaml");
+        let broken_text = "server: [1]\n";
+        std::fs::write(&broken, broken_text).unwrap();
+        let code = run_with_prompt(&args(&broken), &non_interactive());
+        assert_eq!(code, 2, "an unparsable root refuses on an empty plan");
+        assert_eq!(std::fs::read(&broken).unwrap(), broken_text.as_bytes());
+
+        // The control: over a pair that LOADS, the same empty plan is
+        // exactly the no-op the old code reported over the broken pair —
+        // the fix moves the gate, not the no-op.
+        let good = dir.join("good/config.yaml");
+        std::fs::create_dir_all(good.parent().unwrap()).unwrap();
+        assert_eq!(run_with_prompt(&args(&good), &non_interactive()), 0);
+        let (b1, m1) = (
+            std::fs::read(&good).unwrap(),
+            std::fs::metadata(&good).unwrap().modified().unwrap(),
+        );
+        assert_eq!(
+            run_with_prompt(&args(&good), &non_interactive()),
+            0,
+            "a no-op run is a no-op over a config that works"
+        );
+        assert_eq!(b1, std::fs::read(&good).unwrap());
+        assert_eq!(m1, std::fs::metadata(&good).unwrap().modified().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// §4.12 / CONF-79 (the writer half): a missing target directory is
     /// created (`0700` when this run created it) and the created file is
     /// `0600`, read back from the filesystem.
@@ -2179,8 +2320,9 @@ mod tests {
     /// keys, or neither, is refused through the **loader** — the same
     /// exit code and the same nothing-written as before the shape step;
     /// the wizard does not repair what does not load. The run carries one
-    /// answered change so the candidate gate actually fires (an
-    /// unchanged broken file is the no-op path, as before the split).
+    /// answered change so the candidate gate fires on the *edited*
+    /// candidate; that the same refusal fires with an EMPTY plan (the
+    /// base itself as the candidate) is R43-F7's test above.
     #[test]
     fn a_root_writing_both_keys_or_neither_is_refused_through_the_loader() {
         let dir = temp_root("shape-refused");
