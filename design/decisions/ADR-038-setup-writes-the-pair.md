@@ -180,3 +180,32 @@ equal the moved block is not written and not backed up at all.
 - `providers.example.yaml` measured at 71 070 B / 960 lines, its 959 content lines byte-equal to the XDG
   root's inline span (71 069 B) — the inline configs on this machine carry the roster the split moved,
   which is why D3's byte move is the migration those files need rather than a rewrite.
+
+## Dated note — 2026-09-26 (R46-0; the accuracy items **R44-F1** and **R45-1-F1**)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** Two of its own
+sentences are corrected here, and both corrections are pointers rather than restatements.
+
+**1. The attribution — `R44-F1`.** The `Related` bullet (`:13`) and the third bullet of *What this ADR changes
+in the existing record* (`:164`) both speak of *"the inline shape is not deprecated"* as **spec §4.14's**
+sentence, and the second of the two claims that §4.14 *"gains the write side's statement"*. Neither is true:
+the phrase is **this ADR's own**, §4.14's bytes are **untouched by R44** — §4.14 begins at
+`docs/spec.md:1401` in the file as R46-0 reads it (it began at `:1382` at R44's own commit), and R44's spec
+hunks were all at or below `:1111` then — and the write-side statement landed in **§4's preamble** and in
+**§4.11**'s shape step. At HEAD the two readings live at `docs/spec.md:312-313` (*"…is not deprecated **on
+the reading side**"*) and `docs/spec.md:1061` (the shape step). A reader who follows either bullet to §4.14
+finds the load-side contract, which is a different sentence.
+
+**2. The scope note's reading (`:16`–`:19`) — `R45-1-F1`.** *"the reader is untouched. `serve`, `stats` and
+`router setup --check` load an inline root exactly as they do today"* was true of the **load** and of the
+**exit codes**, and R45-1 (2026-09-26) measured the one thing it read as covering and no longer describes:
+over an inline root, `--check` prints one roster-fact line above its names (a `roster` member in `--json`) —
+the fourth surface **D9** did not name. The current reading, as the contract carries it since R45:
+**the load is the whole of what is unchanged** — `docs/spec.md:1025` (the `--check` row), `:1079-1083` (D9's
+surface list, extended by a dated note) and `:1108-1111` (the qualifier) — while the printed surface gains
+that one fact for an inline root and moves nothing else: not a name, not an export snippet, not an exit code.
+
+**What this note does not do.** It re-opens no decision (D1–D10 stand), changes no behaviour, and restates no
+contract: it points at the sections as R45 left them. Both items stay in the register until the round that
+reads them marks them closed; a future reader of `:16`–`:19` or `:164` should read this note with them.
+
