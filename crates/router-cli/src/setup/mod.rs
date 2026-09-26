@@ -1130,6 +1130,19 @@ fn print_or_check(args: &SetupArgs) -> Result<i32, Failure> {
 /// explicitly after `create_dir_all`, which cannot express a mode).
 /// Nothing that already exists is re-moded. The roster lane lands through
 /// the same function: one landing rule for both files of the pair.
+///
+/// **A target that is already there keeps the mode it had** (R43-F6;
+/// spec §4.11's *Landing* bullet, G8; DESIGN §12.14's mode paragraph):
+/// `0600` is the temporary file's **creation** mode, never the landed
+/// file's. The replacement carries the target's own mode — set on the
+/// temporary file BEFORE the `rename`, so there is no window in which
+/// the target's name carries the wrong mode. A `rename` needs the
+/// target's directory to be writable, never the file, so a read-only
+/// (`0444`) target is written rather than refused and is read-only again
+/// when the run returns: no run of this command changes a mode the
+/// operator set. What the rule covers is the **mode** — the replace is a
+/// new inode, so ownership follows the user who ran the command and a
+/// hard link, an ACL or an xattr on the old inode does not travel.
 fn land(path: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
     let dir = path
         .parent()
@@ -1148,6 +1161,23 @@ fn land(path: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
         }
     }
+    // The mode the landing must keep (R43-F6): the target's own, read
+    // before the temporary file is created. `None` = the target is not
+    // there, and the temporary file's `0600` creation mode below IS the
+    // landed file's — the fresh-file half of the rule.
+    #[cfg(unix)]
+    let kept_mode: Option<std::fs::Permissions> = match std::fs::metadata(path) {
+        Ok(m) => {
+            use std::os::unix::fs::PermissionsExt as _;
+            Some(std::fs::Permissions::from_mode(
+                m.permissions().mode() & 0o777,
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(io(format!("cannot stat {}: {e}", path.display())));
+        }
+    };
     let tmp = path.with_extension("setup.tmp");
     {
         use std::io::Write as _;
@@ -1173,6 +1203,20 @@ fn land(path: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
         if let Err(e) = file.sync_all() {
             let _ = std::fs::remove_file(&tmp);
             return Err(io(format!("cannot sync {}: {e}", tmp.display())));
+        }
+    }
+    // The kept mode rides the temporary file across the `rename` (the
+    // preferred half of DESIGN §12.14's rule: no window in which the
+    // target's name carries the wrong mode).
+    #[cfg(unix)]
+    if let Some(mode) = kept_mode {
+        if let Err(e) = std::fs::set_permissions(&tmp, mode) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(io(format!(
+                "cannot keep the mode of {} on {}: {e}",
+                path.display(),
+                tmp.display()
+            )));
         }
     }
     if let Err(e) = std::fs::rename(&tmp, path) {
@@ -1695,6 +1739,96 @@ mod tests {
         );
         assert_eq!(b1, std::fs::read(&good).unwrap());
         assert_eq!(m1, std::fs::metadata(&good).unwrap().modified().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R43-F6 / spec §4.11's *Landing* bullet + G8's file half: **a target
+    /// that is already there keeps the mode it had** across the landing —
+    /// the temporary file's `0600` is a *creation* mode, never the landed
+    /// file's. A read-only (`0444`) pair stays `0444` and is written all
+    /// the same (the `rename` needs the target's **directory** to be
+    /// writable, never the file), a `0644` target stays `0644` across an
+    /// edit landing — on the root lane and the roster lane alike, so no
+    /// run of this command changes a mode the operator set — while a file
+    /// the run **creates** is `0600` (the creation half, unchanged). The
+    /// `.bak` copy keeps the mode of the file it copied.
+    #[test]
+    #[cfg(unix)]
+    fn a_landing_keeps_the_existing_targets_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = temp_root("f6-mode");
+
+        // (a) the read-only pair, stat-verified before the run.
+        let target = dir.join("config.yaml");
+        std::fs::write(&target, EMBEDDED_TEMPLATE).unwrap();
+        let roster = dir.join("providers.example.yaml");
+        std::fs::write(&roster, EMBEDDED_ROSTER).unwrap();
+        for p in [&target, &roster] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        assert_eq!(mode(&target), 0o444, "stat: the root is read-only");
+        assert_eq!(mode(&roster), 0o444, "stat: the roster is read-only");
+        // `--force` lands BOTH lanes (byte-identical to the templates —
+        // the finding's own shape: "the hash did not move and something
+        // did").
+        let code = run_with_prompt(
+            &SetupArgs {
+                force: true,
+                ..args(&target)
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0, "a read-only target is written, not refused");
+        assert_eq!(
+            mode(&target),
+            0o444,
+            "the root lane kept the operator's mode across the landing"
+        );
+        assert_eq!(
+            mode(&roster),
+            0o444,
+            "the roster lane kept the operator's mode across the landing"
+        );
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            EMBEDDED_TEMPLATE.as_bytes()
+        );
+        assert_eq!(std::fs::read(&roster).unwrap(), EMBEDDED_ROSTER.as_bytes());
+        // The `.bak` copies keep the mode of the files they copied.
+        assert_eq!(mode(&dir.join("config.yaml.bak")), 0o444);
+        assert_eq!(mode(&dir.join("providers.example.yaml.bak")), 0o444);
+        // And the run remains re-runnable over the read-only pair: a
+        // second run is a no-op (G3's control in the finding's transcript).
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        assert_eq!(mode(&target), 0o444);
+        assert_eq!(mode(&roster), 0o444);
+
+        // (b) the ordinary case: a `0644` pair, one answered edit — the
+        // landing lane keeps `0644`, the un-landed lane is untouched.
+        for p in [&target, &roster] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("server".to_string()),
+                ..args(&target)
+            },
+            &scripted(&["127.0.0.1:9911", "", ""]),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(mode(&target), 0o644, "0644 stays 0644 on the root lane");
+        assert_eq!(mode(&roster), 0o644, "the roster lane did not land");
+        assert!(std::fs::read_to_string(&target)
+            .unwrap()
+            .contains("127.0.0.1:9911"));
+
+        // (c) the creation half is unchanged: a file the run creates is
+        // `0600`, whatever the umask.
+        let fresh = dir.join("fresh/config.yaml");
+        assert_eq!(run_with_prompt(&args(&fresh), &non_interactive()), 0);
+        assert_eq!(mode(&fresh), 0o600, "a created file is 0600");
+        assert_eq!(mode(&fresh.with_file_name("providers.example.yaml")), 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
