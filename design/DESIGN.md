@@ -290,7 +290,7 @@ router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
 | `router-runtime` | `Ctx` / `Effect` / `ServiceKey` / fiber state machine, declarative loader | none (pure std + core) | 2026-09-19 |
 | `router-plugins` | built-in tier-A: cache_guard / transform_rules / cost_ledger / quota_guard / sticky; and the **assembly** that mounts them from the `plugins:` list (`assemble`, R41-3) | `toml`, `regex` | 2026-09-19 / 2026-09-20 / 2026-09-25 |
 | `router-proxy` | axum data plane: byte-faithful forwarding, SSE passthrough | `axum`, `tokio`, `hyper`, `tower` | 2026-09-19 |
-| `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2) | 2026-09-19 (serve stub) |
+| `router-cli` | `serve` / `stats` / `setup` / `replay` / `trace` (`setup` lands per §12.14; `replay` and `trace` are named in the plan, not yet served) | `clap`, `tokio` (+ `serde_yaml` in this crate only, §12.10.2), **`notify`** (**ADR-039**: the reload's file-watch mechanism, ADR-037 D7's mechanism half, ruled by the owner 2026-09-26 — the row is the contract and it lands **now**; the dependency, the code and the tests land with the reload round's own cards) | 2026-09-19 (serve stub) |
 | `router-plugin-sdk` | tier-B out-of-process plugin protocol types (UDS frames) | `serde_json` | 2026-09-20 |
 | `router-store` | the SQLite/WAL store: the `events` log, the `sessions` / `cache_ledger` / `quota_counters` projections, forward-only migrations | `rusqlite` (bundled), `serde_json` | 2026-09-19 (ADR-009) |
 | `router-conformance` (`tests/conformance/`) | the CONF cases (§12.8) | `tokio`, `axum`, the crates under test | 2026-09-19, as an empty shell |
@@ -299,6 +299,16 @@ router-plugin-sdk  (no workspace-crate dependency; its own dep is `serde_json`)
   dependency set of `cargo tree -p router-core` must be ⊆ the allowlist.
 - Dependency discipline: **a new dependency must have its reason written in the commit message**
   (consistent with this round's task constraint). Any dependency outside the allowlist is discussed first.
+- **The `notify` row is declared and not yet used (ADR-039).** `router-cli` may take `notify` for the
+  reload's file-watch mechanism — ADR-037 D7's mechanism half, decided by the owner on 2026-09-26 — and
+  **no other crate may**: `router-core`'s cell does not gain it (the domain is I/O-free and
+  `cargo tree -p router-core` must stay ⊆ its allowlist, the spot-check above), and no crate may reach the
+  platform backends directly (the crate holds `inotify` / FSEvents / `kqueue` behind one API). The row is
+  the contract; **the `Cargo.toml` line, the code and the tests land with the reload round's own cards**,
+  the dependency's MSRV is re-measured there against `Cargo.toml`'s floor (`rust-version = "1.88"`, whose
+  comment records the 2026-09-20 measurement and that a raised dependency can raise it), and the
+  `[workspace.dependencies]` comment shape the landing round writes is ADR-039 D3's, verbatim (§12.1
+  states the boundary; the ADR states the reason — one copy of each).
 - Every crate root adds `#![forbid(unsafe_code)]`; `router-core` additionally adds
   `#![deny(clippy::float_arithmetic)]` (money only takes the fixed-point path of §12.4).
 - Test placement: unit tests use `#[cfg(test)] mod tests` in place; conformance lives in
