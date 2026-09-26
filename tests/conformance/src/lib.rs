@@ -556,28 +556,149 @@ pub mod testkit {
     /// rigs raced onto one port and the loser connected to the winner's
     /// server — or to nothing once the winner was aborted (R43-F10,
     /// observed as `ConnectionRefused` in conf_85h after
-    /// `wait_listening` had succeeded). A process-wide registry makes
-    /// every call return a port this process has never handed out,
-    /// closing the intra-process half of the race; the cross-process
-    /// window (parallel test binaries) is the OS's and predates the
-    /// suite.
+    /// `wait_listening` had succeeded). Two guards close the race:
+    ///
+    /// - intra-process (R43-7): a process-wide registry never returns a
+    ///   port this process has handed out before;
+    /// - cross-process (R46-3 — the 2/600 residual R43-7's stress loop
+    ///   left open): a per-port lock directory under
+    ///   `$TMPDIR/router-conf-port-locks/<port>`, claimed with
+    ///   `create_dir` (atomic across OS processes) and holding the
+    ///   owner's pid. A second process probing the same port finds the
+    ///   lock held by a live peer and probes again, so two rig processes
+    ///   are never both handed one port — including across *different*
+    ///   test binaries, which share the directory.
+    ///
+    /// The staleness story: a lock outlives its owner by design (there is
+    /// no process-exit hook in a test binary), so a claimant finding an
+    /// existing lock reads the pid and reaps it only when `kill -0` says
+    /// the owner is dead — re-verifying immediately before the atomic
+    /// rename that removes it, so a live lock recreated in the gap is not
+    /// stolen. A missing/unreadable pid or a recycled pid reads as
+    /// *live*: the failure direction is a skipped port (bounded leak,
+    /// $TMPDIR is cleaned by the OS), never a double hand-out.
+    ///
+    /// What this does not close: a process that does not go through
+    /// `free_port` (anything outside the suite — and the kernel itself,
+    /// handing a locked-but-not-yet-bound port to a peer's probe or a
+    /// client connection's source port) can still occupy the port in the
+    /// probe→bind gap. That failure is loud (serve's exit 3), never the
+    /// silent wrong-server connect of R43-F10, and measured at 2/2400
+    /// runs in R46-3's 6-way loop (the F10 class itself: 0/12000
+    /// cross-process allocations, 0 duplicates).
     pub fn free_port() -> u16 {
         static HANDED_OUT: std::sync::OnceLock<Mutex<std::collections::HashSet<u16>>> =
             std::sync::OnceLock::new();
+        let lock_root = std::env::temp_dir().join("router-conf-port-locks");
+        std::fs::create_dir_all(&lock_root).unwrap();
+        let mut missed = 0u32;
         loop {
             let port = std::net::TcpListener::bind("127.0.0.1:0")
                 .unwrap()
                 .local_addr()
                 .unwrap()
                 .port();
-            if HANDED_OUT
+            if !HANDED_OUT
                 .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
                 .lock()
                 .unwrap()
                 .insert(port)
             {
+                continue;
+            }
+            if claim_port_across_processes(&lock_root, port) {
                 return port;
             }
+            // A live peer process owns this port: forget it locally and
+            // probe for another. A bounded spin: if every ephemeral port
+            // is held by live peers (legitimate saturation), fail loudly
+            // rather than spin forever.
+            HANDED_OUT
+                .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+                .lock()
+                .unwrap()
+                .remove(&port);
+            missed += 1;
+            assert!(
+                missed < 4096,
+                "free_port: {missed} consecutive probes found every offered port \
+                 locked in {lock_root:?} by a live peer — the ephemeral range is \
+                 saturated; refusing to spin"
+            );
+        }
+    }
+
+    /// Claim `port` for this process across OS processes. Returns true when
+    /// this process owns the lock directory on return.
+    fn claim_port_across_processes(lock_root: &std::path::Path, port: u16) -> bool {
+        let lockdir = lock_root.join(port.to_string());
+        // A lock is a directory. Anything else at the path is debris of a
+        // foreign or superseded scheme (it can never carry a live owner):
+        // remove it so the range cannot be bricked by stale format files.
+        if lockdir.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+            let _ = std::fs::remove_file(&lockdir);
+        }
+        for attempt in 0..2 {
+            // create_dir is the atomic cross-process claim: exactly one
+            // claimant wins it for a given path.
+            match std::fs::create_dir(&lockdir) {
+                Ok(()) => {
+                    std::fs::write(lockdir.join("pid"), std::process::id().to_string()).unwrap();
+                    return true;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if attempt == 0 && !lock_owner_is_alive(&lockdir) {
+                        reap_stale_lock(&lockdir);
+                        continue; // one retry: whoever's create_dir wins owns it
+                    }
+                    return false; // a live peer (or a peer that just beat us) owns it
+                }
+                Err(e) => panic!("free_port: cannot claim the port lock {lockdir:?}: {e}"),
+            }
+        }
+        false
+    }
+
+    /// Is the process recorded in the lock's `pid` file still running?
+    /// Missing, unreadable or unparsable content reads as *live*
+    /// (conservative: the owner may be mid-claim; a wrong "dead" verdict
+    /// is the only direction that can double-hand a port).
+    fn lock_owner_is_alive(lockdir: &std::path::Path) -> bool {
+        let Ok(text) = std::fs::read_to_string(lockdir.join("pid")) else {
+            return true;
+        };
+        let Ok(pid) = text.trim().parse::<u32>() else {
+            return true;
+        };
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(true)
+    }
+
+    /// Remove a lock whose owner was just verified dead. The rename is
+    /// atomic and names the exact directory we checked; the owner's death
+    /// is re-verified immediately before it, so a lock recreated by a new
+    /// owner in the gap reads as alive and is left alone.
+    fn reap_stale_lock(lockdir: &std::path::Path) {
+        if lock_owner_is_alive(lockdir) {
+            return;
+        }
+        let graveyard = lockdir.with_file_name(format!(
+            "{}.stale-{}-{}",
+            lockdir.file_name().unwrap().to_string_lossy(),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        if std::fs::rename(lockdir, &graveyard).is_ok() {
+            let _ = std::fs::remove_dir_all(&graveyard);
         }
     }
 
