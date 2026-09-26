@@ -2249,7 +2249,9 @@ consequences a reader must not have to infer:
 
 - **A refused candidate writes no row.** The row's meaning is *"this process is serving this revision"*;
   a candidate the loader refuses is not served, so a row for it would be a false statement in the truth
-  store. A refusal is observable **on the process's own surface** (its exact shape is R47-0b's), not here.
+  store. A refusal is observable **on the process's own surface** — **ADR-040 D11** fixes that surface and
+  its four content requirements (one line per refused candidate, naming the reload, the revision still
+  served, the loader's reason verbatim and the resolved path(s) read).
 - **One look that finds no change writes nothing.** The digest decides (ADR-037 D6 / ADR-039 D2): row 13's
   trigger is a *diff*, so a watcher event whose digest matches the current one produces no row, no plugin
   edge and no observable change at all.
@@ -3617,7 +3619,7 @@ observable.
 |---|---|---|---|
 | 1 | a look is triggered (a watcher event, or startup) | `router-cli` (ADR-039 D3's crate) | the trigger is a hint; nothing is decided by it |
 | 2 | **read + gate** the pair — `config_load::load(root)` | `router-cli` (`config_load.rs:146`) | the same parse → join → `validate()` chain `serve` starts with, and the same refusals (§4.14's ladder, §12.10.2's table). A refusal ends the attempt here: keep serving, report, write nothing |
-| 3 | **commit** one `config.applied` row (row 13, `FULL`, intent class) | `router-store`, through the one `Store` handle | intent precedes effect (ADR-010), the order the startup path already uses (`crates/router-cli/src/lib.rs:210-231`); the payload's *changed keys* half is 0b's |
+| 3 | **commit** one `config.applied` row (row 13, `FULL`, intent class) | `router-store`, through the one `Store` handle | intent precedes effect (ADR-010), the order the startup path already uses (`crates/router-cli/src/lib.rs:210-231`); the payload's *changed keys* half is **note R10** |
 | 4 | **build and mount the delta**, off the request path | `router-cli` / `router-plugins`' assembly | a plugin entry unchanged under ADR-002's keyed identity is left mounted; an edge crossed writes row 12 (`plugin.loaded`/`unloaded`). A revision that changes only the roster crosses no edge |
 | 5 | **publish** the new revision (one value, one store) | the handle the serving path reads | steps 1–4 are done, so a reader either sees the whole new revision or the whole old one — there is no half-mounted state to roll back |
 
