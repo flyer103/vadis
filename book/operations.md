@@ -51,10 +51,14 @@ variable's **name**, never its value), the resolved state path, and the state st
 refusal, see the table above). A plugin listed as `disabled` in the config appears as
 disabled rather than missing.
 
-A change to the config is applied as a diff — plugins reload without restarting the
-process. A change to the listen address is not a reload; restart for that one. Nothing in
-the serving path depends on wall-clock time or turn order, so a restart does not change
-what a request looks like upstream.
+**A change to the config takes effect at the next start, not while the process runs.** `serve` reads
+the file — and the roster it names — **once, at startup**, and serves that: v0.1 has no file watcher and
+no reload, so editing `config.yaml` does not change a running gateway; restart it. A change to the listen
+address is the same story. Nothing in the serving path depends on wall-clock time or turn order, so a
+restart does not change what a request looks like upstream. (A reload is a **planned** change, and the
+decision that opens it — the file-watch mechanism — is recorded in
+[`design/decisions/ADR-039-file-watch-crate-for-the-reload.md`](../design/decisions/ADR-039-file-watch-crate-for-the-reload.md);
+**nothing of it is shipped**, and a gateway that reloads itself will be described here when it does.)
 
 ## What it persists
 
