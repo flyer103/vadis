@@ -3703,8 +3703,8 @@ trace is one `DecisionRecord` per request and a switch is not a request (no `req
 anchor, no bytes, no usage — spec §4.5's two-record table), the event log is the log's own home for the row
 and its siblings (row 12, row 15), and the list therefore stays on the operator's side of the observation
 boundary (§4.5 marks the log **internal — autowork never reads it**, ADR-005) — what the analysis channel
-sees about a switch is the **digest on each record** (RV-1) and a window carrying both digests (RV-1's D3
-note). Consequence: **no new trace field, no new record, `TRACE_SCHEMA_VERSION` stays 2.**
+sees about a switch is the **digest on each record** (RV-1) and a window carrying both digests
+(ADR-040 D3). Consequence: **no new trace field, no new record, `TRACE_SCHEMA_VERSION` stays 2.**
 
 *The payload* is **§12.10.5 note R10** (the row's own home): row 13 carries `previous_config_digest` and
 `changed_keys` on every row, `null` at startup, `[]` for a predecessor whose *value* equals the new one

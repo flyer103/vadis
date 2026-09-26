@@ -677,7 +677,10 @@ could only restate the digest would not be worth carrying.
 
 **The emission point.** Row 13 is committed as step 3 of D2's sequence — after the gate, **before** the
 publish — so the row precedes the effect it authorizes (ADR-010's order; the startup path's own order,
-`crates/router-cli/src/lib.rs:210-231`). Three refinements this axis owns:
+`crates/router-cli/src/lib.rs:210-231`). The rejected alternative is worth naming because it is the obvious
+one: writing the row **after** the publish opens a window in which a record already carries the new digest
+while no `config.applied` row for it exists — precisely the state RV-1 calls a defect. Three further
+refinements this axis owns:
 
 - **one row per accepted application**, emitted by the **publish**, never by a **look**: a look that ends at
   the same digest emits nothing (D1; note R9's second absence);
