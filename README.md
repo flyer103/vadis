@@ -251,12 +251,14 @@ three find the file by one rule ([`docs/spec.md` §4.12](docs/spec.md)): the XDG
 neither exists, `serve`/`stats` refuse and name `router setup`, which writes the XDG file
 (mode `0600`; any directory it creates `0700`). `setup` writes the pair from the two templates embedded in the
 binary — `config.example.yaml` and the roster it names, `providers.example.yaml` — byte for byte, and asks only
-about the keys that are yours, editing them by anchored single-line edits; `setup --check` validates the pair
+about the keys that are yours, editing them by anchored single-line edits; a config that still carries the
+roster inline is **moved** into the roster file by the same run, so the wizard's output is one shape
+([ADR-038](design/decisions/ADR-038-setup-writes-the-pair.md)). `setup --check` validates the pair
 without writing; see [the book](book/getting-started.md). The roster may live in a file of its own that the
 config **names** with `providers_file:` — exactly one of the two keys is written, both written or neither is a
 load refusal, the roster is named rather than searched, and `setup providers` edits whichever of the two files
-holds the entry — or it may stay **inline** as `providers:`, which is equally legal ([`docs/spec.md`
-§4.14](docs/spec.md), [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)).
+holds the entry — or it may stay **inline** as `providers:`, which is equally legal for a file you write by
+hand ([`docs/spec.md` §4.14](docs/spec.md), [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)).
 `stats` reads the traces in the window and
 prints the cost and cache report, the plan family's switches and their verified cost, and the requests
 whose outcome is unknown; every figure carries its `verified` / `inferred` label, `--window` is required
