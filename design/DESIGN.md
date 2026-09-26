@@ -2232,7 +2232,8 @@ is no answer body to read and the transport kind is the whole evidence (spec §4
   buffered path's own post-head read-failure arm (`unknown_outcome`) is a different question.
 
 **R9 — row 13's second trigger is the reload's publish, and only an *accepted* diff is an application
-(ADR-040).** Row 13 has said *"at startup after validation, **and on every accepted config diff**"* since
+(ADR-040).** *(`§12.10.5`'s own note series runs R1…R9; §12.10.3's R1…R12 is a separate series and its own
+R9 is unrelated.)* Row 13 has said *"at startup after validation, **and on every accepted config diff**"* since
 it was written, and the tree has had no caller for the second half: `config.applied` is appended at
 exactly one site, the startup path (`crates/router-cli/src/lib.rs:210-231`). ADR-040 makes that half live
 — a revision switch is a **publish**, and the row is its intent commit, written **before** the new
