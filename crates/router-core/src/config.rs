@@ -17,7 +17,7 @@ use std::fmt;
 use std::net::SocketAddr;
 
 use serde::de::{self, Deserializer, Visitor};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cost::{Currency, Nano, Price, PriceTable, TierTable};
 use crate::peak::{PeakTable, PeakWindow, Tz, Weekdays};
@@ -210,19 +210,19 @@ fn parse_weekday(s: &str) -> Result<u8, String> {
 // ---------------------------------------------------------------------------
 
 /// Duration in milliseconds (`60s`, `1h30m`, …).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct DurationVal(pub u64);
 
 /// Context limit in tokens (`131072`, `200k`, `1m` = 1,048,576).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ContextVal(pub u64);
 
 /// Token count; accepts underscores (`100_000_000`) because YAML does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TokensVal(pub u64);
 
 /// `provider/model`, the one route form used by `aliases` and `fallback`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RouteSpec {
     pub provider: String,
     pub model: String,
@@ -236,7 +236,7 @@ impl fmt::Display for RouteSpec {
 
 /// A price scalar as written (USD / 1K tokens); converted to integer
 /// [`Price`] only through [`PriceCfg::to_tier_tables`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct PriceVal(pub f64);
 
 /// A band ceiling as written (`tiers[k].up_to`, spec §4.10 rule 2): a
@@ -246,7 +246,7 @@ pub struct PriceVal(pub f64);
 /// meant. The as-written scalar is kept; the positive-integer refusal
 /// (zero, negative, fractional) runs in [`PriceCfg::to_tier_tables`] so it
 /// can name the band's index and the value found (DESIGN §12.13).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct CeilingVal(pub f64);
 
 impl<'de> Deserialize<'de> for CeilingVal {
@@ -263,19 +263,19 @@ impl<'de> Deserialize<'de> for CeilingVal {
 pub const MAX_PRICE_BANDS: usize = 8;
 
 /// A peak/breakeven multiplier scalar (2.0 → 200 pct).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct MultiplierVal(pub f64);
 
 /// `HH:MM` minutes of day (`24:00` allowed as end of day).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct MinutesVal(pub u16);
 
 /// A weekday bitmask built from a `days:` list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct WeekdaySet(pub u8);
 
 /// A time zone (`UTC` or `+08:00`-style).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TzVal(pub Tz);
 
 /// A single weekday (parsed to its `Weekdays` bit).
@@ -447,7 +447,7 @@ impl<'de> Deserialize<'de> for MultiplierVal {
 /// [`Nano`] only through [`CapUsdVal::to_nano`] — the same single load-time
 /// rounding `price` uses (ADR-006: integers everywhere downstream of this
 /// boundary).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct CapUsdVal(pub f64);
 
 impl CapUsdVal {
@@ -522,7 +522,7 @@ impl<'de> Deserialize<'de> for WeekdaySet {
 /// `Ord` is what lets `urls` be a `BTreeMap`: diagnostics and any serialized
 /// view list the wires in one fixed order instead of an iteration order that
 /// changes between runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum WireApi {
     Chat,
     Responses,
@@ -560,7 +560,7 @@ impl<'de> Deserialize<'de> for WireApi {
 }
 
 /// v0.1 defines exactly one rollover value (spec §4.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Rollover {
     Hourly,
 }
@@ -597,7 +597,7 @@ fn default_max_body_bytes() -> i64 {
 /// error, not a quiet default.
 pub const MIN_MAX_BODY_BYTES: i64 = 1024;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerCfg {
     pub addr: String,
@@ -623,14 +623,14 @@ pub struct ServerCfg {
     pub auth_token_env: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCfg {
     pub key_sources: Vec<String>,
     pub ttl: DurationVal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BreakevenCfg {
     #[serde(default)]
@@ -641,7 +641,7 @@ pub struct BreakevenCfg {
     pub safety_factor: MultiplierVal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CacheCfg {
     #[serde(default = "default_true")]
@@ -649,14 +649,14 @@ pub struct CacheCfg {
     pub breakeven: BreakevenCfg,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceCfg {
     pub dir: String,
     pub rollover: Rollover,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeakCfg {
     pub multiplier: MultiplierVal,
@@ -664,7 +664,7 @@ pub struct PeakCfg {
     pub windows: Vec<WindowCfg>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WindowCfg {
     pub days: WeekdaySet,
@@ -684,7 +684,7 @@ impl WindowCfg {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriceCfg {
     #[serde(default)]
@@ -711,7 +711,7 @@ pub struct PriceCfg {
 /// rule 2). A band carries no `peak` and no currency: the multiplier and
 /// the unit belong to the entry (rule 3, §4.8) — `deny_unknown_fields`
 /// makes a `peak` inside a band a load refusal naming the key.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TierCfg {
     #[serde(default)]
@@ -731,7 +731,7 @@ pub struct TierCfg {
 /// declared, displayed and inert: it routes nothing, it chooses no
 /// currency (a CN-region entry billed in USD is legal), and the router
 /// does not check it against a host in `urls` (ADR-018, ADR-020).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Region {
     Cn,
@@ -778,7 +778,7 @@ impl fmt::Display for FamilyTag {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCfg {
     pub id: String,
@@ -795,13 +795,13 @@ pub struct ModelCfg {
 
 /// `window: monthly` is the only window kind (DESIGN §12.4: any other value
 /// is a load error).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QuotaWindowTag {
     Monthly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OverQuotaTag {
     Block,
@@ -809,7 +809,7 @@ pub enum OverQuotaTag {
 }
 
 /// `reset_day`: 1..=31 (short months clamp at use time, `quota.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ResetDayVal(pub u8);
 
 impl<'de> Deserialize<'de> for ResetDayVal {
@@ -824,7 +824,7 @@ impl<'de> Deserialize<'de> for ResetDayVal {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaCfg {
     pub models: Vec<String>,
@@ -839,7 +839,7 @@ pub struct QuotaCfg {
 /// endpoint and its allowance belong to. Absent means [`AccountKind::Api`]: the
 /// metered account is the ordinary case, and a roster that writes nothing means
 /// exactly what today's roster means (ADR-014 item 8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub enum AccountKind {
     CodingPlan,
     #[default]
@@ -875,7 +875,7 @@ impl<'de> Deserialize<'de> for AccountKind {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderCfg {
     pub name: String,
@@ -917,7 +917,7 @@ impl ProviderCfg {
 
 /// spec §4.6 `on_primary_exhausted`: what a family does once the upstream has
 /// declared its subscription account exhausted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OnPrimaryExhausted {
     /// The family continues on the metered account at its real price.
@@ -931,7 +931,7 @@ pub enum OnPrimaryExhausted {
 /// spec §4.6 `recover`: whether the family probes its `primary` again after the
 /// cooldown (`probe`, the default), or never does (`none`: it returns at the
 /// plan's own window boundary, or by an operator action).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RecoveryMode {
     #[default]
@@ -953,7 +953,7 @@ fn default_cooldown() -> DurationVal {
 /// Only **syntax** is enforced here; the cross-field rules (which routes, which
 /// accounts, which quota covers the family) are routing rules and live in
 /// [`RouterConfig::validate`] (DESIGN §12.5 / §12.10.2).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanPolicyCfg {
     /// The model id both routes carry — and the key of the family's state.
@@ -992,14 +992,14 @@ impl PlanPolicyCfg {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterceptCfg {
     pub sample: f64,
     pub shadow: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginCfg {
     pub id: String,
@@ -1040,7 +1040,7 @@ impl<'de> Deserialize<'de> for StateKeyForbidden {
 
 /// The whole spec §4 file. Every section is required: hidden defaults are
 /// the most expensive silent failure a hand-written config can have.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouterConfig {
     pub server: ServerCfg,
@@ -1056,7 +1056,10 @@ pub struct RouterConfig {
     /// policy is a legal, ordinary entry).
     #[serde(default)]
     pub plan_policy: Option<PlanPolicyCfg>,
-    #[serde(default)]
+    // Never serializes: a present `state:` key refuses the load, so the
+    // value is always None — and `StateKeyForbidden` deliberately has no
+    // `Serialize` (its one job is to fail deserialization).
+    #[serde(default, skip_serializing)]
     pub state: Option<StateKeyForbidden>,
 }
 
@@ -1151,7 +1154,7 @@ where
 /// both-written and neither-written *before* the join. Nothing but the
 /// loader parses this: the serving path sees only the joined
 /// [`RouterConfig`], whose `providers` field is always populated.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RootFile {
     pub server: ServerCfg,
@@ -1180,7 +1183,9 @@ pub struct RootFile {
     pub fallback: Vec<RouteSpec>,
     #[serde(default)]
     pub plan_policy: Option<PlanPolicyCfg>,
-    #[serde(default)]
+    // As on RouterConfig: never serialized (`StateKeyForbidden` has no
+    // `Serialize`; a present key refuses the load).
+    #[serde(default, skip_serializing)]
     pub state: Option<StateKeyForbidden>,
 }
 
@@ -1192,7 +1197,7 @@ pub struct RootFile {
 /// `providers:` key at all (an empty file, a bare sequence). A written
 /// `providers: []` is legal — the empty roster, symmetric with the inline
 /// form (the opener's limb (i)).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RosterFile {
     pub providers: Vec<ProviderCfg>,

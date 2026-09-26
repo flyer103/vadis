@@ -10,6 +10,7 @@
 pub mod body;
 pub mod breakeven;
 pub mod config;
+pub mod config_diff;
 pub mod cost;
 pub mod error;
 pub mod error_class;
@@ -28,6 +29,7 @@ pub use config::{
     PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, RouterConfig, TokensVal, KNOWN_BUILTIN_KINDS,
     KNOWN_SERVICE_SLOTS,
 };
+pub use config_diff::{changed_keys, ChangeKind, KeyChange};
 pub use cost::{
     cost, select_band, CostBreakdown, Currency, Money, Nano, Price, PriceTable, TierTable, Usage,
 };
