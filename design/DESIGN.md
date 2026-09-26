@@ -3172,11 +3172,17 @@ never touches a line it has no edit for.
    today do not move; the extraction is mechanical (§12.10.2's observable behaviour is unchanged). **Every run
    that reaches a plan reaches this step, including a run whose plan is empty** — there the candidate is the
    base itself. The loader is the gate, so a base it refuses is refused here (exit 2, the loader's reason,
-   nothing written), and the four shapes spec §4.14's ladder names — both keys written, neither written, an
-   unparsable text, and a present-but-not-the-roster-block roster — are refused on the writing surface exactly
-   as `--check` refuses them, instead of being reported as a no-op. (spec §4.11's *the loader is the gate*
+   nothing written), and the shapes the ladder refuses are refused on the writing surface exactly as `--check`
+   refuses them, instead of being reported as a no-op. (spec §4.11's *the loader is the gate*
    bullet; **R43-F7**, whose shipped site let the empty plan sweep past this step, on the write path and on
-   `--dry-run` alike.)
+   `--dry-run` alike.) The shapes it covers are the ladder's own refusals — 1 (both keys), 2 (neither),
+   4 (the roster is present and is not the roster block), 5 (a reference the roster does not resolve) — plus
+   the coarser case that precedes the ladder, a root that does not parse. **Shape 3 is not this step's**:
+   a root whose `providers_file` names a path that is **not there** is the arm the writing run *creates* the
+   roster for (measured 2026-09-26: 71 070 B at `0600`, the shipped roster's bytes, the root untouched),
+   while `--check` over that same root refuses it at exit 2 on ladder row 3 — so this contract does not
+   settle whether the create is a repair the command may perform or a refusal (**R46-0-F1**, the round's
+   register; it is not this step's decision, and a coder must not read this step as deciding it).
 9. Empty plan **over a base that loads** → `no change: <path> left as it is`, exit 0 (this is what makes a
    second run a no-op).
 10. `--backup` (or `--force`, which implies it) → copy the existing target to `<target>.bak`.

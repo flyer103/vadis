@@ -1208,11 +1208,17 @@ recall one: it shows what the file carries and what the file cites. A list- or f
   — and when nothing was planned the candidate **is** the base — is parsed and validated before the run may
   report a no-op, so a file the loader **refuses** is refused by this command too: `exit 2`, naming the loader's
   reason, nothing written. The plan's emptiness is a statement about the operator's answers, never about the
-  file. The four shapes §4.14's ladder names are therefore refused here too, rather than told `left as it is`
-  while `--check` (the row above) refuses them: a root that writes **both** `providers:` and `providers_file:`
-  (shape 1), one that writes **neither** (shape 2), a text that does not parse, and a pair whose **roster** is
-  present but is not the roster block (shape 4). `--dry-run` reports the refusal rather than printing a plan of
-  nothing. A no-op run is a no-op over a config that works.
+  file. The shapes §4.14's ladder refuses are therefore refused here too, rather than told `left as it is`
+  while `--check` (the row above) refuses them: **shape 1** (both keys written), **shape 2** (neither
+  written), **shape 4** (a roster that is present and is not the roster block) and **shape 5** (a reference
+  the roster does not resolve) — plus the coarser case that precedes the ladder, a root that does not parse
+  at all. `--dry-run` reports the refusal rather than printing a plan of nothing. A no-op run is a no-op
+  over a config that works. **Shape 3 is deliberately not this bullet's**: a root whose `providers_file`
+  names a path that is **not there** is the arm a writing run *creates* the roster for (measured
+  2026-09-26: the run writes 71 070 B at mode `0600` — the shipped roster's own bytes, sha16
+  `2dbb9d6a5f80f4c9` — and leaves the root's bytes untouched), so what that arm **is** — a repair this
+  command may perform, or a refusal, as its ladder row reads on its own — stays open, and this bullet
+  decides nothing about it.
 
 **Determinism — the frozen, assertable properties.** The written bytes are a function of (base bytes, answers,
 template) **only** — never of the clock, the CWD, the answer order or the environment's contents (the environment
