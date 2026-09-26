@@ -831,3 +831,34 @@ window, or must a fresh p99 ladder be run — and if so, which gate consumes it?
 **Nothing is decided here, and nothing may be measured as a gate input before the ruling** — AGENTS 9 /
 ADR-012 put the L1 envelope and the gate definitions outside the mutable scope, and AGENTS 4 forbids
 presenting an inferred figure as measured. A card that needs the ruling blocks on the owner.
+
+## Dated note — 2026-09-27 (R48-3b; **R47-F1**'s contract half — the landing falsified this ADR's own "not served" sentences)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** Two
+statements of this ADR were true when written — the evidence block's readings are labeled with the
+commit they were taken at (the round's base `9e4b65e`) — and were made false by the reload's landing
+in **R47** (merge `db2ac77`). Both corrections are pointers rather than restatements.
+
+1. **The honest-boundaries sentence** (*"Nothing here is served at the time of writing … no watcher,
+   no second `load` entry point, no published handle and no keyed diff"*) — all four are in the tree
+   now: the watcher is `crates/router-cli/src/reload.rs` (`Watcher`, the leading-edge `Coalescer`,
+   the one `COALESCE_WINDOW` constant — R47-1, `b1c364a`); the second `load` entry point is
+   `reload::look`, which runs the same `config_load::load` `serve` starts with; the published handle
+   is `router_proxy`'s `RevisionCell` (`crates/router-proxy/src/revision.rs`), written only by
+   `reload::Publisher` (R47-2, `2a04c9a` / `078094c`); and the keyed diff is
+   `crates/router-core/src/config_diff.rs` (`router_core::changed_keys` — R47-2, `d4c849b`). R47-3's
+   independent verification of the landing returned **NO BLOCKING FINDING**
+   (`autowork/harness/r47-3/VERDICT.md`), and R47-4 measured D7.2's prefix-neutrality claim on the
+   frozen corpus at $0 — it **HOLDS** (`autowork/harness/r47-4/`).
+2. **The evidence block's `git grep -n notify -- Cargo.toml crates/*/Cargo.toml -> no output (the
+   dependency has not landed; ADR-039 D3)`** — the dependency has landed: `notify = "8"` at
+   `Cargo.toml:65` and `notify = { workspace = true }` at `crates/router-cli/Cargo.toml:41` (R47-1,
+   `34f76d0`, the manifest comment in ADR-039 D3's shape). The block's other no-output readings still
+   hold at this commit: `apply_config_diff` exists nowhere in `crates/` (the keyed diff landed under
+   D10's own name, `changed_keys`), and no store table is keyed by the configuration (RV-6).
+
+**What is still not served, on purpose:** the session-level arm of D3's two-revision window — the
+second owner question above stays the owner's ruling, and no session-level policy is implemented
+(spec §4.15's status line records the same). **What this note does not do:** it re-opens no decision
+(D1–D12 stand), changes no behaviour, and edits no line above; the honest-boundaries bullet and the
+evidence block stand as written, to be read with this note.
