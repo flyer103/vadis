@@ -3598,14 +3598,20 @@ implementer's within that rule** (`Arc` swap, an epoch, a `RwLock` read once —
 own note about the join's typing); what is fixed is that the request's view is a value it took once
 (AGENTS 2), and that the publish is the only writer of what the path reads.
 
-**What a revision may change.** The rule is the read site, not a list: any key the serving path reads per
-request or per revision is reloadable (the roster, `aliases`, `fallback`, `plan_policy`, `quota`,
-`plugins` including `disabled`, `session`, `cache`, the `server.*` timeouts and `max_body_bytes`,
-`server.auth_token_env`'s name, `trace.rollover`). Three keys are **refused with the key named**, because
-the process resolved them once and holds what they name: **`server.addr`** (the listener is bound once),
-**`trace.dir`** (resolved at load, held by the trace writer), and the **state store's path** (fixed,
-spec §4.5). A refusal here is the ordinary refusal of step 2: keep serving, name the key, and the remedy
-is a restart.
+**What a revision may change.** The criterion is the **read site**: a key is reloadable iff its read site
+is per request or per revision. On that criterion the reloadable side is everything the request path reads
+from the revision it holds — the roster and every provider-entry key, `aliases`, `fallback`, `plan_policy`,
+`quota`, `session.*` (read at binding time), `cache.*`, the `plugins` list including `disabled` and each
+entry's own config, and `server.auth_token_env`'s *name*. The refused side is every key whose only consumer
+is an object the **process** builds once and holds, and each refusal names the key: **`server.addr`** (the
+listener is bound once, `crates/router-cli/src/lib.rs:854`), **`trace.dir`** (held by the trace writer —
+which is why `trace.rollover` is the unit that may move), the **state store's path** (fixed, spec §4.5), and
+— measured, not assumed — **`server.upstream_attempt_timeout`** (consumed when the provider transports are
+built: `crates/router-cli/src/lib.rs:299-304`) and **`server.max_body_bytes`** (consumed by the
+inbound-body layer, §12.15). A refusal here is the ordinary refusal of step 2: keep serving, name the key,
+the remedy is a restart. An implementing card may **promote** a refused key by rebuilding its object as
+part of the revision — cheap for a layer, not free for a connection pool — and **the direction is one way
+on purpose**: widening the set later is smaller and safer than tightening it.
 
 **The assertions (ADR-040 D8; `RV-1`…`RV-6`, and the matrix is what a card is held to).**
 

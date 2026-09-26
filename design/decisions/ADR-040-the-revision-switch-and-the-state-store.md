@@ -16,7 +16,9 @@
   resends everything — the reason the reload adds no column and no pin it cannot reconstruct);
   **ADR-009 / ADR-010** (the event log is the truth, intent precedes effect, projections are
   rebuildable — the store's contract the switch must not disturb); **ADR-025** (the writer whose landing
-  is a temp file plus a `rename`, the fact behind D4's torn-pair case); **ADR-003 / ADR-005** (the
+  is a temp file plus a `rename`, the fact behind D4's torn-pair case); **ADR-038** (the shape step and its
+  dated note — the pair is written by one run, which is why D4's torn-pair case is a *reader's* window and
+  not a writer's defect); **ADR-003 / ADR-005** (the
   observation boundary: the trace is the only product → autowork channel); AGENTS hard constraints
   **1** (the byte boundary — untouched by definition here), **2** (content determinism — the constraint
   D2's capture-once decision exists to protect), **3** (the observation boundary), **4** (no unverified
@@ -189,21 +191,32 @@ only writer of what the request path reads. That is what keeps AGENTS 2 true acr
   operator landed. What never happens is the *other* thing: a record carrying digest `D` while the
   process serves structures belonging to `D'`.
 
-### D5 — What a revision may change: everything the serving path reads per request, and nothing the process resolved once
+### D5 — What a revision may change: the criterion is the read site; a key held by a once-built process object is refused with the key named
 
-**Reloadable** (any key the serving path reads per request or per revision): the roster (`providers:`,
-or every key of the file it names), `aliases`, `fallback`, `plan_policy`, `quota`, `plugins` (including
-`disabled`), `session`, `cache`, `server.upstream_attempt_timeout`, `server.request_timeout`,
-`server.max_body_bytes`, `server.auth_token_env` (see the honesty note below), `trace.rollover` — and so
-on: the rule is the read site, not a list.
+**The criterion.** A key is reloadable **iff its read site is per request or per revision** — including the
+objects a revision itself owns (the transform engine and rule set it mounts, its provider-entry data). A
+key whose only consumer is an object the **process** builds once at startup and then holds is **refused**,
+and the refusal names the key.
 
-**Not reloadable — refused, with the key named**: `server.addr` (the listener is bound once), the
-state store's path (fixed at `<config dir>/state/router.db` in v0.1, spec §4.5) and the resolved
-`trace.dir` (resolved once at load and held by the trace writer, which is also what makes `trace.rollover`
-the unit that may move, not the directory). A revision that differs in one of these is refused at
-publish, the refusal names the key, and the remedy is a restart — which is the honest answer, because a
-reload that re-bound a listener would be a drain-and-rebind capability and not a config reload. This set
-is deliberately short and revisitable (Reversibility, below).
+**Refused — the named set, and it is the process's own resources.** `server.addr` (the listener is bound
+once, `crates/router-cli/src/lib.rs:854` names the bind failure), the resolved `trace.dir` (resolved at
+load and held by the trace writer, which is also why `trace.rollover` is the unit that may move, not the
+directory) and the state store's path (fixed at `<config dir>/state/router.db`, spec §4.5). Measured, and
+in the same class though less obviously so: **`server.upstream_attempt_timeout`** is read to build each
+provider transport at startup (`crates/router-cli/src/lib.rs:299-304` — `ReqwestProviderClient::new(timeout)`),
+so it is not a per-request read today; **`server.max_body_bytes`** is consumed by the inbound-body layer
+(§12.15), built for the process. Both are **refused by default**, and the implementing round may promote
+either by rebuilding its object as part of the revision — cheap for a layer, not free for a connection
+pool, whose rebuild costs the pool's warm connections. **The direction of travel is one way on purpose:**
+widening the reloadable set later is a smaller change than tightening it, and tightening it is the change
+that breaks a running deployment.
+
+**Reloadable — everything the request path reads from the revision it holds.** The roster and every
+provider-entry key, `aliases`, `fallback`, `plan_policy`, `quota`, `session.*` (read at binding time),
+`cache.*`, the `plugins` list (including `disabled` and each entry's own config), and `server.auth_token_env`'s *name*
+— the rule is the read site, not this list, and the list is what was read out of the tree rather than a
+convention. A key that is neither of these two cases is **refused with its key named** until a card shows
+where it is read and why the reader is per revision.
 
 **A revision mounts only the delta.** `plugins` are compared by the same identity a plugin entry already
 has (`id`, `kind`, `enabled` and its config — DESIGN §12.2's last row), and a switch writes
@@ -468,10 +481,12 @@ session-level policy may land** — a card that needs it blocks on the owner.
   behaviour is a contract to land, and no card may cite this ADR as "the reload works".
 - **The two-revision window's bound is arm-dependent and one arm is not chosen.** D3 states both bounds;
   which one is real depends on the owner's ruling.
-- **The reloadable set is a judgement, and it is short on purpose.** `server.addr`, `trace.dir` and the
-  state path are refused because the process resolved them once; a reader who disagrees should note that
-  relaxing the set is a *smaller* change than tightening it, and that the refusal names the key either
-  way.
+- **The reloadable set is a judgement, and its default is refusal.** `server.addr`, `trace.dir`, the state
+  path, and — measured, not assumed — the keys whose only consumer is a once-built process object
+  (`server.upstream_attempt_timeout` behind the provider transports, `server.max_body_bytes` behind the
+  inbound-body layer) are refused with the key named. A reader who disagrees should note that the direction
+  is one way: widening the set is a smaller change than tightening it, and a card that widens it can point
+  at the read site it fixed.
 - **D7.2's prefix-neutrality claim is a claim about a *rig* that does not exist yet.** It is stated as an
   assertion with its measurement (identical `prefix.blocks[].hash`, `cache_control_breaks == 0`) so a
   later card can refute it; nothing in this ADR was measured through a live upstream.

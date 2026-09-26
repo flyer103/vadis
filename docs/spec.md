@@ -1501,15 +1501,19 @@ Five rules, each one something a user may rely on:
 | 1 | **The candidate is the pair, and the same loader is the gate.** The root and the roster are read together and parsed and validated by exactly the loader `serve` starts with (§4.11's *the loader is the gate*), `deny_unknown_fields` and §4.14's refusal ladder included. |
 | 2 | **A refusal is not applied, and the process does not stop.** A candidate the loader refuses leaves the running process serving the revision it already had, reports the loader's own reason, and writes **nothing** to the state store. This is the deliberate opposite of startup: at startup a bad config is `exit 2` because nothing is serving yet; a live process that stopped serving because a file was mistyped would be a worse failure than the mistake. |
 | 3 | **One revision serves a request, from arrival to answer.** A request takes the revision in force when it arrives and is answered by that revision — there is no half-applied configuration and no request that sees two. A request already in flight when the change lands finishes on the revision it started on. |
-| 4 | **Only what changed takes effect, and a change that reaches nothing on the wire leaves the prompt cache alone.** The outbound bytes of a request remain a pure function of the client's own bytes and the revision in force; the reload adds no normalization, no re-ordering and no rewrite of what you wrote. A revision that changes only keys the upstream never sees — timeouts, `session.ttl`, the cache and breakeven defaults, prices, quotas, `currency`, `region`, a path or a default — produces byte-identical outbound requests, so a live conversation's cached prefix is untouched. A revision that *does* move a wire-visible fact (the resolved model a request selects, or the transform rules that are mounted) invalidates the upstream prefix for conversations in flight — the cost of the change is then **attributable**, not hidden: the records after the switch name the new `config_digest`, and the prefix break shows up in `prefix.continuity` and `cache_control_breaks` (§6). |
+| 4 | **Only what changed takes effect, and a change that reaches nothing on the wire leaves the prompt cache alone.** The outbound bytes of a request remain a pure function of the client's own bytes and the revision in force; the reload adds no normalization, no re-ordering and no rewrite of what you wrote. A revision that changes only keys the upstream never sees — `session.ttl`, the cache and breakeven defaults, prices, quotas, `currency`, `region`, a path or a default — produces byte-identical outbound requests, so a live conversation's cached prefix is untouched. A revision that *does* move a wire-visible fact (the resolved model a request selects, or the transform rules that are mounted) invalidates the upstream prefix for conversations in flight — the cost of the change is then **attributable**, not hidden: the records after the switch name the new `config_digest`, and the prefix break shows up in `prefix.continuity` and `cache_control_breaks` (§6). |
 | 5 | **The state store is continuous across a switch.** Sessions, the cache ledger, quota counters and cooldowns all survive it unchanged; the switch adds **one** row to the event log — a `config.applied` (§4.5), naming the revision it applied. There is no second ledger, no migration and no revision column: the identity stays what §4.14 says it is, *attribution*, and it never becomes a key. |
 
-**Three keys the reload refuses, because the process resolved them once.** `server.addr` (the listener is
-bound once), `trace.dir` (resolved at load and held by the trace writer) and the state store's path
-(fixed in v0.1, §4.5). A revision that changes one of them is refused with that key named, the process
-keeps serving, and the remedy is a restart — a reload that re-bound a listener would be a different
-capability (drain and rebind), not a configuration change. Everything else in §4 may change under a
-running process.
+**Keys the reload refuses, because the process already holds what they name.** `server.addr` (the listener
+is bound once) and `trace.dir` (resolved at load and held by the trace writer) — and the keys whose only
+consumer is something the process built once and keeps, such as the upstream-attempt timeout behind the
+provider clients or the inbound body bound (`server.max_body_bytes`, §4.13). A revision that changes one
+of them is refused with that key named, the process keeps serving, and the remedy is a restart — a reload
+that re-bound a listener would be a different capability (drain and rebind), not a configuration change.
+The rule behind the list is the **read site**: a key the serving path reads per request or per revision
+travels with the revision and may change under a running process; a key read once into a long-lived object
+is refused until the implementation rebuilds that object with the revision. The direction is deliberate —
+widening this later is a smaller change than narrowing it.
 
 **What a process keeps when it forgets a revision.** Nothing durable: the revision in force lives in the
 process's memory and is re-derived from the files at the next start, where one `config.applied` row is
