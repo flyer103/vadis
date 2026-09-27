@@ -689,7 +689,12 @@ R50-0b used — *prints* the line a claim points at. A wrong number therefore pr
 how finding 1 survived a full audit inside a bullet that was itself printed. `citecheck.py` inverts the
 direction: it reads the documents' text and **fails** when the file, the range or the phrase bound to a
 citation is not there. Its red control is at the pre-fix commit — 4 failures, the two anchor-class ones plus
-these two — and it is green here (`citecheck.txt`: 110 tier-A, 7 tier-B, 0 failures). Nothing in this section
-changes a decision, moves a section, or touches the frozen surface: the assertions in §2 stay what they are,
-`CONF-46` stays green, and R50-1's work is unchanged.
+these two — and it is green here (`citecheck.txt`: 110 tier-A, 7 tier-B, 0 failures). What it **cannot** do
+is stated with it, because a checker's blind spots are part of its evidence: a range that exists but is drawn
+too *wide* passes tier A and is caught only where a phrase is bound to it (tier B, 7 of 110 citations here);
+a claim shaped like a command whose command does not reproduce it is not a citation at all and is
+`measurements.sh`'s job; and a phrase split across a line break is bound as it reads in the joined paragraph,
+so a claim that depends on the break is a human's to read. Nothing in this section changes a decision, moves a
+section, or touches the frozen surface: the assertions in §2 stay what they are, `CONF-46` stays green, and
+R50-1's work is unchanged.
 
