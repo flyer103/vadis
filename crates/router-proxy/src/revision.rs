@@ -141,6 +141,7 @@ mod tests {
                 store: None,
                 trace: None,
                 transform_engine: None,
+                response_cache: None,
                 session_ttl_us: 0,
             },
             config_identity: ConfigIdentity {

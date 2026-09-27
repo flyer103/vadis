@@ -241,6 +241,13 @@ pub(crate) fn build_revision(
         note(line.clone());
     }
     let transform_engine = assembly.transform_engine();
+    // The exact-match response cache (spec §4.17): `Some` only when the
+    // operator mounted `builtin/response_cache` with `config.enabled:
+    // true` — an absent or inert entry assembles to `None`, and the
+    // serving path then never knows the kind exists (CONF-88). A config
+    // reload re-runs `assemble`, so the store's lifetime is the fiber's
+    // (ADR-042 §2.2): a changed entry unloads the store with the fiber.
+    let response_cache = assembly.response_cache();
 
     // The revision's trace writer: the process's one sink (shared Arc),
     // stamped with THIS revision's digest — a request finishing after a
@@ -256,6 +263,7 @@ pub(crate) fn build_revision(
         store: Some(store.clone()),
         trace: Some(trace_writer),
         transform_engine,
+        response_cache,
         // The session TTL's one ms → µs conversion (spec §4.5, note R6):
         // `session.ttl` is a `DurationVal` in **milliseconds**, every
         // consumer of `session_ttl_us` reads **microseconds** — so the

@@ -137,6 +137,7 @@ fn forwarder(
         store: None,
         trace: None,
         transform_engine: Some(Arc::new(NoiseTrimmer)),
+        response_cache: None,
         session_ttl_us: 11 * 3600 * 1_000_000,
     }
 }

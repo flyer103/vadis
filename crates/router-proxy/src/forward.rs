@@ -170,6 +170,8 @@ pub fn mode_refused_record(
         // is claimed (spec §6's pre-pipeline row).
         transform_mode: TransformMode::Passthrough,
         transforms: Vec::new(),
+        // A pre-pipeline refusal can never be a hit: no cache group.
+        cache: None,
         usage: router_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {
@@ -225,6 +227,15 @@ pub struct Forwarder {
     /// fact, never a route property, so this field never decides
     /// anything on the passthrough path (I3).
     pub transform_engine: Option<Arc<dyn router_core::transform::TransformEngine>>,
+    /// The exact-match response cache (spec §4.17, ADR-042): the
+    /// plugin's assembled handle on the **one** store, `None` unless the
+    /// operator mounted `builtin/response_cache` with
+    /// `config.enabled: true`. An absent or inert mount is this `None`,
+    /// and the request path is then byte-identical to a build that does
+    /// not know the kind (CONF-88). Reached at exactly **one** call site
+    /// per forwarding medium — the last step before the upstream attempt
+    /// (ADR-042 §4.4), never earlier.
+    pub response_cache: Option<Arc<dyn router_core::response_cache::ResponseCache>>,
     /// Inbound headers per request (the session key sources live there;
     /// the body's `prompt_cache_key` is checked at receive).
     pub session_ttl_us: i64,
@@ -973,6 +984,105 @@ impl Forwarder {
             );
         }
 
+        // The exact-match response cache (spec §4.17; ADR-042 §4.4): the
+        // lookup is the **last step before the upstream attempt** —
+        // after admission (§4.7), after the body is read and bounded
+        // (§4.13), after route resolution (§3), after the guard chain
+        // (§4.6/§4.2) and after the transform compose step (§2.1) — and
+        // **nowhere earlier**: an early lookup would strip the record of
+        // the route it did not call. A hit replaces exactly one thing:
+        // the call. A request with no session has no key — it is neither
+        // looked up nor stored (fail-closed, §3.3), which is why the key
+        // is derived only inside the session arm. The digest is taken
+        // over the client's inbound body bytes **as received** — before,
+        // and independently of, the two permitted mutations (§3.1).
+        let cache_key = match (&self.response_cache, session.as_deref()) {
+            (Some(_), Some(session_key)) => {
+                Some(router_core::response_cache::ResponseKey::for_request(
+                    &router_core::response_cache::RequestFacts {
+                        protocol_in: proto_in.as_str(),
+                        // The revision this request's own record is
+                        // stamped with — one source (the trace writer),
+                        // so the key and the record can never disagree
+                        // about which revision served the request.
+                        config_digest: self.trace.as_ref().map(|t| t.config_digest()).unwrap_or(""),
+                        session: session_key,
+                        transform_mode: facts.transform_mode,
+                        body,
+                    },
+                ))
+            }
+            _ => None,
+        };
+        if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
+            if let Some(recorded) = cache.lookup(key) {
+                // A hit is a **replay, not a prediction** (ADR-042 §3.2):
+                // these exact bytes were sent before, and the response
+                // bytes returned then are returned now, verbatim — no
+                // claim about what the upstream would answer now. The
+                // record is the ordinary record of this request with one
+                // group added: same identity, same decision (the route
+                // it did NOT call), same timings — plus `cache`.
+                let hit = router_core::trace::CacheRec {
+                    // `inferred`, always (constraint 4): the counterfactual
+                    // was never measured, and no gate may count it (§5).
+                    verdict: "inferred",
+                    key_digest: key.key_digest_hex(),
+                    replayed: router_core::trace::ReplayedRef {
+                        request_id: recorded.source.request_id.clone(),
+                        session: recorded.source.session.clone(),
+                        turn_index: recorded.source.turn_index,
+                    },
+                    replayed_bytes: recorded.body.len() as u64,
+                };
+                let ctx = crate::accounting::AccountCtx {
+                    request_id,
+                    received_event: facts.received_event,
+                    proto_in: proto_in.as_str(),
+                    // No bytes left the process — spec §6's third
+                    // `protocol_out` class.
+                    proto_out: None,
+                    session: session.as_deref(),
+                    turn_index,
+                    selection_source,
+                    requested_model: Some(model),
+                    decision_ms,
+                    started,
+                    now_epoch_s,
+                    plan_switch: facts.plan_switch.clone(),
+                    sticky_hit,
+                    transform_mode: facts.transform_mode,
+                    transforms: facts.transform_records.clone(),
+                    transform_error: facts.transform_error.clone(),
+                };
+                crate::accounting::Accountant {
+                    store: self.store.as_deref(),
+                    trace: self.trace.as_deref(),
+                    // No usage exists to price: the record is
+                    // `usage_missing`-class, charged nowhere and summed
+                    // nowhere (spec §6, ADR-042 §4.3).
+                    accounting: None,
+                }
+                .finish_replay(
+                    &ctx,
+                    hit,
+                    recorded.status,
+                    &primary.provider,
+                    &primary.model,
+                    &facts.blocks,
+                );
+                return ForwardOutcome::Success(ForwardSuccess {
+                    status: recorded.status,
+                    content_type: recorded.content_type.clone(),
+                    body: Bytes::from(recorded.body),
+                    route: primary.clone(),
+                    failover_from: None,
+                    usage: None,
+                    prefix_blocks: facts.blocks.clone(),
+                });
+            }
+        }
+
         // The candidate chain: the primary route, then the global fallback
         // list (spec §4.2), walked once. For a request inside a plan
         // family, the family's `overflow` route is the **first candidate
@@ -1305,6 +1415,33 @@ impl Forwarder {
                         );
                         if let (Some(id), Some(s)) = (intent_id, session.as_deref()) {
                             accountant.put_ledger(Some(s), &blocks, id);
+                        }
+                        // The store's write side (spec §4.17, ADR-042
+                        // §3.3/§3.4): this miss answered with a COMPLETE
+                        // `2xx` body — complete by construction (the
+                        // buffered read), the status checked above — so
+                        // it is a recording candidate. The source
+                        // reference is THIS request's record: the bytes
+                        // a later hit replays are attributed to the one
+                        // measurement, and the session component comes
+                        // from the key, so the reference can never point
+                        // across sessions (§4.3). The byte bound and the
+                        // status rule are the store's own to enforce
+                        // (fail-closed).
+                        if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
+                            cache.record(
+                                key.clone(),
+                                router_core::response_cache::RecordedResponse {
+                                    status: resp.status,
+                                    content_type: resp.content_type.clone(),
+                                    body: resp.body.to_vec(),
+                                    source: router_core::response_cache::SourceRef {
+                                        request_id: request_id.to_string(),
+                                        session: key.session().to_string(),
+                                        turn_index,
+                                    },
+                                },
+                            );
                         }
                         return ForwardOutcome::Success(ForwardSuccess {
                             status: resp.status,
@@ -2243,6 +2380,7 @@ mod walk_tests {
             store: None,
             trace: None,
             transform_engine: None,
+            response_cache: None,
             session_ttl_us: 0,
         }
     }

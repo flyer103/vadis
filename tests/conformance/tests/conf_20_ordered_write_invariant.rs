@@ -194,6 +194,7 @@ fallback: []
         store: Some(store as Arc<dyn router_core::store::Store>),
         trace: None,
         transform_engine: None,
+        response_cache: None,
         session_ttl_us: 11 * 3600 * 1_000_000,
     };
 

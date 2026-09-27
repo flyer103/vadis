@@ -119,6 +119,8 @@ fn empty_record() -> DecisionRecord {
         },
         transform_mode: router_core::transform::TransformMode::Passthrough,
         transforms: Vec::new(),
+        // The additive group (spec §6): this fixture's record is no hit.
+        cache: None,
         usage: Usage::default(),
         usage_missing: false,
         cost: CostRec {

@@ -205,6 +205,7 @@ mod tests {
             },
             transform_mode: router_core::transform::TransformMode::Passthrough,
             transforms: Vec::new(),
+            cache: None,
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {

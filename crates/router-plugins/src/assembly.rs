@@ -8,8 +8,10 @@
 //! per-request `ServiceKey` lookup, `Arc` clone or lock would be a
 //! defect).
 //!
-//! The registry is exactly one kind this round — `builtin/transform_rules`
-//! (§13.1's P6, the first migration). The three always-resident builtins
+//! The registry is two kinds this round — `builtin/transform_rules`
+//! (§13.1's P6, the first migration) and `builtin/response_cache` (spec
+//! §4.17, ADR-042: the exact-match response cache, mounted **inert**
+//! unless `config.enabled: true`). The three always-resident builtins
 //! (`builtin/cost_ledger`, `builtin/quota_guard`, `builtin/sticky`) are
 //! **not** here on purpose: they stay resident (the round's scope call).
 //! A declared entry whose kind has no mount is a **named absence** on the
@@ -26,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use router_core::config::PluginCfg;
+use router_core::response_cache::ResponseCache;
 use router_core::transform::TransformEngine;
 use router_runtime::{
     Ctx, Effect, FiberState, Loader, Plugin, PluginError, PluginId, ServiceId, ServiceKey,
@@ -37,6 +40,31 @@ use crate::transform_rules::load_path;
 /// §4.4). The launcher reads it once at start-up and hands the engine to
 /// the `Forwarder`; the serving path never sees the slot.
 pub const TRANSFORM_CHAIN: ServiceKey<TransformChain> = ServiceKey::new("transform_chain");
+
+/// The typed slot the exact-match response cache's store handle is
+/// bound under (spec §4.17, ADR-042 §9 — the mount row). The launcher
+/// reads it once at start-up and hands the handle to the `Forwarder`;
+/// the serving path never sees the slot. An **inert** entry
+/// (`config.enabled` absent or `false` — the default) provides nothing
+/// here, and the serving path is then byte-identical to a build that
+/// does not know the kind (CONF-88).
+pub const RESPONSE_CACHE: ServiceKey<ResponseCacheSlot> = ServiceKey::new("response_cache");
+
+/// The value bound under [`RESPONSE_CACHE`]: the plugin's handle on the
+/// one store, assembled at boot.
+pub struct ResponseCacheSlot(Arc<dyn ResponseCache>);
+
+impl ResponseCacheSlot {
+    pub(crate) fn new(handle: Arc<dyn ResponseCache>) -> Self {
+        Self(handle)
+    }
+
+    /// The launcher's handle on the store. Cloning the `Arc` is a
+    /// boot-time cost, once — never a serving-path one.
+    pub fn cache(&self) -> Arc<dyn ResponseCache> {
+        Arc::clone(&self.0)
+    }
+}
 
 /// The value bound under [`TRANSFORM_CHAIN`]: the assembled transform
 /// chain, pre-built at boot.
@@ -106,13 +134,25 @@ impl Assembly {
             .get(&TRANSFORM_CHAIN)
             .map(|chain| chain.engine())
     }
+
+    /// The exact-match response cache the assembled context provides —
+    /// `Some` **only** when an entry mounted it enabled
+    /// (`config.enabled: true`, spec §4.17). An absent entry, an inert
+    /// entry (the default) or a still-waiting fiber provides nothing:
+    /// the capability is off, and the serving path does not know the
+    /// difference (CONF-88).
+    pub fn response_cache(&self) -> Option<Arc<dyn ResponseCache>> {
+        self.loader.get(&RESPONSE_CACHE).map(|slot| slot.cache())
+    }
 }
 
 /// The registry: the kinds the launcher can mount from the `plugins:`
-/// list. Exactly one this round (§13.1 P6's migration; the three
-/// always-resident builtins stay resident). Anything else declared is a
-/// named absence — see [`assemble`].
-const REGISTRY: &[&str] = &["builtin/transform_rules"];
+/// list. Two this round: `builtin/transform_rules` (§13.1 P6's
+/// migration) and `builtin/response_cache` (spec §4.17, ADR-042 — the
+/// exact-match response cache, off unless `config.enabled: true`); the
+/// three always-resident builtins stay resident. Anything else declared
+/// is a named absence — see [`assemble`].
+const REGISTRY: &[&str] = &["builtin/transform_rules", "builtin/response_cache"];
 
 /// Builds the pipeline from the declared `plugins:` list: one pass that
 /// maps each entry to a plugin instance via the registry, one
@@ -143,6 +183,10 @@ pub fn assemble(plugins: &[PluginCfg], resolve: &dyn Fn(&str) -> PathBuf) -> Ass
     // The id of the entry that won the transform chain (first hit wins —
     // the three-level override is a later card's lookup ladder).
     let mut chain_winner: Option<&str> = None;
+    // The id of the entry that won the response cache (first hit wins —
+    // the serving path holds ONE store handle, ADR-042 §9's one-store
+    // rule; a second entry is named as superseded, never a second store).
+    let mut cache_winner: Option<&str> = None;
 
     for plug in plugins {
         if plug.disabled {
@@ -162,35 +206,73 @@ pub fn assemble(plugins: &[PluginCfg], resolve: &dyn Fn(&str) -> PathBuf) -> Ass
             ));
             continue;
         }
-        // The one registry row: builtin/transform_rules.
-        if let Some(winner) = chain_winner {
-            notes.push(format!(
-                "plugins[{}] (kind {}): not loaded — first hit wins; \
-                 the transform chain is mounted from plugins[{winner}]",
-                plug.id, plug.kind
-            ));
-            continue;
-        }
-        match build_transform_rules(plug, resolve) {
-            Ok((plugin, mut lines)) => {
-                notes.append(&mut lines);
+        match plug.kind.as_str() {
+            "builtin/transform_rules" => {
+                if let Some(winner) = chain_winner {
+                    notes.push(format!(
+                        "plugins[{}] (kind {}): not loaded — first hit wins; \
+                         the transform chain is mounted from plugins[{winner}]",
+                        plug.id, plug.kind
+                    ));
+                    continue;
+                }
+                match build_transform_rules(plug, resolve) {
+                    Ok((plugin, mut lines)) => {
+                        notes.append(&mut lines);
+                        let id = plug.id.clone();
+                        if let Err(e) = loader.load(Box::new(plugin)) {
+                            // Unreachable: config validation refuses duplicate
+                            // plugin ids (config.rs's plugin loop). Named anyway
+                            // — never a silent drop.
+                            notes.push(format!("plugins[{id}] (kind {}): {e}", plug.kind));
+                            continue;
+                        }
+                        chain_winner = Some(&plug.id);
+                        mounted.push(plug);
+                    }
+                    Err(line) => {
+                        // A failed entry is a named absence and the next entry
+                        // of the kind gets its turn (first *successful* hit
+                        // wins) — the hand-rolled assembly's `continue`.
+                        notes.push(line);
+                    }
+                }
+            }
+            "builtin/response_cache" => {
+                // spec §4.17 / ADR-042 §9: one store, one handle. A
+                // second entry of the kind would either be a second
+                // store (a named defect) or silently displace the
+                // first's binding — so the first hit wins and the loser
+                // is named, the transform chain's own discipline.
+                if let Some(winner) = cache_winner {
+                    notes.push(format!(
+                        "plugins[{}] (kind {}): not loaded — first hit wins; \
+                         the response cache is mounted from plugins[{winner}]",
+                        plug.id, plug.kind
+                    ));
+                    continue;
+                }
+                let plugin = crate::response_cache::build_response_cache(
+                    plug,
+                    declared_inject(&plug.inject),
+                );
                 let id = plug.id.clone();
                 if let Err(e) = loader.load(Box::new(plugin)) {
-                    // Unreachable: config validation refuses duplicate
-                    // plugin ids (config.rs's plugin loop). Named anyway
-                    // — never a silent drop.
+                    // Unreachable (config validation refuses duplicate
+                    // plugin ids). Named anyway — never a silent drop.
                     notes.push(format!("plugins[{id}] (kind {}): {e}", plug.kind));
                     continue;
                 }
-                chain_winner = Some(&plug.id);
+                // An inert mount (`config.enabled` absent or `false` —
+                // the default) loads the fiber and provides nothing:
+                // it says nothing here, the way an absent entry says
+                // nothing (spec §4.17: the fiber may be loaded and the
+                // capability still off).
+                cache_winner = Some(&plug.id);
                 mounted.push(plug);
             }
-            Err(line) => {
-                // A failed entry is a named absence and the next entry
-                // of the kind gets its turn (first *successful* hit
-                // wins) — the hand-rolled assembly's `continue`.
-                notes.push(line);
-            }
+            // REGISTRY membership was checked above; the two arms are it.
+            _ => unreachable!("a registered kind has a mount branch"),
         }
     }
 

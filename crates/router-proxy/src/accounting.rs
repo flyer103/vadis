@@ -299,6 +299,7 @@ impl<'a> Accountant<'a> {
             Vec::new(),
             blocks,
             upstream_ms,
+            None,
         )
     }
 
@@ -350,6 +351,42 @@ impl<'a> Accountant<'a> {
             vec![trace_error_for_failure(&failure)],
             blocks,
             upstream_ms,
+            None,
+        )
+    }
+
+    /// The **response-cache hit's record** (spec §6's `cache` group and
+    /// its third `protocol_out` class; ADR-042 §4): one more class
+    /// through `commit` — the ordinary record of the request (identity,
+    /// decision, timings, prefix) with the no-upstream-call fields
+    /// nulled (`usage_missing: true`, `usage` zeroed, `cost.*` `0`,
+    /// `upstream_status`/`upstream_ms` absent) and the `cache` group
+    /// naming the source record attached. The caller passes
+    /// `ctx.proto_out: None` — no bytes left the process. `status` is
+    /// the **recorded** response's own status and `provider`/`model` the
+    /// route this request resolved to and did **not** call.
+    pub fn finish_replay(
+        &self,
+        ctx: &AccountCtx<'_>,
+        cache: router_core::trace::CacheRec,
+        status: u16,
+        provider: &str,
+        model: &str,
+        blocks: &[PrefixBlock],
+    ) -> AccountResult {
+        self.commit(
+            ctx,
+            status,
+            None,
+            provider,
+            model,
+            None,
+            true,
+            None,
+            Vec::new(),
+            blocks,
+            None,
+            Some(cache),
         )
     }
 
@@ -381,6 +418,7 @@ impl<'a> Accountant<'a> {
             extra_errors,
             blocks,
             upstream_ms,
+            None,
         )
     }
 
@@ -399,6 +437,10 @@ impl<'a> Accountant<'a> {
         extra_errors: Vec<TraceError>,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
+        // The response-cache group (spec §6): `Some` **iff** this
+        // record's response came from the recorded store — every class
+        // but `finish_replay` passes `None`.
+        cache: Option<router_core::trace::CacheRec>,
     ) -> AccountResult {
         let mut errors = extra_errors;
         // The applier's fail-safe, if it fired, is the request's first
@@ -543,6 +585,7 @@ impl<'a> Accountant<'a> {
             },
             transform_mode: ctx.transform_mode,
             transforms: ctx.transforms.clone(),
+            cache,
             usage,
             usage_missing,
             cost: CostRec {
