@@ -10,7 +10,7 @@
 - Authority: the **owner's direction of 2026-09-27, item 3 of four**, relayed to the loop through this round's
   card `t_a338250d`; quoted verbatim in §1.1.
 - Supersedes, **in the narrow sense of §1.2**: the **exclusion as an absolute** — `design/DESIGN.md` §13.6's
-  cache row (`:4043`) and ADR-036's own-reasoning bullet (`ADR-036:288-294`), plus the competitiveness plan's
+  cache row (`:4043` **at the base `bf96207`** — the revision this round replaces it in; at HEAD the row is `:4131`) and ADR-036's own-reasoning bullet (`ADR-036:288-294`), plus the competitiveness plan's
   *filing* of the item (`$HERMES_HOME/plans/2026-09-25_130500-router-competitiveness-plan.md:122-124`). It
   supersedes **nothing else** — §1.3 enumerates what it does **not** license, and the *semantic* cache stays
   exactly where it was (`docs/spec.md:19`, `:134`).
@@ -24,10 +24,10 @@
   transform invariants), ADR-036 (**what a plugin may never own**, and the plugin-surface map), ADR-037 D6
   (`config_digest`), ADR-040 D5 (the keys a reload refuses), ADR-041 §4 (the single-owner rule's shape, which
   §9 mirrors); spec §1 (`:13`), §2 (`:24`), §2.1 (`:81`), §4 (`:137`), §4.3 (`:427`), §4.4 (`:463`), **§4.17
-  (new)**, §6 (`:1694`), §7 (`:2000`), §9.2 (`:2285`), §9.3 (`:2414`); DESIGN §4 (`:65`), §12.6 (`:730`),
-  §12.8 (`:950`), §12.10.4/§12.10.5 (`:1581`ff), §12.12 (`:2857`), **§12.22 (new)**, §13.1 (`:3898`), §13.2
-  (`:3912`), §13.6 (`:4010`); `config.example.yaml:127-157`; `crates/router-plugins/src/assembly.rs:115,165`;
-  `crates/router-proxy/src/forward.rs:446`; `crates/router-core/src/trace.rs:28,62,248-262`.
+  (new)**, §6 (`:1749`), §7 (`:2086`), §9.2 (`:2371`), §9.3 (`:2500`); DESIGN §4 (`:65`), §12.6 (`:730`),
+  §12.8 (`:959`), §12.10.4/§12.10.5 (`:1615`ff), §12.12 (`:2891`), **§12.22 (new)**, §13.1 (`:3985`), §13.2
+  (`:3999`), §13.6 (`:4098`); `config.example.yaml:127-157`; `crates/router-plugins/src/assembly.rs:155,210`;
+  `crates/router-proxy/src/forward.rs:457`; `crates/router-core/src/trace.rs:28,70,295-309`.
 - Cases: **`CONF-88`** (the capability is **off by default** — green at the base *by construction*, and the
   arm a later config edit must not be able to move) and **`CONF-89`** (**a hit is the recorded bytes**: the
   byte-equality, the record's shape, the ledger's reconciliation). Both ids are claimed from a measurement
@@ -38,21 +38,27 @@
   for it; the next free number is `ADDR-044`-free — i.e. `ADR-043` is the newest *other* entry, so the next
   free number after this one is **`ADR-044`**.
 - **Line-number convention (so every `path:line` below can be checked).** Every reference resolves at **this
-  branch's HEAD** — the commit that carries this ADR — and, where a number is a *measurement of the base*
-  commit `bf96207`, the sentence says so. The two documents this card edits shift under it; the deltas are
-  stated in §11.4/§12.6 rather than left to be discovered.
+  branch's HEAD** — the revision that carries this ADR, by tree rather than by a fixed ancestor commit id — and,
+  where a number is a *measurement of the base* commit `bf96207`, the sentence says so. This round's own cards
+  shift both documents **and three code files** under it; every number below is re-derived at this branch's HEAD
+  by the card that shifted it, as §11.4 promises, and §0 names its own revision where it quotes text this round
+  replaces.
 
 ---
 
-## 0. The step-0 assertions, quoted at HEAD (before anything below was written)
+## 0. The step-0 assertions (the first fails, and the exclusion has moved)
 
 The card asked for four assertions. Three hold as stated; **the first does not, and the exclusion has moved** —
 so it is quoted where it actually is, and the line the card remembered is quoted too, because a document that
 wrote this ADR against a remembered line number would have cited a row about `router-core/src/prefix.rs`.
+Every line number in this section is re-derived at this branch's HEAD, like every other number in this ADR
+(§11.4); the **quoted text** is the base commit `bf96207`'s, which is both the revision the card's assertion was
+written against and the only revision that still carries the `excluded` row this round replaces — at HEAD that
+row sits at `design/DESIGN.md:4131` and states the reversal.
 
 | # | asserted | what HEAD actually says | verdict |
 |---|---|---|---|
-| 1 | `design/DESIGN.md:3917` carries the exclusion reasoning | **False, and the exclusion moved.** `design/DESIGN.md:3917` is §13.2's module-map row for `router-core/src/prefix.rs`: *"\| `router-core/src/prefix.rs` \| P5 (`prefix_blocks[]`, `prefix_continuity`, `extract_prefix_blocks:82`, `prefix_continuity:266`) + P8 (`attribute_tokens:235` is the GAP-Q14 proportional attribution → `inferred`) \| a tokenizer — the allowlist has none, which is why every derived token figure is labelled \|"*. The exclusion reasoning is at **`design/DESIGN.md:4043`** (§13.6's "other surface \| mountable \| the contract it answers" table): *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **quoted where it is** (`:4043`), and §12.6 replaces that row |
+| 1 | *(the card's assertion, measured at the base `bf96207`)* `design/DESIGN.md:3917` carries the exclusion reasoning | **False, and the exclusion moved.** `design/DESIGN.md:4004` is §13.2's module-map row for `router-core/src/prefix.rs` (at the base, `:3917`): *"\| `router-core/src/prefix.rs` \| P5 (`prefix_blocks[]`, `prefix_continuity`, `extract_prefix_blocks:82`, `prefix_continuity:266`) + P8 (`attribute_tokens:235` is the GAP-Q14 proportional attribution → `inferred`) \| a tokenizer — the allowlist has none, which is why every derived token figure is labelled \|"*. The exclusion reasoning is at **`design/DESIGN.md:4043` at the base `bf96207`** (§13.6's "other surface \| mountable \| the contract it answers" table): *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **quoted where it was** (`:4043`, at the base; `:4131` at HEAD), and §12.6 replaces that row |
 | 2 | `docs/spec.md` still lists the response cache among v0.1's non-goals | **True.** `docs/spec.md:13` is the heading — *"**v0.1 non-goals** (explicit exclusions — do not add them on the side):"* — and `docs/spec.md:19` is the row: *"\| Semantic response cache, context summarization \| Large conflict surface with prefix caching; a measured ledger is needed first (P4) \|"* | holds; §11.3 amends the row **additively** |
 | 3 | no `ADR-042` exists yet | **True.** `ls design/decisions/ADR-042*` → *No such file or directory*; the register holds `ADR-001…ADR-041` + `ADR-043` (42 files). | holds |
 | 4 | `main` is at the R50 merge | **True, as the merge being an ancestor of the cut.** The cut point is `bf96207` = `origin/main`, and `git merge-base --is-ancestor 54e4864 HEAD` → **rc=0**: the R50 merge `54e4864` (*"Merge round/50-metrics — R50: `GET /metrics`, the operator's scrape surface (ADR-041)"*) is in this branch's history. The branch is `round/51-cache`, cut from `main` at `bf96207`. | holds |
@@ -90,12 +96,12 @@ the record, and none of them may be inferred away:
 
 ### 1.2 What the ruling supersedes — and what the prior artifacts actually said
 
-Every claim in this table was re-read at this branch's HEAD (`bf96207`) or at the path named; the commands and
+Every claim in this table was re-read at the base `bf96207` (this card's HEAD when it was written) or at the path named; the commands and
 their raw output are in `autowork/harness/r51-0/anchors.txt`.
 
 | Artifact | What it says, verbatim or closely | Superseded? |
 |---|---|---|
-| `design/DESIGN.md:4043` (§13.6's cache row) | *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **Yes, the `excluded` verdict — and only it.** The row's *reason* survives intact and is the reason this ADR spends its longest section on the record class (§4) and the label (§5): the saving is `inferred` for ever, and the 1 : 1 correspondence **is** deliberately broken. The row is replaced in §12.6 by one that says so. |
+| `design/DESIGN.md:4043` (§13.6's cache row, **at the base `bf96207`** — this round replaces it; at HEAD the row is `:4131`) | *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **Yes, the `excluded` verdict — and only it.** The row's *reason* survives intact and is the reason this ADR spends its longest section on the record class (§4) and the label (§5): the saving is `inferred` for ever, and the 1 : 1 correspondence **is** deliberately broken. The row is replaced in §12.6 by one that says so. |
 | `design/decisions/ADR-036-minimal-core-and-plugin-surface.md:288-294` | *"**Semantic / exact-match response caching.** Excluded by this ADR's reasoning, not by an owner's word: a hit removes the upstream call, so no `usage` object exists and the saving can only ever be `inferred` — it would be the first shipped feature whose headline benefit cannot enter a gate (AGENTS 4), and it breaks the 1 client request = 1 upstream call correspondence the accounting rests on. If it is ever built it must be a plugin, **off by default, disclosed in the trace, and excluded from every gate**"* | **The exclusion, yes; the four conditions, no — they are obeyed.** Every clause after "If it is ever built" is a *requirement this ADR discharges*: a plugin (§9.2), off by default (§6.1), disclosed in the trace (§10), excluded from every gate (§5.2). ADR-036:25's classification of the exclusion as its own reasoning is what makes the reversal the owner's to make. |
 | `$HERMES_HOME/plans/2026-09-25_130500-router-competitiveness-plan.md:122-124` (§T3-B) | *"Attractive (every L2/L3 competitor has one) but it breaks *\"one client request → that provider call\"* … If built, it must be off by default, declared in the trace, and never counted by a gate."* | **Yes, as a filing.** It is the same requirement list as ADR-036's, filed under "the real feature gaps (strategic, each collides with a frozen constraint)"; the owner's ruling is that filing being taken. Nothing in it measured anything. |
 | `$HERMES_HOME/plans/2026-09-25_130500-router-competitiveness-plan.md:132-134` (**"Not doing"**) | the heading *"## Not doing (write it down so the loop does not drift into it)"* and its line *"**Semantic cache** · MCP / A2A / gRPC ingress · dashboards / `/metrics` before v0.2 · SDKs · …"* | **The `/metrics` clause was already discharged by ADR-041 §1.2; the *semantic* clause is not touched and stays filed.** This ADR builds an **exact-match** cache: a byte-identical repeat of one session's own request, matched by digest of the client's bytes. Similarity matching, embedding lookup and any content-equivalence claim are the *semantic* cache, and they stay out (§1.3, `docs/spec.md:19`). |
@@ -231,7 +237,7 @@ Precise definition, because the naive reading ("the prefix continuity of the hit
 ```
 key := ( protocol.protocol_in          — from the request's own path (spec §2)
        , config_digest                 — the loader's own digest of the revision in force (ADR-037 D6)
-       , identity.session              — spec §4's `key_sources`, preferring `prompt_cache_key` (§4, :146, :1703)
+       , identity.session              — spec §4's `key_sources`, preferring `prompt_cache_key` (§4, :146, :1758)
        , transform_mode                — spec §2.1's word: the mode this request asked for (§2.1)
        , sha256(inbound body bytes as received) )   ← the content component, and the ONLY one that is bytes
 ```
@@ -325,7 +331,7 @@ preserved instead is a set of four properties, each of which an auditor can chec
   other request is, from the same writer (`Accountant`, DESIGN §12.6's single-writer rule).
 - **The record carries the fact that no upstream call was made** in the vocabulary that already means it:
   `usage_missing: true` (spec §6: *"`usage_missing: true` means \"no usage was measured for this request\" … A
-  request that never reached an upstream is in the same class"*, `docs/spec.md:1733-1735`) together with
+  request that never reached an upstream is in the same class"*, `docs/spec.md:1792-1794`) together with
   `result.upstream_status: null` and `result.upstream_ms: null` (§10.1).
 - **The group's presence is the assertion.** `cache` (§10.1) is written **iff** this record's response came from
   the store. A reader asks one question — *does `cache` exist?* — and gets one answer. That is the shape
@@ -346,7 +352,7 @@ not have to derive it.
 > **A sum over records cannot double-count a replayed response:** a hit's record contributes **no** usage, **no**
 > money and **no** upstream call to any sum — it is `usage_missing`-class (spec §6: *"The flag is what keeps such
 > a record out of every rate, every sum and every gate — `router stats` counts it on its own line and prices it
-> nowhere"*, `docs/spec.md:1737-1738`) — while the bytes it returned are attributed to the **source** record's
+> nowhere"*, `docs/spec.md:1796-1797`) — while the bytes it returned are attributed to the **source** record's
 > id, which is the record that owns the one measurement.
 
 Three checks an auditor can run, and none of them needs the store:
@@ -391,7 +397,7 @@ deliberate:
 **The `usage` a hit's figure would rest on was measured by a *different* request, and the counterfactual — what
 this provider would have charged and returned for these bytes now — was never measured at all**, so the figure
 is a local, counterfactual-adjacent arithmetic and is `inferred` by spec §7's own definition (*"local tokenizer
-estimate, no control"*, `docs/spec.md:2005`) — permanently, not until a pair exists: no control turn can exist
+estimate, no control"*, `docs/spec.md:2091`) — permanently, not until a pair exists: no control turn can exist
 for a request that was never sent.
 
 ### 5.2 No gate may count it
@@ -401,7 +407,7 @@ for a request that was never sent.
   `:32`: *"Only numbers in the `verified` convention may enter a gate or an external report"*). A hit's figure is
   `inferred`, therefore it cannot enter one — this is a consequence of the frozen rules, not a new favour.
 - **The label is carried on the record, and the exclusion is structural.** `cache.verdict: "inferred"` (§10.1,
-  the same one-word vocabulary `forward.rs:446` already writes — *`verdict: "inferred"`* with its comment *"A
+  the same one-word vocabulary `forward.rs:457` already writes — *`verdict: "inferred"`* with its comment *"A
   decision-time figure is `inferred` and says so"*), and the record is `usage_missing`, which the readers already
   exclude from every rate, sum and gate (spec §6). **No new word is invented**: `verified`/`inferred` is the
   vocabulary, and a hit never says the other one.
@@ -573,10 +579,10 @@ not by review.
 |---|---|---|
 | the key | `router_core::response_cache::ResponseKey::for_request(&RequestFacts) -> ResponseKey` — **one derivation**, in `router-core`, pure, no clock | the five components of §3.1, built from values the pipeline already holds; the digest is the only one computed here |
 | the store | `router_core::response_cache::ResponseStore` (in-memory, FIFO, two frozen bounds) — **one implementation** | `lookup(&ResponseKey) -> Option<&RecordedResponse>` and `record(&ResponseKey, RecordedResponse)`; `RecordedResponse` carries the bytes, the status and the **source reference** (§4.2) |
-| the mount | the plugin `builtin/response_cache` in `router-plugins`, registered in the assembly's registry beside `builtin/transform_rules` (`assembly.rs:115`) | an entry with `config.enabled: false` mounts **inert** (§6.1); the fiber owns the store instance, so the mechanism's own unload semantics are the store's lifetime (§2.2) |
+| the mount | the plugin `builtin/response_cache` in `router-plugins`, registered in the assembly's registry beside `builtin/transform_rules` (`assembly.rs:155`) | an entry with `config.enabled: false` mounts **inert** (§6.1); the fiber owns the store instance, so the mechanism's own unload semantics are the store's lifetime (§2.2) |
 | the seam | **one call site** in `crates/router-proxy/src/forward.rs`, the last step before the attempt (§4.4) | `match cache.lookup(&key) { Some(rec) => serve(rec), None => attempt(...) }` — the buffered path's only new branch; the streaming path's twin is the same owner, called at the same position |
 | the record | `Accountant` — **the existing single writer** (DESIGN §12.6) | the hit is one more class through `commit`, with `usage_missing: true` and the `cache` group; no second writer, no second record shape |
-| the label | `inferred` — one word, one meaning, `forward.rs:446`'s own (`verified`/`inferred`, spec §7) | `cache.verdict`, a `&'static str` |
+| the label | `inferred` — one word, one meaning, `forward.rs:457`'s own (`verified`/`inferred`, spec §7) | `cache.verdict`, a `&'static str` |
 
 **The required extraction list, closed** (the whole of the refactor the implementation card owes):
 
@@ -607,7 +613,7 @@ not by review.
 
 ```jsonc
 "cache": {                       // present IFF this record's response came from the store — never null, never empty
-  "verdict": "inferred",         // always (constraint 4); the same word forward.rs:446 writes
+  "verdict": "inferred",         // always (constraint 4); the same word forward.rs:457 writes
   "key_digest": "<64 hex>",      // sha256 of the client's inbound body bytes AS RECEIVED (§3.1) — the one key
                                  //  component the record does not already carry
   "replayed": { "request_id": "<the source record's id>", "session": "<same as this record's>", "turn_index": 3 },
@@ -640,7 +646,7 @@ hit as its third class, and §4.17 is the new config subsection. §11 carries th
 ### 10.3 The case ids, claimed from a measurement
 
 Measured at this branch's base `bf96207`: `ls tests/conformance/tests/*.rs | wc -l` → **77** files, ids
-`01–47, 53–66, 71–78, 80–87`; DESIGN §12.8's own occupancy paragraph (R50-0's, `:1489-1498`) closes with *"the
+`01–47, 53–66, 71–78, 80–87`; DESIGN §12.8's own occupancy paragraph (R50-0's, `:1501-1510`) closes with *"the
 next free ID is **`CONF-88`**"*, and the register's spent set is `01–47, 52–70, 71–78, 79, 80–87` with `48–51`
 reserved. This round therefore takes the **lowest free id above both** the tree's maximum (87) and the
 register's own claim (88): **`CONF-88`** and **`CONF-89`**, on
@@ -668,7 +674,7 @@ a reader must not have to derive: present iff a hit; `usage_missing`-class, so s
 reference is inside the session and is the source record's id.
 
 **The `protocol_out` sentence is widened additively** (spec §6's own words today: *"it is `null` only in the
-classes where no route was selected"*, `docs/spec.md:1717`): a hit is a **third** class — a route *was* selected
+classes where no route was selected"*, `docs/spec.md:1773`): a hit is a **third** class — a route *was* selected
 and no bytes left the process — so `null` is a hit's value and the sentence names the class. The field's meaning
 does not move: the two existing classes and every record written today read exactly as they did.
 
@@ -687,13 +693,20 @@ can turn on, or the contract has a hole of the *documented-and-unreachable* clas
 implemented-and-undocumented one. Second, it **drifts R49's claim row W2/C19/C25** (`CLAIM-SOURCES.md:360`,
 R49's file, outside this card's write set), which is registered rather than hidden (`R51-0-F1`, §14).
 
-### 11.4 Line-number deltas the next reader should expect
+### 11.4 Line-number deltas, and who re-derives them
 
 This card adds §4.17 to a 2439-line spec and two rows + paragraphs to DESIGN §12.8, and inserts §12.22 before
 §13: §12.8's rows move nothing above them, `design/DESIGN.md` §13.1 shifts by the length of §12.22, and
-`docs/spec.md` §6/§7/§9.2 shift by the length of §4.17. Every `path:line` in **this** ADR resolves at this
-branch's HEAD (the convention in the header), and the shift-carrying numbers are re-derived by the round's
-implementation card rather than trusted.
+`docs/spec.md` §6/§7/§9.2 shift by the length of §4.17. **Those deltas carry every number in this ADR with them,
+and the implementation card shifts three code files as well** (`crates/router-proxy/src/forward.rs` +11 at the
+cited line, `crates/router-plugins/src/assembly.rs` +40/+44, `crates/router-core/src/trace.rs` +8/+47, and
+`book/cost-and-caching.md` +3). The sentence here used to promise the re-derivation to "the round's
+implementation card", and that promise was owed rather than kept: R51-1 touched no document, so **R51-3, the
+round's landing card, performed the mechanical act** — it re-derived every `path:line` in this ADR at this
+branch's HEAD, hunk by hunk, and verified each against the content it claims
+(`autowork/harness/r51-3/REANCHOR.md` carries the table, the before/after and the after-check). Every
+`path:line` in **this** ADR therefore resolves at this branch's HEAD (the convention in the header) **by
+re-derivation rather than trust**, with the two replacement quotes §0 keeps labelled there as the base's.
 
 ---
 
@@ -770,7 +783,7 @@ Minimum set, each recorded under `autowork/harness/r51-*/` (the R50-1 precedent'
 | **In-process store, FIFO bound** (§3.4) | SQLite/file persistence; an LRU bound; no bound | Gain: no second durable artefact, no migration, no state-dir writer, and a determinism story with no clock and no recursion. Sacrifice: a restart is a cold store; a busy session can evict a quiet one's entries (a miss, never a wrong answer). | Yes (persistence is `R51-0-F4`; an LRU policy is a widening) |
 | **The lookup at the last step before the attempt** (§4.4) | before resolution (cheaper); before the guard chain (a policy bypass) | Gain: the record is the ordinary record plus one group, refusals are never softened, and the latency gate's quantity does not move. Sacrifice: a hit pays the decision and transform compute it does not need. | Yes (a cheaper path is a registered widening — and it would change the record's fields) |
 | **The `cache` group, present iff a hit** (§10.1) | a new `status` word; a boolean beside `usage_missing`; a `transforms[]`-style entry | Gain: one question, one answer; no new vocabulary; additivity keeps `schema_version` at 2. Sacrifice: a reader must know the rule (stated in spec §6). | Yes, but every alternative spends a word the vocabulary already uses for something else |
-| **The label `inferred`, spelled with `forward.rs:446`'s own word** (§5) | a new word (`replayed`, `cached`, `unverified`) | Gain: constraint 4's convention has one vocabulary and one definition. Sacrifice: the word does not by itself say *why* — the record's `replayed` reference does. | Yes (a word is cheap; a second convention is not) |
+| **The label `inferred`, spelled with `forward.rs:457`'s own word** (§5) | a new word (`replayed`, `cached`, `unverified`) | Gain: constraint 4's convention has one vocabulary and one definition. Sacrifice: the word does not by itself say *why* — the record's `replayed` reference does. | Yes (a word is cheap; a second convention is not) |
 | **`config.enabled`, default `false`, beside the mechanism's `disabled`** (§6.1) | `disabled` alone (so listing = enabling); a top-level key outside `plugins:` | Gain: the default is a property of the loader, and a config edit cannot silently enable the capability; the mount stays in the mechanism ADR-036 requires. Sacrifice: one key to explain (the ADR explains it). | Yes |
 | **The spec row amended additively** (§11.3) | leave §1 silent; delete the row; keep the row and document the capability only in §4.17 | Gain: §1's table stays the complete list of what is in and out of scope, and the semantic exclusion stays written. Sacrifice: a claim row drifts (registered, `R51-0-F1`). | Yes |
 
@@ -804,7 +817,7 @@ Minimum set, each recorded under `autowork/harness/r51-*/` (the R50-1 precedent'
 | `R51-0-F5` | **the upstream-prefix consequence of a hit** (§2.5): a hit does not warm the *upstream's* prefix cache, so a later turn in the same session may pay for it in `cached_tokens`. Reportable as a `cached_tokens` comparison; **not** measurable on the frozen corpus, and **not** a determinism violation. | the round that first measures the cache on live traffic | open |
 | `R51-0-F6` | **the number that would justify the feature does not exist in this tree.** §7 measures the class on the frozen corpora (0 of 34, 0.0%) and states why (cumulative resends; the same script in another session differs by 22 bytes inside the session-id spans). A live repeat rate needs real traffic through a cache-enabled root — a paid measurement, hence the owner's. This row exists so the next round does not re-derive the null and mistake it for an argument *against* the feature. | the orchestrator (a live-measurement direction) + the owner (its authorisation) | open |
 | `R51-0-F7` | **the design's own residue, named**: the capability is landed **off** and the class it serves is empty on every corpus this repository has, so this round's honest summary is *"a capability with a contract and no measured payoff yet"*. A round that lands it must not present it as a cost lever; §7.4's rule binds every later sentence about it. | every later round that mentions the cache | standing |
-| `R51-0-F8` | **a contradiction inside the chapter this round edits**: `book/cost-and-caching.md:3-6`'s status sentence (*"cache fidelity and plan-first routing are served; payload compression is not"*) reads false against the chapter's **own** §"Payload compression: an opt-in mode, off by default" (`:283-326`, which documents the mode as landable today) and against DESIGN §12.12's status (`tier 1 wired`) — measured by reading both sites at this HEAD; **not** edited here (outside this round's subject, and it is another feature's truth) | `book/`'s next owner | open, standing |
+| `R51-0-F8` | **a contradiction inside the chapter this round edits**: `book/cost-and-caching.md:3-6`'s status sentence (*"cache fidelity and plan-first routing are served; payload compression is not"*) reads false against the chapter's **own** §"Payload compression: an opt-in mode, off by default" (`:286-329`, which documents the mode as landable today) and against DESIGN §12.12's status (`tier 1 wired`) — measured by reading both sites at this HEAD; **not** edited here (outside this round's subject, and it is another feature's truth) | `book/`'s next owner | open, standing |
 | `R51-0-N1` | constraint 2's own words are what force §2.2's shape (`AGENTS.md`: *"never of turn number, wall clock, or RNG"*); a future "add a TTL for hygiene" idea is a **new contract with the owner's signature**, not a convenience edit | — (note) | n/a |
 | `R51-0-N2` | cost: this card is docs-only and offline — **`$0.00`**, no provider dialled, no credential read; the measurement in §7 reads committed corpus bytes | — (note) | n/a |
 
@@ -848,7 +861,7 @@ implementation is the round's implementation card, its independent verification 
 | 2. the determinism collision | §2 (§2.1 in constraint 2's words, §2.2 the frozen answer, §2.3 the alternatives with costs, **§2.4 the owner decision**, §2.5 the prefix statement) |
 | 3. the byte boundary | §3 (§3.1 the key and the no-normalisation rule, §3.2 the honesty sentence, §3.3 the fail-closed list) |
 | 4. what replaces 1 : 1 | §4 (§4.1 the record, §4.2 the reference, §4.3 the reconciliation property, §4.4 the seam) |
-| 5. the label | §5 (`inferred` always, gate-invisible structurally, `forward.rs:446`'s own word) |
+| 5. the label | §5 (`inferred` always, gate-invisible structurally, `forward.rs:457`'s own word) |
 | 6. default off + the case | §6 and §12.2 (`CONF-88`, and its red control) |
 | 7. the measured payoff | §7 (0 of 34, 0.0%, the method, why, and what it does not license) + `autowork/harness/r51-0/{repeat-rate.txt,repeat-rate.json,measure-repeat-rate.py,corpus-verify.txt}` |
 | 8. the observation boundary | §8 |
