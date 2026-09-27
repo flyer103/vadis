@@ -356,13 +356,15 @@ what this process loaded, including a configured plan family's account and probe
 this process's own `trace.dir` in the Prometheus text exposition format, behind the same token guard
 as the three protocol endpoints (`/health`'s exemption is `/health`'s alone); the whole contract is
 [`docs/spec.md` §4.16](docs/spec.md). What it exports is a closed list — §9.2's own figures,
-rendered, each carrying §9.2's `verified` / `inferred` label as a machine-readable `provenance`
-label, so an inferred figure cannot be read as a measured one — and so is what it deliberately does
-**not** export: no client bytes or message content, no key material (not even the name of the
-variable holding it), nothing per-request and nothing keyed by traffic, no session identity, no
-per-provider or per-model cost split, and no config echo. One figure is absent by design: the
-`unknown outcome requests` figure lives in the event log, and the serving path never scans that log.
-The response names the omission in-band every time, so its absence cannot be read as a zero.
+rendered, minus the one named below — and a figure that carries one of §9.2's labels carries it as a
+machine-readable `provenance` value: the four §4.16 fixes are `verified`, `inferred`, `measured` and
+`count`. Not every series carries one — a plain count of records does not — so an inferred figure
+cannot be read as a measured one. What it deliberately does **not** export is a closed list too: no
+client bytes or message content, no key material (not even the name of the variable holding it),
+nothing per-request and nothing keyed by traffic, no session identity, no per-provider or per-model
+cost split, and no config echo. One figure is absent by design: the `unknown outcome requests` figure
+lives in the event log, and the serving path never scans that log. The response names the omission
+in-band every time, so its absence cannot be read as a zero.
 
 **Not implemented in v0.1:**
 
