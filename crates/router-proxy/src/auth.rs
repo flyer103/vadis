@@ -9,7 +9,6 @@
 //! guard unit-tests without a rig. The wiring (route layers, the 401
 //! response, the startup resolution) is router-cli's.
 
-use router_core::config::WireApi;
 use router_core::cost::Nano;
 use router_core::error::ErrorCode;
 use router_core::trace::{
@@ -123,9 +122,19 @@ pub fn refused_message(verdict: &AuthVerdict) -> String {
 /// every record of this process carries — a fact of the config, not of
 /// the request), handed in by the caller from the trace writer this
 /// record is written through.
+///
+/// `proto_in` is the endpoint's OWN protocol word as a string (ADR-041
+/// §3.8): the three protocol routes pass their `WireApi::as_str()` —
+/// byte-identical to what the enum wrote before — and a guarded
+/// non-protocol route (`GET /metrics`, spec §4.16) passes its own word
+/// (`"metrics"`), which is literally what spec §6 prescribes for
+/// `protocol.protocol_in`. A `WireApi` variant was the rejected
+/// alternative: the wire enum is what providers declare in `supports:`,
+/// and a `Metrics` arm would contaminate the configuration contract for
+/// a trace-vocabulary need.
 pub fn refused_record(
     request_id: &str,
-    proto_in: WireApi,
+    proto_in: &str,
     verdict: &AuthVerdict,
     now_epoch_s: u64,
     overhead_ms: u32,
@@ -151,7 +160,7 @@ pub fn refused_record(
             turn_index: 0,
         },
         protocol: ProtocolRec {
-            protocol_in: proto_in.as_str().to_string(),
+            protocol_in: proto_in.to_string(),
             // No route was selected.
             protocol_out: None,
             translated: false,
@@ -356,14 +365,7 @@ mod tests {
     fn refused_record_matches_the_spec6_table() {
         let g = AuthGate::new("tok-conf45-secret".into());
         let v = g.admits(&hdrs(&[("authorization", "Bearer nope")]));
-        let rec = refused_record(
-            "req-1",
-            WireApi::Chat,
-            &v,
-            1_789_256_462,
-            3,
-            "0123456789abcdef",
-        );
+        let rec = refused_record("req-1", "chat", &v, 1_789_256_462, 3, "0123456789abcdef");
         let j = serde_json::to_value(&rec).unwrap();
         assert_eq!(j["schema_version"], 2); // v2: cost.currency (ADR-018)
         assert_eq!(j["config_digest"], "0123456789abcdef"); // additive, version unmoved (ADR-037 D6)
@@ -409,7 +411,7 @@ mod tests {
     fn refused_record_without_a_header_carries_null() {
         let g = AuthGate::new("tok-conf45-secret".into());
         let v = g.admits(&hdrs(&[]));
-        let rec = refused_record("req-2", WireApi::Anthropic, &v, 0, 0, "");
+        let rec = refused_record("req-2", "anthropic", &v, 0, 0, "");
         let j = serde_json::to_value(&rec).unwrap();
         assert_eq!(j["errors"][0]["details"]["header"], serde_json::Value::Null);
         assert_eq!(j["protocol"]["protocol_in"], "anthropic");
