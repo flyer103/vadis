@@ -22,6 +22,17 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  # R53-0: debug info is not part of any gate verdict — no test reads DWARF (the only
+  # debug_assert! users are controlled by `debug-assertions`, which stays on), and
+  # RUST_BACKTRACE still resolves function names from the symbol table. At the dev
+  # defaults (debug=2 + incremental) the 76 conformance test binaries plus ~150 rlibs
+  # each grew target/ to 35 GB on the runner and exhausted the disk (measured:
+  # run 36299293578, autowork/harness/r53-0/RUN1-DIAGNOSTIC.md). Turning DWARF and
+  # incremental off is what makes the build fit; it changes build artifacts, never
+  # verdicts.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_INCREMENTAL: "false"
 
 jobs:
   gates:
@@ -45,14 +56,16 @@ jobs:
           cargo clippy --version
           cargo fmt --version
 
-      # The workspace builds one debug test binary per conformance case (55 of them at the
+      # The workspace builds one debug test binary per conformance case (76 of them at the
       # time of writing) and each link pulls ~150 rlibs. On the default runner that exhausts
       # the free space and `ld` dies mid-link with SIGBUS: observed twice in run 35543405184,
       # attempt 1 failing on `conf_27_outbound_model_native_id` and attempt 2 on
       # `conf_24_trace_event_join` — a different target each time, which is the signature of
-      # resource exhaustion rather than a build error. None of these SDKs is used by this
-      # build; removing them frees roughly 20 GB. No gate command is touched, and
-      # `/opt/hostedtoolcache` is left alone because the pinned Rust toolchain lives there.
+      # resource exhaustion rather than a build error — and again in run 36299293578 on
+      # `conf_46_metrics_is_bare_404` / `conf_39_cooldown_testable`. None of these SDKs is
+      # used by this build; removing them frees roughly 20 GB. No gate command is touched,
+      # and `/opt/hostedtoolcache` is left alone because the pinned Rust toolchain lives
+      # there.
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift \
@@ -60,19 +73,23 @@ jobs:
           sudo apt-get clean
           df -h /
 
-      # `target/` plus the cargo registry: without this a cold run rebuilds every dependency,
-      # including the bundled SQLite C library that rusqlite compiles.
-      - name: Restore the cargo registry and target directory
+      # The cargo registry only, deliberately WITHOUT `target` (R53-0). A warm target/
+      # for this workspace is 25-35 GB: run 36299293578 measured the cache restoring a
+      # complete 25 GB tree (a 6 GB archive, under the 10 GB cap), which left the runner
+      # 10 GB of headroom that cargo test then exhausted. The registry alone is hundreds
+      # of MB — the cache stays what the header says it is: an optimisation that changes
+      # run time, never the verdict. The key carries a `v2` namespace so a stale archive
+      # saved WITH target/ under the old `cargo-` prefix can never be restored here.
+      - name: Restore the cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-v2-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-cargo-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-v2-
 
       # TEMPORARY R53-0 DIAGNOSTIC — removed before this branch's final commit.
       - name: "DIAG r53-0: disk after cache restore"
