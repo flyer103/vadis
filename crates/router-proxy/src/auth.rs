@@ -189,6 +189,8 @@ pub fn refused_record(
         // claimed (ADR-019's "refused before the transform chain ran").
         transform_mode: TransformMode::Passthrough,
         transforms: Vec::new(),
+        // A pre-pipeline refusal can never be a hit: no cache group.
+        cache: None,
         usage: router_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {

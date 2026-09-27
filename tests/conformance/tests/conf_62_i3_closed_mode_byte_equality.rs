@@ -121,6 +121,7 @@ fallback: []
         store: None,
         trace: None,
         transform_engine: engine,
+        response_cache: None,
         session_ttl_us: 11 * 3600 * 1_000_000,
     }
 }

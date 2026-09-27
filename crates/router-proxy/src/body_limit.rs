@@ -109,6 +109,8 @@ pub fn too_large_record(
         // is `passthrough` and nothing is claimed.
         transform_mode: TransformMode::Passthrough,
         transforms: Vec::new(),
+        // A pre-pipeline refusal can never be a hit: no cache group.
+        cache: None,
         usage: router_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {

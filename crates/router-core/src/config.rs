@@ -1574,12 +1574,15 @@ fn quad_to_table(
 /// Tier-A builtin kinds compiled into the product (plus the three always
 /// resident ones, which take no config entries). Adding a builtin means
 /// adding it here — the whitelist discipline of `ROUTER_OWNED_TOP_LEVEL_KEYS`.
-pub const KNOWN_BUILTIN_KINDS: [&str; 5] = [
+pub const KNOWN_BUILTIN_KINDS: [&str; 6] = [
     "cache_guard",
     "transform_rules",
     "cost_ledger",
     "quota_guard",
     "sticky",
+    // spec §4.17's exact-match response cache (ADR-042): a tier-A plugin
+    // mounted from the `plugins:` list, off unless `config.enabled: true`.
+    "response_cache",
 ];
 
 /// Product-defined typed service-slot names usable in `inject` (spec §4.3).

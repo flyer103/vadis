@@ -58,6 +58,14 @@ pub struct DecisionRecord {
     pub transform_mode: TransformMode,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transforms: Vec<TransformRecord>,
+    /// The response-cache group (spec §6, ADR-042 §10.1): present **iff**
+    /// this record's response came from the recorded store — its presence
+    /// *is* the statement "no upstream call was made by this request".
+    /// Additive: an added key never moves the version, so
+    /// `schema_version` stays **2**, and a record **without** the group
+    /// is not a hit and must never be read as one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheRec>,
     pub usage: Usage,
     pub usage_missing: bool,
     pub cost: CostRec,
@@ -142,6 +150,45 @@ pub struct PrefixBlockRec {
     /// (GAP-Q14) — an `inferred` figure.
     pub tokens: u64,
     pub hash: String,
+}
+
+/// The response-cache group (spec §6, ADR-042 §10.1): a **replay, not a
+/// prediction** — the bytes came from a recorded response, and the record
+/// asserts nothing about what the provider would answer now. Written on
+/// exactly the records whose response came from the recorded store, by
+/// the record's existing single writer; never `null`, never `{}`, never
+/// a `verified` verdict.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CacheRec {
+    /// `inferred`, always (constraint 4): the `usage` a hit's figure
+    /// would rest on was measured by a *different* request, and the
+    /// counterfactual was never measured at all — the same one-word
+    /// vocabulary `forward.rs:446` writes, and no gate may count it.
+    pub verdict: &'static str,
+    /// sha256 of the client's inbound body bytes **as received** — the
+    /// one key component the record does not already carry (the other
+    /// four are `protocol.protocol_in`, `config_digest`,
+    /// `identity.session` and `transform_mode`).
+    pub key_digest: String,
+    /// The record the bytes came from (ADR-042 §4.2) — necessarily the
+    /// same session and the same revision as this record.
+    pub replayed: ReplayedRef,
+    /// How many response bytes were returned from the store — a count of
+    /// bytes returned, not a measurement of an upstream, not a price and
+    /// not a saving.
+    pub replayed_bytes: u64,
+}
+
+/// The source record a hit's bytes came from (spec §6 `cache.replayed`):
+/// its `request_id` (the trace's own join key), its session, and the
+/// turn index that record itself reported.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReplayedRef {
+    pub request_id: String,
+    pub session: String,
+    pub turn_index: u32,
 }
 
 /// One transform step's accounting (spec §6 "transform"). This round's
@@ -499,6 +546,7 @@ mod tests {
             },
             transform_mode: TransformMode::Passthrough,
             transforms: Vec::new(),
+            cache: None,
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {

@@ -146,6 +146,17 @@ struct RelayCtx {
     /// The applier's fail-safe entry, if the plan's edits could not be
     /// spliced (spec §8 / DESIGN §12.12).
     transform_error: Option<router_core::trace::TraceError>,
+    /// The exact-match response cache (spec §4.17, ADR-042): the one
+    /// store's handle plus this request's key, `Some` only when the
+    /// capability is mounted AND this request has a session (a
+    /// sessionless request is neither looked up nor stored — fail-closed,
+    /// §3.3). The relay records ONLY on a completed stream.
+    cache: Option<(
+        Arc<dyn router_core::response_cache::ResponseCache>,
+        router_core::response_cache::ResponseKey,
+    )>,
+    /// The answering head's content-type — a recorded response replays it.
+    content_type: Option<String>,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -171,6 +182,13 @@ struct RelayState {
     intent: Option<EventId>,
     /// The first route that failed pre-relay, for `failover_from`.
     failover_from: Option<RouteSpec>,
+    /// The recording buffer (spec §4.17, ADR-042 §4.4): a copy of the
+    /// relayed bytes, kept ONLY while the stream is a recording
+    /// candidate — dropped on a spill past the store's byte bound, never
+    /// stored on a truncation or an abort (fail-closed, §3.3). `None`
+    /// when the capability is off or the request is sessionless, so the
+    /// ordinary stream path buffers nothing.
+    record_buf: Option<Vec<u8>>,
 }
 
 fn now_us() -> i64 {
@@ -532,6 +550,91 @@ impl Forwarder {
             );
         }
 
+        // The exact-match response cache (spec §4.17; ADR-042 §4.4), the
+        // buffered path's twin: the lookup is the **last step before the
+        // upstream attempt** — after admission, the bounded body read,
+        // route resolution, the guard chain and the transform compose
+        // step — and nowhere earlier. A hit replaces exactly one thing:
+        // the call. The digest is taken over the client's inbound body
+        // bytes **as received** (§3.1); a sessionless request has no key
+        // and is neither looked up nor stored (§3.3).
+        let cache_key = match (&self.response_cache, session.as_deref()) {
+            (Some(_), Some(session_key)) => {
+                Some(router_core::response_cache::ResponseKey::for_request(
+                    &router_core::response_cache::RequestFacts {
+                        protocol_in: proto_in.as_str(),
+                        config_digest: self.trace.as_ref().map(|t| t.config_digest()).unwrap_or(""),
+                        session: session_key,
+                        transform_mode: facts.transform_mode,
+                        body,
+                    },
+                ))
+            }
+            _ => None,
+        };
+        if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
+            if let Some(recorded) = cache.lookup(key) {
+                // A hit is a **replay, not a prediction** (ADR-042 §3.2):
+                // the recorded response bytes are returned verbatim, as
+                // one stream item — no claim about what the upstream
+                // would answer now, no upstream call at all.
+                let hit = router_core::trace::CacheRec {
+                    verdict: "inferred",
+                    key_digest: key.key_digest_hex(),
+                    replayed: router_core::trace::ReplayedRef {
+                        request_id: recorded.source.request_id.clone(),
+                        session: recorded.source.session.clone(),
+                        turn_index: recorded.source.turn_index,
+                    },
+                    replayed_bytes: recorded.body.len() as u64,
+                };
+                let ctx = AccountCtx {
+                    request_id,
+                    received_event: facts.received_event,
+                    proto_in: proto_in.as_str(),
+                    // No bytes left the process — spec §6's third
+                    // `protocol_out` class.
+                    proto_out: None,
+                    session: session.as_deref(),
+                    turn_index,
+                    selection_source,
+                    requested_model: Some(model),
+                    decision_ms,
+                    started,
+                    now_epoch_s,
+                    plan_switch: facts.plan_switch.clone(),
+                    sticky_hit,
+                    transform_mode: facts.transform_mode,
+                    transforms: facts.transform_records.clone(),
+                    transform_error: facts.transform_error.clone(),
+                };
+                crate::accounting::Accountant {
+                    store: self.store.as_deref(),
+                    trace: self.trace.as_deref(),
+                    // No usage exists to price: the record is
+                    // `usage_missing`-class, charged nowhere and summed
+                    // nowhere (spec §6, ADR-042 §4.3).
+                    accounting: None,
+                }
+                .finish_replay(
+                    &ctx,
+                    hit,
+                    recorded.status,
+                    &primary.provider,
+                    &primary.model,
+                    &facts.blocks,
+                );
+                let body = Bytes::from(recorded.body);
+                return StreamOutcome::Success(StreamSuccess {
+                    status: recorded.status,
+                    content_type: recorded.content_type.clone(),
+                    route: primary.clone(),
+                    failover_from: None,
+                    body: Box::pin(futures::stream::once(std::future::ready(body))),
+                });
+            }
+        }
+
         // The primary candidate plus the fallback chain (spec §4.2),
         // filtered to native routes with a key present at startup. For a
         // request inside a plan family the family's `overflow` route is
@@ -858,6 +961,11 @@ impl Forwarder {
                             transform_mode: facts.transform_mode,
                             transform_records: facts.transform_records.clone(),
                             transform_error: facts.transform_error.clone(),
+                            cache: match (&self.response_cache, &cache_key) {
+                                (Some(cache), Some(key)) => Some((Arc::clone(cache), key.clone())),
+                                _ => None,
+                            },
+                            content_type: content_type.clone(),
                         };
                         let state = RelayState {
                             tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -870,6 +978,9 @@ impl Forwarder {
                             head_ms,
                             intent: intent_id,
                             failover_from: failover_from.clone(),
+                            // Only a request the capability records buffers a
+                            // copy; the ordinary stream path holds nothing.
+                            record_buf: ctx.cache.is_some().then(Vec::new),
                         };
                         facts.failover_from = failover_from.clone();
                         let relay = relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
@@ -1310,6 +1421,19 @@ fn relay_stream(
                         // tap reads a copy (§12.10.3 R7).
                         st.tap.feed(&b);
                         st.relayed = true;
+                        // The cache's recording copy (spec §4.17): kept only
+                        // within the store's byte bound — a body past it is
+                        // never a candidate, so the buffer is dropped rather
+                        // than held (fail-closed, ADR-042 §3.4).
+                        if let Some(buf) = &mut st.record_buf {
+                            if buf.len() as u64 + b.len() as u64
+                                <= router_core::response_cache::MAX_STORED_BYTES
+                            {
+                                buf.extend_from_slice(&b);
+                            } else {
+                                st.record_buf = None;
+                            }
+                        }
                         return Some((b, (ctx, st, cleaned)));
                     }
                     // An empty keep-alive chunk: nothing to relay,
@@ -1569,6 +1693,30 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
     // continuity measurement inside `finish_stream`.
     if let (Some(id), Some(s)) = (st.intent, ctx.session.as_deref()) {
         accountant.put_ledger(Some(s), &blocks, id);
+    }
+    // The store's write side, the buffered path's twin (spec §4.17,
+    // ADR-042 §3.3): the stream COMPLETED (`truncated.is_none()` — a
+    // truncation or an abort never stores), so the buffered copy is a
+    // complete 2xx body and a recording candidate. The source reference
+    // is THIS request's record — the bytes a later hit replays are
+    // attributed to the one measurement, and the session component comes
+    // from the key, so the reference can never point across sessions.
+    if truncated.is_none() {
+        if let (Some((cache, key)), Some(buf)) = (&ctx.cache, &st.record_buf) {
+            cache.record(
+                key.clone(),
+                router_core::response_cache::RecordedResponse {
+                    status: 200,
+                    content_type: ctx.content_type.clone(),
+                    body: buf.clone(),
+                    source: router_core::response_cache::SourceRef {
+                        request_id: ctx.request_id.clone(),
+                        session: key.session().to_string(),
+                        turn_index: ctx.turn_index,
+                    },
+                },
+            );
+        }
     }
 }
 
