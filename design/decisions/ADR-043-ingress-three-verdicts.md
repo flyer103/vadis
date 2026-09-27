@@ -64,7 +64,7 @@ measurement that would lift it (§4, §5).
 
 The question is answered **separately, three times** — a single verdict over a collapsed "add MCP
 support" is itself the defect this round exists to avoid (the survey was required to keep the three
-apart, and the audit held that separation: `reports §4 HELD`). It is legitimate — and here it is the
+apart, and the audit's §4 recorded the separation as **HELD**). It is legitimate — and here it is the
 case — for one direction to be adopted while another is declined.
 
 | # | The question | Verdict | One-line reason |
@@ -155,7 +155,8 @@ Shape follows the repository's evaluation rounds (a question, a cheap experiment
 
 Not run by this round; named so a future round can run them without re-litigating the reasoning:
 
-- **(a)/(a′)** — the reopening instrument for (a) is the one the loop's bar asks for: **a real
+- **(a)/(a′)** — the reopening instrument for (a) is the measurement the evidence bar of §1 asks for
+  (a claim without one is not written): **a real
   user (or the owner) demonstrating an MCP-only or A2A-only client workflow that the OpenAI-compatible
   endpoints plus the (c1) adapter story cannot serve.** For (a′), the cheap instrument the survey named:
   a one-day scratch spike mounting `rmcp`'s Streamable HTTP service at `/mcp` exposing one read-only
@@ -241,7 +242,7 @@ Each of these is a decision the loop **may not take** (AGENTS constraint 9 with 
 definitions, the frozen corpus, the conformance assertions, the L1 envelope and the contracts
 themselves are outside the loop's mutable scope; and `AGENTS.md` constraint 1 is the charter itself).
 They are written in the shape `autowork/STATE.md`'s *Waiting on human adjudication* table uses, so
-R52’s close-out can carry them into it as new rows.
+R52's close-out can carry them into it as new rows.
 
 | # | What it is | Why it is not the loop's to decide | What the human must decide | Source | State |
 |---|---|---|---|---|---|
@@ -274,7 +275,7 @@ is in the table above and **not** decided here.
   conformance id, no spec/DESIGN clause, no `README.md` byte. `Cargo.toml:40` and every crate manifest
   are untouched: `grep -rn -iE 'mcp|a2a|grpc|tonic|connectrpc' Cargo.toml crates/*/Cargo.toml` returns
   nothing at this HEAD.
-- **`book/roadmap.md` gains one paragraph** (§ of that file's *Outline*): what the question was, what
+- **`book/roadmap.md` gains one paragraph** (in that file's *Outline*): what the question was, what
   was decided, what to expect next — with the engineering verdicts left to this ADR, per constraint 8.
 - **The survey carries an appended corrections block** — "Corrections (R52-1, from R52-0b's F1/F2)" —
   stating the corrected attribution (F1), the bounded negative with the Lemonade footnote (F2) and the
@@ -289,8 +290,10 @@ is in the table above and **not** decided here.
   O3** into `autowork/STATE.md`'s *Waiting on human adjudication* table as new rows (the next free row
   is **19**), in that table's six-column shape, since none of them is loop-actionable.
 - **The evidence chain is reproducible from the branch:** the survey at `786eb40`, its audit at
-  `8bff7ca`, this card's own re-reads in `autowork/harness/r52-1/REPORT.md`. No figure is minted, no
-  `verified` label is touched, and the repository still holds zero of them (D3's state is unchanged).
+  `8bff7ca`, this card's own re-reads in `autowork/harness/r52-1/REPORT.md`. **No figure of any kind is
+  minted by this ADR** — it touches no cost model, no trace field and no `verified` label, and the
+  `verified` rows this repository already holds (R39/R40; `D3` closed as **MET** by R41's row,
+  `autowork/STATE.md:466-481`) are untouched and un-retracted by it.
 - **Nothing in this ADR authorizes any implementation.** If a later round adopts (b) or (a′) it must
   satisfy its own gate; this document is a decision about *directions*, and its adoption clauses are
   conditions, not permissions.
