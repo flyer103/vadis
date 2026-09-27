@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/flyer103/router/actions/workflows/ci.yml/badge.svg)](https://github.com/flyer103/router/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A **local-first, multi-protocol LLM gateway**: point codex / hermes / claude code at `http://127.0.0.1:8790/v1` and router resolves each request to one configured (provider, model), saves tokens **without breaking the upstream prefix cache**, and writes every decision and every cost into a per-request trace record.
+A **local-first, multi-protocol LLM gateway**: point codex / hermes / claude code at `http://127.0.0.1:8790/v1` and router resolves each request to one configured (provider, model), saves tokens **without breaking the upstream prefix cache**, and records what it decided and what the upstream measured into a trace record for every request it completes.
 
 The upstream sees the client's own bytes. Routing is resolved **first**, the upstream is called with the resolved provider-native `model` id, and the only two byte mutations permitted are deleting router-owned top-level fields and replacing that one top-level `model` **value span** — never message content, order, whitespace or tool schemas.
 
