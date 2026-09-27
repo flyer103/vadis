@@ -269,8 +269,8 @@ carry their `verified` / `inferred` label, and `--json` prints the same figures 
 `router replay --trace traces/x.jsonl --config config.yaml` and `router trace tail` are
 **planned, not served**: they are not subcommands of this binary, and the parser refuses them
 with a usage error and a non-zero exit — never a silently ignored flag. Today the trace record
-**is** the interface: append-only JSONL, one decision record per request, readable with any JSON
-tool, and the iteration loop replays it from [`autowork/harness/replay.py`](autowork/harness/replay.py).
+**is** the interface: append-only JSONL, one decision record per completed request, readable with
+any JSON tool, and the iteration loop replays it from [`autowork/harness/replay.py`](autowork/harness/replay.py).
 
 ## API
 
@@ -282,8 +282,13 @@ Inbound endpoints (the three are equivalent and mirror the upstream semantics pe
 | POST | `/v1/responses` | OpenAI responses |
 | POST | `/v1/messages` | Anthropic messages |
 | GET | `/health` | liveness, plus what this process actually loaded (and, when a `plan_policy` is configured, that family's account and probe deadline) |
+| GET | `/metrics` | the last 900 seconds of this process's own `trace.dir`, in the Prometheus text exposition format (`text/plain; version=0.0.4; charset=utf-8`) — behind the same token guard as the three protocol endpoints (spec §4.16) |
 
-`GET /metrics` (Prometheus) is not registered in v0.1: the route answers a bare `404`.
+`GET /metrics` **is** served: a scrape answers §9.2's own figures over the last 900 seconds — a
+process constant, not a flag and not a query parameter — in the Prometheus text exposition format
+(`text/plain; version=0.0.4; charset=utf-8`), behind the same token guard as the three protocol
+endpoints (`/health`'s exemption is `/health`'s alone), and its contract is
+[`docs/spec.md` §4.16](docs/spec.md).
 
 The `model` field accepts `provider/model`, an alias from the config, or `auto` (v0.1 returns
 `400` and says a plugin must take over). A `router_meta` response block — the plugin chain that
@@ -347,10 +352,21 @@ charged again and no cost is invented (`design/DESIGN.md` §12.10.3 R5).
 family's switches **and their verified cost** — a cost, not a saving), and `GET /health` reports
 what this process loaded, including a configured plan family's account and probe deadline.
 
+**A third surface is served, for a scraper.** `GET /metrics` answers the last 900 seconds of
+this process's own `trace.dir` in the Prometheus text exposition format, behind the same token guard
+as the three protocol endpoints (`/health`'s exemption is `/health`'s alone); the whole contract is
+[`docs/spec.md` §4.16](docs/spec.md). What it exports is a closed list — §9.2's own figures,
+rendered, each carrying §9.2's `verified` / `inferred` label as a machine-readable `provenance`
+label, so an inferred figure cannot be read as a measured one — and so is what it deliberately does
+**not** export: no client bytes or message content, no key material (not even the name of the
+variable holding it), nothing per-request and nothing keyed by traffic, no session identity, no
+per-provider or per-model cost split, and no config echo. One figure is absent by design: the
+`unknown outcome requests` figure lives in the event log, and the serving path never scans that log.
+The response names the omission in-band every time, so its absence cannot be read as a zero.
+
 **Not implemented in v0.1:**
 
 - the six cross-protocol translation cells are not served: a route the **client names** in a cell that needs translation is answered `501 not_implemented`, while a **candidate the client did not name** is skipped rather than translated;
-- `GET /metrics`: not registered — the route answers a bare `404`;
 - the `replay` / `trace tail` subcommands: not subcommands of this binary — the parser refuses them with a usage error and a non-zero exit;
 - the `router_meta` response block;
 - tier-B (out-of-process) plugins;
@@ -392,7 +408,7 @@ public issue. See [`SECURITY.md`](SECURITY.md).
 - **One local store.** Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005), and **no request or response body is stored**.
 - **Back up the pair and the store together.** The config is a pair: the file plus the roster it names. Back up both, with the store, and see [Operations §Backup](book/operations.md#backup) for what a restore does when one half is missing.
 - **Cache is the first-order cost lever.** Every rewrite must be **content-deterministic** (same content → same upstream bytes), because the upstream prefix cache is what the turns after it are billed against.
-- **The trace is the authoritative record** of what each request cost, and `router stats` reads it back. `docs/spec.md` §9.3 lists the reporting surfaces that are not served yet, and the rule behind it: a documented-but-unreachable surface is a defect.
+- **The trace is the authoritative record** of what each request was measured to cost, and `router stats` reads it back. `docs/spec.md` §9.3 lists the reporting surfaces that are not served yet, and the rule behind it: a documented-but-unreachable surface is a defect.
 
 ## License
 
