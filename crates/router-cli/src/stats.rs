@@ -406,7 +406,18 @@ fn ts_to_epoch_ms(ts: &str) -> Option<i64> {
 /// Read every trace file whose hourly range (§4.1: `YYYY-MM-DDTHH.jsonl`)
 /// intersects the window, then keep the records whose own `ts` is inside
 /// `[start_ms, now_ms]` — never by which file they happen to be in.
-fn read_window_records(
+///
+/// `pub(crate)` for the `/metrics` surface (spec §4.16, ADR-041 §4): the
+/// window's read has ONE owner, shared by `router stats` and the scrape —
+/// two readers of one derivation, never two derivations.
+///
+/// **The torn tail** (ADR-041 §4): the serving process appends to the
+/// newest of these files while a reader scans it, so the *final* line of
+/// the *newest* file may be observed mid-write. That one line, when it is
+/// not valid JSON, is skipped — never fabricated, never counted (the next
+/// read sees it whole). Every other malformed line stays the error it
+/// always was.
+pub(crate) fn read_window_records(
     dir: &Path,
     start_ms: i64,
     now_ms: i64,
@@ -417,27 +428,37 @@ fn read_window_records(
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
         .collect();
     files.sort();
+    // The files the window actually intersects, in name order — the last
+    // of them is the newest, the one a live writer may be mid-line in.
+    let targets: Vec<PathBuf> = files
+        .into_iter()
+        .filter(|path| {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let Some(hour_ms) = hour_start_ms(stem) else {
+                return false; // not a rollover-named file; §4.1 names them all
+            };
+            let hour_end_ms = hour_ms + 3_600_000;
+            hour_ms <= now_ms && hour_end_ms >= start_ms
+        })
+        .collect();
     let mut out = Vec::new();
     let mut read = 0usize;
-    for path in files {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let Some(hour_ms) = hour_start_ms(stem) else {
-            continue; // not a rollover-named file; §4.1 names them all
-        };
-        let hour_end_ms = hour_ms + 3_600_000;
-        if hour_ms > now_ms || hour_end_ms < start_ms {
-            continue; // no intersection with the window
-        }
+    for (fi, path) in targets.iter().enumerate() {
         read += 1;
-        for line in std::fs::read_to_string(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .lines()
-        {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let rec: Value = serde_json::from_str(line)
-                .map_err(|e| format!("{}: not a trace record: {e}", path.display()))?;
+        let newest = fi == targets.len() - 1;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        for (li, line) in lines.iter().enumerate() {
+            let rec: Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(e) => {
+                    if newest && li == lines.len() - 1 {
+                        continue; // the torn tail — skipped, never fabricated
+                    }
+                    return Err(format!("{}: not a trace record: {e}", path.display()));
+                }
+            };
             let Some(ts) = rec
                 .get("ts")
                 .and_then(Value::as_str)
@@ -485,7 +506,9 @@ fn rfc3339_millis(ms: i64) -> String {
 }
 
 /// Median (average of the two middle values on an even count).
-fn median(xs: &mut [f64]) -> Option<f64> {
+/// `pub(crate)` so the `/metrics` formatter renders the SAME quantile
+/// (ADR-041 §4: one derivation, two readers — never a second copy).
+pub(crate) fn median(xs: &mut [f64]) -> Option<f64> {
     if xs.is_empty() {
         return None;
     }
@@ -499,13 +522,36 @@ fn median(xs: &mut [f64]) -> Option<f64> {
 }
 
 /// Nearest-rank p99 (ceil(0.99·n)-th of the sorted values).
-fn p99(xs: &mut [u64]) -> Option<u64> {
+/// `pub(crate)` for the same single-owner reason as `median`.
+pub(crate) fn p99(xs: &mut [u64]) -> Option<u64> {
     if xs.is_empty() {
         return None;
     }
     xs.sort_unstable();
     let rank = ((xs.len() as f64) * 0.99).ceil() as usize;
     Some(xs[rank.saturating_sub(1).min(xs.len() - 1)])
+}
+
+/// §9.2's `hit rate`: `None` when the window holds no input tokens (the
+/// absence is a hole, never a 0). Hoisted out of `print_text`/`report_json`
+/// so the ratio is divided in ONE place (ADR-041 §4) — the printer, the
+/// `--json` builder and the `/metrics` formatter all call this.
+pub(crate) fn cache_hit_rate(f: &TraceFigures) -> Option<f64> {
+    if f.input_total_tokens == 0 {
+        None
+    } else {
+        Some(f.input_cached_tokens as f64 / f.input_total_tokens as f64)
+    }
+}
+
+/// §9.2's `stateful inbound rate`: `None` when the window holds no
+/// records. Same single-owner hoist as `cache_hit_rate`.
+pub(crate) fn stateful_inbound_rate(f: &TraceFigures) -> Option<f64> {
+    if f.requests == 0 {
+        None
+    } else {
+        Some(f.stateful_inbound as f64 / f.requests as f64)
+    }
 }
 
 /// The `--json` `cost` member (spec §9.2's omission rule): with exactly
@@ -619,14 +665,11 @@ pub(crate) fn print_text(
     }
     let _ = writeln!(w);
     let _ = writeln!(w, "cache");
-    let rate = if f.input_total_tokens == 0 {
-        String::from("0.0000")
-    } else {
-        format!(
-            "{:.4}",
-            f.input_cached_tokens as f64 / f.input_total_tokens as f64
-        )
-    };
+    // The hoisted single-owner ratio (ADR-041 §4); the printer's own
+    // rendering of the hole is the `0.0000` it has always printed.
+    let rate = cache_hit_rate(f)
+        .map(|r| format!("{r:.4}"))
+        .unwrap_or_else(|| String::from("0.0000"));
     let _ = writeln!(
         w,
         "  hit rate (verified)        {rate}   ({} / {} input tokens)",
@@ -688,11 +731,7 @@ pub(crate) fn print_text(
         let _ = writeln!(w);
     }
     let _ = writeln!(w, "state");
-    let stateful = if f.requests == 0 {
-        0.0
-    } else {
-        f.stateful_inbound as f64 / f.requests as f64
-    };
+    let stateful = stateful_inbound_rate(f).unwrap_or(0.0);
     let _ = writeln!(
         w,
         "  stateful inbound rate       {stateful:.4}   (always 0 in v0.1 — gap G-F; printed so the constant is visible)"
@@ -753,9 +792,7 @@ pub fn report_json(
         "cache": {
             "hit_rate": {
                 "label": "verified",
-                "value": if f.input_total_tokens == 0 { None } else {
-                    Some(f.input_cached_tokens as f64 / f.input_total_tokens as f64)
-                },
+                "value": cache_hit_rate(f),
                 "input_cached": f.input_cached_tokens,
                 "input_total": f.input_total_tokens,
             },
@@ -770,9 +807,7 @@ pub fn report_json(
         },
         "state": {
             "stateful_inbound_rate": {
-                "value": if f.requests == 0 { None } else {
-                    Some(f.stateful_inbound as f64 / f.requests as f64)
-                },
+                "value": stateful_inbound_rate(f),
                 "note": "always 0 in v0.1 (gap G-F)",
             },
         },

@@ -1494,7 +1494,7 @@ fallback: []
         };
         let record = router_proxy::refused_record(
             "req-in-flight",
-            router_core::config::WireApi::Chat,
+            router_core::config::WireApi::Chat.as_str(),
             &verdict,
             1_800_000_000,
             0,

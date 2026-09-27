@@ -947,7 +947,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-84`)
+### 12.8 conformance case table (`CONF-01…CONF-87`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1002,7 +1002,7 @@ not written).
 | CONF-44 | spec §6's `plan_switch` producer table (row ii)·the direction rule | **a state-driven displacement's `reason` is decided by destination, never by the account state read before the request**: on the third turn of an already-spilled family (nothing failed in the request, no probe admitted) the displacement to the overflow route says `primary_exhausted` with `failover_from: null` and `probe: false`; the spill round itself keeps `primary_exhausted` in the same run, so the two rows cannot drift | the guard's displacement record (both forwarding paths) |
 | CONF-60 | spec §2.1/§6, ADR-019 §2·the transform-mode opt-in channel | **the mode channel, four ways**: ① absence of `X-Router-Transform` ⇒ `passthrough`, the byte path; ② explicit `passthrough` ⇒ the same; ③ `transform` with no configured engine ⇒ "asked, not applied": served, `transform_mode: "transform"` on the trace, `transforms` omitted, upstream bytes byte-equal modulo (a)/(b); ④ any other value ⇒ `400 invalid_request` decided **before the body is read** (the wire sees nothing), §8's body + `X-Router-Request-Id`, and the pre-pipeline record class on the trace (`transform_mode: "passthrough"`, `event_id: 0`, `usage_missing: true`, `errors[].kind == "transform_error"`, priced nowhere) | the header resolution at the boundary (`router-proxy::resolve_transform_mode` + `router-cli`'s `mode_refused_record`, §12.12) |
 | CONF-45 | spec §4.7 + §8·inbound token auth | **the boundary guard, six ways**: ① no token → `401` (`unauthorized`, §8's body verbatim); ② a wrong token → `401`; ③ the right token, once as `Authorization: Bearer` and once as `x-api-key` → forwarded normally, with the upstream-visible bytes unchanged (the guard adds nothing to the body); ④ `GET /health` with no token → `200`; ⑤ **no `server.auth_token_env` ⇒ behaviour identical to before the key existed** (no auth anywhere); ⑥ the key written but its environment variable missing/empty ⇒ the process does not start (non-zero exit, the variable named on stderr). A 401's trace line — one record, `errors[].kind == "unauthorized"`, `usage_missing: true`, priced nowhere — is asserted with them | the start-up resolution (router-cli) + the guard (`router-proxy::auth`) + §12.11's record |
-| CONF-46 | spec §9.3·`GET /metrics` not served | **a bare 404, both layers**: against the real `serve` assembly over loopback (with a `/health` 200 liveness control on the same run), `GET /metrics` answers status `404` — never `200` (a served surface) and never `501` (a registered-but-unimplemented route), because an unregistered path has no handler to choose either — and the response carries no §8 error body: no JSON `error` member and no `X-Router-Request-Id` header (an unrouted path does not go through §8's formatter) | the `serve` route registration (router-cli), asserted without touching it |
+| CONF-46 | spec §4.16 + §9.3·`GET /metrics` **is served** | **the served surface, and the shape of its refusal — five arrows, one rig** (the real `serve` assembly over loopback, with a `/health` 200 liveness control on the same run): ① with `server.auth_token_env` set and **no** token, `GET /metrics` answers `401` with **§8's** body (`error.type = "unauthorized"`, `details.header`) and `X-Router-Request-Id` **present** — the guard's refusal, not this surface's answer; ② the same request with `Authorization: Bearer <token>` answers **`200`** whose `content-type` is `text/plain; version=0.0.4; charset=utf-8` and whose body is an exposition (`# HELP`/`# TYPE` + the §4.16 names); ③ the same with `x-api-key: <token>` answers **byte-identically** to ②; ④ the admitted body carries **no** JSON `error` member and **no** `X-Router-Request-Id` (the old case's two negative layers, re-pointed at `200`); ⑤ with **no** `server.auth_token_env` the same GET answers `200` with no token at all (§4.7's key-absent control, CONF-45 ⑤'s shape). **The status set is closed**: anything but `{200, 401}` — `404`, `501`, `500`, `503` — is a defect, which is what the old `501`/`200` exclusions become. Two further limbs: a GET carrying a **canary body** answers byte-identically to the body-less one and the canary appears in no response byte, no trace file and no store row (no request byte is read); and an **admitted** scrape changes neither the trace dir's bytes nor the store's event count, where each **refused** arm adds exactly **one** record — the guard's boundary-class line, `protocol.protocol_in: "metrics"`, `errors[].kind: "unauthorized"` | the `serve` route registration (router-cli) + the guard's `&str` protocol seam (router-proxy), asserted without touching either. **Replaces** `conf_46_metrics_is_bare_404.rs` (renamed `conf_46_metrics_is_served.rs`; the ID is unchanged — an ID is the contract, a file name is a description) and **lands with the implementation** in one card, so the tree is never red in between (ADR-041 §2.2/§2.5) |
 | CONF-47 | spec §9.3·unserved subcommands | **the parser's refusal, real exit code and wording**: `router replay --trace … --config …`, `router trace tail`, and the bare `router replay` / `router trace` are each refused by the same `Cli` parser `main` dispatches on — a usage error naming the subcommand (`unrecognized subcommand`, plus a usage line; checked by substring, not a frozen string), mapping to a non-zero process exit (clap's usage error → exit 2, never a silently ignored flag); a liveness control shows the same argv prefix with a served subcommand parses, proving the refusal is the subcommand itself | the CLI argument parser (`router_cli::Cli`, clap derive) |
 | CONF-52 | spec §4.8 / ADR-018 §2·money never mixes at the type level | **`compile_fail` doctests on `Money` + the money unit tests in `router-core`'s `cost.rs`**: mixed-currency arithmetic does not compile and aggregation is spelled per-currency — the witness lives in `router-core` (not a `tests/conformance/` file), the class CONF-27's parking rule uses for a non-serve-path invariant | `Money` + `Currency` (§12.4) |
 | CONF-53 | spec §4.8 / ADR-018 §1·the currency and region keys parse exactly, default exactly, refuse at load | through the real `config_load::load` (YAML bytes → validated config) and the illegal-currency half through the real `router_cli::serve` exit: (a) an omitted `currency` loads as USD, an omitted `region` as `intl` — per-entry defaults, never global; (b) `currency: CNY` and `region: cn` load, and **cn + USD loads too** (neither field derives the other); (c) an illegal `currency` (wrong case, unknown code, non-string) is a load error naming `providers[i].currency` with the legal spellings, `serve` exits 2; (d) an illegal `region` refuses the same way | the config parser's currency/region keys + load-time validation (§12.10.2) |
@@ -1038,6 +1038,9 @@ not written).
 | CONF-83 | §4.13·the inbound body bound + §8·its refusal + §6·the boundary record | **the bound is the router's own, and so is the refusal** — on the real `serve` assembly against a loopback mock, with `server.max_body_bytes` at the rig's own value: (a) a body **exactly at** the bound is served, the upstream-visible request bytes are the client's own (the byte control), and its record carries `upstream_ms` present with `usage_missing: false`; (b) a body **one byte above** it is refused `413` in §8's unified shape naming `request_too_large`, with `details.limit_bytes` equal to the rig's own configured value, `X-Router-Request-Id` present, **one** pre-pipeline trace record (`event_id: 0`, `usage_missing: true`, nothing priced) and **zero** requests arriving at the stand-in; (c) the same refusal when the length is **not declared** (a chunked body), so omitting `Content-Length` cannot walk around the bound; (d) a body above the bound in a **streaming** request (`stream: true`) is answered as that same complete, non-SSE `413` — `content-type: application/json`, **no** `details.stream` member, no SSE head ever sent — with the connection closed rather than handed on (spec §4.13); (e) the bound follows the key: the rig's own two values move which body is accepted, and a value below `1024` is a load refusal (exit 2) naming the key | the boundary middleware above the path split and the `ErrorCode` vocabulary (spec §4.13, DESIGN §12.15), with the HTTP framework's own cap **disabled** so exactly one bound exists |
 | CONF-84 | §6·`overhead_ms_p99` + §9.2·the `overhead p99` line | **the printed figure is the router's own overhead, not the upstream's** — over a rig-built trace whose records carry a declared `upstream_ms` beside a distinctly larger `overhead_ms`: (a) `overhead p99` in the text report **and** `overhead_ms_p99` in `--json` both equal the p99 of the **differences**, so raising every record's `upstream_ms` while holding `overhead_ms` fixed **does not move the figure** — the control the raw-field p99 fails today; (b) records whose `upstream_ms` is `null` are excluded from the sample rather than read as `0` ms (a window holding only such records has **no** figure, never `0`); (c) the two print paths agree element for element on one window | `stats`'s collector and both print paths (`router-cli/src/stats.rs`), against spec §6's definition and §9.2's provenance row (DESIGN §12.16; the `R32-F5` repair) |
 | CONF-85 | §4·the roster is its own file + §4.14·the refusal ladder and the identity + §4.12·a named roster is not a candidate | **a named roster, and one identity over the pair — the split's two halves in one case.** *(Half A — the refusal ladder.)* Against the real `serve` loader, each shape of spec §4.14 is refused naming **its own key**, with the inline control green on the same rig: (a) both `providers:` and `providers_file:` written → both keys named; (b) **neither** written → both keys named; (c) `providers_file` naming an unreadable path → `providers_file`, the value as written and the resolved path; (d) a roster file whose top-level key is not `providers:` → the roster's own path and the offending key; (e) a root reference the roster does not define (`aliases`, `fallback[0]`, `plan_policy.primary`) → the key **and the roster file**; (f) the no-candidate arm: with `--config` pinning the root, a `providers.yaml` sitting beside it is never read — §4.12's four-candidate table gained no row — while a fixture pair (root + roster, written into the case's own temp dir) parses and its joined `providers` is **deep-equal** to the inline form's. *(Half B — the identity.)* The pair's bytes hashed **independently of the product** (`shasum -a 256` over each file's bytes, first 16 hex chars, then over `"<root_sha16>:<roster_sha16>"`) equal the `config_digest` on that request's trace row, on the `config.applied` event and on `/health`'s config member — with the discriminators: a **comment-only** roster edit moves the digest and moves **nothing else** on the row (no decision, no byte on the wire, no `Nano` figure), while a **price** edit moves the digest **and** the cost; and the inline shape reports `roster_path: null` / `roster_sha16: ""` while still hashing to a stable digest. Half A is written by the split's card and half B by the identity's — **one file, one writer at a time**, hence the serial chain | the loader's shape check and join (`router-cli/src/config_load.rs`), the roster types (`router-core/src/config.rs`), the trace field and its writers (`router-core/src/trace.rs` + the four `router-proxy` constructors), `/health`'s `config` member (`router-proxy/src/health.rs`) and the `config.applied` payload (`router-cli/src/lib.rs`) |
+| CONF-86 | §4.11's `--check` row + `docs/spec.md:1079-1083` (D9's *reported, never silent* list) + ADR-038 **D9**·the roster fact is stated for an inline root, and only for an inline root | **pinned on the binary's wire output**: over a root whose roster is inline, `router setup --check` prints one `roster: inline in this file — a writing run moves it to <name>` line above the key rows and carries a `roster` member in `--json`; over an already-split root it prints **neither**, and the key rows, the export snippets and the exit codes are identical in both shapes (the inline arm's own output minus its first line is the relation). The behavior is ADR-038 D9's and shipped with R45; what **R45-1-F2** measured missing was the *assertion* — no case pinned the line, so a regression of it would have been invisible. Drives the real `router` binary of this build as a subprocess (the only way to assert on stdout), green at the base by construction, and its fixtures live in its own temp dirs | the `setup --check` printer (§12.14). **Allocated by the human's 2026-09-26 authorisation** (the gate side is normally the owner's: ADR-012 / AGENTS 9) — it **adds** an assertion and moves no existing one. Its row is **registered retroactively** by R50 (this table is the registry and a case file without a row is the drift the section forbids — CONF-26's precedent), closing half of `R46-4-F2`; the case file is untouched |
+| CONF-87 | spec §4.16·the metrics surface's **single owner** + §9.2's provenance table·the figures and their labels + §4.8·money per currency + §4.1·the rollover | **the numbers are §9.2's, rendered — and the surface cannot invent one.** Against the real `serve` assembly with the case's own `trace.dir` pre-seeded: (a) **every** series' value equals the case's **own** independently computed count/sum/quantile/ratio over its own fixture records (`CONF-41`'s method), and the figures both surfaces carry also equal `stats::report_json`'s for the same window (`CONF-56`'s method) — one derivation, two readers; (b) the series set is a function of the **config**, not of traffic: two rigs holding **N** and **10N** records in one window produce the same metric-name+label set and the same line count (only digits differ), and the body stays under 8 KiB; (c) the read is bounded and sourced: `router_trace_files_read` equals the §4.1 rollover files the window actually intersects (`≤ 2`), and a **decoy** trace directory full of records outside the config's `trace.dir` contributes **nothing**; (d) **determinism**: two admitted scrapes with no intervening traffic are **byte-identical** (no timestamp, no uptime — so no wall-clock value exists to differ); (e) **zero is not absent**: a window holding records but no input tokens keeps the token series at `0` and **omits** the ratio series, with its `# router: … omitted — …` comment naming why, while a window whose `trace.dir` is removed after boot answers `200` with every trace-derived figure absent, its comments present, `router_metrics_omitted_figures ≥ 1` and **no** §8 body; (f) the `provenance` label is §9.2's own word per series and is never re-labelled (an `inferred` figure cannot be emitted as `verified`); (g) the formatter is called **directly** with a hand-built `TraceFigures` and renders exactly the series those values imply — the single-owner rule's structural half: a figure derived from records is not expressible through `metrics::exposition`'s signature (ADR-041 §4) | `router-cli/src/metrics.rs` (new) over `stats::read_window_records` + `stats::aggregate` + the hoisted ratio helpers; the route and the guard seam are §12.21's |
+
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
 never-mutable path rule), which is why the allocation is recorded here rather than appearing
@@ -1468,6 +1471,31 @@ files under `tests/conformance/**` that carry a top-level `providers:` block (me
 because the exactly-one-of rule keeps the inline shape legal — which is why R43 edits no fixture, no case file
 and no harness config; and nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md`
 or the L1 envelope (AGENTS 9 / ADR-012).
+
+**Allocation of `CONF-87` (R50 — the `GET /metrics` surface, ADR-041) — recorded 2026-09-27 by the round's
+contract card, the R9/R10/R17/R22/R28/R29/R32/R43 precedent.** The occupancy check was a **measurement** of the
+real directory at this card's HEAD (`ac44181`): `ls tests/conformance/tests/*.rs | wc -l` → **76** files, ids
+`01–47, 53–66, 71–78, 80–86`; cross-read with the paragraphs above, the last of which (**R43/CONF-85**) closes
+with *"the next free ID is **`CONF-86`**"* — **stale since R46**, because a file for `CONF-86` exists and no
+row for it does (`R46-4-F2`, `progress/2026-09-26_19-57-19_R46-overdue-register.md:204`). R50 therefore takes
+the lowest free id above **both** the tree's maximum (86) and the register's own stale claim: **`CONF-87`**,
+on `tests/conformance/tests/conf_87_metrics_single_owner.rs`, landed **with the implementation it witnesses**
+in one card — R50 writes neither case ahead of its surface (ADR-041 §2.2/§2.5; the CONF-27 / CONF-41/42 /
+CONF-45 / CONF-57 parking rule applies unchanged if that ever changes). The ID is spent: not renumbered, not
+reused. **Two registry repairs ride with this paragraph, both forced by the measurement and neither a new
+decision**: (i) `CONF-86`'s missing row is restored **retroactively** from its own case file (the CONF-26
+precedent, quoted in that row), and (ii) this section's **heading** moves from `` `CONF-01…CONF-84` `` to
+`` `CONF-01…CONF-87` `` — a heading whose last row is `CONF-87` while the title says `84` is the same drift,
+in the section that forbids it (R10's merge fought over this header once already). **Occupancy now.** Case files present: `01–47`, `53–66`, `71–78`, `80–87` (76 at the base commit, plus
+`CONF-87`). The register's accumulated **spent** set — allocated at least once, witness present or not — is
+`01–47`, `52–70`, `71–78`, `79`, `80–87`: `CONF-52`'s witness is deliberately a `compile_fail` doctest in
+`router-core` rather than a case file (`design/DESIGN.md:1142`, `:1208`), and `67–70`/`79` are R22's file-less
+allocations (`R22-F4`) — which is the one correction this paragraph makes to the R43 paragraph above, whose
+`53–70` reads as if `CONF-52` were free. `48–51` stay reserved exactly as the paragraphs above leave them; the
+next free ID is **`CONF-88`**. No existing assertion is touched: the round **replaces** `CONF-46`'s own
+assertion (same ID, renamed file) and **adds** `CONF-87`, both landing with the code they assert. `CONF-45`'s
+six arms, `CONF-47`'s parser refusals and every other case file stay **byte-identical**. Nothing here moves a
+gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 / ADR-012).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -2762,6 +2790,15 @@ makes `/health`'s exemption structural rather than a path comparison (spec §4.7
   (`WireApi::Chat` / `Responses` / `Anthropic`) — the gate never has to guess a protocol from a path string,
   and a fourth route added later cannot silently inherit a wrong one.
 - `/health` is registered outside that guarded set and keeps answering with no token.
+- **A fourth guarded route exists since R50 — `GET /metrics`** (spec §4.16; ADR-041 §3.7) — and it is why
+  the guard's record takes the endpoint's own protocol word as a **`&str`** rather than a `WireApi`:
+  `refused_record(…, proto_in: &str, …)` and, with it, `GuardState.proto_in`. The three protocol routes pass
+  `WireApi::Chat|Responses|Anthropic.as_str()` — **byte-identical on the wire**, so `CONF-45`'s six arms and
+  every pre-pipeline case are unaffected — and `/metrics` passes `"metrics"`, which is what spec §6's own
+  row for the field prescribes (*the endpoint's own protocol*, `docs/spec.md:1869`). `ProtocolRec.protocol_in`
+  is a `String` in the landed type (§12.6), so this is a **value** widening, never a schema move, and no
+  consumer branches on it. The alternative — a fourth `WireApi` variant — is rejected in ADR-041 §3.8:
+  `WireApi` is the *wire* enum a provider declares in `supports:` (`router-core/src/config.rs:526-529`).
 - When `server.auth_token_env` is absent, **no layer is installed** and the assembled router is byte-for-byte
   the assembly v0.1 had before this key existed — CONF-45 ⑤ asserts the behaviour, and the structural form
   makes it impossible for the guard to "half apply".
@@ -3755,6 +3792,95 @@ harmless when it cannot (D1); the watcher **never** binds to the target's inode.
 next look is **the next event, and nothing else** — no timer, no reconciliation pass, no per-request
 re-check: the reload does not promise delivery of a change that produced no event, and the operator's
 fallback is a restart, which is today's behaviour.
+
+### 12.21 The `/metrics` surface (the landing of spec §4.16, ADR-041)
+
+Spec §4.16 is the contract; this section is where it lands, so two implementers cannot disagree about the
+shape. The one-sentence version: **a fifth route, behind the same guard as the protocol endpoints and next
+to `/health` in the assembly, reads the trace dir the process already resolved and renders it through the
+derivation `router stats` already owns — it computes no figure, writes nothing, and reads no part of a
+request.**
+
+**The route's home.** `crates/router-cli/src/metrics.rs` — a **new module in `router-cli`**, not in
+`router-proxy`, and the reason is the dependency direction (DESIGN §2): the derivation it must call
+(`stats::read_window_records`, `stats::aggregate`, the quantile and ratio helpers) lives in `router-cli`, and
+`router-cli` depends on `router-proxy`, never the reverse. The module owns three things and nothing else:
+
+```rust
+pub const WINDOW_MS: i64 = 900_000;                       // spec §4.16: the frozen window
+
+/// Pure: the derivation's output in, the exposition out (spec §4.16).
+/// It takes NO records — a second value cannot be derived through this seam.
+pub fn exposition(
+    figures: &crate::stats::TraceFigures,
+    files_read: usize,
+    plan_family: Option<&str>,
+    read_error: Option<&str>,
+) -> String;
+
+/// The read + the call above: the whole of the handler's body.
+pub fn snapshot(state: &router_proxy::AppState) -> String;
+```
+
+**Registration.** In `serve`'s assembly (`lib.rs:891-910`), one more `merge`: a `guarded` route on the
+non-protocol path, built by a sibling of `guarded_protocol_route` (`lib.rs:785-794`) whose guard state carries
+`proto: "metrics"` instead of a `WireApi` — i.e. the seam widening §12.11 records. The handler takes the
+state and nothing else: **no `Bytes` extractor, no header extractor, no body layer** (the §4.13 bound is not
+installed on this route — it reads nothing, so it needs no bound; `/health` has the same property today). The
+response is `(StatusCode::OK, [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")], snapshot(&state))`.
+`/health`'s router (`lib.rs:584-593`) is the shape to copy, not the protocol route's.
+
+**The read, and its one owner.** `snapshot` calls `crate::stats::read_window_records(&trace_dir, now-900_000,
+now)` and then `crate::stats::aggregate(&records)` — the same two calls `stats::report` makes
+(`stats.rs:238-264`), which is why the two surfaces cannot disagree. `read_window_records` becomes
+`pub(crate)`; nothing else in `stats.rs` moves except the two hoisted ratio helpers
+(`cache_hit_rate`, `stateful_inbound_rate`), which `print_text` and `report_json` call too, so the same ratio
+is divided in one place instead of three (ADR-041 §4).
+
+**The torn tail.** The window read **tolerates a torn tail**: the final line of the newest file, when it is
+not valid JSON, is skipped (never fabricated, never counted); every other malformed line keeps today's error
+behaviour. This lives in the shared read — not in the metrics path — because the serving process appends to
+the very file a scrape reads (`router-store/src/trace_sink.rs:73-106`), so a per-scrape "the window is
+unreadable" would be a routine accident instead of a fault. `router stats` gains the same tolerance for the
+same input class; no case asserts the old behaviour (ADR-041 §4).
+
+**The `trace.dir` it reads is the process's own** (`AppState.trace_dir`, `router-proxy/src/health.rs:20-22`),
+resolved once at startup (`lib.rs:401-408`) — and a key the reload **refuses** (ADR-040 D5; spec §4.15), so
+the surface needs no revision capture and cannot be pointed at a second directory by a reload. **The store is
+not read** (`AppState.store` is untouched): spec §4.16 excludes the one figure that would need it, because
+`Query::AllEvents` is documented *bounded use* — *"the serving path never scans the log"*
+(`router-core/src/store.rs:303-305`).
+
+**What the surface writes: nothing.** No trace line, no event row, no state — the admitted arm is a pure
+read; a **refused** scrape writes the guard's own boundary-class line (`event_id: 0`, `usage_missing: true`,
+`errors[].kind: "unauthorized"`, `protocol.protocol_in: "metrics"`), exactly as §4.7's table says of a
+refusal, and the reader takes it from `errors[].kind`, never from `decision.selection_source`.
+
+**The observation boundary, stated where the code lives** (constraint 3): the read site is the config's own
+trace directory and nothing else — no path under `autowork/` is opened by this module, and the exposition is
+a **derived view for operators**, never a product → autowork channel (ADR-005: the trace JSONL is that
+channel) and never a gate's or a corpus's input. A future round that wants to consume it must say which
+measurement it replaces.
+
+**Invariants and their cases** (the rows are §12.8's; the contract is spec §4.16; the reasoning ADR-041 §5):
+
+| invariant | case |
+|---|---|
+| the status set is `{200, 401}` — never `404`, never `501`, never a §8 body on the `200` arm, never `X-Router-Request-Id` on it | `CONF-46` |
+| the guard applies, both accepted header forms, and the key-absent control | `CONF-46` |
+| a request byte is never read and nothing of the request is carried (the canary limb) | `CONF-46` |
+| an admitted scrape writes nothing; a refused one writes exactly one record | `CONF-46` |
+| every value equals §9.2's derivation and `--json`'s figures — one owner, two readers | `CONF-87` |
+| the series set is a function of the config, not of traffic; the body is O(series) | `CONF-87` |
+| the read is bounded (≤ 2 rollover files) and sourced from the config's own dir (the decoy limb) | `CONF-87` |
+| determinism: two scrapes over an unchanged window are byte-identical (no timestamp, no uptime) | `CONF-87` |
+| zero is not absent: a hole is omitted with a named comment and counted by `router_metrics_omitted_figures` | `CONF-87` |
+| the `provenance` label is §9.2's word per series and is never re-labelled | `CONF-87` |
+| the formatter's signature admits no records (the single-owner rule's structural half) | `CONF-87` |
+
+**What this section does not promise**: no configurable window (ADR-041 `R50-0-F3`), no unknown-outcome
+figure (`R50-0-F2`), no per-provider or per-model cost split (forbidden by the single-owner rule until it is
+first in §9.2's provenance), no counters and no `_total` names, and no second route.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 
