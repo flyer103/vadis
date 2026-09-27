@@ -424,9 +424,10 @@ observation channel?":
 
 ### 3.10 The one figure that is **not** here, and why
 
-`router_unknown_outcome_requests` (§9.2's `unknown outcome requests`, the only figure that lives in the
-**event log** rather than in the trace) is **not exposed by this surface**, and the omission is a frozen
-constant of the response (§3.5's first row), not a runtime arm:
+§9.2's `unknown outcome requests` (the only figure that lives in the **event log** rather than in the trace)
+is **not exposed by this surface** — **no series of any name carries it**, which is why no metric name is
+proposed for it here (the comment line in §3.5 names the *figure*, not a series) — and the omission is a
+frozen constant of the response (§3.5's first row), not a runtime arm:
 
 - `Query::AllEvents` is documented in the store contract as **bounded use**: *"The full event log in
   `event_id` order (bounded use: conformance and rebuild; **the serving path never scans the log**)"*
