@@ -892,6 +892,15 @@ spec §6 field groups → Rust paths (auditable line by line):
   invariant on the contract side). Nothing about the **format** moves for it: `schema_version` stays 2, and a
   record with no digest is still read as "not recorded" (the additive rule above) — a statement about a
   vintage, never an invitation to write one.
+- The **`cache` group** is an addition of the same class (ADR-042; spec §6, §4.17): present **iff** this record's
+  response came from the recorded store, so its *presence* states "no upstream call was made by this request".
+  It is written through the **existing** writer (`commit`, with `usage_missing: true`), it changes no other
+  field's meaning — the hit's identity, decision, prefix and timing fields are the ordinary record's, and
+  `protocol.protocol_out` is `null` because nothing left the process (spec §6's third class) — and a record
+  **without** the key is not a hit and must never be read as one. `schema_version` stays **2**. The key's five
+  components are all recoverable from the record itself (`cache.key_digest` + `protocol_in` + `config_digest` +
+  `session` + `transform_mode`), which is what makes §12.22's ledger checks runnable by a stranger (§12.22 lands
+  the rest).
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
@@ -947,7 +956,7 @@ Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a ses
 `X-Router-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-87`)
+### 12.8 conformance case table (`CONF-01…CONF-89`)
 
 Location: the workspace member `router-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1040,6 +1049,9 @@ not written).
 | CONF-85 | §4·the roster is its own file + §4.14·the refusal ladder and the identity + §4.12·a named roster is not a candidate | **a named roster, and one identity over the pair — the split's two halves in one case.** *(Half A — the refusal ladder.)* Against the real `serve` loader, each shape of spec §4.14 is refused naming **its own key**, with the inline control green on the same rig: (a) both `providers:` and `providers_file:` written → both keys named; (b) **neither** written → both keys named; (c) `providers_file` naming an unreadable path → `providers_file`, the value as written and the resolved path; (d) a roster file whose top-level key is not `providers:` → the roster's own path and the offending key; (e) a root reference the roster does not define (`aliases`, `fallback[0]`, `plan_policy.primary`) → the key **and the roster file**; (f) the no-candidate arm: with `--config` pinning the root, a `providers.yaml` sitting beside it is never read — §4.12's four-candidate table gained no row — while a fixture pair (root + roster, written into the case's own temp dir) parses and its joined `providers` is **deep-equal** to the inline form's. *(Half B — the identity.)* The pair's bytes hashed **independently of the product** (`shasum -a 256` over each file's bytes, first 16 hex chars, then over `"<root_sha16>:<roster_sha16>"`) equal the `config_digest` on that request's trace row, on the `config.applied` event and on `/health`'s config member — with the discriminators: a **comment-only** roster edit moves the digest and moves **nothing else** on the row (no decision, no byte on the wire, no `Nano` figure), while a **price** edit moves the digest **and** the cost; and the inline shape reports `roster_path: null` / `roster_sha16: ""` while still hashing to a stable digest. Half A is written by the split's card and half B by the identity's — **one file, one writer at a time**, hence the serial chain | the loader's shape check and join (`router-cli/src/config_load.rs`), the roster types (`router-core/src/config.rs`), the trace field and its writers (`router-core/src/trace.rs` + the four `router-proxy` constructors), `/health`'s `config` member (`router-proxy/src/health.rs`) and the `config.applied` payload (`router-cli/src/lib.rs`) |
 | CONF-86 | §4.11's `--check` row + `docs/spec.md:1079-1083` (D9's *reported, never silent* list) + ADR-038 **D9**·the roster fact is stated for an inline root, and only for an inline root | **pinned on the binary's wire output**: over a root whose roster is inline, `router setup --check` prints one `roster: inline in this file — a writing run moves it to <name>` line above the key rows and carries a `roster` member in `--json`; over an already-split root it prints **neither**, and the key rows, the export snippets and the exit codes are identical in both shapes (the inline arm's own output minus its first line is the relation). The behavior is ADR-038 D9's and shipped with R45; what **R45-1-F2** measured missing was the *assertion* — no case pinned the line, so a regression of it would have been invisible. Drives the real `router` binary of this build as a subprocess (the only way to assert on stdout), green at the base by construction, and its fixtures live in its own temp dirs | the `setup --check` printer (§12.14). **Allocated by the human's 2026-09-26 authorisation** (the gate side is normally the owner's: ADR-012 / AGENTS 9) — it **adds** an assertion and moves no existing one. Its row is **registered retroactively** by R50 (this table is the registry and a case file without a row is the drift the section forbids — CONF-26's precedent), closing half of `R46-4-F2`; the case file is untouched |
 | CONF-87 | spec §4.16·the metrics surface's **single owner** + §9.2's provenance table·the figures and their labels + §4.8·money per currency + §4.1·the rollover | **the numbers are §9.2's, rendered — and the surface cannot invent one.** Against the real `serve` assembly with the case's own `trace.dir` pre-seeded: (a) **every** series' value equals the case's **own** independently computed count/sum/quantile/ratio over its own fixture records (`CONF-41`'s method), and the figures both surfaces carry also equal `stats::report_json`'s for the same window (`CONF-56`'s method) — one derivation, two readers; (b) the series set is a function of the **config**, not of traffic: two rigs holding **N** and **10N** records in one window produce the same metric-name+label set and the same line count (only digits differ), and the body stays under 8 KiB; (c) the read is bounded and sourced: `router_trace_files_read` equals the §4.1 rollover files the window actually intersects (`≤ 2`), and a **decoy** trace directory full of records outside the config's `trace.dir` contributes **nothing**; (d) **determinism**: two admitted scrapes with no intervening traffic are **byte-identical** (no timestamp, no uptime — so no wall-clock value exists to differ); (e) **zero is not absent**: a window holding records but no input tokens keeps the token series at `0` and **omits** the ratio series, with its `# router: … omitted — …` comment naming why, while a window whose `trace.dir` is removed after boot answers `200` with every trace-derived figure absent, its comments present, `router_metrics_omitted_figures ≥ 1` and **no** §8 body; (f) the `provenance` label is §9.2's own word per series and is never re-labelled (an `inferred` figure cannot be emitted as `verified`); (g) the formatter is called **directly** with a hand-built `TraceFigures` and renders exactly the series those values imply — the single-owner rule's structural half: a figure derived from records is not expressible through `metrics::exposition`'s signature (ADR-041 §4) | `router-cli/src/metrics.rs` (new) over `stats::read_window_records` + `stats::aggregate` + the hoisted ratio helpers; the route and the guard seam are §12.21's |
+
+| CONF-88 | spec §1·the amended non-goal row + §4.17·`config.enabled` and its default + AGENTS 1·the default path | **the capability is off by default, and a later config edit cannot silently enable it.** Over a root that does not mount the kind (and over one that mounts it with `config.enabled` absent or `false`), a byte-identical repeat inside one session is **still forwarded upstream**: two calls, two records, **no `cache` group anywhere**, and outbound bytes byte-identical to the same build's bodies with the kind deleted from the registry. **Green at the base by construction** (the kind does not exist, so nothing can be on) — which is the point: it cannot be made green by the implementation, so it pins the *default* rather than the feature. Its red control is a sabotage run, not a limb: a build whose loader defaults that key to `true` must turn this case red (`autowork/harness/r51-*/`, the R50-1 sabotage-control shape) | the plugin's inert mount + the loader's default (`builtin/response_cache`) |
+| CONF-89 | spec §4.17·the key's five components, the never-stored list and the store's two frozen bounds + §6·the `cache` group and its three properties + §7·the `inferred` label and the gate's exclusion | **a hit is the recorded bytes, and the record refuses to be counted.** After one miss, a byte-identical repeat of the same session returns a response **byte-identical** to the recorded one with the upstream seeing **one** request; the hit's record carries `cache` with `verdict: "inferred"`, `key_digest` = the sha256 of the bytes **as sent**, `replayed.request_id` = the miss's own id (same session), `replayed_bytes` = the returned length; it is `usage_missing: true` with `usage` zeroed, `cost.*` `0`, `upstream_status`/`upstream_ms`/`protocol_out` `null` and `cache` **absent** on the miss and on the run's ordinary records. Plus the arm set: a changed session / mode / revision / single body byte is a **miss**; a non-`2xx` or incomplete response is never stored; a request with no session is neither looked up nor stored; past either bound, eviction is FIFO by insertion; and the ledger reconciles (the window's `Σ usage` is unmoved by the repeat, the reference resolves inside the session, hits are never counted as calls). **Red at the base** — no store exists, so no hit can happen | the key, the store, the one seam in `forward.rs`, and the record's `cache` group |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1496,6 +1508,28 @@ next free ID is **`CONF-88`**. No existing assertion is touched: the round **rep
 assertion (same ID, renamed file) and **adds** `CONF-87`, both landing with the code they assert. `CONF-45`'s
 six arms, `CONF-47`'s parser refusals and every other case file stay **byte-identical**. Nothing here moves a
 gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 / ADR-012).
+
+**Allocation of `CONF-88` and `CONF-89` (R51 — the exact-match response cache, ADR-042) — recorded
+2026-09-27 by the round's contract card, the R9/R10/R17/R22/R28/R29/R32/R43/R50 precedent.** The occupancy
+check was a **measurement** of the real directory at this card's HEAD (`bf96207`):
+`ls tests/conformance/tests/*.rs | wc -l` → **77** files, ids `01–47, 53–66, 71–78, 80–87`; cross-read with the
+paragraph above, which closes with *"the next free ID is **`CONF-88`**"*, R51 takes **88** and **89** — both
+above the tree's maximum (87) and at the register's own claim. The pairing is deliberate and is the round's
+red/green contrast: **`CONF-88`** (off by default) is **green at the base by construction** and must stay green
+(the capability's own default is the arm it pins, and a later config edit that flips the loader's default turns
+it red); **`CONF-89`** (a hit is the recorded bytes) is **red at the base**, because no store exists for a hit
+to come from, and lands green with the code. Both case files land **with the implementation they witness** in
+one card (ADR-042 §10.3; the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule applies unchanged if that
+ever changes), on `tests/conformance/tests/conf_88_response_cache_off_by_default.rs` and
+`tests/conformance/tests/conf_89_response_cache_hit_is_the_recorded_bytes.rs`. The IDs are spent: not
+renumbered, not reused. **Occupancy now.** Case files present: `01–47`, `53–66`, `71–78`, `80–89` (77 at the
+base commit, plus the two this round adds). The register's accumulated **spent** set is the one the paragraph
+above states, gaining `88`/`89`; `48–51` stay reserved exactly as the paragraphs above leave them; **the next
+free ID is `CONF-90`**. No existing assertion is touched: these two are **added**, and every other case file —
+including `CONF-43`'s whitelist, `CONF-45`'s six arms and `CONF-46`'s own arm set — stays **byte-identical**.
+Nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope
+(AGENTS 9 / ADR-012), and the four frozen corpora's digests are unmoved, re-read for this round
+(`autowork/harness/r51-0/corpus-verify.txt`).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -3882,6 +3916,59 @@ measurement it replaces.
 figure (`R50-0-F2`), no per-provider or per-model cost split (forbidden by the single-owner rule until it is
 first in §9.2's provenance), no counters and no `_total` names, and no second route.
 
+### 12.22 The exact-match response cache (the landing of spec §4.17, ADR-042)
+
+Spec §4.17 is the contract; this section is where it lands, so two implementers cannot disagree about the shape.
+The one-sentence version: **a tier-A plugin mounted from the `plugins:` list, off unless `config.enabled: true`
+says otherwise, which serves a request from the response bytes recorded for the identical request of the same
+session — and says so in one additive trace group, while reading no record, no store row and no file.**
+
+**The module's home, and what each layer owns** (the single-owner rule, ADR-042 §9; the shape §12.21 borrows
+from ADR-041 §4):
+
+| layer | home | what it owns |
+|---|---|---|
+| the key | `crates/router-core/src/response_cache.rs` — `ResponseKey::for_request(&RequestFacts) -> ResponseKey` | **one** derivation: (protocol, `config_digest`, session, transform mode, `sha256` of the inbound body bytes as received). Pure; no clock, no I/O, no second copy anywhere |
+| the store | the same module: `ResponseStore` (in-memory, FIFO by insertion, `MAX_ENTRIES = 1024`, `MAX_STORED_BYTES = 64 MiB`) | the bytes, the recorded status and the source reference — **no derived figure** (no token estimate, no price, no counter a report could sum) |
+| the mount | `crates/router-plugins/src/response_cache.rs`, registered in the assembly's registry beside `builtin/transform_rules` (`assembly.rs:115`) | the fiber's own lifetime is the store's: an entry with `config.enabled: false` mounts **inert**, and the mechanism's unload semantics (`config.example.yaml:130`) are what drops the store |
+| the seam | `crates/router-proxy/src/forward.rs` — **one** call site, the last step before the attempt | the buffered path's only new branch; the streaming path's twin calls the **same owner** at the same position (the L2a/L2b leak class is not to be extended by this round) |
+| the record | `Accountant` — unchanged, the only writer | the hit's `cache` group, through the existing `commit` (`usage_missing: true`), never a second writer |
+| the label | `inferred` — `forward.rs:446`'s own word (spec §7) | `cache.verdict`, a `&'static str` |
+
+**What the code must not become** (each is a named defect, not a style preference): a second key derivation
+(including one inside a test helper a case then asserts against — the case tests the owner); a second store, a
+per-protocol map, a cache-of-the-cache, or persistence; a second trace writer; a `verified` word anywhere on
+this path; a read of anything under `autowork/`; and an early lookup that would strip the record of the route it
+did not call (ADR-042 §4.4).
+
+**The record** (spec §6's `cache` group, §12.6's additive class): present **iff** a hit; `verdict` `inferred`;
+`key_digest` the sha256 of the bytes as sent; `replayed` the source record's `request_id` + `session` +
+`turn_index`; `replayed_bytes` the count returned. `schema_version` stays **2**, and a record **without** the key
+is not a hit. The hit's other fields are spec §6's own list: `usage_missing: true`, `usage` zeroed, `cost.*` `0`,
+`result.upstream_status`/`upstream_ms` `null`, `protocol.protocol_out` `null` (the third class spec §6 states),
+`decision.provider`/`model` the route it did **not** call, `errors: []`.
+
+**The observation boundary, stated where the code lives** (constraint 3): the key reads the request's own
+values; the store is in-process memory; the trace JSONL stays the only product → autowork channel. A grep of
+`response_cache.rs` for `autowork` must stay **0**, and no measurement definition may cite the store (it is not
+durable, so it is not observable after a restart).
+
+| invariant | case |
+|---|---|
+| off by default: an absent entry, and an entry with `enabled` absent or `false`, change nothing on the default path | `CONF-88` |
+| a hit returns the recorded bytes verbatim, with the upstream seeing one request | `CONF-89` |
+| the hit's record says which record the bytes came from, and carries every component of its own key | `CONF-89` |
+| the record refuses to be counted (`usage_missing`, `null` upstream fields, `cache` absent elsewhere) and the ledger reconciles | `CONF-89` |
+| only complete `2xx` bodies are stored; a request with no session is neither looked up nor stored | `CONF-89` |
+| the two bounds hold and eviction is FIFO by insertion | `CONF-89` |
+| the gate corpus and the L1 envelope run with the capability off, and no gate reads a cache field | the round's gate run + the gate-non-interference rig (spec §4.17, ADR-042 §6.2/§12.5) |
+
+**What this section does not promise**: a TTL (the owner's decision, ADR-042 §2.4); a configurable capacity or
+per-session capacity (registered, `R51-0-F3`); persistence across restarts (`R51-0-F4`); a reporting line of its
+own (`R51-0-F2`); a semantic cache of any kind (`docs/spec.md:19`); and any saving figure that a gate could
+count (`R51-0-F7`: this round lands a capability whose measured class is **empty** on every corpus the repository
+has).
+
 ## 13. Primitive register, module map and leak register (ADR-016)
 
 The vocabulary is ADR-016's; this chapter is the enumeration. It answers three questions that §2–§12 answer
@@ -3939,6 +4026,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | `router-plugin-sdk/` | P9's tier-B half — **contract-only** (`src/lib.rs:1-4` stub) | a claim that a realm exists today |
 | `tests/conformance/` | the assertions that pin P1/P3/P5/P7 (and the ones that will pin the others; §12.8 is the table) | a place to move an invariant in order to pass (AGENTS 9; ADR-012) |
 | `autowork/` | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
+| `router-core/src/response_cache.rs` + `router-plugins/src/response_cache.rs` | **no primitive of P1–P9** — a *mountable capability* (§12.22, ADR-042): the key and the store, and nothing else | a second key derivation, a second store, a second trace writer, or a `verified` word on its path (§12.22's prohibition list). It holds **response** bytes; it never builds a request byte, so P1's boundary is untouched by construction |
 
 ### 13.3 The leak register
 
@@ -4040,7 +4128,7 @@ the three always-resident builtins remain resident, and the `Selector`/`Guard` s
 | protocol codecs / mappers | yes, per-cell declared | `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022) — and the owner's 〈暂时不做协议翻译〉 leaves the translation column empty |
 | price tables / tier config | yes, as data | constraint 5: every figure carries its official source URL + date; ADR-021/§12.13 |
 | the four service-key implementations | yes | the binding is replaceable; the semantics stay the core's (the ledger's rules, the table's stickiness, the quota arithmetic, the sink's append-only contract) |
-| semantic / exact-match response cache | yes, but **excluded** | a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, "What this ADR does not decide") |
+| semantic / exact-match response cache | **yes — the exact-match half is built** (ADR-042, R51; §12.22, spec §4.17): a plugin mounted from the `plugins:` list, **off by default** (`config.enabled`, default `false`), disclosed by **one** additive trace group, and **counted by no gate** | a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` **for ever** (AGENTS 4), and the 1 client request = 1 upstream call correspondence is **deliberately broken** — preserved instead as one record per client request, no usage, no money, and the source record's id as the attributed origin (§12.22) |
 
 The type-level half (ADR-036 **D4**): the boundary is enforced by making the alternatives
 unrepresentable rather than forbidden — `RawBody`'s mutators are private to the core, `Nano`

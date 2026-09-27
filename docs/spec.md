@@ -16,7 +16,7 @@ replayable trace.
 |---|---|
 | Server-side session state (`store:true`, `previous_response_id`) | Measured: clients do not use it (the capture in ADR-004); stickiness keeps fidelity when it is absent. **Not implemented in v0.1**: the two fields are never inspected — they are forwarded as the client's own bytes (§2) — so the trace's `state.stateful_inbound` is `false` for every request (gap G-F, §6) |
 | Automatic model selection / effect optimization | Explicit specification is primary; `auto` is left as a plugin slot (ADR-004) |
-| Semantic response cache, context summarization | Large conflict surface with prefix caching; a measured ledger is needed first (P4) |
+| **Semantic** response cache, context summarization | **Still out**: content-similarity matching and summarization — a large conflict surface with prefix caching, and a measured ledger is needed first (P4). **Now in scope, and off by default**: the **exact-match** response cache (§4.17) — a byte-identical repeat of one session's own request may be served from a response recorded earlier; a hit's saving is `inferred` for ever and **no gate may count it** (AGENTS 4, §7; ADR-042 §5) |
 | Multi-user, multi-tenant, multi-node deployment | Single-operator local process; local state is one SQLite/WAL file behind `trait Store` (§4.5, ADR-009) — the hosted form is a second implementation of the same trait, not a v0.1 goal |
 | Historical algorithms such as bandit / MF / BT | Kept as experiment assets; later returned as tier-A plugins |
 | A retrieval channel for `tee` original text (retrieve endpoint) | A rule may declare `tee`, but the storage location and retrieval channel are **not implemented in this version** (§4) |
@@ -1669,6 +1669,61 @@ equal §9.2's derivation and `--json`'s values, the series set is a function of 
 traffic, the read's bound and its source, determinism, and the zero-vs-absent rule). DESIGN §12.8's rows
 carry them.
 
+### 4.17 `builtin/response_cache` (the exact-match response cache — off by default)
+
+One capability, one key, one default, and it is **off** unless the operator asks for it. The kind is a tier-A
+plugin mounted from the `plugins:` list (ADR-036 requires this capability to be one), and it serves a request
+from a response recorded earlier **iff the client's request bytes are identical** — nothing else, ever
+(ADR-042; the reasoning, the alternatives and the measurement are there, not here).
+
+```yaml
+plugins:
+  - id: response-cache
+    kind: builtin/response_cache
+    config: { enabled: false }        # `enabled` is false by default: the key may be omitted entirely
+```
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `config.enabled` | bool | **`false`** | the capability's own opt-in. Absent or `false` ⇒ the plugin is **mounted inert**: it registers nothing into the serving path, reads no store and changes no record — the process behaves exactly as a build that does not know the kind |
+
+- **Two switches, one meaning each, and they are not synonyms.** `disabled` (§4.3) is the *mechanism's*
+  start-up switch, honoured for every plugin: it decides whether the fiber is loaded. `config.enabled` decides
+  whether the loaded fiber **acts**. The rule in one sentence: **the fiber may be loaded and the capability
+  still off** — so listing the plugin cannot silently enable it.
+- **The key** is the tuple (protocol, `config_digest`, `session`, transform mode, `sha256` of the inbound body
+  bytes **exactly as received**). No normalisation happens and there is none to do: the digest is taken over the
+  client's own bytes, before and independently of §2's two permitted mutations, and the other four components
+  are facts the bytes cannot express (the inbound path, the revision, the session — a header when `key_sources`
+  takes it from one — and §2.1's mode header). A request with **no session** is neither looked up nor stored.
+- **What a hit proves, and what it does not claim.** These exact bytes were sent before, and the response bytes
+  returned *then* are the bytes returned *now*, verbatim. **A hit therefore makes no claim about what the
+  upstream would answer now** — it is a **replay, not a prediction** — so `result.upstream_status` and
+  `result.upstream_ms` are `null` (an absent measurement, never `0`), `protocol.protocol_out` is `null`, and the
+  record's `cache` group says so (§6).
+- **What is never stored**: a response whose status is not `2xx`; an incomplete body (a stream abandoned
+  mid-way, a client disconnect, an upstream that died mid-stream); a body larger than the store's byte bound;
+  anything at all for a request with no session. Fail-closed in every arm: a class that is not stored is an
+  ordinary miss, never a partial answer.
+- **The store is in-process memory and nothing else** — no file, no store row, no migration, no event-log
+  writer — with two **frozen in-band constants**: at most **1024 entries** and at most **64 MiB** of stored
+  bodies, evicted **FIFO by insertion**. Both are constants, not keys (the same stance §3.3/§4.16 take for their
+  own frozen values); a configurable capacity is a future widening, never a smuggled knob. A restart is a cold
+  store: it changes **how many calls** are made, never **what any call sends**.
+- **Where the lookup sits**: the last step before the upstream attempt — after admission (§4.7), the body bound
+  (§4.13), route resolution (§3), the guard chain (§4.6) and the transform compose step (§2.1). A hit replaces
+  exactly one thing, the call: **a refusal is never softened by the cache**, and the record of a hit is the
+  ordinary record of that request with one group added (§6).
+- **The saving a hit produces is `inferred`, always, and no gate may count it** (§7; AGENTS constraint 4). The
+  `usage` it would rest on was measured by a *different* request, and the counterfactual was never measured; the
+  record is `usage_missing`-class, so it is counted on its own line and priced nowhere (§6, §9.2).
+- **Not in this version**: a semantic (similarity) cache — the exclusion above is unchanged; a **time-based
+  lifetime** (a TTL would make the hit verdict a function of the wall clock, which AGENTS constraint 2 forbids;
+  the decision is the owner's, ADR-042 §2.4); per-key capacity config; and persistence across restarts.
+- **Assertions**: `CONF-88` (off by default, with the red control that can fail it) and `CONF-89` (a hit is the
+  recorded bytes, the record's shape, the ledger's reconciliation). **This section and the code that implements
+  it land in one round** — the contract is not written ahead of the feature (the R50-0 → R50-1 shape).
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -1706,6 +1761,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | `transform_mode` (`passthrough` \| `transform`; always present — the mode in effect for **this request's outbound body**, §2.1), and `transforms[]`: one entry per step **that changed the payload**, each `plugin` (the rule id), `edited_paths[]` (`{ path, bytes_in, bytes_out }`, where the two byte counts are the **payload text's** length before and after the step — the length of the spliced JSON string span differs by its escaping and is not claimed here), `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1). **Every step must report its token delta**: a step that cannot is not admissible as one |
+| response cache | `cache` — **present iff this record's response came from the recorded store** (§4.17), i.e. iff no upstream call was made: `verdict` (`inferred`, always — §7 / constraint 4), `key_digest` (the `sha256` of the client's inbound body bytes **as received**), `replayed` (`request_id` of the record the bytes came from + its `session` + its `turn_index`), `replayed_bytes` (how many response bytes were returned — a count of bytes, never a price and never a saving). See the paragraph below for the three properties a reader must not have to derive |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
@@ -1715,7 +1771,10 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 `protocol_out` names the wire the request's bytes actually went out on. Because only a candidate whose
 `wire_api` equals the inbound protocol may be attempted (§2, §4.2), it equals `protocol_in` on every record of
 an attempt and **may never name another protocol**; it is `null` only in the classes where no route was
-selected (the pre-route rows below, the resolved route's `400`/`501`). `translated` is true only when the
+selected (the pre-route rows below, the resolved route's `400`/`501`) — **and in a third class, added by
+§4.17: a response-cache hit, where a route *was* selected and no bytes left the process.** That third class
+changes no existing record: the field names the wire the request's bytes actually went out on, and on a hit none
+went out. `translated` is true only when the
 attempt that carried the request re-encoded the body through a mapper; v0.1 ships no mapper, so it is **`false`
 on every record this build writes** and a record of this vintage may not be read as "a translation happened"
 (the R11-F1 record — `protocol_out` a foreign wire with `translated: true` over an untranslated body — is the
@@ -1736,6 +1795,33 @@ pre-route rejection, a connect failure, a request the inbound auth guard refused
 body bound refused (§4.13). The flag
 is what keeps such a record out of every rate, every sum and every gate — `router stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
+
+**A `cache` group means a *replay*, not a prediction, and the ledger must be able to say so** (§4.17). Three
+properties are contract rather than commentary, because each is a place a naive implementation breaks the
+accounting the trace exists for:
+
+1. **Present iff a hit** — `cache` is written on exactly the records whose response came from the recorded
+   store, by the record's existing single writer; never `null`, never `{}`, never `verdict: "verified"`. Its
+   presence *is* the statement "no upstream call was made by this request", which is why no second boolean is
+   spent on it.
+2. **The record refuses to be counted.** A hit is `usage_missing: true`, with `usage` zeroed and `cost.*` `0`
+   (the conventions the boundary-refusal table below already fixes, and for the same reason: no measurement
+   exists), `result.upstream_status` and `result.upstream_ms` `null`, and `protocol.protocol_out` `null`; the
+   response bytes it returned are attributed to the **source record's** id, which is the record that owns the
+   one measurement. A sum over records therefore cannot double-count a replayed response, and a hit can never be
+   counted as a call (ADR-042 §4.3). **One record per client request is unchanged** — this heading is a
+   statement about records, and it stays true on a hit.
+3. **Every component of the hit's own key is on the record** — `cache.key_digest` plus the record's own
+   `protocol.protocol_in`, `config_digest`, `identity.session` and `transform_mode` — so a stranger can
+   recompute the key that produced the hit, and `cache.replayed.session` must equal the hit's own session (a
+   reference across sessions is a defect, not a shape).
+
+The rest of a hit's record is the ordinary record of that request, **not** the boundary-refusal class's: the
+request entered the pipeline, so `identity.session` / `turn_index` / `event_id` are real, `decision_ms` and
+`result.overhead_ms` are measured (the lookup is the last step before the attempt, §4.17), and
+`decision.provider` / `model` name the route the request resolved to and did **not** call. Its
+`result.status` is the **recorded** response's own status, `transform_mode` stays the mode the request asked
+for (it is a key component), `translated` stays `false` and `errors[]` stays empty.
 
 **`state.sticky_hit` is one predicate about the moment a request arrived, and it is not a constant.**
 *Did this session already have a binding row?* — did the `sessions` projection of §4.5 hold, for

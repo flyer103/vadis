@@ -45,6 +45,9 @@ stable**, and choosing a cheaper model is second-order.
   *difference between two worlds* — the request that ran and the one that did not. A local estimate is
   labelled `inferred` and can never be reported as measured; where no comparison happened, the honest
   figure is none at all ([`docs/spec.md` §7](../docs/spec.md)).
+- **Response caching**: an exact-match, session-scoped *replay* of a response router recorded — **off by
+  default**, and the one lever whose saving can never be measured (so it is excluded from every gate). The
+  `verified`/`inferred` rule above is what makes that exclusion checkable; see *Response caching* below.
 - **How to check the claim**: `router stats --config config.yaml --window 24h` to read the
   cost and cache report (the window is required, because a saving that does not state its window
   cannot be checked), and its `plan family` section for what the switches cost. `router replay`,
@@ -324,6 +327,24 @@ the header is byte-for-byte your own bytes no matter what is configured. Every f
 reports is an estimate until a paired on/off measurement exists, so the report gains its
 measured per-transform saving only when that measurement lands — until then the rule file's
 numbers are shapes, not savings.
+
+## Response caching: exact match only, off unless you ask
+
+A different kind of cache, and the smallest useful one. When a request is **byte-identical** to one this
+session has already sent — the same request bytes, in the same session, on the same protocol, under the same
+configuration and with the same transform mode — router can return the response bytes it recorded then instead
+of calling the provider again. Change one byte, or ask from another session, and it is an ordinary request.
+It is **off by default**, and turning it on takes both halves: a `plugins:` entry of kind
+`builtin/response_cache` **and** `config.enabled: true` inside it — listing the plugin without that switch does
+nothing, and no later config edit can turn it on behind your back. What it will **not** claim is the interesting
+half: a served repeat is a **replay, not a prediction** — those bytes are what the provider returned earlier, so
+router asserts nothing about what it would answer now — and because no call happens, nothing is measured: the
+figure is labelled `inferred`, it is kept out of every rate and every sum, and no gate counts it
+([`docs/spec.md` §4.17](../docs/spec.md) and §7; `design/decisions/ADR-042-exact-match-cache.md`). It pays when
+a client re-sends an identical request inside one session — a retry after a timeout, a re-run of an unchanged
+command. On the corpora this project measures against, no request is a byte-identical repeat of another in its
+session, so treat it as a fidelity-preserving convenience rather than a cost lever: the numbers to weigh it are
+not in this repository yet, and this chapter will not invent them.
 
 ## Authoritative sources
 
