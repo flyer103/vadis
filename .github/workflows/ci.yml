@@ -74,10 +74,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-
 
+      # TEMPORARY R53-0 DIAGNOSTIC — removed before this branch's final commit.
+      - name: "DIAG r53-0: disk after cache restore"
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || echo "no target dir restored"
+          du -sh ~/.cargo 2>/dev/null || true
+
       # tests/conformance is a workspace member, so the protocol matrix, the byte/prefix
       # invariants and the accounting convention run as part of this step.
       - name: cargo build --workspace
         run: cargo build --workspace
+
+      # TEMPORARY R53-0 DIAGNOSTIC — removed before this branch's final commit.
+      - name: "DIAG r53-0: disk after cargo build"
+        run: |
+          df -h /
+          du -sh target
+          du -sh target/debug/deps target/debug/incremental 2>/dev/null || true
 
       - name: cargo test --workspace --no-fail-fast
         run: cargo test --workspace --no-fail-fast
@@ -87,3 +101,12 @@ jobs:
 
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
+
+      # TEMPORARY R53-0 DIAGNOSTIC — removed before this branch's final commit.
+      # Runs even after a gate failure so the post-mortem disk state is captured.
+      - name: "DIAG r53-0: disk at end (always)"
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
+          du -sh target/debug/deps target/debug/incremental 2>/dev/null || true
