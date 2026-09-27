@@ -2795,7 +2795,7 @@ makes `/health`'s exemption structural rather than a path comparison (spec §4.7
   `refused_record(…, proto_in: &str, …)` and, with it, `GuardState.proto_in`. The three protocol routes pass
   `WireApi::Chat|Responses|Anthropic.as_str()` — **byte-identical on the wire**, so `CONF-45`'s six arms and
   every pre-pipeline case are unaffected — and `/metrics` passes `"metrics"`, which is what spec §6's own
-  row for the field prescribes (*the endpoint's own protocol*, `docs/spec.md:1757`). `ProtocolRec.protocol_in`
+  row for the field prescribes (*the endpoint's own protocol*, `docs/spec.md:1869`). `ProtocolRec.protocol_in`
   is a `String` in the landed type (§12.6), so this is a **value** widening, never a schema move, and no
   consumer branches on it. The alternative — a fourth `WireApi` variant — is rejected in ADR-041 §3.8:
   `WireApi` is the *wire* enum a provider declares in `supports:` (`router-core/src/config.rs:526-529`).

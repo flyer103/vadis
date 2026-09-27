@@ -101,8 +101,13 @@ reach:
 
 - **any other route.** Not `/mcp` (STATE.md row 20's question, still the owner's), not a dashboard, not
   `router replay`, not `router trace tail`, not a second metrics path (`/metrics/v1`, a query-parameterised
-  variant, a per-window endpoint). `grep -c 'route(' crates/router-cli/src/lib.rs` is 4 at HEAD; it is 5
-  after R50-1 and 5 afterwards.
+  variant, a per-window endpoint). What is registered today is exactly what `serve` assembles at
+  `crates/router-cli/src/lib.rs:891-910` — `health_router`'s `/health` (`:584-591`) plus the three
+  `.merge(guarded_protocol_route(…))` sites (`:892`, `:898`, `:904`) — i.e. four path literals, which one
+  grep counts: ``grep -c '"/health"\|"/v1/chat/completions"\|"/v1/responses"\|"/v1/messages"' crates/router-cli/src/lib.rs``
+  → **4** at HEAD (measured; the same file through `grep -c 'route('` reads **8** and measures nothing —
+  two `fn` definitions, two `.route(` builders and `route_layer`). R50-1 adds `/metrics`' own literal, so
+  the pattern's count reads **5** after it: one new path, not a category.
 - **the byte boundary.** No client byte is read, mutated, or echoed by this surface; the two permitted
   mutations of `AGENTS.md` constraint 1 stay exactly two (ADR-015 item 1/5).
 - **any translation cell or protocol semantics** (ADR-022/023, ADR-043's (a) verdict).
@@ -232,8 +237,10 @@ parameter, not a header:
   `config.example.yaml`, the parser, the reload's refused-set question (ADR-040 D5 — is a window change
   live?) and a conformance case — a configuration-contract change, not a metrics one.
 - **Stated in-band, always**: `router_metrics_window_seconds` is a series of every response, and it is the
-  metrics surface's answer to spec §9.2's rule (*"a report must state the window it covers"*,
-  `docs/spec.md:2297-2299`). A reader never has to guess the scope, and it changes only when the constant
+  metrics surface's answer to spec §9.2's rule that a windowed report must say which window it covers
+  (`docs/spec.md:2297-2299`: *"A default would let a report be printed without stating the window it
+  covers, which is exactly what §7's reporting requirement forbids"*). A reader never has to guess the
+  scope, and it changes only when the constant
   does.
 - Cost of the choice: the window is not tunable without a release. Registered as `R50-0-F3` (§8) with the
   trigger: *a round that wants a configurable window owns the key, its read site, the reload's answer for
@@ -373,7 +380,7 @@ never a match on the three wire words (`autowork/harness/r50-0/anchors.txt`, sec
 consumers"). So the vocabulary gains one word and no code path gains an arm. Consequences, stated:
 
 - `router stats` counts a refused scrape in `requests`/`failed` and splits it out as `unauthorized`
-  (§9.2's provenance rows already say a refusal lands there — `docs/spec.md:2372` is the `succeeded`/`failed`
+  (§9.2's provenance rows already say a refusal lands there — `docs/spec.md:2371` is the `succeeded`/`failed`
   row, *"split by `errors[].kind`"*, and `:2370` the `requests` row); a metrics scan is
   therefore visible in the report beside a protocol-endpoint scan. That is deliberate: §4.7's own table says
   the trace is how *"am I being scanned?"* is answered (`docs/spec.md:731`), and a scan of the metrics port
@@ -598,7 +605,7 @@ one of the four: the surface is now served, and the owner said so.
 | `R50-0-F1` | the `R49-2-F1`/`R49-2-F6` class: the over-general universal *"one decision record per request"* still stands at `docs/spec.md:1694` (§6's heading) and `:2436` (§9.3's close), and `autowork/harness/r49-0/CLAIM-SOURCES.md` rows C3/C40 carry its wording — **not repaired here** (§1.2), because a partial narrowing is the same defect class and the atomic edit needs one card that owns all four carriers (the row file is outside every R50 write set). Recommended home: one contract-wording card. | architect (the contract's next owner) | open |
 | `R50-0-F2` | the unknown-outcome figure is absent from `/metrics` by design (§3.10); the widening (a windowed, non-scanning store read) needs a store-contract owner | backend-coder + the store contract's owner | open — with a trigger |
 | `R50-0-F3` | the metrics window is a constant (§3.3); a configurable window is the registered widening, with its own key, read site, reload answer and case | the next round that owns `config.example.yaml` | open — with a trigger |
-| `R50-0-F4` | the `conf_46` **rename** moves a case file name; any document, harness script or register that pins the *file name* `conf_46_metrics_is_bare_404.rs` must move with it. Measured at HEAD: `grep -rn 'conf_46_metrics_is_bare_404' .` finds `DESIGN §12.8`'s row only (the row is rewritten by §2.4); no harness script and no `book/` page names the file | the implementing card (R50-1) | due R50-1 |
+| `R50-0-F4` | the `conf_46` **rename** moves a case file name. Re-measured at HEAD with `git grep --untracked -n`, because the sentence this row first carried (`grep -rn 'conf_46_metrics_is_bare_404' .`, "finds `DESIGN §12.8`'s row only") is **false and was not a measurement**: a recursive filesystem grep over this repo also walks `target/`, and what it returns is not the tree. The real set is **74 files / 85 lines outside this card's own evidence** (the command in `measurements.txt` carries the `':!autowork/harness/r50-0'` exclusion, because the receipt that prints this number is a file in that directory and a count taken while it is being written is a self-reference rather than a measurement; the excluded half is measured on its own below). It splits: **must move** — `design/DESIGN.md:1005`, §12.8's `CONF-46` row, which §2.4 rewrites to carry both names, and *nothing else* (R50-1's rename owes no other document an edit). **Must not move**, each because it quotes or seals an event in which the file really carried that name: `.github/workflows/ci.yml:65` — a **live** file: the free-disk comment quotes the targets run 36299293578 died on, and rewriting the quotation would make the workflow assert an event that did not happen (`ci.yml` is R53's file, outside every R50 write set); this ADR's own lines (a record that authorises a rename must name both names); R49's fourteen, including the two audit rigs that `grep` the case **by path** (`r49-0/anchors.sh:67,250,252`, `r49-0b/my-anchors.sh:67,250,252`) and `r49-0/CLAIM-SOURCES.md:160,359`; three round records; fifty-four sealed `gates*.log`/`*.out` receipts under `autowork/harness/r2*–r53*`; and this card's **9** evidence files, which the same command reports separately (`git grep --untracked -l … -- autowork/harness/r50-0` → `9`) because they seal the pre-rename state and must outlive the rename as they are. What is **not** in the set, and is the part that would have bitten: no `book/` page, no manifest (`tests/conformance/Cargo.toml` names no case) and no live harness entry point | R50-1 — nothing owed beyond the rename itself (one re-scoped verdict, no edit) | due R50-1 |
 | `R50-0-F5` | **`DESIGN §12.11` contradicts `router-cli/src/lib.rs:579-583` on the key-absent case** — the section still reads *"When `server.auth_token_env` is absent, **no layer is installed** and the assembled router is byte-for-byte the assembly v0.1 had before this key existed"*, while the landed wiring (R47-2) installs the layer **always** and gives the key-absent revision a gate that admits everything, precisely so the two revisions have one code path. `R50-0` noticed it while adding this round's bullet directly above that sentence and **did not edit it** (the sentence is not this card's subject and the fix is a sentence in a file another round owns); the evidence is `crates/router-cli/src/lib.rs:579-583` against `design/DESIGN.md` §12.11's bullet list | the next round that owns `design/DESIGN.md` §12.11 (the auth landing; `R47-2`/`R48`'s truth-repair class) | next §12.11-touching card |
 | `R50-0-N1` | `AGENTS.md` constraint 2's discipline is what forbids the timestamp/uptime in the body (§3.2); a future "add `router_uptime_seconds`" idea must be recorded as a *new* contract, not a convenience | — (note) | n/a |
 | `R50-0-N2` | cost: this card is docs-only, offline, `$0.00` — no provider dialled, no credential read | — (note) | n/a |
@@ -638,8 +645,9 @@ excludes it). The writer's touch, four edits, all in `README.md`:
 
 Two further README facts the writer should not have to re-derive: `README.md:5`'s headline was fixed by
 `R49-1c` (`d2641ad`) and is **already** the narrowed form (*"…for every request it **completes**"*), and
-`README.md:389-393`'s §Ops bullet (*"`docs/spec.md` §9.3 lists the reporting surfaces that are not served
-yet"*) stays **true** — `router replay` and `router trace tail` are still not served, so only its wording,
+`README.md:395`'s §Ops bullet (*"`docs/spec.md` §9.3 lists the reporting surfaces that are not served
+yet"* — the bullet that also carries `R49-2-F2`'s sentence, one line below the §Ops heading at `:389`)
+stays **true** — `router replay` and `router trace tail` are still not served, so only its wording,
 not its truth, is at issue.
 
 ---
@@ -652,3 +660,36 @@ file; it does not touch `README.md`, `book/`, `AGENTS.md`, `crates/**`, `tests/*
 implementation of everything frozen here is `R50-1` (backend-coder), its independent verification `R50-1b`
 (the `CONF-46` red → green contrast is its control), the README `R50-1w`, and the audit of this contract
 `R50-0b`.
+
+---
+
+## 11. Post-audit repairs (R50-0b, 2026-09-27) — pointers, not decisions
+
+`R50-0b` audited this contract against `8b0fd21` and returned **changes requested**: every substantive check
+it ran passed (the four gates and `CONF-46` reproduced independently; the 21 series identical in spec §4.16,
+this ADR and DESIGN §12.21; the single-owner rule structurally enforceable; the amended `CONF-46` conserving
+each protection it had; the guarded-route decision sound; the authority chain quoted correctly) and **four
+defects sat in the text's own pointers**. All four are repaired here, in the card that owns the text:
+
+| R50-0b | the defect | the repair |
+|---|---|---|
+| 1 | `design/DESIGN.md:2798`'s §12.11 bullet cited `docs/spec.md:1757` for *the endpoint's own protocol*; the phrase occurs at `:1869`. The pair was stale in one carrier — this card's remap fixed it in this ADR and missed the DESIGN bullet | `1757` → `1869` in DESIGN. Asserted by tier B of `citecheck.py` |
+| 2 | §9's second note anchored the §Ops bullet at `README.md:389-393`; the sentence is at `README.md:395` (the bullet `R49-2-F2` also lives in). The writer card would have hunted three lines early | anchored at `:395`, with the §Ops heading's own line (`:389`) named so the reader can see both |
+| 3 | §1.3's *any other route* bullet named `grep -c 'route('` as the measurement of "4 routes at HEAD"; that command reads **8** — it counts `fn` definitions, `.route(` builders and `route_layer`, not routes. The number was right, the command was not a measurement of it | the bullet now anchors the assembly (`crates/router-cli/src/lib.rs:891-910`, `/health` `:584-591`, three `.merge(guarded_protocol_route(…))` sites `:892`/`:898`/`:904`) and names a pattern that reads **4**, with the old pattern's **8** stated beside it |
+| 4 | §8's `R50-0-F4` asserted that `grep -rn 'conf_46_metrics_is_bare_404' .` "finds `DESIGN §12.8`'s row only". The command never terminates over `target/`, and the real carrier set is **74 files / 85 lines outside this card's own evidence** — including one **live** file the sentence did not mention, `.github/workflows/ci.yml:65`, which quotes the failing targets of CI run 36299293578 | the row is re-measured with `git grep --untracked -n` and split into what must move (one row) and what must **not** (a quotation of an observed run, sealed receipts, a past round's tables), with the failed command named as failed |
+
+**Two more of the same class were found by the new assertion rig**, not by the audit, and are repaired here
+too. §3.3 attributed the rule *"a report must state the window it covers"* to `docs/spec.md:2297-2299`, where
+the spec's words are not that quote — a compression in quotation marks rather than a citation, so the section
+now carries the spec's own sentence verbatim. And §3.8 named `docs/spec.md:2372` as the `succeeded`/`failed`
+row when it is `:2371`; `:2372` is the `usage missing` row.
+
+**Why an assertion rig, and not a better sentence.** `anchors.sh` — this card's original evidence, the tool
+R50-0b used — *prints* the line a claim points at. A wrong number therefore prints happily, which is exactly
+how finding 1 survived a full audit inside a bullet that was itself printed. `citecheck.py` inverts the
+direction: it reads the documents' text and **fails** when the file, the range or the phrase bound to a
+citation is not there. Its red control is at the pre-fix commit — 4 failures, the two anchor-class ones plus
+these two — and it is green here (`citecheck.txt`: 110 tier-A, 7 tier-B, 0 failures). Nothing in this section
+changes a decision, moves a section, or touches the frozen surface: the assertions in §2 stay what they are,
+`CONF-46` stays green, and R50-1's work is unchanged.
+
