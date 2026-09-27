@@ -28,6 +28,18 @@ record; a round that fails its gates leaves documentation and no broken code.
   the routing tables that a human merges, and supplying the reference probabilities the semantic-
   corroboration gate is currently missing. The conclusion, and the first step if it is ever adopted,
   are in [`design/decisions/ADR-017`](../design/decisions/ADR-017-decision-model-evaluation-and-shadow-plan.md).
+- **Ingress: MCP / A2A / gRPC — evaluated, three separate verdicts.** The question "should router speak
+  MCP, A2A or gRPC?" is really three questions, and they were answered separately. *Serving another
+  protocol's semantics* — an MCP tool that runs a completion, an A2A agent card, a gRPC service — is
+  declined: each one stops forwarding your client's own bytes and starts synthesizing a reply, which is
+  the one thing this gateway promises not to do, and which is the maintainer's call to change rather than
+  a round's. So the six cross-protocol cells that already refuse with `501` stay the whole promise (see
+  [Protocols](protocols.md)). *Carrying the same bytes over HTTP/2* is the one transport change the
+  evidence supports, and it is not taken yet: it waits on a conformance experiment and on a reason to
+  have it. *Reaching the router from an MCP client* — fronting the OpenAI-compatible endpoints with an
+  external MCP adapter — works today with no product change, and the book will document it rather than
+  rebuild it. The verdicts, their conditions and what would reverse each one are in
+  [`design/decisions/ADR-043`](../design/decisions/ADR-043-ingress-three-verdicts.md).
 - **The iteration loop**: the direction pool lists the candidate rounds (real-client
   smoke tests, trace capture and replay corpora, input-side compression, output-side
   discipline, quota-aware routing, cache robustness, cost reporting, price verification,
