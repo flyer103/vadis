@@ -5,6 +5,7 @@
 
 pub mod config_load;
 pub mod config_path;
+pub mod metrics;
 pub mod reload;
 pub mod setup;
 pub mod stats;
@@ -799,6 +800,46 @@ pub async fn serve(config_path: &str) -> i32 {
         )
     }
 
+    /// `GET /metrics` (spec §4.16, ADR-041 §3.7, DESIGN §12.21): the one
+    /// guarded route that is not a protocol endpoint. It sits BEHIND the
+    /// same guard — §4.7's exemption is `/health`'s alone ("Nothing else
+    /// is exempt") — and its guard state carries the endpoint's own
+    /// protocol word, `"metrics"`, so a refused scrape leaves the same
+    /// boundary-class record a refused protocol request does. The handler
+    /// takes the state and nothing else: NO `Bytes` extractor, no header
+    /// extractor, no body layer (the §4.13 bound is not installed — the
+    /// route reads nothing, so it needs no bound; `/health` has the same
+    /// property today). The admitted arm writes nothing.
+    fn guarded_metrics_route(
+        revision: router_proxy::SharedRevision,
+        state: std::sync::Arc<AppState>,
+    ) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/metrics",
+                get(move || {
+                    let state = state.clone();
+                    async move {
+                        (
+                            StatusCode::OK,
+                            [(
+                                axum::http::header::CONTENT_TYPE,
+                                "text/plain; version=0.0.4; charset=utf-8",
+                            )],
+                            crate::metrics::snapshot(&state),
+                        )
+                    }
+                }),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(
+                GuardState {
+                    revision,
+                    proto_in: "metrics",
+                },
+                guard_mw,
+            ))
+    }
+
     /// What the guard runs with: the revision handle and this route's own
     /// protocol word. The gate itself lives on the **revision** (ADR-040
     /// D5's honesty note — a reload may rename, add or drop
@@ -916,6 +957,7 @@ pub async fn serve(config_path: &str) -> i32 {
             "/v1/messages",
             max_body_bytes,
         ))
+        .merge(guarded_metrics_route(cell.clone(), state.clone()))
         .with_state(());
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
