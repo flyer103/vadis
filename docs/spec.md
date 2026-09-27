@@ -1557,6 +1557,118 @@ observability section: whether a switch invalidates the L1 latency envelope, and
 ladder. AGENTS 9 / ADR-012 put the envelope and the gate definitions outside the mutable scope, so that is
 the owner's, and nothing measures it before the ruling.
 
+### 4.16 `GET /metrics` (the operator's scrape surface)
+
+*Status: **served** — the contract below, the amended `CONF-46` and the handler land **together** in the
+round that implements it (R50), so the tree is never documented-but-unreachable and never red in between
+(§9.3's rule). The route's home, the seam it joins and the derivation it must not duplicate are
+`design/DESIGN.md` §12.21; the authority, the rejected alternatives and the register are
+[ADR-041](../design/decisions/ADR-041-metrics-surface.md).*
+
+**One endpoint, one medium, one scope: the last 900 seconds of this process's own `trace.dir`, rendered in
+the Prometheus text exposition format.** It reads no part of a request, it writes nothing, and it adds no
+figure of its own — its numbers are §9.2's, rendered.
+
+| Property | Value |
+|---|---|
+| Method / path | `GET /metrics` (one route; no variants, no query parameters, no second path) |
+| Auth | **behind `server.auth_token_env`'s guard**, exactly as the three protocol endpoints (§4.7: *"Nothing else is exempt"* — `/health`'s exemption is `/health`'s alone). A scrape presents the token in `Authorization: Bearer <token>` or `x-api-key: <token>` (§4.7's two accepted forms) |
+| Success | `200`, `content-type: text/plain; version=0.0.4; charset=utf-8` — `# HELP` / `# TYPE` / `name{labels} value` lines |
+| Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Router-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"metrics"`**, and no store row — §4.7's refusal table, unchanged |
+| Any other status | **a defect.** The status set is exactly `{200, 401}`: never `404` (the surface is served), never `501`, never `503`, and never §8's error body on the `200` arm |
+| Window | **`900` seconds, a process constant** (`WINDOW_MS`), not a key, not a flag, not a query parameter; stated in every response by the `router_metrics_window_seconds` series, because §9.2's rule (*"a report must state the window it covers"*) has no other way to be kept in-band |
+| Timestamps | **none.** The scrape's own instant is the scraper's; the body carries no wall-clock value and no uptime, so two scrapes over an unchanged window are **byte-identical** |
+| Reads | the resolved `trace.dir` (`AppState`, §4.1's resolution; a key the reload **refuses**, §4.15). **Not** the store, **not** the config beyond the plan family below, and nothing under `autowork/` (constraint 3) |
+| Writes | nothing: no trace record, no event row, no state — on the admitted arm (a refusal writes the one record named above) |
+
+**The series.** Every row is a **`gauge`** (no `_total` name: these are window-scoped figures that may go
+down, and a `_total` suffix would invite a `rate()` over a value that is not monotonic). Counts and token
+quantities are unsigned integers, **money is integer nano of its own `currency`** (§4.8 — never a decimal),
+ratios carry the report's own four decimal places, `overhead_ms_p99` is integer milliseconds.
+
+| metric | labels | unit | the figure (all of them §9.2's, none of them new) |
+|---|---|---|---|
+| `router_metrics_window_seconds` | — | seconds | the constant `900` |
+| `router_metrics_omitted_figures` | — | count | how many omissions the rules below produced in *this* response (the response's own bookkeeping, never a figure over records) |
+| `router_trace_files_read` | — | count | the rollover files this read opened (≤ 2 for a 900s window, §4.1) |
+| `router_requests` | — | count | `requests` |
+| `router_requests_succeeded` | — | count | `succeeded` |
+| `router_requests_failed` | — | count | `failed` |
+| `router_failures_by_kind` | `kind` | count | the `failed` split — `kind` ∈ §8's `errors[].kind` vocabulary |
+| `router_requests_usage_missing` | — | count | `usage missing` |
+| `router_cost_nano` | `tier`, `currency`, `provenance` | integer nano | the four cost tiers, **per currency**; `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output`. **No total series exists** — the printed total is their sum, and a `tier="total"` would double-count under a `sum()` |
+| `router_cache_input_cached_tokens` | `provenance` | tokens | the hit rate's numerator (the measured quantity) |
+| `router_cache_input_tokens` | `provenance` | tokens | its denominator |
+| `router_cache_hit_rate` | `provenance` | ratio (0..1) | `hit rate` |
+| `router_prefix_continuity_p50` | `provenance` | ratio | `continuity p50` |
+| `router_transform_savings_tokens` | `provenance` | tokens | the two savings lines, one series per label present |
+| `router_plan_switches` | `family` | count | `switches` |
+| `router_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `switch cost (verified, <currency>)` |
+| `router_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `switch re-prefill (inferred)` — the token sum |
+| `router_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | the same line's cost sum |
+| `router_plan_switches_without_usage` | `family` | count | `switches without usage` |
+| `router_stateful_inbound_rate` | `provenance` | ratio | `stateful inbound rate` |
+| `router_overhead_ms_p99` | `provenance` | milliseconds | `overhead p99` — the derivation §9.2 defines (`overhead_ms − upstream_ms`), not the raw field |
+
+The five plan series exist **only when the loaded config declares a `plan_policy`** (§9.1's
+no-fabricated-plan-section rule); `family` is that policy's `family` verbatim.
+
+**`provenance` is §9.2's own label, machine-readable.** Its value is exactly the label column of §9.2's
+provenance table row for that figure — `verified`, `inferred`, `measured` or `count` — so a consumer may
+select `provenance="verified"` and can neither average an inferred figure into a measured one nor present
+one as the other (§7, AGENTS constraint 4). The two savings series are the case where the label *is* the
+distinction: `{provenance="verified"}` and `{provenance="inferred"}` are one metric name and are never to be
+summed together.
+
+**Four emission rules.**
+
+- **Money is per currency and never summed across them** (§4.8). A money series exists only for a currency
+  the window actually holds — never a zero series for an absent one — and the `# HELP` line says so.
+- **A figure that cannot be computed is omitted, with a named reason — never a `0`** (§9.2's own rule). Zero
+  is a *read*; the absence is a *hole*, and every hole is named by a `#` comment line in the body (the
+  exposition has no stderr): `# router: <figure> omitted — <reason>`. `router_metrics_omitted_figures`
+  counts what fired.
+- **Only labels the window produced are emitted** — never a synthetic zero for a failure kind or a savings
+  verdict nothing carried.
+- **Nothing else, ever** — see the export boundary below.
+
+**What may not be exported** (the list is the contract, not an implementer's judgement):
+
+- **no client bytes and no message content** — not a body, a message, a tool schema, a prompt, a `model`
+  string, or a hash of any of them. The formatter receives no request input at all;
+- **no key material** — never a token or `api_key` value, and not even the *name* of the variable holding
+  one (`server.auth_token_env` is §9.1's `auth` member, and one fact lives on one surface);
+- **nothing per-request and nothing keyed by traffic** — no `request_id`, no `model`, no `provider`, no
+  `requested_model`, no `client`, no upstream URL, no `thread_id`, no `turn_index`. `kind` is the one
+  traffic-shaped label and its domain is §8's closed vocabulary, not the traffic;
+- **no session identity** — no `session`, no `prompt_cache_key`, not even hashed: the trace is where §6
+  documents those, and this surface may not become a second channel for them (constraint 3);
+- **no per-provider or per-model cost split** — it is the most tempting figure here and it is forbidden:
+  §9.2's derivation aggregates by currency only, so exposing a split would be a **second, parallel
+  derivation** of the same money. It becomes available only when it is first in §9.2's own provenance;
+- **no config echo** — no paths, digests, prices, quotas or plugin lists (§9.1 reports the loaded
+  configuration);
+- **no inferred figure presented as measured** — that is what the `provenance` label is for.
+
+**The one figure that is not here.** `unknown outcome requests` (the only figure that lives in the event
+log) is **not** exposed: the store contract states that the full-log read is *"bounded use: conformance and
+rebuild; **the serving path never scans the log**"* (DESIGN §12.10.8's `Query::AllEvents`), and a per-scrape
+log scan is exactly what that forbids. The omission is constant, and the response names it in-band
+(`# router: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not
+scan it`), so its absence can never be read as a zero. `router stats` remains the surface for it.
+
+**One owner for every value.** The figures are the ones `router stats` already derives — the window read and
+`stats::aggregate` — and the surface **formats** them; it may not compute a figure from records, and the
+formatter's signature admits none (DESIGN §12.21). Two consequences are contract, not implementation detail:
+`router stats` and this surface can never disagree about a figure, and the per-provider split above can
+never appear here without first appearing there.
+
+**Assertions.** `CONF-46` (the status set, the guard's four arms, the absence of §8's body and header on the
+`200` arm, the canary limb, and the "an admitted scrape writes nothing" limb) and `CONF-87` (the figures
+equal §9.2's derivation and `--json`'s values, the series set is a function of the config and not of
+traffic, the read's bound and its source, determinism, and the zero-vs-absent rule). DESIGN §12.8's rows
+carry them.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
@@ -2301,17 +2413,22 @@ Four conventions this report obeys, each of which has bitten someone:
 
 ### 9.3 Surfaces that are **not** served in v0.1
 
-`router replay --trace … --config …` (DESIGN §9's same-code-path replay), `router trace tail`, and
-`GET /metrics` (Prometheus) are **planned, not served**:
+`router replay --trace … --config …` (DESIGN §9's same-code-path replay) and `router trace tail` are
+**planned, not served**:
 
 - `router replay` and `router trace tail` are not subcommands of this binary: the CLI accepts `serve` and
   `stats`, and any other subcommand is refused by the argument parser with a usage error and a **non-zero
   exit** — never a silently ignored flag.
-- `GET /metrics` is not registered: the route answers a bare `404` (an unrouted path does not go through
-  §8's error body), and its metric names, labels and units are frozen by the change that implements it
-  (the figures are integer fixed-point nano amounts there too — a Prometheus surface must not invent
-  decimals, and a window holding two currencies would need the currency as a label on every money series,
-  §4.8; that is the implementing change's ruling to make, not this section's).
+
+**`GET /metrics` has left this list.** It is **served**, and its shape was frozen by the change that
+implements it, exactly as the bullet that stood here said it would be: the metric contract is **§4.16**, the
+route's home and the derivation it must not duplicate are **DESIGN §12.21**, and the authority, the amended
+`CONF-46` and the register are **ADR-041**. Three sentences from the old entry are worth keeping in view,
+because each one was a promise and is now a fact: the surface reports **§9.2's own figures** (nothing new is
+computed for it), money is **integer fixed-point nano** with the window's currency as a label — a Prometheus
+surface does not invent decimals — and a window holding two currencies carries both, per §4.8, never a
+combined figure. Its assertions are `CONF-46` (the served surface and its refusal) and `CONF-87` (the
+figures are §9.2's).
 
 The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect
