@@ -873,3 +873,70 @@ implementation is the round's implementation card, its independent verification 
 that could); a ruling that the lifetime may be time-based (§2.4 — which would change §3.4 and nothing else); or
 a serving incident in which a replayed response was demonstrably wrong for the request that received it — which
 would be a defect in the key's components (§3.1) and would narrow §3.3 rather than licence a new claim.
+
+---
+
+## 17. Owner rulings (2026-09-28)
+
+Two decisions this ADR **surfaced instead of taking** — the lifetime question of §2.4 and the paid
+measurement of §7/§14 (`R51-0-N1`, `R51-0-F6`) — were put to the owner on **2026-09-28**, each with the
+orchestrator's recommendation beside it. **The owner ruled on both, the same day.** This section records
+those rulings **as the owner's decisions**; it rewrites nothing above it. §2.2's frozen shape **stands as
+written**, §2.4's route (a future time bound as a declared deviation) is **not** exercised, and the
+paragraphs that raised the two questions stay where they are — they are the record of *why* each was the
+owner's to answer and not the loop's.
+
+| id | the question, and where this ADR put it | the owner's ruling (2026-09-28) | what it closes | what it leaves open |
+|---|---|---|---|---|
+| `R51-0-N1` | may the store's lifetime be **time-based**? — §2.4's row, with its trigger | **No: the lifetime stays clock-free.** No TTL, no `session.ttl` reuse, no timestamp comparison on the lookup path | §2.4's question, and the loop's standing licence to treat **"add a TTL for hygiene"** as a convenience edit; §2.2's shape stands | §2.4's trigger, unchanged: the owner asks for the store to age out, or a serving incident shows unbounded staleness mattering in practice |
+| `R51-0-F6` | the **paid live measurement** that would give the capability a real-traffic repeat rate — §7's number, §14's row | **Not funded.** The four frozen corpora's measured **`0.0%`** stands as the only measured rate for this capability | the search for a measured repeat rate inside this repository: nothing is queued behind the corpora's null | the capability's payoff **on real traffic** — stated as **unknown**, explicitly not estimated. A later funding decision, a real deployment's own traffic, or an owner who wants the instrument built would reopen it |
+
+**Ruling 1 — the store's lifetime stays clock-free (`R51-0-N1`).** On 2026-09-28 the owner decided that
+the response-cache store's lifetime **stays clock-free**: **no TTL, no `session.ttl` reuse, and no
+timestamp comparison on the lookup path.** The implementation already reads no clock — R51's own sweep of
+the serving path (re-attacked, and re-derived, by R51-2's verification, attack 7) found **zero** time-API
+references in the two cache modules; `autowork/STATE.md` row 22 records that reading — so what the ruling
+changes is not the code path but the **authority**. The clock-free contract is now the **owner's**
+decision and no longer only this ADR's: a card that proposes a TTL, a `session.ttl` reuse, a "stale after
+N seconds" rule or any other expiry by elapsed time is proposing a **contract change that needs new
+authority**, and it may not be read — or argued — as an implementer tidying up an oversight. The converse
+is the reason the ruling is worth writing down at all: **the absence of a TTL is a decided absence, not
+an unexamined default.**
+
+**Ruling 2 — the paid live measurement is not funded (`R51-0-F6`).** On 2026-09-28 the owner decided
+**not to fund** the paid live run that would give this capability a real-traffic repeat rate. **What it
+closes** is the search for a measured repeat rate inside this tree: the frozen corpora's **`0.0%`**
+within-session byte-identical repeat rate (0 of 34 items, 8 sessions; §7 measures it, §7.3 states the
+mechanism) **stands as the only measured rate this capability has**, and no further measurement is queued
+behind it. **What it leaves open** is everything that number would have decided — and the honest form of
+"open" here is **unknown**, not estimated: **the capability's payoff on real traffic is unknown**, and it
+stays unknown until an owner funds a measurement or real traffic reports a rate of its own.
+
+The consequences are the ruling's substance, and they bind every later sentence about this capability:
+
+- **No saving may be claimed anywhere on the strength of this ruling or of this capability.** Not in
+  `book/`, not in `README.md`, not in the trace vocabulary, not in a round record, not in a config
+  comment: the measured `0.0%` licenses **no** saving figure, and §5's always-`inferred` label was never
+  a licence to publish one. §7.4's rule and register row `R51-0-F7` already said so; the ruling makes the
+  gap between *unmeasured* and *claimed* a **decision** rather than a waiting item.
+- **The ruling is fiscal, not technical.** It is a decision about **spending money on a measurement**,
+  taken against a corpus that holds no repeat — it is **not** evidence that the response cache never
+  pays. The honest reading of §7 is that this repository has never had the traffic that could show it
+  either way, and the mechanism the capability would exploit (a client resending a byte-identical
+  request in the same session) is a property of the clients, not of this corpus. A later owner may fund
+  the measurement; a real deployment may produce the rate for free. **Neither would contradict this
+  ruling**, and neither is required to justify the capability's existence — which was authorised on
+  constraint grounds (§1.1), not on a saving.
+- **What remains true and unchanged:** `CONF-88`/`CONF-89` (off by default; a hit is the recorded
+  bytes), the byte boundary (§3), the label (§5), the observation boundary (§8), and §7.2's headline —
+  *a documented null*. The capability ships as a fidelity-preserving convenience with a measured `0.0%`
+  on every corpus this repository holds, and **nothing above this section is amended.**
+
+**Where the two rulings are registered.** `autowork/STATE.md`'s waiting-on-human table carries them as
+rows **22** and **23**; both rows were **decided** on 2026-09-28 by the commit that appends this section
+(the rows name it), their original registration text left **standing** — a row in that table is the
+record of a decision the loop could not take, and after the ruling the same row becomes the record that
+the owner took it. **§14's register rows are not rewritten either** (this ADR is append-only): `R51-0-N1`
+is a note whose content this ruling confirms, and `R51-0-F6`'s `open` column is **superseded by this
+section** rather than by an edit to §14 — the same spirit as §2.4's unexercised route. A reader who
+follows either row's citation to this ADR lands here.
