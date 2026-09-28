@@ -42,6 +42,14 @@ pub struct SseUsageExtractor {
     chat_carrier_allowed: bool,
     /// Bytes of a not-yet-complete event (carried across chunks).
     pending: Vec<u8>,
+    /// The incremental terminator-scan cursor: the leading `scanned`
+    /// bytes of `pending` are known to contain no terminator start, so
+    /// the next scan resumes near the cursor instead of rescanning the
+    /// whole buffer on every chunk. Without it one oversized event made
+    /// `feed` quadratic in the buffered length and starved the relay
+    /// (R54: a single >16 MiB event was truncated to the client at the
+    /// §12.10.3 R4 bound; the bound itself is untouched).
+    scanned: usize,
     /// The input-side usage (anthropic `message_start`).
     input_side: Option<Usage>,
     /// The output-side usage (anthropic `message_delta`).
@@ -59,6 +67,7 @@ impl SseUsageExtractor {
             // other two protocols always carry usage in their terminals.
             chat_carrier_allowed: wire != WireApi::Chat || client_requested_usage,
             pending: Vec::new(),
+            scanned: 0,
             input_side: None,
             output_side: None,
             whole: None,
@@ -68,15 +77,37 @@ impl SseUsageExtractor {
 
     /// Feed one relayed chunk. Reassembles complete SSE events (blank-line
     /// terminated) and harvests each protocol's usage carrier.
+    ///
+    /// The whole pass is linear in the bytes that arrived, never in the
+    /// buffered length (R54 — the two quadratic limbs it removes: the
+    /// terminator scan resumes at the `scanned` cursor instead of
+    /// rescanning the buffer on every chunk, and the consumed prefix is
+    /// drained ONCE per feed instead of shifting the tail per event).
     pub fn feed(&mut self, chunk: &[u8]) {
         self.pending.extend_from_slice(chunk);
-        while let Some((end, term_len)) = next_event_span(&self.pending) {
-            // `end` indexes the blank-line terminator: everything before it
-            // is one complete event body.
-            let mut event: Vec<u8> = self.pending.drain(..end + term_len).collect();
-            event.truncate(end);
-            self.observe_event(&event);
+        // Take the buffer so the scan/observe loop borrows it while the
+        // observer borrows `self` — no per-event copy of the event body.
+        let mut buf = std::mem::take(&mut self.pending);
+        // A terminator can straddle the cursor by at most one byte less
+        // than its length (the longest is 4), so the scan resumes 3
+        // bytes early; anything older was checked with all its bytes
+        // present and found clean. After an event is consumed the scan
+        // continues at its end — consumed bytes are never rescanned.
+        let mut from = self.scanned.saturating_sub(3);
+        let mut consumed = 0usize;
+        while let Some((end, term_len)) = next_event_span(&buf, from.max(consumed)) {
+            // `end` indexes the blank-line terminator: everything before
+            // it (since the last event) is one complete event body.
+            self.observe_event(&buf[consumed..end]);
+            consumed = end + term_len;
+            from = consumed;
         }
+        // One shift per feed: drop the consumed events, keep the
+        // unterminated tail. The final scan covered the tail with all
+        // its bytes present, so the cursor marks it fully scanned.
+        buf.drain(..consumed);
+        self.scanned = buf.len();
+        self.pending = buf;
     }
 
     /// The tap's verdict. Call once the relay ended.
@@ -220,20 +251,42 @@ impl SseUsageExtractor {
     }
 }
 
-/// Finds the next complete event in `buf`: returns `(data_start, term_len)`
+/// Finds the next complete event in `buf`, scanning from `from` onward:
+/// returns `(data_start, term_len)`
 /// — the event body starts after any leading newlines carried over from
 /// the previous split, and `term_len` is the blank-line terminator's
 /// length (2 for `\n\n`, 4 for `\r\n\r\n`). `None` when no complete event
-/// is buffered yet.
-fn next_event_span(buf: &[u8]) -> Option<(usize, usize)> {
-    let lf = find(buf, b"\n\n").map(|i| (i, 2));
-    let crlf = find(buf, b"\r\n\r\n").map(|i| (i, 4));
-    match (lf, crlf) {
-        (Some((a, la)), Some((b, lb))) => Some(if a < b { (a, la) } else { (b, lb) }),
-        (Some((a, la)), None) => Some((a, la)),
-        (None, Some((b, lb))) => Some((b, lb)),
-        (None, None) => None,
+/// is buffered yet. `from` must be a position such that no terminator
+/// starts before it (the caller's scan cursor, minus the straddle
+/// allowance); the returned offset is absolute in `buf`.
+///
+/// One left-to-right pass: both terminators contain a `\n` (at offset 0
+/// and 1 respectively), so checking each `\n` position against both
+/// shapes finds the earliest terminator of either kind without ever
+/// scanning past it — an absent `\r\n\r\n` must not cost a whole-buffer
+/// scan per call (R54's second quadratic limb).
+fn next_event_span(buf: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from.min(buf.len());
+    while i < buf.len() {
+        if buf[i] != b'\n' {
+            i += 1;
+            continue;
+        }
+        // `\n\n` starting at i?
+        if buf.get(i + 1) == Some(&b'\n') {
+            return Some((i, 2));
+        }
+        // `\r\n\r\n` starting at i-1 (the `\n` at i is its second byte)?
+        if i >= 1
+            && buf[i - 1] == b'\r'
+            && buf.get(i + 1) == Some(&b'\r')
+            && buf.get(i + 2) == Some(&b'\n')
+        {
+            return Some((i - 1, 4));
+        }
+        i += 1;
     }
+    None
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -384,6 +437,65 @@ mod tests {
         ex.feed(b"data: not json at all\n\n");
         ex.feed(b"data: [DONE]\n\n");
         // Terminal seen, but no usage carrier arrived: honest Missing.
+        assert_eq!(ex.finish(), SseUsageOutcome::Missing);
+    }
+
+    #[test]
+    fn the_scan_cursor_tracks_the_unterminated_tail() {
+        // White-box: with no terminator buffered, the cursor marks the
+        // whole pending buffer as scanned (the next chunk resumes the
+        // scan there instead of rescanning from byte 0).
+        let mut ex = SseUsageExtractor::new(WireApi::Chat, true);
+        ex.feed(b"data: abc");
+        assert_eq!(ex.scanned, 9);
+        assert_eq!(ex.pending.len(), 9);
+        ex.feed(b"def\n");
+        assert_eq!(ex.scanned, 13);
+        // A terminator completing across the cursor: the event drains
+        // and the cursor starts over on the (empty) remainder.
+        ex.feed(b"\n");
+        assert_eq!(ex.scanned, 0);
+        assert!(ex.pending.is_empty());
+    }
+
+    #[test]
+    fn terminator_straddling_the_cursor_is_found() {
+        // The 4-byte CRLF terminator split 1/3 across feeds: the resume
+        // point's 3-byte overlap must still see it.
+        let mut ex = SseUsageExtractor::new(WireApi::Chat, true);
+        ex.feed(b"data: {\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\r");
+        ex.feed(b"\n\r\n");
+        ex.feed(b"data: [DONE]\r\n\r\n");
+        match ex.finish() {
+            SseUsageOutcome::Complete(u) => {
+                assert_eq!(u.input_total, 7);
+                assert_eq!(u.output, 2);
+            }
+            _ => panic!("expected Complete"),
+        }
+    }
+
+    #[test]
+    fn one_giant_event_is_reassembled_across_many_chunks() {
+        // The R54 shape: ONE event far larger than any chunk, with no
+        // terminator until its end. The tap must reassemble it and still
+        // see the following [DONE] (a quadratic rescan is what starved
+        // the relay; the integration guard is CONF-90 — this pins the
+        // functional result).
+        let mut ex = SseUsageExtractor::new(WireApi::Chat, true);
+        let mut giant = Vec::with_capacity((16 << 20) + 8);
+        giant.extend_from_slice(b"data: ");
+        giant.resize(6 + (16 << 20), b'x');
+        giant.extend_from_slice(b"\n\n");
+        for c in giant.chunks(1 << 20) {
+            ex.feed(c);
+            // Mid-event: the cursor keeps pace with the tail, so the
+            // per-chunk scan stays proportional to the chunk.
+            assert_eq!(ex.scanned, ex.pending.len());
+        }
+        assert!(ex.pending.is_empty(), "the giant event drained whole");
+        ex.feed(b"data: [DONE]\n\n");
+        // The giant payload was not a usage carrier; [DONE] was seen.
         assert_eq!(ex.finish(), SseUsageOutcome::Missing);
     }
 }
