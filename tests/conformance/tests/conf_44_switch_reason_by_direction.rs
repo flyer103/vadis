@@ -23,6 +23,11 @@
 #![forbid(unsafe_code)]
 
 use router_conformance::testkit::{self, PlanRig};
+use router_core::config::{
+    CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
+};
+use router_core::cost::Nano;
+use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 
 async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
@@ -285,11 +290,72 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
 /// deterministically: the 403 carries `Retry-After: 0` (the demotion
 /// expires the moment it is written) and the family's cooldown is 0s,
 /// so the deadline IS the spill's own µs timestamp — and the boundary
-/// request is posted immediately, well inside the same whole second.
-/// A second-granular guard computes `now < since_us` for that request
-/// and silently spills it; the unified µs clock admits the probe.
+/// request is posted after it, which a µs guard must always admit.
+///
+/// R58 — the discrimination moved off the wall clock (the R56-1 load
+/// red at :328 — the self-diagnosing "indeterminate: the second
+/// boundary was crossed; re-run" abort, red on byte-identical input,
+/// the same class R56 fixed in conf_72/conf_73). The old text sampled
+/// the same-second window *probabilistically*: the live arm could tell
+/// a second-granular guard from the µs one only while the boundary
+/// request landed in the spill's whole second, so it aborted red
+/// whenever 700ms of scheduling had passed. The fixed case splits the
+/// two properties the arm conflated:
+///
+/// - **The µs-word discrimination** is pinned UNCONDITIONALLY by pure
+///   `PlanFirstRule` calls at instants the test controls (below): with
+///   the deadline at a mid-second instant `S`, the gate refuses at
+///   `S − 1µs`, lifts exactly at `S`, and — the decisive row — admits
+///   at `S + 1µs`, an instant a second-granular guard computes as
+///   `S − 500ms` and refuses. No wall clock, no scheduling, fires on
+///   every run.
+/// - **The live agreement** (the surface's word and the guard's word
+///   for the same configuration) needs no window at all: with a
+///   zero-length deadline EVERY instant after the spill judges alike,
+///   so "the request is admitted the way the surface said" holds
+///   unconditionally — the live arm now asserts it on every run, where
+///   the old text asserted nothing at all on the runs it aborted.
+///
+/// The replacement is strictly stronger per run, and the caller-side
+/// regression it was written for (a guard clock fed by the truncated
+/// seconds word) still reds the live arm on any run whose boundary
+/// request lands in the spill's whole second — demonstrated by the
+/// sabotage control under `autowork/harness/r58-0/`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_44_guard_and_surface_judge_the_same_instant() {
+    // The deterministic pin (no wall clock): with a zero-length
+    // cooldown the deadline IS the spill's own µs timestamp. `S` is
+    // mid-second on purpose — 2027-01-15T08:00:00.500000Z: a guard
+    // whose instant is rebuilt from the truncated whole-seconds word
+    // computes now' = S − 500_000µs < S at now = S + 1µs and REFUSES;
+    // the µs guard admits. This is the same-second discrimination the
+    // live arm below can only sample; here it fires on every run.
+    let p = policy();
+    const S: i64 = 1_800_000_000_500_000;
+    assert_eq!(
+        guard_word(&p, S, S - 1, true),
+        Some("cooldown".into()),
+        "strictly before the zero-length deadline the cooldown arm stands \
+         (the deadline IS the spill's own µs timestamp)"
+    );
+    assert_eq!(
+        guard_word(&p, S, S, true),
+        None,
+        "the gate lifts exactly at the deadline"
+    );
+    assert_eq!(
+        guard_word(&p, S, S + 1, true),
+        None,
+        "1µs past the deadline, still inside the same whole second: the µs \
+         word admits — a second-granular guard refuses here"
+    );
+    assert_eq!(
+        guard_word(&p, S, S + 1, false),
+        Some("primary_cooling_down".into()),
+        "with the demotion live the same instant refuses: the admission \
+         depends on the demotion being dead, not on a toothless gate"
+    );
+
     let rig = rig("conf44-clock").await;
     rig.plan.queue(testkit::plan_ok("t1"));
     // The spill's 403 with a ZERO Retry-After: the provider demotion
@@ -308,12 +374,14 @@ async fn conf_44_guard_and_surface_judge_the_same_instant() {
 
     let (s1, _b, _h) = rig.post(Some("S1"), 1);
     assert_eq!(s1, 200);
-    let t_spill = std::time::SystemTime::now();
     let (s2, _b2, _h2) = rig.post(Some("S1"), 2);
     assert_eq!(s2, 200, "turn 2 spills to the metered account");
 
     // The surface's verdict at its own µs clock, taken immediately: the
     // family is on overflow and nothing blocks the probe anymore.
+    // Timing-safe by construction — the zero-TTL demotion died at its
+    // write instant and the family cooldown is 0s, so at ANY instant
+    // after the spill the surface admits.
     let h = http_get(&rig.listen_addr, "/health");
     assert_eq!(h["plan"]["account"], "overflow");
     assert_eq!(
@@ -322,16 +390,10 @@ async fn conf_44_guard_and_surface_judge_the_same_instant() {
     );
     assert_eq!(h["plan"]["probe"]["blocked_by"], serde_json::Value::Null);
 
-    // Immediately — /health and the spill are still inside the same
-    // whole second (the case aborts as indeterminate otherwise, never
-    // passes for the wrong reason) — the boundary request arrives.
-    assert!(
-        std::time::SystemTime::now()
-            .duration_since(t_spill)
-            .expect("clock")
-            < std::time::Duration::from_millis(700),
-        "indeterminate: the second boundary was crossed; re-run"
-    );
+    // The boundary request: the guard must admit the way the surface
+    // did. No window is sampled — for this configuration (the deadline
+    // IS the spill's own instant) every later instant judges alike, so
+    // the agreement holds on every run, loaded or not.
     let (sp, _bp, _hp) = rig.post(Some("S2"), 1);
     assert_eq!(sp, 200);
     assert_eq!(
@@ -349,6 +411,57 @@ async fn conf_44_guard_and_surface_judge_the_same_instant() {
     assert_eq!(switches[1].1["to_account"], "primary");
     assert_eq!(switches[1].1["reason"], "primary_recovered");
     assert_eq!(switches[1].1["probe"], true);
+}
+
+/// This case's plan policy as a value (PLAN_POLICY_DEFAULT: spill,
+/// probe recovery, cooldown 0s) — for the pure `PlanFirstRule` pins.
+fn policy() -> PlanPolicyCfg {
+    PlanPolicyCfg {
+        family: "m1".into(),
+        primary: RouteSpec {
+            provider: "p-plan".into(),
+            model: "m1".into(),
+        },
+        overflow: RouteSpec {
+            provider: "p-api".into(),
+            model: "m1".into(),
+        },
+        on_primary_exhausted: OnPrimaryExhausted::Spill,
+        recover: RecoveryMode::Probe,
+        cooldown: DurationVal(0),
+        overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+    }
+}
+
+/// The guard's word for a boundary request at `now_us` (independent
+/// evaluation — the same `PlanFirstRule` type the request path runs,
+/// called here as a pure function of test-controlled instants).
+/// `primary_allowed` is the availability input: `true` keeps the
+/// ADR-011 demotion arm out of the call, so the zero-length gate is
+/// exercised unmasked (CONF-72's helper shape).
+fn guard_word(
+    p: &PlanPolicyCfg,
+    since_us: i64,
+    now_us: i64,
+    primary_allowed: bool,
+) -> Option<String> {
+    let rule = PlanFirstRule::new(p.clone());
+    let req = PlanRequest {
+        session: Some("conf-44"),
+        turn_index: 1,
+        state: PlanStateRow {
+            account: PlanAccount::Overflow,
+            since_us,
+        },
+        now_us,
+        primary_allowed,
+        deferred_by_window: false,
+        overflow_spend: Nano(0),
+    };
+    rule.probe_admitted(&req)
+        .err()
+        .and_then(|e| e.blocked_by_surface_word())
+        .map(str::to_string)
 }
 
 /// Minimal blocking GET (the CONF-25/41 style).
