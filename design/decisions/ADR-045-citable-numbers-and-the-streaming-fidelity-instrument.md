@@ -18,7 +18,8 @@
   **ADR-044** (the streaming bound's semantics, which the truncation legs must match); **DESIGN** §12.10.3
   (**R1** no re-framing, **R2** write-through, **R4** the bound, **R6** mid-stream failure), §12.16 (where a
   baseline's numbers live), §12.23 (**the definitions' contract home, added by this round**), §13.6
-  (`:4137`, the `Observer` row); `docs/spec.md` §6 (the observation contract), §7 (the labels), §9.2/§9.3
+  (the `Observer` row — `:4137` as this round's card cites it, `:4202` once §12.23's insertion below moved
+  it); `docs/spec.md` §6 (the observation contract), §7 (the labels), §9.2/§9.3
   (reporting surfaces); `tests/conformance/tests/conf_13_sse_passthrough.rs` (what the suite asserts today);
   `autowork/harness/r32-2/results/C22/result.json` + `autowork/harness/r32-3/results/C22/result.json` (the
   counterexample); `autowork/harness/r32-3/qa3_rig.py` (its reducer); `autowork/harness/r59-0/**` (this
@@ -411,7 +412,8 @@ is named here rather than taken as a side effect.*
 
 - `AGENTS.md` constraints 1, 2, 3, 4, 5, 8, 9
 - `design/DESIGN.md` §12.10.3 R1/R2/R4/R5/R6, §12.16 (where numbers live), **§12.23 (the definitions)**,
-  §13.1 (P1's row), §13.6 (`:4137`, `:338` — amended by this round)
+  §13.1 (P1's row), §12.2 (`:338`, at the base) and §13.6 (`:4137`, at the base) — both amended by this
+  round to name the `R41-4` forward reference that no round ran
 - `design/decisions/` — ADR-007, ADR-011, ADR-012, ADR-015, ADR-028, ADR-029 D1/D3, ADR-030 D3, ADR-036
   D3 + `:110`/`:216` (residue), ADR-042, ADR-044
 - `docs/spec.md` §2, §6, §7, §9.2, §9.3
