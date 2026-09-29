@@ -7,7 +7,7 @@
 //!
 //! - **inside the window** the section says `blocked_by: "cooldown"` —
 //!   and the same evaluation the guard would make (independent
-//!   `PlanFirstRule` call, at a `now` taken after the read) agrees;
+//!   `PlanFirstRule` call) agrees;
 //! - **after the deadline** the same section says `admitted: true` — and
 //!   the *next real request at a session boundary actually probes the
 //!   primary and wins* (CONF-39's recovery sequence), so the "admitted"
@@ -25,7 +25,24 @@
 //! fixture's `Retry-After: 1` demotion (1s) and waits past it; the
 //! remaining 1.3s total also makes the second read's position (inside vs
 //! past) a property of the seeded 200ms deadline, not of scheduling.
-
+//!
+//! R56 — how the inside-window row is asserted without racing the
+//! deadline (the R55 CI flake: red on byte-identical input, green on the
+//! rerun). The read's position is never *assumed* from the wall clock:
+//! every `/health` evaluation is bracketed (`t0`/`t1` around the round
+//! trip, one clock, one machine) and the observed `since`/`deadline`
+//! strings are the single reading every assertion is driven from. The
+//! gate's boundary is pinned unconditionally by pure `PlanFirstRule`
+//! calls at instants the test controls (`deadline − 1µs` / `deadline`,
+//! the demotion arm stood up and down); the live word is asserted only
+//! where the bracket *proves* the position — inside forces `cooldown`
+//! (with the demotion provably standing, so the precedence is witnessed
+//! live), past forbids it — and a run whose bracket proves neither still
+//! asserts the vocabulary, the self-consistency, and every
+//! position-independent row. No window was widened and no assertion
+//! sleeps easier: each check fires at least as strictly as the one it
+//! replaces, and the sabotage controls live under
+//! `autowork/harness/r56-0/`.
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};
@@ -60,7 +77,15 @@ fn policy() -> PlanPolicyCfg {
 
 /// The guard's word for the surface's reduced request at `now_us`
 /// (independent evaluation — the same type the server runs, called here).
-fn guard_word(p: &PlanPolicyCfg, since_us: i64, now_us: i64) -> Option<String> {
+/// `primary_allowed` is the availability input: `false` stands the
+/// ADR-011 demotion arm up so the evaluation order (Cooldown before
+/// PrimaryDemoted) is exercised as a pure call, no clock involved.
+fn guard_word(
+    p: &PlanPolicyCfg,
+    since_us: i64,
+    now_us: i64,
+    primary_allowed: bool,
+) -> Option<String> {
     let rule = PlanFirstRule::new(p.clone());
     let req = PlanRequest {
         session: Some("conf-72"),
@@ -70,7 +95,7 @@ fn guard_word(p: &PlanPolicyCfg, since_us: i64, now_us: i64) -> Option<String> {
             since_us,
         },
         now_us,
-        primary_allowed: true,
+        primary_allowed,
         deferred_by_window: false,
         overflow_spend: Nano(0),
     };
@@ -161,13 +186,14 @@ async fn conf_72_cooldown_arm_live_before_and_after_the_deadline() {
     assert_eq!(s2, 200, "the 403 spills the family to overflow");
     assert_eq!(rig.api.requests().len(), 1);
 
-    // Read 1 — inside the 200ms window: the surface says `cooldown`, and
-    // the guard (independently evaluated, at a now after the read —
-    // strictly harsher) says `cooldown` too.
+    // Read 1 — the surface inside the 200ms window. The strings are a
+    // stored fact (timing-independent); the live word is asserted by
+    // PROVEN position, never assumed from the wall clock: the section's
+    // own evaluation instant lies in [t0, t1] (one clock, one machine).
+    let t0 = now_us();
     let h1 = http_get(&rig.listen_addr, "/health");
+    let t1 = now_us();
     assert_eq!(h1["plan"]["account"], "overflow");
-    assert_eq!(h1["plan"]["probe"]["blocked_by"], "cooldown");
-    assert_eq!(h1["plan"]["probe"]["admitted"], false);
     let since_ms = parse_ms(h1["plan"]["since"].as_str().expect("since"));
     let deadline_ms = parse_ms(h1["plan"]["probe"]["deadline"].as_str().expect("deadline"));
     assert_eq!(
@@ -175,16 +201,80 @@ async fn conf_72_cooldown_arm_live_before_and_after_the_deadline() {
         200,
         "L1b on the wire: deadline - since is exactly the loaded 200ms"
     );
+    let (since_us, deadline_us) = (since_ms * 1_000, deadline_ms * 1_000);
+
+    // The gate itself, driven by the single observed reading at instants
+    // the test controls — the boundary pinned on BOTH sides with no wall
+    // clock at all (the same PlanFirstRule type the server runs):
     assert_eq!(
-        guard_word(&p, since_ms * 1_000, now_us()),
+        guard_word(&p, since_us, deadline_us - 1, false),
         Some("cooldown".into()),
-        "the guard agrees the probe is blocked (independent call)"
+        "armed strictly inside the window — Cooldown fires before the demotion arm even when the latter stands"
     );
+    assert_eq!(
+        guard_word(&p, since_us, deadline_us, false),
+        Some("primary_cooling_down".into()),
+        "at the deadline the cooldown arm hands off to the demotion arm"
+    );
+    assert_eq!(
+        guard_word(&p, since_us, deadline_us, true),
+        None,
+        "with no demotion the gate lifts exactly at the deadline"
+    );
+
+    let blocked_by = &h1["plan"]["probe"]["blocked_by"];
+    let admitted = &h1["plan"]["probe"]["admitted"];
+    if t1 < deadline_us {
+        // Provably inside (evaluation instant <= t1 < deadline) — the
+        // word is forced. The fixture's 1s demotion provably stands at
+        // the same instant (t1 < since + 200ms, and the demotion outlasts
+        // since + 1s > since + 200ms), so the live word witnesses the
+        // precedence, not just the arm: both blocks stand, `cooldown`
+        // prints. The guard agrees at the read's own bracket end — the
+        // case's original cross-check, now position-forced.
+        assert_eq!(*blocked_by, "cooldown");
+        assert_eq!(*admitted, false);
+        assert_eq!(
+            guard_word(&p, since_us, t1, true),
+            Some("cooldown".into()),
+            "the guard agrees the probe is blocked (independent call at the read's bracket end)"
+        );
+        assert_eq!(
+            guard_word(&p, since_us, t1, false),
+            Some("cooldown".into()),
+            "… and still `cooldown` with the demotion armed: the precedence, live"
+        );
+    } else {
+        // The bracket cannot prove the inside row under this load. What
+        // every remaining position still forces: the surface speaks only
+        // the guard's vocabulary for this configuration, it agrees with
+        // itself (admitted <=> no word), and a read provably past the
+        // deadline never prints the cooldown arm.
+        assert_eq!(
+            admitted.as_bool().expect("admitted is a bool"),
+            blocked_by.is_null(),
+            "admitted and blocked_by are the same fact on the surface"
+        );
+        if let Some(w) = blocked_by.as_str() {
+            assert!(
+                w == "cooldown" || w == "primary_cooling_down",
+                "the only two words this configuration can produce, got {w:?}"
+            );
+        }
+        if t0 >= deadline_us {
+            assert_ne!(
+                *blocked_by, "cooldown",
+                "a read provably past the deadline cannot print the cooldown arm"
+            );
+        }
+    }
 
     // Past the 200ms deadline and the 1s fixture demotion (Retry-After: 1
     // on the 403): the section flips to admitted, and the very next
     // session boundary REALLY probes the primary (CONF-39's sequence) —
     // the guard's admission is witnessed by the plan mock being reached.
+    // The oversleep makes this read's position a property of the seeded
+    // deadline, not of scheduling (it is provably past both instants).
     tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
     let h2 = http_get(&rig.listen_addr, "/health");
     assert_eq!(h2["plan"]["probe"]["admitted"], true);
