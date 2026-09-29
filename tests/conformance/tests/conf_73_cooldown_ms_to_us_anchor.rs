@@ -22,16 +22,87 @@
 //!
 //! The counterweight is structural: `cooldown: 0s` cannot fail this case
 //! (deadline == since either way), which is why the knob here is 700ms.
-
+//!
+//! R56 — how the gate rows are asserted without racing the deadline (the
+//! R55 CI flake: the witness-2 post landed past the window on a loaded
+//! runner and the plan mock saw the probe where the case expected the
+//! refusal — red on byte-identical input, green on the rerun). The
+//! request's position is never *assumed* from the wall clock: the post
+//! is bracketed (`s0`/`s1` around the round trip, one clock, one
+//! machine), the observed `since`/`deadline` strings are the single
+//! reading every assertion is driven from, and the 700ms boundary is
+//! pinned unconditionally by pure `PlanFirstRule` calls at instants the
+//! test controls (`deadline − 1µs` / `deadline`, the demotion arm stood
+//! up and down — no fixture demotion can mask the gate there). The live
+//! refusal is asserted only where the bracket *proves* the post was
+//! handled inside the window; a run that cannot prove it still asserts
+//! every position-independent row, and the admission row is witnessed
+//! either by S3 after the oversleep (its position provably past both
+//! instants) or, on a run so loaded the probe fired at S2, by S2 itself.
+//! No window was widened and no assertion sleeps easier; the sabotage
+//! controls live under `autowork/harness/r56-0/`.
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use router_conformance::testkit::{self, PlanRig};
+use router_core::config::{
+    CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
+};
+use router_core::cost::Nano;
+use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 use router_core::store::{Query, QueryRow, Store as _};
 
 const POLICY_700MS: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 700ms";
+
+fn policy() -> PlanPolicyCfg {
+    PlanPolicyCfg {
+        family: "m1".into(),
+        primary: RouteSpec {
+            provider: "p-plan".into(),
+            model: "m1".into(),
+        },
+        overflow: RouteSpec {
+            provider: "p-api".into(),
+            model: "m1".into(),
+        },
+        on_primary_exhausted: OnPrimaryExhausted::Spill,
+        recover: RecoveryMode::Probe,
+        cooldown: DurationVal(700),
+        overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+    }
+}
+
+/// The guard's word for a boundary request at `now_us` (independent
+/// evaluation — the same `PlanFirstRule` type the request path runs,
+/// called here as a pure function of the observed strings).
+/// `primary_allowed` is the availability input: `true` keeps the ADR-011
+/// demotion arm out of the call, so the 700ms gate is exercised unmasked.
+fn guard_word(
+    p: &PlanPolicyCfg,
+    since_us: i64,
+    now_us: i64,
+    primary_allowed: bool,
+) -> Option<String> {
+    let rule = PlanFirstRule::new(p.clone());
+    let req = PlanRequest {
+        session: Some("conf-73"),
+        turn_index: 1,
+        state: PlanStateRow {
+            account: PlanAccount::Overflow,
+            since_us,
+        },
+        now_us,
+        primary_allowed,
+        deferred_by_window: false,
+        overflow_spend: Nano(0),
+    };
+    rule.probe_admitted(&req)
+        .err()
+        .and_then(|e| e.blocked_by_surface_word())
+        .map(str::to_string)
+}
 
 async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) = testkit::plan_rig_parts(tag, "", POLICY_700MS).await;
@@ -68,6 +139,13 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
     let text = String::from_utf8_lossy(&buf).into_owned();
     let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
     serde_json::from_str(body.trim()).expect("health json")
+}
+
+fn now_us() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0)
 }
 
 fn parse_ms(ts: &str) -> i64 {
@@ -110,7 +188,9 @@ async fn conf_73_surface_and_gate_share_the_sub_second_boundary() {
     spill(&rig).await;
 
     // Witness 1 — the surface: deadline - since is exactly the loaded
-    // 700ms, parsed back from the two RFC3339 strings.
+    // 700ms, parsed back from the two RFC3339 strings. The strings are a
+    // stored fact: no probe request has run yet, so the account and both
+    // instants are timing-independent.
     let h = http_get(&rig.listen_addr, "/health");
     assert_eq!(h["plan"]["account"], "overflow");
     let since_ms = parse_ms(h["plan"]["since"].as_str().expect("since"));
@@ -120,31 +200,78 @@ async fn conf_73_surface_and_gate_share_the_sub_second_boundary() {
         700,
         "L1b witness 1 (surface): the deadline is since + exactly 700ms"
     );
+    let (since_us, deadline_us) = (since_ms * 1_000, deadline_ms * 1_000);
 
-    // Witness 2 — the request path agrees on the same boundary: inside
-    // the 700ms window a fresh session's boundary does NOT reach the
-    // primary (the overflow serves it).
+    // The gate the request path runs, driven by the single observed
+    // reading at instants the test controls — the 700ms boundary pinned
+    // on both sides with no wall clock and no demotion masking
+    // (`primary_allowed: true` keeps the availability arm out of the
+    // call, so a broken cooldown gate cannot hide behind the fixture's
+    // 1s demotion here):
+    assert_eq!(
+        guard_word(&policy(), since_us, deadline_us - 1, true),
+        Some("cooldown".into()),
+        "the gate is armed strictly inside the observed window"
+    );
+    assert_eq!(
+        guard_word(&policy(), since_us, deadline_us - 1, false),
+        Some("cooldown".into()),
+        "… and the cooldown arm answers first even with the demotion armed"
+    );
+    assert_eq!(
+        guard_word(&policy(), since_us, deadline_us, true),
+        None,
+        "the gate lifts exactly at the observed deadline"
+    );
+    assert_eq!(
+        guard_word(&policy(), since_us, deadline_us, false),
+        Some("primary_cooling_down".into()),
+        "… and only the demotion arm remains once the deadline passes"
+    );
+
+    // Witness 2 — the request path at the same boundary. The post's
+    // handling instant is bounded above by the response's receipt (one
+    // clock, one machine); only a proven position forces a verdict.
     rig.api.queue(testkit::plan_ok("inside-window"));
     let (se, _be, _he) = rig.post(Some("S2"), 1);
-    assert_eq!(se, 200, "served — by the overflow account");
-    assert_eq!(
-        rig.plan.requests().len(),
-        2,
-        "the gate refused the probe with the same 700ms unit"
-    );
-    assert_eq!(rig.api.requests().len(), 2);
+    let s1 = now_us();
+    assert_eq!(se, 200, "served — by whichever account the gate named");
+    if s1 < deadline_us {
+        // Provably inside the 700ms window (handling <= s1 < deadline):
+        // the probe gate must have refused, so the overflow served it.
+        assert_eq!(
+            rig.plan.requests().len(),
+            2,
+            "the gate refused the probe with the same 700ms unit"
+        );
+        assert_eq!(rig.api.requests().len(), 2);
+    }
 
-    // Past the 700ms deadline and the 1s fixture demotion: the boundary
-    // IS the probe and the primary answers it.
-    tokio::time::sleep(std::time::Duration::from_millis(1_800)).await;
-    let (sp, _bp, _hp) = rig.post(Some("S3"), 1);
-    assert_eq!(sp, 200);
-    assert_eq!(
-        rig.plan.requests().len(),
-        3,
-        "the same gate admitted once the same 700ms had passed"
-    );
-    assert_eq!(rig.api.requests().len(), 2, "no metered spend");
+    if rig.plan.requests().len() == 2 {
+        // Refused: the admission row is witnessed after the deadline and
+        // the fixture's 1s demotion. The oversleep makes S3's position a
+        // property of the seeded 700ms, not of scheduling — S3's handling
+        // is provably past both instants.
+        tokio::time::sleep(std::time::Duration::from_millis(1_800)).await;
+        let (sp, _bp, _hp) = rig.post(Some("S3"), 1);
+        assert_eq!(sp, 200);
+        assert_eq!(
+            rig.plan.requests().len(),
+            3,
+            "the same gate admitted once the same 700ms had passed"
+        );
+        assert_eq!(rig.api.requests().len(), 2, "no metered spend");
+    } else {
+        // S2 itself landed past the window under this load and the gate
+        // admitted — the admission row was just witnessed live: the plan
+        // mock saw the probe, and nothing metered reached the overflow.
+        assert_eq!(
+            rig.plan.requests().len(),
+            3,
+            "past the window the same gate admitted the probe"
+        );
+        assert_eq!(rig.api.requests().len(), 1, "no metered spend");
+    }
 
     rig.stop();
 }
