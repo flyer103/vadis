@@ -1788,8 +1788,19 @@ plus §12.7's response headers, including all three `X-Router-*` values required
 is written before the first body byte. A streaming response never gains a `content-length`
 that router invented; a buffered response keeps the upstream's.
 
-**R4 — bounded idle.** After the head is sent, a gap with no upstream bytes longer than
-`server.upstream_attempt_timeout` is a failure: the relay ends (R6), it does not hang. The
+**R4 — bounded idle.** After the head is sent, the attempt is bounded by
+`server.upstream_attempt_timeout` on **total elapsed time since the attempt was sent**, not on the gap
+between bytes: the bound is that knob applied as reqwest's **per-request timeout** (the `.timeout(…)`
+on the streaming provider client's own send, `crates/router-providers/src/stream.rs`), so a relay that
+stays *continuously busy* for longer than the knob is a failure exactly as an idle one is: the relay
+ends (R6), it does not hang. (The knob's second application — the per-read gap arm inside `read_chunk`,
+on the same read path — is real and unchanged, but it is not the arm that binds first.) **Consequence,
+stated so a reader does not have to learn it by incident:** a legitimately long single response, a long
+reasoning stream being the obvious case, is capped by the same knob; raising the knob is the remedy, and
+the trace records the truncation (`errors[]` with `error_class: stream_truncated`, R8's usage honesty
+below). *ADR-044 is this sentence's authority: it amends the clock this rule defines — from the
+pre-ADR *"a gap with no upstream bytes"* — and touches neither the knob's value, nor the bound's
+duration, nor the read path, nor the failover/attempt semantics of R6 and R12.* The
 inbound `server.request_timeout` (default 10m) remains the outer bound on the whole request,
 including the stream.
 

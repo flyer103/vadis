@@ -415,10 +415,11 @@ arrived is evidence). The two forwarding paths feed the classifier those same th
 answer classifies one way on the buffered path and the same way on the streaming path. On a streaming attempt
 whose head is an error status, the answer's body is therefore **read before the classifier runs** — the relay
 has sent no byte to the client at that point (DESIGN §12.10.3 R6 column 1), so the request is still an ordinary
-one and the §8 refusal answers it. The read is bounded by the streaming path's existing idle bound
+one and the §8 refusal answers it. The read is bounded by the streaming path's existing attempt bound
 (`server.upstream_attempt_timeout`, DESIGN §12.10.3 R4 — the same bound the relay's own reads use, no new bound
-and no new knob) and it is **internal**: an error head is relayed to no one, so this changes no byte a client
-sees. A read that ends short (the idle bound trips, or the connection closes) leaves the classifier with the
+and no new knob, and a bound on the attempt's **total elapsed time** rather than on the gap between bytes,
+ADR-044). It is **internal**: an error head is relayed to no one, so this changes no byte a client
+sees. A read that ends short (the bound trips, or the connection closes) leaves the classifier with the
 bytes that arrived — the status-and-headers verdict when none did. The read is an **input** to the
 classification, never a fourth fact about it: a failure whose body could not be read is not a different outcome
 class, and §4.6 rule 3's account-moving verdict is reachable on a streaming request for the same reason it is

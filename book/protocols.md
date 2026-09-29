@@ -90,9 +90,13 @@ lines, and it does not add a terminal marker of its own.
 
 Two consequences worth knowing before you point an agent at it:
 
-- **A stall is bounded.** A gap with no upstream bytes longer than the configured upstream
-  attempt timeout ends the relay, and the client sees a truncated stream rather than a
-  hang.
+- **The relay is bounded, not just a stall.** The configured upstream attempt timeout bounds the
+  whole attempt on elapsed time, so both a gap with no upstream bytes *and* a stream that keeps
+  sending bytes but runs past that timeout end the relay: the client sees a truncated stream rather
+  than a hang. Point a slow, long-running response at it — a long reasoning stream is the obvious
+  case — and it is this timeout you will meet; raise it if that is the shape you serve. The exact
+  rule is [`docs/spec.md` §4.2](../docs/spec.md) and DESIGN §12.10.3 R4
+  ([`ADR-044`](../design/decisions/ADR-044-the-bound-is-total-elapsed-time.md)).
 - **A failure after the first event cannot be failed over.** Once events have reached the
   client, the output is committed; router terminates the stream using the protocol's own
   in-band failure shape where one exists, and otherwise simply ends it without the
