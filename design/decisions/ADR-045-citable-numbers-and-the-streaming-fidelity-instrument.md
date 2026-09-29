@@ -117,8 +117,8 @@ measurement.
 **The acid test, which is the definition of done.** *A third party, given only the repository, reproduces the
 figure* — by running the published reducer over the committed raw, **without re-running the measurement**.
 Anything weaker (re-running it and getting "about the same") is a *reproduction of the phenomenon*, not of
-the figure, and the two are not the same thing: on this machine, re-running R32's own ladder rung for rung
-produced 9 ms where the other rig produced 23.
+the figure, and the two are not the same thing: R32's two rigs ran the same ladder and read **9 ms** and
+**23 ms** on the same cell, and neither number can now be reduced from anything the repository holds (§1.3).
 
 **What the rule is not, stated so it cannot be read as more than it is:**
 
