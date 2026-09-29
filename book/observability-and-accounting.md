@@ -198,7 +198,12 @@ beside **the exact command** that produced it and **the reducer** that turns the
 figure, with **the machine and the commit** named (a figure that does not name its machine is not
 citable). So you can check one without trusting it, and without re-running any measurement: clone
 the repository, find the run's directory under `autowork/harness/`, run the published reducer over
-the committed raw, and compare. If a figure cannot be reproduced that way, it is not citable — and
+the committed raw, and compare. What that gives you is the **figure**, not the **measurement**: a
+stranger reproduces the figure from the committed raw and the reducer alone, while repeating the
+measurement — re-running the run the raw came from — needs a built gateway binary (it is not in the
+repository; it is built from the commit the figure names) and a machine of the kind the figure
+names. The figure is the part that has to hold still; the measurement is yours to repeat. If a
+figure cannot be reproduced that way, it is not citable — and
 that is a statement about the figure's carriers, not about whether the measurement was honest. The
 counterexample the rule was written for is in ADR-045 §1.3: two published readings of the same cell
 that disagree, with the records each was reduced from left out of the repository.
