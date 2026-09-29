@@ -162,6 +162,53 @@ reason a surface's shape is frozen only by the change that implements it is the 
 `router stats` reads the trace files directly and opens the local store read-only, so it runs
 while `serve` holds that state directory (see [Operations](operations.md)).
 
+## How to read a stream's own numbers
+
+When a response streams, the gateway's only job is to pass it through — and "pass it through" is
+three separate promises, each with its own number. They are defined in
+[ADR-045](../design/decisions/ADR-045-citable-numbers-and-the-streaming-fidelity-instrument.md)
+and stated as contract text in [`design/DESIGN.md` §12.23](../design/DESIGN.md); what follows is
+how to read them as a user.
+
+- **TTFT — time to first byte, measured on your side.** From the moment the request is written to
+  the moment the first body byte arrives *at the client*. That is the number you actually feel. It
+  is reported as a distribution, never as one value: one request's time-to-first-byte is an
+  anecdote. Alongside it sits the gateway's share of it — the same clock, minus the instant the
+  upstream emitted that first byte.
+- **Added inter-chunk jitter — the honest one.** For each gap between two consecutive chunks that
+  arrive at you, subtract the gap the upstream itself left between emitting them. What is left is
+  what the gateway added. **Why the subtraction and not the raw gap:** with a stand-in upstream
+  under the harness's control, the raw gap is the upstream's pacing plus the machine's scheduler —
+  a figure that would describe your upstream while wearing the gateway's name. The same rig is run
+  once with the gateway *out of the path*; that null baseline is published beside every number, and
+  it is how you can tell how much of what you see is the ruler rather than the thing measured.
+- **Fidelity — an equality, not a statistic.** A stream is faithful when the bytes that reach you
+  are the bytes the upstream sent: same bytes, same order, same events, nothing merged, nothing
+  split, nothing invented, the terminal `[DONE]` last and nothing after it. This is the
+  response-side twin of the promise the gateway makes about the *request* it forwards, and unlike a
+  latency number it is a verdict — you either got the stream the upstream wrote or you did not. The
+  endings count: a stream the gateway cuts short (see [Protocols](protocols.md) for the bound) must
+  reach you as a **strict prefix** of what was sent, with no terminal marker the upstream never
+  sent, and the cut must be recorded as such. A gateway that only got the happy path right would
+  look faithful on exactly the cases where it is most likely to re-frame what it relayed.
+
+**How to recompute a figure yourself.** Every number the gateway publishes about its own streaming
+behaviour obeys one rule: its **raw artifact is committed under a tracked path in this repository**,
+beside **the exact command** that produced it and **the reducer** that turns the raw into the
+figure, with **the machine and the commit** named (a figure that does not name its machine is not
+citable). So you can check one without trusting it, and without re-running any measurement: clone
+the repository, find the run's directory under `autowork/harness/`, run the published reducer over
+the committed raw, and compare. If a figure cannot be reproduced that way, it is not citable — and
+that is a statement about the figure's carriers, not about whether the measurement was honest. The
+counterexample the rule was written for is in ADR-045 §1.3: two published readings of the same cell
+that disagree, with the records each was reduced from left out of the repository.
+
+**What these numbers do not say.** No figure compares this gateway with any other, or with a
+different design: each one is *this machine, this commit, this upstream, this stimulus, this number
+of samples*, and nothing about your traffic, your model or your load. And latency and fidelity
+figures are not savings figures: `verified` and `inferred` (the table above) are the labels of the
+*money* convention, and a latency number puts on neither.
+
 ## When cost goes up, look in this order
 
 1. **Prefix continuity** between adjacent turns in the same session. If it dropped, something at the
@@ -201,5 +248,10 @@ while `serve` holds that state directory (see [Operations](operations.md)).
   — why the trace is the sole interface to the iteration loop.
 - [`design/decisions/ADR-010-event-log-as-state-truth.md`](../design/decisions/ADR-010-event-log-as-state-truth.md)
   — the state truth, the join key and the unknown-outcome rule.
+- [`design/decisions/ADR-045-citable-numbers-and-the-streaming-fidelity-instrument.md`](../design/decisions/ADR-045-citable-numbers-and-the-streaming-fidelity-instrument.md)
+  — the definitions of TTFT, the added inter-chunk jitter and the fidelity assertion, the
+  measurement's route, and the rule that makes a figure citable.
+- [`design/DESIGN.md` §12.23](../design/DESIGN.md) — those definitions as contract text; §12.16
+  for where a baseline's measured numbers live.
 - [`autowork/STATE.md`](../autowork/STATE.md) — the measured facts and the current
   state-of-the-world as of the last round.

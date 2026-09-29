@@ -335,7 +335,8 @@ place. The exception: the four service-key constants (`CACHE_LEDGER` / `SESSION_
 (`dyn CacheLedger` / `dyn SessionTable` / `dyn QuotaStore` / `dyn TraceSink`) exist nowhere in
 `crates/` and this sketch never gives their method sets, so inventing them inside a round would
 freeze contracts nothing has tested against a real binding; they land in the round that first
-binds one (R41-3's assembly or R41-4's observer, ADR-036 D3's order). `router-plugin-sdk` stays a
+binds one (R41-3's assembly or the observer of §12.23's measurement — the design's `R41-4` forward reference,
+which **no round ever ran**; ADR-036 D3's order). `router-plugin-sdk` stays a
 stub, and nothing consumes the runtime yet — the state is **implemented, not wired**.
 
 | Cordis primitive | Rust type (`router-runtime`) | Where the semantics land |
@@ -3980,6 +3981,70 @@ own (`R51-0-F2`); a semantic cache of any kind (`docs/spec.md:19`); and any savi
 count (`R51-0-F7`: this round lands a capability whose measured class is **empty** on every corpus the repository
 has).
 
+### 12.23 The streaming fidelity instrument: the metrics, the declared stimulus, the route, and the citable-number rule (ADR-045)
+
+**These are definitions, not a gate.** Nothing in this section is an operand of any gate; no threshold, corpus,
+conformance assertion or L1-envelope value moves with it, and whether these observables ever *become* a blocking
+gate is the owner's question and stays ADR-036's (AGENTS 9, ADR-012; `autowork/STATE.md`). They are written here
+because a number whose definition is prose in a report cannot be cited (the same reason ADR-029's method has its
+home in §12.16), and because the design names the observables — *"R41-4's moat measurement (inter-chunk jitter,
+chunk fidelity)"* — while their definitions were never written (**R41-4 never ran**: `autowork/progress/` holds
+R41-0…R41-3 and nothing else; the gap was registered by the round that had to stop, `R41-1-F5`, owner the human).
+
+**The route is outside the process, and that is a decision** (ADR-045 §4): a harness rig — a **loopback stub**
+that emits a declared chunk sequence with declared emission instants, plus a **raw-socket client** that
+timestamps every arrival — so the instrument is **zero product bytes**, works on any build, and perturbs nothing
+it measures. The `Observer` plugin route stays exactly where ADR-036 D3 put it (unamended, still `yes, and
+first`): it would add in-process visibility the client cannot have (pre-transport bytes, per-chunk attribution),
+and it would also put the instrument's most load-bearing check inside the subject under test — the shape STATE.md
+row 13 refused for the byte audits. **R41-4 is a forward reference this file carried and no round ran**; the
+`Observer` row below is amended only to say so.
+
+**Definitions (µs; R ≥ 3 repetitions reported as a band; the null baseline — the same stimulus with the router
+*out of the path* — is published beside every figure; ADR-030 D3's citation rules apply verbatim).**
+
+| metric | definition | why it is defined this way |
+|---|---|---|
+| **`ttft`** | client-side arrival of the first delivered body byte, measured from the request write | the quantity a user waits for; a distribution over **N streams** (`p50`/`p99`; a `p99` needs N ≥ 100 or it is reported `NOT established`) |
+| **`ttft_added`** | `ttft` − the stub's emission instant of its first unit | the absolute figure carries the stub's schedule and the harness's own scheduling; only the difference is the relay's |
+| **`jitter_added_ms[k]`** | (client arrival(k+1) − client arrival(k)) − (stub emission(k+1) − stub emission(k)), aggregated `p50`/`p99`/`max` | a **raw** gap would measure the stub, not the router: in a rig the stub *is* the upstream, and the null baseline is what shows the raw gap with nothing in the middle |
+| **`fidelity`** | an **assertion**, three limbs: **F1** the de-framed client byte stream equals the emitted concatenation (order, bytes, `[DONE]` last, nothing appended); **F2** the SSE **event** sequence is identical (no merged / split / reordered / inserted-empty event — §12.10.3 **R1**); **F3** the **emission-unit** sequence is identical (no coalescing, no splitting, no invented empty unit) | F1/F2 are the response-direction mirror of AGENTS 1's byte boundary (which is written about the request the upstream sees, asserted by CONF-01/10/27); F3 is what a raw-socket client can see and a de-chunking library cannot — `CONF-13` asserts F1/F2 in-suite and explicitly reserves HTTP re-framing, so **F3 is asserted from outside and mints no product promise** (the formal-promise question is registered with the owner) |
+
+**Where the definition applies — and where it is undefined.** The passthrough path with the response cache
+**off** (its default, ADR-042/spec §4.17). An **exact-match cache hit has no upstream**: there is no emitted
+sequence to compare and no upstream gap for the added quantity, so the instrument **refuses** a sample whose
+record shows a hit and says so, rather than folding a hit's timing into a jitter number.
+
+**Termination and error paths are limbs, not footnotes.** Normal end (the terminal unit is last, nothing
+appended); truncation by the bound per **ADR-044**'s total-elapsed semantics (the delivered bytes are a
+**strict prefix**; **no terminal carrier is synthesized** — the classic re-frame; the death is declared as
+`error_class: stream_truncated`; the relay ends, it does not hang); upstream error mid-stream (same prefix and
+no-synthesis rules, ADR-011's classification, no failover after bytes reached the client, exactly one
+client-visible outcome). A client disconnect (§12.10.3 **R5**) is a cancellation path, not a fidelity limb.
+
+**What these numbers do not license** (ADR-045 §3.8): no comparative claim of any kind; `jitter_added` licenses
+one sentence about *this machine, this commit, this stub, this stimulus, this N* — it is not a throughput, a
+concurrency or a TTFT claim (the declared stimulus is a **single stream**; a concurrency figure is ADR-029/
+ADR-030's load-ladder class and this instrument does not run it); the fidelity verdict licenses only that the
+delivered sequence equaled the emitted one on this stimulus; and **neither number takes a `verified`/`inferred`
+label** — those belong to the saving convention (constraint 4, spec §7).
+
+**The citable-number rule (ADR-045 §2), which is a rule about documents and not about gates.** A figure a report
+or the book shows is citable iff **(1)** its raw artifact lives under a `tracked` path (never `state/`,
+`autowork/results/`, `autowork/captures/`, `autowork/corpus/*/raw/` — the evidence-homing rule R46 wrote into
+`work-mode.md`), **(2)** the exact command that produced it is published, **(3)** the **reducer** is committed and
+**runs offline against the raw** (no rerun, no network), and **(4)** the machine and the commit are named —
+ADR-029 D3's clause, unchanged: *a figure that does not name its machine is not citable*. **The acid test is the
+definition of done:** a third party, given only the repository, reproduces the figure by reducing the committed
+raw. **The counterexample this rule exists for**: R32's chat-streaming C=32 tail — `C22` — whose two tracked
+aggregates read `p99 9` and `p99 23` ms on the same cell while the 220 per-request records each was reduced from
+are excluded by `.gitignore:29`, and whose reducer has **no offline mode** (`qa3_rig.py`-class rig: `scan_trace` is
+pure but no CLI command takes a raw and prints the figure; `summary` re-reads `*/result.json`). The rule adds no
+gate operand, mints no label (`loop-local` and a caveat-carrying `verified` are `STATE.md` row 18's owner
+question), and is **not** `autowork/program.md` text — that file is a gate definition (AGENTS 9). **Where the
+numbers live**: in the per-run evidence under `autowork/harness/r59-*/` and in `autowork/STATE.md`'s *Key measured
+facts*, restated by the round record — never as a second copy of a measurement in this file (§12.16's rule).
+
 ## 13. Primitive register, module map and leak register (ADR-016)
 
 The vocabulary is ADR-016's; this chapter is the enumeration. It answers three questions that §2–§12 answer
@@ -4134,7 +4199,7 @@ the three always-resident builtins remain resident, and the `Selector`/`Guard` s
 
 | other surface | mountable | the contract it answers |
 |---|---|---|
-| `Observer` | **yes, and first** | returns nothing that reaches the wire; R41-4's moat measurement (inter-chunk jitter, chunk fidelity) is the first plugin |
+| `Observer` | **yes, and first** | returns nothing that reaches the wire; the moat measurement (inter-chunk jitter, chunk fidelity) is the first plugin — its **definitions** now live in §12.23 (ADR-045) and its **route** there is the harness side, while this row's `Observer` route stays open and unamended (ADR-036 D3; the design's *"R41-4's moat measurement"* is a forward reference **no round ever ran** — `R41-1-F5`) |
 | provider transport | yes | receives a prepared `RawBody`, may add headers, cannot rewrite the body |
 | protocol codecs / mappers | yes, per-cell declared | `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022) — and the owner's 〈暂时不做协议翻译〉 leaves the translation column empty |
 | price tables / tier config | yes, as data | constraint 5: every figure carries its official source URL + date; ADR-021/§12.13 |
