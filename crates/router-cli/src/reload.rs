@@ -50,8 +50,8 @@ use crate::config_load::{self, ConfigIdentity, ResolvedConfig};
 /// The value's lower bound is the landing's own write gap: spec §4.11's
 /// writer sequence (`temp` create + write + fsync + `rename`-over) measured
 /// min 0.128 ms / median 0.138 ms / p95 0.182 ms / max 0.258 ms (N = 200;
-/// the tracked run is `autowork/harness/r47-0b/probe.out` P18, re-runnable
-/// by its `gap.py`). 200 ms sits ~3 orders of magnitude above that gap
+/// a tracked probe run, re-runnable by its `gap.py`). 200 ms sits ~3
+/// orders of magnitude above that gap
 /// (776× the run's max) — deliberately conservative, and safe in both
 /// directions by D12.2's own argument: the window is a bound on how often
 /// two small files are read, never a correctness mechanism, because a look
@@ -1758,8 +1758,7 @@ fallback: []
     // no row, the service uninterrupted. The line's content and count
     // are pinned by the rig above against the same sink seam `serve`
     // wires to stderr; the process-level run evidence (the real binary's
-    // stderr, one line) is this card's tracked probe
-    // (autowork/harness/r47-1/probe.out).
+    // stderr, one line) is the landing's own tracked probe run.
     // -------------------------------------------------------------
 
     fn free_port() -> u16 {

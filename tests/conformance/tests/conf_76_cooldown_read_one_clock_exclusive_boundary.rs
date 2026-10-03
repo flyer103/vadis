@@ -54,8 +54,8 @@
 //!
 //! No window was widened (the seeded offset is still 700ms), no
 //! assertion sleeps easier: each fires at least as strictly as the one
-//! it replaces, and the falsifiability control lives under
-//! `autowork/harness/r58-0/`.
+//! it replaces, and the falsifiability control captured when this case
+//! was made still witnesses the strictness.
 
 #![forbid(unsafe_code)]
 

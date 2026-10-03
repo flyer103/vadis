@@ -89,8 +89,8 @@ const TTL_US: i64 = 11 * 3_600 * 1_000 * 1_000;
 const QUOTA_403_BODY: &[u8] = br#"{"error":{"message":"You have exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#;
 
 /// A 403 body that matches NO classifier pattern table (the probe
-/// shape R4 already uses, `autowork/harness/r4_plan_probe.py:61-65`):
-/// status-and-headers alone decide, on both media.
+/// shape the failure-head evidence already used): status-and-headers
+/// alone decide, on both media.
 const AUTH_403_BODY: &[u8] =
     br#"{"error":{"type":"authentication_error","message":"Incorrect API key provided"}}"#;
 

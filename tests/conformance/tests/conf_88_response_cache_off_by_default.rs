@@ -12,9 +12,8 @@
 //! - (b) **`enabled: false` ⇒ off**, and the default path is byte-identical
 //!   to (a)'s (limb 4: the cache changed nothing on the default path);
 //! - (c) **the key absent ⇒ off** — the limb the loader default pins: the
-//!   red control (`autowork/harness/r51-1/`) is a sabotage build whose
-//!   loader defaults `config.enabled` to `true`, which must turn exactly
-//!   this arm red.
+//!   red control is a sabotage build whose loader defaults
+//!   `config.enabled` to `true`, which must turn exactly this arm red.
 //!
 //! No network egress: a loopback mock upstream only.
 

@@ -40,7 +40,7 @@
 //! either by S3 after the oversleep (its position provably past both
 //! instants) or, on a run so loaded the probe fired at S2, by S2 itself.
 //! No window was widened and no assertion sleeps easier; the sabotage
-//! controls live under `autowork/harness/r56-0/`.
+//! controls captured when this case was made still witness each check.
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};

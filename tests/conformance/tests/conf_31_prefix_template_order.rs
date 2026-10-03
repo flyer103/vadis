@@ -12,9 +12,9 @@
 //! insertion and `prefix.continuity` reported 0.250, a ~4× under-report.
 //! The historical numbers (0.250 byte-order / 0.690 raw byte prefix /
 //! 0.991 verified / 1.000 template-order recomputation) are preserved in
-//! the harness guard `autowork/harness/prefix_continuity_order_guard.py`;
-//! the decision and evidence are recorded under `autowork/progress/`
-//! (2026-09-20).
+//! the harness guard that pinned the decision; the decision and its
+//! evidence are recorded with the 2026-09-20 date in the loop's own
+//! history, which does not ship with the product.
 //!
 //! Assertions, over the real `router_cli::serve` assembly on loopback
 //! HTTP with a mock upstream speaking the responses wire shape:

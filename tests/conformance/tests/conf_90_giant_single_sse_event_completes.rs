@@ -3,7 +3,7 @@
 //! single SSE event larger than 16 MiB is relayed byte-complete.**
 //!
 //! R51-2 measured the pre-existing defect this case pins (finding F1,
-//! `autowork/harness/r51-2/logs/attack6-f1-curl-evidence.txt`): with the
+//! curl evidence captured when the finding was made): with the
 //! usage tap rescanning its whole reassembly buffer on every chunk, one
 //! oversized event made `feed()` quadratic in the buffered length, the
 //! relay starved, and the client received a strict 16 MiB prefix before
@@ -17,8 +17,8 @@
 //!   stream terminates normally (its record declares no error), and the
 //!   transfer completes inside `server.upstream_attempt_timeout` — the
 //!   defect's signature was death AT that bound. **Red before the fix**
-//!   (R54-0's red control, `autowork/harness/r54-0/logs/`): the client
-//!   received a strict 16 777 216-byte prefix at the bound.
+//!   (a red control run captured before the fix): the client received a
+//!   strict 16 777 216-byte prefix at the bound.
 //! - (b) **the same total as many 16 KiB events**: byte-complete, as it
 //!   always was — the fix may not change the ordinary path. It runs
 //!   FIRST and doubles as the machine calibration for limb (a) (R58,
@@ -65,10 +65,10 @@
 //! The client-side elapsed is still measured and printed, as an
 //! observation only. What this trade removes is precisely the flake —
 //! a healthy relay on a starved or marginal host — and nothing else:
-//! the falsifiability controls under `autowork/harness/r58-0/` and
-//! `autowork/harness/r58-3/` demonstrate the full-strictness branch
-//! red-ing on the defect class (quiet machine) and the truncation
-//! branch red-ing on a mis-declared death.
+//! the falsifiability controls captured when this case was made
+//! demonstrate the full-strictness branch red-ing on the defect class
+//! (quiet machine) and the truncation branch red-ing on a mis-declared
+//! death.
 //!
 //! THE NAMED LIMIT (R58-3, registered with the same prominence as
 //! R58-0's): the strict limb does NOT fire exactly when the calibration

@@ -9,9 +9,10 @@
 //! module formats; it never computes a figure.
 //!
 //! The observation boundary (AGENTS constraint 3): the read site is the
-//! config's own trace directory and nothing else — no path under
-//! `autowork/` is opened by this module, and the exposition is a derived
-//! view for operators, never a product → autowork channel (ADR-005).
+//! config's own trace directory and nothing else — no path outside that
+//! directory is opened by this module, and the exposition is a derived
+//! view for operators, never a serving-path → observation channel
+//! (ADR-005).
 
 #![forbid(unsafe_code)]
 
@@ -368,8 +369,8 @@ pub fn exposition(
 /// §12.21). Reads the process's own resolved `trace.dir` (the reload
 /// refuses to move it, ADR-040 D5 — no revision coupling needed) and the
 /// plan family off the revision in force (a reload MAY repoint the
-/// policy); touches no request byte, no store, and nothing under
-/// `autowork/`.
+/// policy); touches no request byte, no store, and no file outside the
+/// process's own trace directory.
 pub fn snapshot(state: &router_proxy::AppState) -> String {
     let plan_family = state
         .revision

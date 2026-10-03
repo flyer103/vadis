@@ -1,8 +1,8 @@
 //! The trace contract (spec §6, DESIGN §12.6): one `DecisionRecord` per
 //! request, append-only JSONL, rolled hourly to
 //! `<trace.dir>/YYYY-MM-DDTHH.jsonl` (UTC). The record is the **analysis
-//! truth** and the only product → autowork channel (ADR-005); the state
-//! truth is the event log, and the two are paired on
+//! truth** and the only serving-path → observation channel (ADR-005);
+//! the state truth is the event log, and the two are paired on
 //! `request_id` + `event_id` — never on a timestamp.
 //!
 //! Wire shape: serde `snake_case` with the spec §6 field names verbatim;
@@ -18,9 +18,9 @@ use crate::transform::TransformMode;
 use crate::Usage;
 
 /// The trace schema version. It only increments on a **breaking** change;
-/// adding an optional field does not (the autowork side tolerates unknown
-/// fields, ADR-005). Version **2** (ADR-018) adds `cost.currency` and
-/// `plan_switch.cost_currency` — not the optional-field exemption: the new
+/// adding an optional field does not (a consumer outside the serving path
+/// tolerates unknown fields, ADR-005). Version **2** (ADR-018) adds
+/// `cost.currency` and `plan_switch.cost_currency` — not the optional-field exemption: the new
 /// fields change how the existing money fields are **read**, and a consumer
 /// that ignores them would sum CNY into USD. A v1 record is USD by
 /// definition (no non-USD route was configurable when it was written), so

@@ -41,8 +41,8 @@
 //! asserts the vocabulary, the self-consistency, and every
 //! position-independent row. No window was widened and no assertion
 //! sleeps easier: each check fires at least as strictly as the one it
-//! replaces, and the sabotage controls live under
-//! `autowork/harness/r56-0/`.
+//! replaces, and the sabotage controls captured when this case was made
+//! still witness each one.
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};

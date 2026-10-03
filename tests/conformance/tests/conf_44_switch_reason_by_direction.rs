@@ -320,7 +320,7 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
 /// regression it was written for (a guard clock fed by the truncated
 /// seconds word) still reds the live arm on any run whose boundary
 /// request lands in the spill's whole second — demonstrated by the
-/// sabotage control under `autowork/harness/r58-0/`.
+/// sabotage control captured when this case was made.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_44_guard_and_surface_judge_the_same_instant() {
     // The deterministic pin (no wall clock): with a zero-length

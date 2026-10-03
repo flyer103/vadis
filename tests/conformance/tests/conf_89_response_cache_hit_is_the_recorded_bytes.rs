@@ -22,8 +22,8 @@
 //!
 //! **Red at the round's base** (no store exists, so no hit can happen):
 //! the rigs below mount `builtin/response_cache` with `enabled: true`,
-//! which the base's config validation refuses — the recorded red run is
-//! `autowork/harness/r51-1/conf-89-red-at-base.log`.
+//! which the base's config validation refuses — the red run was
+//! recorded when this case was made.
 //!
 //! No network egress: a loopback mock upstream only.
 

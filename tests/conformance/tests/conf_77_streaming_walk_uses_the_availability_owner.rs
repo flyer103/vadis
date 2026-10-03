@@ -44,8 +44,8 @@
 //! read from the recovery's own event and trace rows instead — the
 //! same property, proven from a record rather than a schedule. No
 //! window was widened (the fixture's `Retry-After: 1` stands), no
-//! assertion sleeps easier; the falsifiability control lives under
-//! `autowork/harness/r58-0/`.
+//! assertion sleeps easier; the falsifiability control captured when
+//! this case was made still witnesses the strictness.
 
 #![forbid(unsafe_code)]
 
