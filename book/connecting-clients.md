@@ -24,14 +24,13 @@ proxy. hermes (`httpx`) did **not** reproduce this on the same machine (3/3 runs
 the loopback router with only the system proxy configured — httpx appears to honour the
 exclusion list, or not to read the macOS system proxy at all), so for hermes the export
 is insurance rather than the repair of an observed failure. An earlier measurement that
-forced a proxy into the environment explicitly (R1-3) did make httpx fail too — that is
+forced a proxy into the environment explicitly did make httpx fail too — that is
 a different experiment from the system-proxy-only one, and both are recorded. Export the
 variable in the same shell (or the same service environment) that starts the client, not
 only in the shell that starts router.
 
 The contract clause and its measurement are in
-[`docs/spec.md` §5](../docs/spec.md); the captured evidence is in `AGENTS.md` and
-`autowork/STATE.md`.
+[`docs/spec.md` §5](../docs/spec.md); `AGENTS.md` records the incident.
 
 ## Endpoints to point a client at
 
@@ -45,9 +44,10 @@ The contract clause and its measurement are in
 The three protocol endpoints are equivalent: same decision pipeline, same accounting, and
 each mirrors its own protocol's upstream semantics. Which one you use is your client's
 choice — codex speaks `responses`, most other tools speak `chat`, and an Anthropic-shaped
-client speaks `messages`. `GET /metrics` appears in the README's endpoint table and is a
-planned surface, not a served one today: [`docs/spec.md` §9.3](../docs/spec.md) is the list of
-what is served and what is not.
+client speaks `messages`. `GET /metrics` (the Prometheus scrape surface, behind the same
+token guard as the protocol endpoints) is served too — its contract is
+[`docs/spec.md` §4.16](../docs/spec.md), and the served/not-served list for the reporting
+surfaces is [`docs/spec.md` §9.3](../docs/spec.md).
 
 ## Per-client setup
 
@@ -70,7 +70,7 @@ against codex-cli 0.137.0) is in the [README quick start](../README.md#quick-sta
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
-codex exec --skip-git-repo-check -C /tmp "Reply with the single word: pong" < /dev/null
+codex exec --skip-git-repo-check -C <dir> "Reply with the single word: pong" < /dev/null
 ```
 
 `wire_api` here is the one easy mistake: it must equal the **provider's** `wire_api` for the
@@ -91,8 +91,8 @@ chain can serve your protocol you get `502 upstream_error` with `details.stage: 
 The setup below was smoke-verified end to end (two turns in one session, the second a tool
 call, real upstream); the commands and outputs are quoted from that run.
 
-1. Keep hermes in an isolated `HERMES_HOME` so it never touches your default profile. The
-   smoke used `/tmp/r11-smoke/hermes-home`; any directory you own works the same way. Write
+1. Keep hermes in an isolated `HERMES_HOME` so it never touches your default profile —
+   any directory you own works. Write
    that home's `config.yaml`:
 
 ```yaml
@@ -110,12 +110,12 @@ custom_providers:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
-HERMES_HOME=/tmp/r11-smoke/hermes-home hermes -z "Reply with the single word: pong"
+HERMES_HOME=<hermes-home> hermes -z "Reply with the single word: pong"
 # rc=0, stdout: pong
 
-HERMES_HOME=/tmp/r11-smoke/hermes-home hermes --continue -z \
-  "Now use the terminal tool to run the shell command: echo r11-hermes-tool . Then reply with exactly its stdout."
-# rc=0, stdout: r11-hermes-tool
+HERMES_HOME=<hermes-home> hermes --continue -z \
+  "Now use the terminal tool to run the shell command: echo router-hermes-tool . Then reply with exactly its stdout."
+# rc=0, stdout: router-hermes-tool
 ```
 
 Two pitfalls are load-bearing (both were hit for real during the smoke):
@@ -132,8 +132,7 @@ Two pitfalls are load-bearing (both were hit for real during the smoke):
 
 What that run left in the trace, so you know the healthy shape of a hermes session:
 
-- The session is hermes's own `prompt_cache_key`, `pck_`-prefixed (the run recorded
-  `pck_495971920e8c2f23d2112597` for turn 1); router invents no key of its own. The key is
+- The session is hermes's own `prompt_cache_key`, `pck_`-prefixed; router invents no key of its own. The key is
   content-derived, so it holds steady only while the prefix-bearing parts (instructions, tool
   list) stay stable — the continuation turn was recorded at `turn_index` 2 in that session
   with `prefix.continuity` 1.0, i.e. the prefix carried over intact.
@@ -153,7 +152,7 @@ What that run left in the trace, so you know the healthy shape of a hermes sessi
 The **chat wire is a different, unwitnessed cell**: switching hermes to
 `api_mode: chat_completions` requires a chat-native route of your own — the example roster's
 `deepseek` (which `coding-fast` points at) is responses-native, and chat against it answers
-`501 not_implemented`. The round's smoke did send hermes down the chat wire against the
+`501 not_implemented`. The same smoke run did send hermes down the chat wire against the
 roster's two chat-native routes and witnessed **no 200**: the attempt ended `502` after
 failover (primary `429 rate_limit` → fallback `401 auth`, cost 0) — local upstream
 credentials and quotas, not the gateway. Until you have your own chat-native provider, treat
@@ -182,11 +181,12 @@ deliberately not enabled in v0.1: it returns an explicit error instead of guessi
 slot is reserved for a plugin.
 
 One shape deserves a warning because it looks like a typo and is not. Some vendors sell a 1M-context
-variant of a model as a **separate model id with an `[1m]` suffix** — the shipped example roster has
-such a plan entry, so its route really is `zai-plan/glm-5.3[1m]`, suffix and all. If your fingers keep
-writing the bare name, point the client at the alias instead (`glm-plan` in the example config): the
-alias and the full route string reach the upstream byte-identically, and the alias is the one that
-does not move when the vendor renames the variant.
+variant of a model as a **separate model id with an `[1m]` suffix** — for at least one vendor the
+suffix turned out to be a client-side switch the server refuses as an id, so whether it is a real
+route is a per-vendor fact you must check against that vendor's own pages. If your roster does carry
+such an id and your fingers keep writing the bare name, point the client at an alias instead (see the
+`aliases` in the example config): the alias and the full route string reach the upstream
+byte-identically, and the alias is the one that does not move when the vendor renames the variant.
 
 ## Requiring a token (inbound auth)
 

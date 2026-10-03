@@ -12,16 +12,16 @@ Every transform is a pure function of (content, stable config). The prefix on tu
 
 ## Features
 
-| **Capability** | what it is |
+| Capability | what it is |
 |---|---|
 | **Three wires, one local endpoint each** | `POST /v1/chat/completions`, `POST /v1/responses` and `POST /v1/messages` — semantically equivalent, each served natively when the route's provider speaks the same wire |
 | **Byte-faithful passthrough, streaming included** | the client's own bytes minus router-owned top-level fields, carrying the resolved provider-native `model` id; on the streaming path the upstream's SSE events are relayed as they arrive |
 | **A decision and a cost ledger in every trace record** | one record per terminal outcome — the decision, the plan family's switches, the usage the upstream reported, integer-Nano amounts and the quota snapshot; `router stats` and `GET /health` read them back out |
 | **Plan-first routing, with a classified failover chain** | a subscription account is the primary, its metered twin is the spill, the way back is a session-boundary probe; upstream failures are classified, and the request can fail over along the configured chain |
 | **Prefix-cache continuity** | session identity is the client's own key (`prompt_cache_key`, then the configured headers), and every rewrite is content-deterministic, so one turn cannot invalidate the cache for the turns after it |
-| **A declarative plugin runtime** | the runtime mounts what the `plugins:` list declares — exactly one kind today, `builtin/transform_rules`, the rule engine over `rules/tool_output.toml`; `inject` and `disabled` are honoured, `isolate` / `intercept` are inert, tier-B is a stub, and the three always-resident builtins stay resident |
+| **A declarative plugin runtime** | the runtime mounts what the `plugins:` list declares — two builtin kinds today, `builtin/transform_rules` (the rule engine over a TOML rule file) and `builtin/response_cache` (exact-match, session-scoped, off unless enabled); `inject` and `disabled` are honoured, `isolate` / `intercept` are inert, tier-B is a scaffold, and the three always-resident builtins stay resident |
 | **Hot reload** | a configuration change takes effect without a restart |
-| **Guided setup** | `router setup` writes the config pair — and the rule file that config names — from the templates embedded in the binary, byte for byte, and edits only the keys that are yours |
+| **Guided setup** | `router setup` writes the config trio — the root file, the roster it names, and the rule file that config names — from the templates embedded in the binary, byte for byte, and edits only the keys that are yours |
 
 ## Requirements
 
@@ -31,15 +31,55 @@ Every transform is a pure function of (content, stable config). The prefix on tu
 
 ## Quick Start
 
+The guided path — `router setup` does the copying and asks about only your own keys:
+
+```bash
+cargo build --release
+./target/release/router setup          # writes the config trio, then asks about your deployment
+export <the variables it names>        # the wizard prints each name; `router setup --check` verifies them
+./target/release/router serve
+```
+
+`router setup` lands the **trio**: the root config at the XDG location
+(`${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`, mode `0600`; any directory it
+creates `0700`), the roster that config names with `providers_file:`, and the rule file the
+config's `plugins` entry points at (`rules/tool_output.toml`) — created when absent, left
+untouched when present, replaced only by `--force` with the previous bytes kept at
+`<file>.bak` ([ADR-046](design/decisions/ADR-046-setup-lands-the-rule-file.md); the contract
+is [`docs/spec.md` §4.11](docs/spec.md), and the file-finding rule is §4.12). The templates
+are embedded in the binary, so this works from anywhere — no copying from the checkout. It
+asks only about the keys that are yours (where the file lives, the listen address, the
+**names** of your key variables) and edits them by anchored single-line edits, so every
+comment and price citation in the template survives verbatim. `router setup --check` is the
+verification step: it loads the file with the same loader `serve` runs and reports every
+environment variable it names — exit `0` when all are present, `4` when one is missing.
+
+**The repository-local alternative** — a copy of the shipped example pair instead of the
+wizard:
+
 ```bash
 cp config.example.yaml config.yaml     # edit the roster: providers.example.yaml, named by this file
 set -a && source .env && set +a        # provider keys are read from env only, never written into yaml
 cargo run --locked -p router-cli -- serve --config config.yaml
 ```
 
-The config is a **pair**: the root file plus the roster it names. The roster may live in a file of its own that the config **names** with `providers_file:` — exactly one of the two keys is written, both written or neither is a load refusal, and the roster is named rather than searched — or it may stay **inline** as `providers:`, which is equally legal for a file you write by hand (spec §4.14, [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)). The shipped example uses the named form: `providers_file: providers.example.yaml`.
+This path starts the same server, with one gap: the config's `plugins` entry names
+`./rules/tool_output.toml` relative to the config's own directory, so if you copy the pair
+**out** of the checkout you must also copy the rule file (`rules/tool_output.toml` ships in
+the repository) or the transform engine starts with a dangling reference. Inside the
+checkout the file is already there. `router setup` writes it for you; that is the
+difference between the two paths.
 
-Steps 4–6 are the client side. Those steps were verified end to end by the R11 onboarding smoke ([`autowork/harness/r11-onboarding-smoke-runbook.md`](autowork/harness/r11-onboarding-smoke-runbook.md)); the figures it quotes belong to that run.
+The config is a **pair**: the root file plus the roster it names. The roster may live in a
+file of its own that the config **names** with `providers_file:` — exactly one of the two
+keys is written, both written or neither is a load refusal, and the roster is named rather
+than searched — or it may stay **inline** as `providers:`, which is equally legal for a file
+you write by hand (spec §4.14, [ADR-037](design/decisions/ADR-037-roster-file-and-config-identity.md)).
+The shipped example uses the named form: `providers_file: providers.example.yaml`.
+
+Steps 4–6 are the client side. Both client blocks were verified end to end against real
+upstreams when this guide was written; the client versions they name were read on
+2026-09-21 and are not maintained as a standing claim.
 
 ### 1. Turn on inbound auth (optional, recommended)
 
@@ -71,7 +111,7 @@ export NO_PROXY=127.0.0.1,localhost     # codex (reqwest) deterministically; her
 
 With a system proxy configured, codex sends requests to a locally bound router into the
 proxy instead; router receives no connection and the client reports `503 Service Unavailable`
-(reproduced 4/4 with only the system proxy set, R11-3). hermes did not reproduce this on the
+(reproduced 4/4 with only the system proxy set). hermes did not reproduce this on the
 same machine (3/3 runs reached the router), so for hermes the export is insurance, not the
 repair of an observed failure. Export the variable in the shell that starts the client — see
 `docs/spec.md` §5 for the recorded incident.
@@ -96,12 +136,12 @@ curl example against the stock roster uses the responses endpoint:
 
 ```bash
 curl -s http://127.0.0.1:8790/v1/responses \
-  -H "Authorization: Bearer $ROUTER_TOKEN" \
+  -H "Authorization: Bearer ***" \
   -H 'content-type: application/json' \
   -d '{"model":"coding-fast","input":"Reply with the single word: pong","max_output_tokens":64}'
 ```
 
-Either accepted header form works; `x-api-key: $ROUTER_TOKEN` is equivalent. A successful call
+Either accepted header form works; `x-api-key: ***` is equivalent. A successful call
 returns the upstream response verbatim: `"model":"deepseek-flash"` (the resolved native id,
 not the alias you sent), the answer text in `output`, and `usage.total_tokens` greater than
 zero.
@@ -112,7 +152,7 @@ Without a token the same request is refused locally — nothing reaches the upst
 HTTP/1.1 401 Unauthorized
 x-router-request-id: req-1
 
-{"error":{"type":"unauthorized","message":"inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')"}}
+{"error":{"type":"unauthorized","message":"inbound auth: no token presented (send it as 'Authorization: Bearer ***' or 'x-api-key: ***
 ```
 
 `details.header` names the header that was read and rejected: `"authorization"` for a wrong or
@@ -169,11 +209,11 @@ for your route — the entry is the tested shape:
 }
 ```
 
-Smoke it:
+Smoke it, from any scratch directory you own:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
-codex exec --skip-git-repo-check -C /tmp "Reply with the single word: pong" < /dev/null
+codex exec --skip-git-repo-check -C <dir> "Reply with the single word: pong" < /dev/null
 ```
 
 Expected: the banner names `provider: router` and `model: coding-fast`, the reply is `pong`,
@@ -192,7 +232,7 @@ Why the non-obvious parts are there:
 hermes reaches the same native `/v1/responses` wire through its codex transport, and — unlike
 codex — it needs an isolated `HERMES_HOME` so the setup never touches your default profile.
 
-Write `<HERMES_HOME>/config.yaml` (the smoke used `/tmp/r11-smoke/hermes-home`):
+Write `<HERMES_HOME>/config.yaml` — any directory you own works as the home:
 
 ```yaml
 model: {default: coding-fast, provider: router, base_url: http://127.0.0.1:8790/v1, api_mode: codex_responses}
@@ -206,39 +246,30 @@ Put the router token in `<HERMES_HOME>/.env` **twice** — `ROUTER_TOKEN=<token>
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
-HERMES_HOME=/tmp/r11-smoke/hermes-home hermes -z "Reply with the single word: pong"
+HERMES_HOME=<hermes-home> hermes -z "Reply with the single word: pong"
 # rc=0   stdout: pong
 
-HERMES_HOME=/tmp/r11-smoke/hermes-home hermes --continue -z \
-  "Now use the terminal tool to run the shell command: echo r11-hermes-tool . Then reply with exactly its stdout."
-# rc=0   stdout: r11-hermes-tool
+HERMES_HOME=<hermes-home> hermes --continue -z \
+  "Now use the terminal tool to run the shell command: echo router-hermes-tool . Then reply with exactly its stdout."
+# rc=0   stdout: router-hermes-tool
 ```
 
-In that run: the session key was hermes's own `prompt_cache_key` (`pck_…`-prefixed,
+In the verified run: the session key was hermes's own `prompt_cache_key` (`pck_`-prefixed,
 content-derived); one `hermes -z` turn was two requests (the main conversation plus a small
-auxiliary call in its own `pck_` session — 240 input tokens in the run, not a misroute); and the
-tool-call continuation hit the upstream prefix cache at 99.0% of its input tokens. Continuity is
-a relation, per client and per turn — that turn read `prefix.continuity` 1.0, and a client that
-changes its tool array between turns reads less; do not read 1.0 as a constant. Chat instead of
-responses is a different, **unwitnessed** cell here — see
-[the book](book/connecting-clients.md) before pointing hermes at `/v1/chat/completions`.
+auxiliary call in its own `pck_` session — not a misroute); and the tool-call continuation hit
+the upstream prefix cache at 99.0% of its input tokens. Continuity is a relation, per client
+and per turn — that turn read `prefix.continuity` 1.0, and a client that changes its tool array
+between turns reads less; do not read 1.0 as a constant. Chat instead of responses is a
+different, **unwitnessed** cell here — see [the book](book/connecting-clients.md) before
+pointing hermes at `/v1/chat/completions`.
 
-Both client blocks above are outside every gate — no conformance case reads a client config —
-and the client versions they name were read on 2026-09-21, not maintained as a standing claim.
+Both client blocks above are outside every gate — no conformance case reads a client config.
 
 Why the non-obvious parts are there:
 
-- `api_mode: codex_responses` (twice) — for a loopback `base_url` hermes's URL detection
-  returns nothing and the entry would resolve to `chat_completions`, i.e. the wrong wire
-  against a responses-native route.
-- `ROUTER_API_KEY` in `.env` — hermes resolves a custom provider's credentials as
-  `<PROVIDER>_API_KEY` and, without it, refuses with
-  `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`;
-  `api_key_env` alone does not reach it. `key_env: ROUTER_TOKEN` plus that variable is the
-  combination that reached 200.
-- `HERMES_HOME` — the isolation boundary: the smoke ran hermes under a scratch home
-  (`/tmp/r11-smoke/hermes-home`) precisely so config, `.env` and sessions live there and your
-  default profile is left alone.
+- `api_mode: codex_responses` (twice) — for a loopback `base_url` hermes's URL detection returns nothing and the entry would resolve to `chat_completions`, i.e. the wrong wire against a responses-native route.
+- `ROUTER_API_KEY` in `.env` — hermes resolves a custom provider's credentials as `<PROVIDER>_API_KEY` and, without it, refuses with `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`; `api_key_env` alone does not reach it. `key_env: ROUTER_TOKEN` plus that variable is the combination that reached 200.
+- `HERMES_HOME` — the isolation boundary: config, `.env` and sessions all live under it and your default profile is left alone.
 
 ## CLI
 
@@ -246,7 +277,7 @@ Why the non-obvious parts are there:
 |---|---|
 | `router serve --config config.yaml` | starts the HTTP proxy — config-driven, one process |
 | `router stats --config config.yaml --window 24h` | prints the window's figures from the trace and event log (spec §9.2) |
-| `router setup [--non-interactive] [--config <path>]` | guided first configuration: the template pair, the questions, the edits in place |
+| `router setup [--non-interactive] [--config <path>]` | guided first configuration: the trio, the questions, the edits in place |
 | `router setup --check` | loads the file with the same loader `serve` runs, then checks every environment variable it names — no prompt, no write |
 
 `serve`, `stats` and `setup` are the three subcommands the binary has. Without `--config`, all
@@ -274,8 +305,8 @@ carry their `verified` / `inferred` label, and `--json` prints the same figures 
 `router replay --trace traces/x.jsonl --config config.yaml` and `router trace tail` are
 **planned, not served**: they are not subcommands of this binary, and the parser refuses them
 with a usage error and a non-zero exit — never a silently ignored flag. Today the trace record
-**is** the interface: append-only JSONL, one decision record per completed request, readable with
-any JSON tool, and the iteration loop replays it from [`autowork/harness/replay.py`](autowork/harness/replay.py).
+**is** the interface: append-only JSONL, one decision record per completed request, readable
+with any JSON tool.
 
 ## API
 
@@ -290,10 +321,9 @@ Inbound endpoints (the three are equivalent and mirror the upstream semantics pe
 | GET | `/metrics` | the last 900 seconds of this process's own `trace.dir`, in the Prometheus text exposition format (`text/plain; version=0.0.4; charset=utf-8`) — behind the same token guard as the three protocol endpoints (spec §4.16) |
 
 `GET /metrics` **is** served: a scrape answers §9.2's own figures over the last 900 seconds — a
-process constant, not a flag and not a query parameter — in the Prometheus text exposition format
-(`text/plain; version=0.0.4; charset=utf-8`), behind the same token guard as the three protocol
-endpoints (`/health`'s exemption is `/health`'s alone), and its contract is
-[`docs/spec.md` §4.16](docs/spec.md).
+process constant, not a flag and not a query parameter — in the Prometheus text exposition format,
+behind the same token guard as the three protocol endpoints (`/health`'s exemption is `/health`'s
+alone), and its contract is [`docs/spec.md` §4.16](docs/spec.md).
 
 The `model` field accepts `provider/model`, an alias from the config, or `auto` (v0.1 returns
 `400` and says a plugin must take over). A `router_meta` response block — the plugin chain that
@@ -314,10 +344,9 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
 
-`cargo test` includes the 3×3 protocol matrix in `tests/conformance`. All four must be green
-before a pull request. A card's own test run proves the card; the round is proven only by the
-integration verify — the four gates on the merged HEAD — and a gate verdict is void if anything
-lands after it.
+`cargo test` includes the protocol matrix in `tests/conformance` (the 3×3 wire matrix plus the
+byte / cache / accounting invariants). All four must be green before a pull request; CI runs
+exactly these four commands on every push and pull request.
 
 ## Layout
 
@@ -325,19 +354,18 @@ lands after it.
 - `crates/router-protocol` — the three-protocol codec: native-path usage normalization for the three wire shapes and the SSE block parser; the cross-protocol translation matrix is not implemented in v0.1.
 - `crates/router-providers` — the upstream provider adapters: the HTTP transport, auth-header assembly, upstream error classification and the SSE response relay.
 - `crates/router-proxy` — the axum data plane: byte-faithful forwarding, the SSE relay, `/health`, and the per-request accounting that closes a trace record.
-- `crates/router-plugins` — the built-in tier-A plugins and their assembly: `serve` mounts what the `plugins:` list declares — today one kind, `builtin/transform_rules`, the rule engine over `rules/tool_output.toml` — and that engine's composition step runs on the request path, on the non-buffered route and the streaming route alike. What it *plans* is request-scoped: in passthrough mode nothing is planned, even when a rule would match.
-- `crates/router-runtime` — the Cordis-semantics runtime: the effect / coeffect / fiber model and the declarative loader, implemented in R41-2 and driven by the tier-A assembly from the `plugins:` list since R41-3.
+- `crates/router-plugins` — the built-in tier-A plugins and their assembly: `serve` mounts what the `plugins:` list declares — two builtin kinds today, `builtin/transform_rules` (the rule engine over a TOML rule file) and `builtin/response_cache` — and the transform engine's composition step runs on the request path, on the non-buffered route and the streaming route alike. What it *plans* is request-scoped: in passthrough mode nothing is planned, even when a rule would match.
+- `crates/router-runtime` — the Cordis-semantics runtime: the effect / coeffect / fiber model and the declarative loader, driven by the tier-A assembly from the `plugins:` list.
 - `crates/router-plugin-sdk` — the out-of-process tier-B plugin protocol (UDS framing); a scaffold only, in v0.1.
 - `crates/router-store` — the one local SQLite/WAL store (the event log and its projections) and the JSONL trace sink; the only writer of the state database.
 - `crates/router-cli` — the `router` binary: `serve`, `stats` and `setup`, the three subcommands v0.1 has, plus config loading, the reload watcher and the startup resolution.
 - `tests/conformance` — the 3×3 protocol matrix and the byte / cache invariants; a change that breaks them is not landed regardless of downstream wins.
-- `autowork/` — the iteration loop: the harness (collect / replay / judge), corpora, traces and round files; `autowork/STATE.md` is the authoritative current-state document.
 
 The other documentation homes — `book/`, `docs/`, `design/` — are the ones **Documentation** describes.
 
 ## Status
 
-**What is served (v0.1 data plane, landed).** `serve` is config-driven, and the three protocol
+**What is served (v0.1 data plane).** `serve` is config-driven, and the three protocol
 endpoints forward **natively** — the client's own bytes, minus router-owned top-level keys, with
 the resolved provider-native `model` id, never parsed and reserialized; the streaming path relays
 the upstream's SSE events.
@@ -351,7 +379,7 @@ nowhere — never as a zero. The local store holds the event log and its project
 **One class is honestly outside that enumeration.** A stream the client disconnects from mid-flight
 never reaches a terminal outcome, so it leaves its write-ahead event rows and **no trace record** —
 the request is an `unknown_outcome`; the upstream may already have billed it, so the quota is not
-charged again and no cost is invented (`design/DESIGN.md` §12.10.3 R5).
+charged again and no cost is invented (`design/DESIGN.md` §12.10.3).
 
 **The two read-back surfaces.** `router stats` reads those records back out (cost, cache, the plan
 family's switches **and their verified cost** — a cost, not a saving), and `GET /health` reports
@@ -377,14 +405,14 @@ in-band every time, so its absence cannot be read as a zero.
 - the `replay` / `trace tail` subcommands: not subcommands of this binary — the parser refuses them with a usage error and a non-zero exit;
 - the `router_meta` response block;
 - tier-B (out-of-process) plugins;
-- automatic model selection (`model: auto` answers `400` in v0.1; the slot is reserved for a plugin).
+- automatic model selection (`model: auto` answers `400` in v0.1; the slot is reserved for a plugin);
+- detecting server-side session state on the inbound request (`store` / `previous_response_id` are forwarded like every other client field and never inspected, so the trace's `state.stateful_inbound` is `false` on every record — a declared, known gap).
 
 | | |
 |---|---|
 | Model choice | **Explicit** (provider, model) or an alias; automatic selection is a plugin slot, not enabled in v0.1 |
 | Protocols | Inbound and outbound native passthrough for OpenAI chat completions / OpenAI responses / Anthropic messages |
 | Cost | P0 cache fidelity → P1 input-side payload compression → P2 output-side discipline → P3 provider arbitrage |
-| Iteration | the `autowork/` loop keeps iterating the product by round ([`autowork/program.md`](autowork/program.md)) |
 
 There is no comparative speed claim anywhere in this file: no same-basis measurement against
 another gateway exists, and none is quoted.
@@ -395,7 +423,6 @@ another gateway exists, and none is quoted.
 - [Spec (WHAT)](docs/spec.md) — protocol contracts, config schema, observation and accounting conventions.
 - [Design (HOW)](design/DESIGN.md) — crate layout, plugin runtime, cost engine, cache policy.
 - [Decisions (WHY)](design/decisions/) — the ADRs, append-only.
-- [Autowork](autowork/program.md) — the loop charter, its gates and its direction pool; `autowork/STATE.md`'s **Round Log** is the round-by-round index, and each round's own record is in `autowork/progress/`.
 
 ## Contributing
 
@@ -411,7 +438,7 @@ public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Ops
 
-- **No server-side session state.** Session identity is the client's own key (`prompt_cache_key`, then the configured headers, spec §4) — never `store` / `previous_response_id`. v0.1 does not inspect those two fields: they are forwarded byte-for-byte like every other client field and take no part in routing, so `state.stateful_inbound` in the trace is `false` on every request. Detecting inbound state and marking the trace record is planned, not implemented (known gap G-F).
+- **No server-side session state.** Session identity is the client's own key (`prompt_cache_key`, then the configured headers, spec §4) — never `store` / `previous_response_id`. v0.1 does not inspect those two fields: they are forwarded byte-for-byte like every other client field and take no part in routing, so `state.stateful_inbound` in the trace is `false` on every request.
 - **One local store.** Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, ADR-009) holding the event log and its projections; the trace stays the only analysis channel (ADR-005), and **no request or response body is stored**.
 - **Back up the pair and the store together.** The config is a pair: the file plus the roster it names. Back up both, with the store, and see [Operations §Backup](book/operations.md#backup) for what a restore does when one half is missing.
 - **Cache is the first-order cost lever.** Every rewrite must be **content-deterministic** (same content → same upstream bytes), because the upstream prefix cache is what the turns after it are billed against.

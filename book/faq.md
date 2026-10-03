@@ -12,9 +12,8 @@ question is about a number, the answer is a link, never a number.
 - **"Why does `model: auto` fail?"** Automatic model selection is intentionally not enabled
   in v0.1; `auto` returns an explicit error and the selection slot is reserved for a plugin.
   Use an explicit `provider/model` or a configured alias.
-- **"Endpoint X returns 'not implemented'."** Those paths are staged: the gateway is
-  implemented in rounds, and unimplemented endpoints answer with a specific error code
-  rather than pretending or panicking.
+- **"Endpoint X returns 'not implemented'."** Unimplemented paths are declared, staged gaps:
+  the gateway answers them with a specific error code rather than pretending or panicking.
 - **"Where are the prices?"** In the config, one entry per model, each carrying the official
   pricing page URL and capture date. Documentation intentionally never copies price numbers,
   so there is exactly one place to update and one place to audit.

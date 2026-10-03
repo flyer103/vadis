@@ -48,8 +48,8 @@ does two things, it is two commits.
 ## 3. All repository text is English
 
 Docs, code comments, commit messages and file names are English. The one exemption is captured
-data (`autowork/traces/`, `autowork/corpus/`): that is raw client traffic, not authored text.
-(AGENTS.md constraint 7.)
+data — raw recorded client traffic kept on the private side, not in the published tree: that is
+traffic, not authored text. (AGENTS.md constraint 7.)
 
 ## 4. The measurement is not part of the change space
 
@@ -92,9 +92,8 @@ Privately, never as a public issue — see [`SECURITY.md`](SECURITY.md).
 | `crates/router-protocol` | the three-protocol codec: usage normalization, the SSE block parser |
 | `crates/router-providers` | provider adapters: wire_api capability, auth, error classification |
 | `crates/router-proxy` | the data plane (axum), byte-faithful forwarding |
-| `crates/router-cli` | the binary (`serve`) |
+| `crates/router-cli` | the binary (`serve`, `stats`, `setup`) |
 | `crates/router-store` | SQLite/WAL event log + projections, and the JSONL trace sink |
 | `tests/conformance` | the protocol matrix and the byte/prefix/accounting invariants |
-| `autowork/` | the iteration loop (Python): harness, corpus, traces, round records |
 
 Start with `README.md`, then `book/` for the user-facing story.

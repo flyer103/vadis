@@ -22,12 +22,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  # R53-0: debug info is not part of any gate verdict — no test reads DWARF (the only
+  # Debug info is not read by any gate: no test reads DWARF (the only
   # debug_assert! users are controlled by `debug-assertions`, which stays on), and
   # RUST_BACKTRACE still resolves function names from the symbol table. At the dev
   # defaults (debug=2 + incremental) the 76 conformance test binaries plus ~150 rlibs
-  # each grew target/ to 35 GB on the runner and exhausted the disk (measured:
-  # run 36299293578, autowork/harness/r53-0/RUN1-DIAGNOSTIC.md). Turning DWARF and
+  # each grew target/ to 35 GB on the runner and exhausted the disk (measured on a
+  # runner diagnostic run). Turning DWARF and
   # incremental off is what makes the build fit; it changes build artifacts, never
   # verdicts.
   CARGO_PROFILE_DEV_DEBUG: "0"
@@ -73,11 +73,11 @@ jobs:
           sudo apt-get clean
           df -h /
 
-      # The cargo registry only, deliberately WITHOUT `target` (R53-0). A warm target/
-      # for this workspace is 25-35 GB: run 36299293578 measured the cache restoring a
+      # The cargo registry only, deliberately WITHOUT `target`. A warm target/
+      # for this workspace is 25-35 GB: an early run measured the cache restoring a
       # complete 25 GB tree (a 6 GB archive, under the 10 GB cap), which left the runner
-      # 10 GB of headroom that cargo test then exhausted. The registry alone is hundreds
-      # of MB — the cache stays what the header says it is: an optimisation that changes
+      # 10 GB of headroom that cargo test then exhausted. The registry alone is hundreds of
+      # MB — the cache stays what the header says it is: an optimisation that changes
       # run time, never the verdict. The key carries a `v2` namespace so a stale archive
       # saved WITH target/ under the old `cargo-` prefix can never be restored here.
       - name: Restore the cargo registry

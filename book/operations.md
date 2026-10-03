@@ -193,8 +193,8 @@ your conversations" surface at all.
 
 ## Upgrades and rollback
 
-One logical change per commit on a round branch, merged only when the round's gates pass; a
-round that fails leaves documentation and no broken code. The store's schema is migrated
+One logical change per commit, on its own branch, merged only when its gates pass; a
+change that fails leaves documentation and no broken code. The store's schema is migrated
 **forward only** — a database written by a newer build is refused by an older one rather
 than read on a guess. Restore a backup if you need to go back. A bounded parameter may also
 be adopted online: it is tried on a share of *new* sessions only (never changed mid-session,
@@ -207,7 +207,7 @@ wrong (ADR-012, ADR-013).
 |---|---|
 | the client sees `503` and nothing reaches the logs | the local-proxy prerequisite (`NO_PROXY=127.0.0.1,localhost`) — see [Connecting clients](connecting-clients.md) |
 | the process exits immediately at startup | the config (it names the offending key), the state store (permissions, a migration, or a second instance holding the writer lock), or — with `server.auth_token_env` written — a token variable that is unset or empty (see the startup table above) |
-| an endpoint returns "not implemented" | that path is staged for a later round; nothing is wrong with your setup |
+| an endpoint returns "not implemented" | that path is a declared, staged gap — the unified error body names it; nothing is wrong with your setup |
 | costs moved | prefix continuity between turns in the same session, before anything else |
 | a provider seems to be skipped entirely | it is inside a cooldown, which `/health` reports |
 | "nothing is being charged" | check `unknown_outcome` counts and whether usage was missing for those requests — a reported ambiguity is not a bug, an invented number would be |
@@ -243,4 +243,5 @@ wrong (ADR-012, ADR-013).
   — how a parameter adopted online behaves on your traffic.
 - [`AGENTS.md`](../AGENTS.md) — build/test commands, version-control rules, environment
   gotchas.
-- [`autowork/program.md`](../autowork/program.md) — the round gates that gate a merge.
+- [`docs/spec.md` §9.3`](../docs/spec.md) — which reporting surfaces are served and which are
+  planned.
