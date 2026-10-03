@@ -7,9 +7,6 @@ config.yaml
 *.env.local
 .bootstrap-key
 
-# the loop's own local git repository lives at autowork/; this repository does not track it
-autowork/
-
 # runtime state
 state/
 *.sqlite
