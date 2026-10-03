@@ -13,8 +13,10 @@
   verbatim template — *the file is **edited**, never reproduced*); **ADR-038** (the pair, and D6's
   *backed-up-then-overwritten* shape and D1's *the run's shape is always the pair*, whose lane semantics this
   ADR's third file follows); **ADR-037** (the roster as its own named file; §4.1's one resolution rule);
-  **ADR-003** (the rule set is **data** — rule-override-and-trust, which declines the compiled-in alternative
-  below); **ADR-019** (content determinism and the mode the client asks for); `AGENTS.md` constraints **1**
+  **ADR-003** (saving cost is a declarative, revertible, individually accounted pipeline — the rule set is
+  **data**, the fact that declines the compiled-in alternative below) and **ADR-008** (the three-level rule-file
+  override and its trust gate); **ADR-019** (content determinism and the mode the client asks for); `AGENTS.md`
+  constraints **1**
   (the byte boundary — this file is not on a request path), **2** (content determinism), **5** (no fabricated
   prices — the rule file carries none), **8** (docs before code) and **9** / ADR-012; spec **§4.4** (the
   rule-file format), **§4.11** (the writer and its boundary), **§4.12** (where a path written in the file
@@ -149,7 +151,7 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
 | **Leave the reference dangling** — do nothing | The measured defect **is** this alternative: every fresh XDG install starts with a named absence, the transform silently does not run, and `/health` agrees with the config rather than with the process. A named absence that nothing reports is the failure this ADR exists to end |
 | **Document a manual copy step only** (`cp rules/tool_output.toml …` in `book/`) | Documentation does not produce the file, and the wizard's whole job is to turn the template into your configuration. R44 ended exactly this ceremony for the roster (ADR-038's *Background*: *\"documenting the ceremony does not produce it\"*); repeating it for the third file would make the trap a documented trap. It also fails the installed-binary case outright: a user with no clone has no `rules/` to copy from |
 | **Ship the example's entry `disabled: true`** | This hides the absence instead of fixing it, and it changes a capability the user did not ask about: the shipped example would mount no rule engine, so `X-Router-Transform` would be a no-op **even on a site whose operator later enables the entry** — `disabled` is the start-up switch (spec §4.3), not a file-existence guard. It would also make the shipped example disagree with the roster it ships beside, for a reason that is about a missing file |
-| **Embed the rule set as a built-in default instead of a file** | Declined by **ADR-003** (rule-override-and-trust): the rule set is **data** — a file the operator can read, review, tune and override — and a compiled-in default would (i) create a second source of truth for the rules, (ii) make `plugins[].config.rules_file` name a file nothing reads (a lie in the config, which `deny_unknown_fields` would not catch), and (iii) move the rules outside the operator's reach, which is the opposite of what ADR-003 bought |
+| **Embed the rule set as a built-in default instead of a file** | Declined by **ADR-003** and **ADR-008**: the rule set is **data** — a declarative, revertible, individually accounted pipeline (ADR-003) with a three-level override and a trust gate (ADR-008) — and a compiled-in default would (i) create a second source of truth for the rules, (ii) make `plugins[].config.rules_file` name a file nothing reads (a lie in the config, which `deny_unknown_fields` would not catch), and (iii) move the rules outside the operator's reach, which is the opposite of what ADR-003 bought |
 | **Write the rule file on every run** (no roster semantics) | It would clobber an operator's own rules on a routine reconfigure — the one thing ADR-025's *refuse rather than guess* discipline and the owner's ruling both forbid. The roster semantics the owner chose (create when absent; replace only under `--force`) is what makes the file the operator's after the first landing |
 
 ## Consequences
