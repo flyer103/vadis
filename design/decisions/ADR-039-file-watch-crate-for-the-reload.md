@@ -26,7 +26,7 @@
 (`design/decisions/ADR-037-roster-file-and-config-identity.md:221-231`) puts the reload in its own round
 and names its pre-requisites in terms: *"its named pre-requisites are the watcher decision (a file-watch
 crate — a change to the dependency allowlist of DESIGN §12.1, and therefore a **human** decision — versus a
-std-only mtime poll), the atomic-swap decision, and a fresh p99 ladder run."* `autowork/STATE.md`'s
+std-only mtime poll), the atomic-swap decision, and a fresh p99 ladder run."* the loop state record's
 waiting-on-human **row 17** carries the same item, registered by R43's close-out and deliberately not
 decided by it.
 
@@ -182,8 +182,8 @@ own cards own each of them:
   no manifest line, no conformance assertion and no measurement definition is touched by this ADR
   (AGENTS 9 / ADR-012). The reader side of §4.14 and the writer of §4.11 are untouched: a running process
   still serves the configuration it loaded, and the reload is one round away from being observable.
-- **STATE.md's waiting-on-human row 17 moves only in part** — its *mechanism* half is now decided, and its
-  remaining half (the swap, the store, the ladder) stays open. This ADR does not edit `STATE.md`; the
+- **the loop state record's waiting-on-human row 17 moves only in part** — its *mechanism* half is now decided, and its
+  remaining half (the swap, the store, the ladder) stays open. This ADR does not edit the loop state record; the
   round's close-out card records the row's partial closure.
 
 ## Evidence (all re-runnable; none of it is an estimate)
@@ -210,11 +210,11 @@ cargo tree -p router-cli --locked -i libc          -> libc v0.2.189 (via sha2/cp
 git grep -n notify Cargo.toml crates/*/Cargo.toml  -> (no output)
 ```
 
-The probe scripts and their raw output are tracked at **`autowork/harness/r46-0/`** (flat names, one
+The probe scripts and their raw output are tracked at **the loop's evidence for that decision** (flat names, one
 `git ls-files` away in a fresh clone); the numbers above are also reproducible from the commands, which is
-the point of writing them down (`autowork/work-mode.md`'s evidence rule).
+the point of writing them down (the loop execution model's evidence rule).
 
-## Dated note — 2026-09-26 (the R46-0b audit, card `t_d8a3e014`)
+## Dated note — 2026-09-26 (the R46-0b audit)
 
 Two corrections, both re-measured against live sources on the same day rather than trusted:
 
@@ -229,4 +229,15 @@ Two corrections, both re-measured against live sources on the same day rather th
 2. **The bundle sentence above originally read "the R46-0 card's attachments" — and that card has none.**
    The orchestrator's attach attempt was stopped by the approval gate, so the raw bundle (which lived only
    in a pruned scratch directory) was landed here in the tree by the audit instead, per
-   `autowork/work-mode.md`'s rule that a fresh clone must resolve every number's evidence.
+   the loop execution model's rule that a fresh clone must resolve every number's evidence.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

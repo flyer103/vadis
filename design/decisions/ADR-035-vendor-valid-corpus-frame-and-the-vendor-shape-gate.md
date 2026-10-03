@@ -8,10 +8,10 @@
   **ADR-015** (the byte boundary's two mutations); **ADR-026** (corpus tiers and automated scoring);
   **ADR-028** (the wire recorder); **ADR-032** (the L2 measurement; **D5**, the composed bytes'
   honesty cost); **ADR-034** (the promotion's route-namespace gate — the layer above this one, whose
-  **D4** honesty boundary this ADR deliberately mirrors); `autowork/harness/replay-contract.md` §11
-  (HAND-10), §14 (CORP-12), §9 (PROV-8) and ARM-3.8/3.9; `autowork/harness/r35-1/FREEZE.md` §D1.4 and
-  §D2.0; `autowork/harness/r39-1/FREEZE.md` (this round's clause list and its receipts);
-  `autowork/harness/r39-1/EVIDENCE.md` (this ADR's measurements); `autowork/harness/corpus_route_check.py`
+  **D4** honesty boundary this ADR deliberately mirrors); the loop replay contract §11
+  (HAND-10), §14 (CORP-12), §9 (PROV-8) and ARM-3.8/3.9; the loop's freeze note §D1.4 and
+  §D2.0; the loop's freeze note (this round's clause list and its receipts);
+  the loop's evidence record (this ADR's measurements); the loop route check
   (the gate this one is modelled on); `rules/tool_output.toml` (`[filters.bash-log-noise]`).
 - Numbering note: **ADR-034** landed with R38; **ADR-033** landed with R37. This is the next free
   number in `design/decisions/`.
@@ -45,7 +45,7 @@ The route gate **passed** the corpus the vendor then refused. A gate that answer
 question is the correct remedy; a stronger route gate would have been the wrong one.
 
 **What the accepted bytes prove, and what the composed bytes lack** (14 accepted bodies vs 6 refused,
-re-derived by this card; `r39-1/EVIDENCE.md` §1):
+re-derived by this card; the loop's evidence record §1):
 
 | | accepted (`codex-pair-2026-09-22`) | refused (both composed freezes) |
 |---|---|---|
@@ -111,12 +111,12 @@ client sessions' captured bytes, the payloads are authored. Round files and card
 
 ### D2. The gate: derived from accepted bytes, two rules, one committed artifact
 
-**Home: `autowork/harness/corpus_vendor_check.py`** — a new top-level module, invoked as `python -m`,
+**Home: the loop vendor check** — a new top-level module, invoked as `python -m`,
 mirroring ADR-034's gate in shape: the same "where it sits in the promotion" docstring, the same FAIL-6
 exit codes (0 / 2), the same mutually exclusive `--corpus <dir-or-id>` / `--body`, the same money-free,
 credential-free, read-only declaration, the same one-line-per-body + verdict print. **Not** a second
 verb in `corpus.py`: §11.2.1 freezes the corpus CLI's entry points, and a new module is ADR-034's own
-precedent. It never writes under `autowork/corpus/` (COR-2.4).
+precedent. It never writes under the corpus (COR-2.4).
 
 **`VG-1` — the reasoning echo.** If a body carries ≥1 `input` member of `type == "function_call"`, then
 ≥1 `input` member of `type == "reasoning"` whose `content` contains a `reasoning_text` child must
@@ -134,7 +134,7 @@ skeleton = the **intersection** of the accepted bodies' top-level key sets (12 k
 admitted deliberately: the rule is what the bytes prove, and a body carrying extra fields is not
 thereby refused.
 
-**The skeleton is a committed, hash-bound artifact** (`autowork/harness/vendor-skeleton.json`): the
+**The skeleton is a committed, hash-bound artifact** (the loop vendor skeleton): the
 accepted source's identity (`corpus_id`, `corpus_digest`, `manifest_sha256`, per-item sha256), the
 skeleton and each accepted body's key set (so the intersection is re-derivable without the bodies), the
 two rules' parameters, and the **acceptance witness** — the run roots and statuses, **including the one
@@ -148,15 +148,15 @@ member's index. It edits nothing.
 
 ### D3. One step in the promotion path, adjacent to ADR-034's
 
-The step lives in `autowork/work-mode.md`, beside ADR-034's route gate. It runs on the **same bodies
+The step lives in the loop execution model, beside ADR-034's route gate. It runs on the **same bodies
 the freeze is about to copy**. Order: **route gate first** (one scalar per body; its refusal is
 upstream), **vendor gate second**; both GREEN before the freeze.
 
-The **capture** route's steps (this round's route) are catalogued in `r39-1/FREEZE.md` §C3.1 with one
+The **capture** route's steps (this round's route) are catalogued in the loop's freeze note §C3.1 with one
 owner each: draft from the capture → **graft** (frame from the draft, payload authored) → the round's
 offline suite scored `$0` → route gate → vendor gate → the human's freeze → `corpus verify` (the
 tripwire in both directions) → the authoritative `size` reading → pin the digest → run. The
-**nomination** route's ten steps (`r35-1/FREEZE.md` §D2.0·A2) are a different route and are **not**
+**nomination** route's ten steps (the loop's freeze note §D2.0·A2) are a different route and are **not**
 this ADR's to move; that its table still lacks both gates is registered (`R39-1-F4`, carrying
 `R38-2-F3`).
 
@@ -182,7 +182,7 @@ ADR-034's **D4** says its gate never claimed vendor validity. The symmetry is ex
 
 **The target is the tier's own, not this ADR's** (`SZ-1`): the promoted corpus must read `size`
 **pass** — **≥ 3** distinct buckets over `items[].bytes` among the five frozen edges (1 / 8 / 64 / 256
-KiB), **and** `max(bytes) ≥ 8 KiB` (`replay-contract.md:2833-2860`; `corpus_auto.py:182-196`, `:158`;
+KiB), **and** `max(bytes) ≥ 8 KiB` (the loop replay contract; `corpus_auto.py:182-196`, the same file;
 read on the signed card by `corpus.py:158-162`). Re-derived by this card: the donor reads `size` fail,
 value 1, bucket `['8–64 KiB']`. §14.3's disposition for a miss is a `coverage_gap` plus a `needs[]` row
 whose `closer` is `human` — **not a refusal** — and this round's freeze makes the target a
@@ -216,7 +216,7 @@ minted here; the numbers are arithmetic over a source-named price row, labelled 
 
 ### D6. Which payload source is admissible
 
-**The synthetic adapter's generator family** (`autowork/harness/sources/__init__.py::_synth_span_bytes`,
+**The synthetic adapter's generator family** (`the loop's sources package::_synth_span_bytes`,
 `r23-payload-walker@1`), **at a new version or a new generator id** whose size classes reach the buckets
 `SZ-1` names: deterministic by construction (the spec's seed and the item index, never the clock),
 `licence = "self-authored"`, a revision string `<generator>@<version>#<seed>`, no network and no
@@ -240,9 +240,9 @@ the auto suite's own row, which does carry `licence` (§14.7), and (ii) the prom
 the freeze disclosure, quoting the same revision string. Registered as `R39-1-F2` rather than worked
 around.
 
-### D7. The composer is demoted, and `autowork/harness/sources/**` is granted to the round's build card
+### D7. The composer is demoted, and the loop's sources package is granted to the round's build card
 
-`_compose_request` (`sources/__init__.py` ≈`:262`, its model write at `:273`) is what synthesised the
+`_compose_request` (`sources/__init__.py` ≈the same file, its model write at the same file) is what synthesised the
 refused conversation. Its role under this ADR: **the auto tier only**, where its mock-only base is
 correct (ADR-034's finding). On the signed tier **no path that writes a body may call it**, and
 `:273`'s `model = f"deepseek-{protocol}/…"` must not be reachable from the graft. The graft is a **new
@@ -250,9 +250,9 @@ module** (`harness/sources/graft.py`) exposing a **pure function** of (donor bod
 payloads, stable spec) that inserts no member, removes no member, and touches no byte outside the
 payload values it is given.
 
-`R35-1-F7` registered that `autowork/harness/sources/**` lies in no card's write set. **This ADR
+`R35-1-F7` registered that the loop's sources package lies in no card's write set. **This ADR
 resolves it by grant, not by improvisation**: the round's build card (R39-2) owns
-`autowork/harness/sources/**` for this round, scoped to the new graft module (+ tests) and a **new
+the loop's sources package for this round, scoped to the new graft module (+ tests) and a **new
 generator version** — never a change to `@1`'s deterministic output, never a call into the composer
 from the graft path. **The grant expires with the round.**
 
@@ -353,29 +353,40 @@ gate says so in its own vocabulary.
   graft. The human's, with the file:line registered.
 - **The signed vocabulary's gap** (`R39-1-F2`): whether a capture-framed, payload-authored item needs
   its own `source` word or a disclosure key. The human's / `harness-conv`'s.
-- **Anything in `program.md`**: no direction, gate or threshold is calibrated here, and the direction
+- **Anything in the loop charter**: no direction, gate or threshold is calibrated here, and the direction
   pool's D3 entry is untouched.
-- **The nomination route's step table** (`R39-1-F4`, carrying `R38-2-F3`): `r35-1/FREEZE.md` is not this
+- **The nomination route's step table** (`R39-1-F4`, carrying `R38-2-F3`): the loop's freeze note is not this
   round's write set.
 - **`R35-1-F5`'s reading** (whether a *composed* corpus may carry `verified`): not reached on this route,
   because every item's `session` identity here is a **capture fact**, and not re-adjudicated.
 
 ## References
 
-- `autowork/harness/r39-1/FREEZE.md` — this round's clauses (`CS-1`, `VG-1`, `VG-2`, `SZ-1`, `SZ-2`,
+- the loop's freeze note — this round's clauses (`CS-1`, `VG-1`, `VG-2`, `SZ-1`, `SZ-2`,
   `PS-1`, `CG-1`, `LA-1`), the gate's exact command and control set, the capture route's steps.
-- `autowork/harness/r39-1/EVIDENCE.md` + `autowork/harness/r39-1/receipts/` — every measurement this ADR
+- the loop's evidence record + the loop's evidence for that decision — every measurement this ADR
   cites, with the artifact each number came from.
 - `design/decisions/ADR-034-promoted-corpus-must-resolve-on-the-declared-live-base.md` — the layer above,
   and the source of the honesty boundary D4 mirrors.
-- `autowork/harness/replay-contract.md` §11 (HAND-10: the capture → freeze handoff, §11.3's four
+- the loop replay contract §11 (HAND-10: the capture → freeze handoff, §11.3's four
   commands, §11.4's prohibitions), §14 (CORP-12: tiers, the coverage rubric's `size` row, the four
   adapters), §9/ARM-3.8–3.9 (`external`, and why `paired-sessions` is the ladder's shape).
-- `autowork/harness/replay.py:156-159` (the item key set), `:227-231` (`created_by`), `:251-262` (the
-  `source` vocabulary), `:281-285` (the COR-2.3 digest recipe).
-- `autowork/harness/corpus.py` (`draft`/`verify`/`score`), `autowork/harness/corpus_auto.py:158`,
-  `:182-196` (`size_bucket`, `_metric`), `autowork/harness/corpus_route_check.py` (the gate's shape).
+- the loop replay driver (the item key set), the same file (`created_by`), the same file (the
+  `source` vocabulary), the same file (the COR-2.3 digest recipe).
+- the loop corpus tool (`draft`/`verify`/`score`), the loop auto-corpus tool,
+  the same file (`size_bucket`, `_metric`), the loop route check (the gate's shape).
 - `rules/tool_output.toml:163-197` (`[filters.bash-log-noise]`, its stages and parameters);
   `crates/router-core/src/transform.rs:154-183` (the selection paths).
-- `config.example.yaml:147-160` (`deepseek-flash`, off-peak, source-named); `autowork/work-mode.md`
+- `config.example.yaml:147-160` (`deepseek-flash`, off-peak, source-named); the loop execution model
   (the promotion path, where this ADR's step lands).
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

@@ -16,8 +16,8 @@
   (the config schema, prices, tiers, peak windows, `plan_policy`), §6 (the trace contract: `usage`, `cost`),
   §7 (the labels), §9 (the report); DESIGN §5/§12.4 (the cost engine), §12.8 (the conformance allocation),
   §12.16 (the baseline's quantity), §12.17 (**this method's product-side pointer**);
-  `autowork/program.md:34-42` (the gate table: the **Cost** gate reads the fixed-trace replay's `verified`
-  figure; **D3** is the P1 lever) and `:58-96` (steps 0/0.5); `autowork/STATE.md:846` (waiting-on-human
+  the loop charter (the gate table: the **Cost** gate reads the fixed-trace replay's `verified`
+  figure; **D3** is the P1 lever) and the same file (steps 0/0.5); the loop state record (waiting-on-human
   **row 1**, still open — no threshold is written here).
 
 ## Background
@@ -26,8 +26,8 @@
 runnable; R31 fixed the recorder and ran the first post-R24 live pair; R32 measured the router's own
 latency under scale; R33 measured the transform path's latency. None of them produced a token or dollar
 delta: R33's own record says it in one line — *"this round measured **latency**, not tokens; the token
-ledger rows are `inferred`"*. `program.md:40`'s Cost gate reads *"the `verified` $ and token ledger of a
-fixed-trace replay"*, `autowork/STATE.md` states that **no `verified` figure has ever been produced**, and
+ledger rows are `inferred`"*. The loop charter's Cost gate reads *"the `verified` $ and token ledger of a
+fixed-trace replay"*, the loop state record states that **no `verified` figure has ever been produced**, and
 the last live run's own row says why it could not be: `verified_ineligible_reason: condition-4
 instrument-not-usable (dirty harness tree)`.
 
@@ -158,10 +158,10 @@ why" rather than an omitted row — an omission reads as a zero.
 1. **Mint `verified`** — no row, no headline, no total.
 2. **Copy a price number into `book/`** — the book links to the authority (AGENTS 8).
 3. **Print a price without its official source URL + date** (AGENTS 5).
-4. **Write a threshold** — budget, transform band, envelope, L1. `autowork/STATE.md:846`'s row 1 stays the
+4. **Write a threshold** — budget, transform band, envelope, L1. The loop state record's row 1 stays the
    human's; a method may *measure* a quantity without *setting* a limit (ADR-029's boundary, unchanged).
-5. **Touch** the frozen corpus, `tests/conformance/`, `autowork/harness/replay.py`,
-   `autowork/harness/replay-contract.md`, `autowork/program.md`, `autowork/work-mode.md`.
+5. **Touch** the frozen corpus, `tests/conformance/`, the loop replay driver,
+   the loop replay contract, the loop charter, the loop execution model.
 6. **Present the ranking as a product surface** — `router stats` serves no `$`-ranked table, and a claim
    that the router ships one would be false.
 7. **Rank a saving whose retrieval path does not exist** — e.g. a `tee`-shaped byte saving while v0.1 has
@@ -196,8 +196,19 @@ why" rather than an omitted row — an omission reads as a zero.
 - `crates/router-core/src/cost.rs:113-137`, `:150-172`, `:205-218`, `:260-300` — the money type, the price
   unit, the band selection and the formula this ADR adopts.
 - `config.example.yaml:110-163` — the price entries with their own source URL + date, and the peak windows.
-- `autowork/harness/r31-2/run-evidence/` — the committed live rows whose recomputation is this method's red
-  control; `autowork/harness/r34-1/` — R34's freeze, its receipts and its ledger adjudication.
-- `autowork/program.md:34-42` (the gate table), `:58-96` (steps 0/0.5), `:135-147` (the direction pool).
-- `autowork/STATE.md:846` (row 1) and `:731-734` (the cache facts the lever inventory rests on);
-  `autowork/harness/replay-contract.md:1154`, `:1444-1450` (the label ladder and the dirty-tree suppression).
+- the loop's evidence for that decision — the committed live rows whose recomputation is this method's red
+  control; the loop's evidence for that decision — R34's freeze, its receipts and its ledger adjudication.
+- the loop charter (the gate table), the same file (steps 0/0.5), the same file (the direction pool).
+- the loop state record (row 1) and the same file (the cache facts the lever inventory rests on);
+  the loop replay contract, the same file (the label ladder and the dirty-tree suppression).
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

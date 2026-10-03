@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-20
-- Related: ADR-003 (a revertible, individually accounted transform pipeline), ADR-004 (clients are stateless, so the gateway holds every binding), ADR-005 (the trace is the only product↔autowork channel), ADR-006 (integer NanoUsd), ADR-009 (one local store, tiered durability, rebuildable projections), ADR-010 (the event log is the state truth; write ahead, then execute), ADR-011 (one classifier; a quota/billing failure is a fact about the **account**; a failover prices the cache it broke), ADR-012 (the measurement is not part of the search space; a routing knob with money behaviour goes through the human gate), ADR-013 (online iteration rails); spec §1 (v0.1 scope), §3 (selection and the Guard stage), §4 (`quota`; a plan references only its own provider's models), §4.0 (price convention), §4.2 (the fallback chain), §4.5 (state), §6 (observation), §7 (accounting convention), §8 (error behaviour); DESIGN §5 (the switch-cost function), §6 (stickiness), §8 (state), §12.3 (`GuardOutcome`), §12.4 (the quota pure functions), §12.5 (config parsing), §12.6 (DecisionRecord), §12.9 (GAP-Q1), §12.10.2 (config landing), §12.10.4 (store and projections), §12.10.5 (event wiring), §12.10.6 (prefix blocks)
+- Related: ADR-003 (a revertible, individually accounted transform pipeline), ADR-004 (clients are stateless, so the gateway holds every binding), ADR-005 (the trace is the only product↔analysis-loop channel), ADR-006 (integer NanoUsd), ADR-009 (one local store, tiered durability, rebuildable projections), ADR-010 (the event log is the state truth; write ahead, then execute), ADR-011 (one classifier; a quota/billing failure is a fact about the **account**; a failover prices the cache it broke), ADR-012 (the measurement is not part of the search space; a routing knob with money behaviour goes through the human gate), ADR-013 (online iteration rails); spec §1 (v0.1 scope), §3 (selection and the Guard stage), §4 (`quota`; a plan references only its own provider's models), §4.0 (price convention), §4.2 (the fallback chain), §4.5 (state), §6 (observation), §7 (accounting convention), §8 (error behaviour); DESIGN §5 (the switch-cost function), §6 (stickiness), §8 (state), §12.3 (`GuardOutcome`), §12.4 (the quota pure functions), §12.5 (config parsing), §12.6 (DecisionRecord), §12.9 (GAP-Q1), §12.10.2 (config landing), §12.10.4 (store and projections), §12.10.5 (event wiring), §12.10.6 (prefix blocks)
 
 ## Background
 
@@ -284,3 +284,14 @@ key:
   pairing is a config defect, caught at load); and nothing here verifies a plan's allowance — it reacts to what
   the upstream says and comes back when the upstream allows it, which is the strongest claim the protocol
   layer supports.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

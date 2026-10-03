@@ -7,8 +7,7 @@
   record, the determinism collision's resolution, the key and the store, the trace and config contract, the
   measurement, and the DESIGN landing (§12.22 + §12.6 + §12.8 + §13.6). **The case and the code land together in
   one card** (§12.4), so the tree is never red in between — the R50-0 → R50-1 shape.
-- Authority: the **owner's direction of 2026-09-27, item 3 of four**, relayed to the loop through this round's
-  card `t_a338250d`; quoted verbatim in §1.1.
+- Authority: the **owner's direction of 2026-09-27, item 3 of four**, relayed to the loop by the owner's card, quoted verbatim in §1.1.
 - Supersedes, **in the narrow sense of §1.2**: the **exclusion as an absolute** — `design/DESIGN.md` §13.6's
   cache row (`:4043` **at the base `bf96207`** — the revision this round replaces it in; at HEAD the row is `:4131`) and ADR-036's own-reasoning bullet (`ADR-036:288-294`), plus the competitiveness plan's
   *filing* of the item (an out-of-tree plan document, `:122-124`). It
@@ -18,7 +17,7 @@
   mutations), **2** (**content determinism — never of turn number, wall clock, or RNG**), **3** (the
   observation boundary), **4** (no unverified savings), **5** (no fabricated prices), **8** (docs before code),
   **9** (**the measurement is not part of the search space**); ADR-002 (the Cordis runtime and the keyed config
-  diff), ADR-005 (the trace is the only product → autowork channel), ADR-006/018 (integer `Nano`, one
+  diff), ADR-005 (the trace is the only product → analysis-loop channel), ADR-006/018 (integer `Nano`, one
   `currency`), ADR-009/010 (the log is the truth; intent before effect), ADR-012 (**the never-mutable paths**
   and the L1 envelope), ADR-015 (the byte mutations), ADR-019 + spec §2.1 (the mode channel and the three
   transform invariants), ADR-036 (**what a plugin may never own**, and the plugin-surface map), ADR-037 D6
@@ -69,8 +68,8 @@ row sits at `design/DESIGN.md:4131` and states the reversal.
 
 ### 1.1 The owner's authorisation, verbatim and dated
 
-**The owner's direction of 2026-09-27 (item 3 of four)**, relayed to the loop by this round's card
-`t_a338250d` (card body, "Round R51", first paragraph), verbatim:
+**The owner's direction of 2026-09-27 (item 3 of four)**, relayed to the loop by the owner's card
+(card body, "Round R51", first paragraph), verbatim:
 
 > *"exact match only, **off by default**, **declared in the trace**, and **never counted by any gate**"*
 
@@ -83,8 +82,7 @@ the record, and none of them may be inferred away:
    says of the exclusion: *"The semantic / exact-match response cache exclusion in D6 is this ADR's own
    reasoning, not an owner's word."* An artefact that is not an owner's word is exactly what an owner's word may
    reverse — and the reversal is the owner's, recorded here, not a round reopening a decided question. The
-   standing loop-side rule (`autowork/harness/r49-0/CLAIM-SOURCES.md:360`, row W2, quoting the cut-spec card
-   `t_1d86acb2`) is *"do not reopen a rejected item; a reopening must supply a measurement the dossier does not
+   standing loop-side rule (the loop's claim-sources record, row W2, quoting the cut-spec card) is *"do not reopen a rejected item; a reopening must supply a measurement the dossier does not
    have"*; that rule binds **the loop**, and §7 supplies the measurement anyway.
 2. **It is dated and scoped**: *this* capability — the **exact-match** cache — and four of its properties
    (exact match only; off by default; declared in the trace; never counted by a gate). §1.3 lists what it does
@@ -97,7 +95,7 @@ the record, and none of them may be inferred away:
 ### 1.2 What the ruling supersedes — and what the prior artifacts actually said
 
 Every claim in this table was re-read at the base `bf96207` (this card's HEAD when it was written) or at the path named; the commands and
-their raw output are in `autowork/harness/r51-0/anchors.txt`.
+their raw output are in the loop's anchors record.
 
 | Artifact | What it says, verbatim or closely | Superseded? |
 |---|---|---|
@@ -106,7 +104,7 @@ their raw output are in `autowork/harness/r51-0/anchors.txt`.
 | `<an out-of-tree plan document, :122-124>` (§T3-B) | *"Attractive (every L2/L3 competitor has one) but it breaks *\"one client request → that provider call\"* … If built, it must be off by default, declared in the trace, and never counted by a gate."* | **Yes, as a filing.** It is the same requirement list as ADR-036's, filed under "the real feature gaps (strategic, each collides with a frozen constraint)"; the owner's ruling is that filing being taken. Nothing in it measured anything. |
 | `<an out-of-tree plan document, :132-134>` (**"Not doing"**) | the heading *"## Not doing (write it down so the loop does not drift into it)"* and its line *"**Semantic cache** · MCP / A2A / gRPC ingress · dashboards / `/metrics` before v0.2 · SDKs · …"* | **The `/metrics` clause was already discharged by ADR-041 §1.2; the *semantic* clause is not touched and stays filed.** This ADR builds an **exact-match** cache: a byte-identical repeat of one session's own request, matched by digest of the client's bytes. Similarity matching, embedding lookup and any content-equivalence claim are the *semantic* cache, and they stay out (§1.3, `docs/spec.md:19`). |
 | `docs/spec.md:19` | *"\| Semantic response cache, context summarization \| Large conflict surface with prefix caching; a measured ledger is needed first (P4) \|"* | **No — the row is amended additively, not falsified** (§11.3). R49's contract predicted exactly this and required this shape: *"an off-by-default exact-match cache does not falsify `docs/spec.md:19`'s *semantic* response-cache non-goal (a different thing), so that row stays"* (`CLAIM-SOURCES.md:360`). The row's *only* defect after this round is silence, not error: §1's table would otherwise not name a capability the config can turn on. §11.3 replaces the row with one that states both halves, and the drift of that claim row is registered (`R51-0-F1`, §14). |
-| `autowork/program.md:34-42` (the gate table) | the four blocking gates — protocol fidelity, cache, cost, latency — and the warning-level semantic corroboration | **No, and this ADR binds itself to them** (§5.2, §6.2). Gate definitions are outside the loop's mutable scope (AGENTS 9 / ADR-012); nothing here moves one. |
+| the loop charter (the gate table) | the four blocking gates — protocol fidelity, cache, cost, latency — and the warning-level semantic corroboration | **No, and this ADR binds itself to them** (§5.2, §6.2). Gate definitions are outside the loop's mutable scope (AGENTS 9 / ADR-012); nothing here moves one. |
 | `tests/conformance/**`, the four frozen corpora | the assertions and the corpus digests (`607ffac6…`, `0f8b7edb…`, `ab3cf279…`, `e07405bf…`) | **No.** No assertion, no gate and no corpus digest is touched: `CONF-88`/`CONF-89` are **added** with the code they witness (§10.3), and the measurement in §7 reads the corpora without editing them. |
 
 ### 1.3 What the authorisation does **not** license
@@ -403,8 +401,8 @@ for a request that was never sent.
 ### 5.2 No gate may count it
 
 - **Gate definitions are outside the loop's mutable scope** (AGENTS 9 / ADR-012), and the cost gate counts only
-  `verified` figures (`autowork/program.md:40`: *"the `verified` $ and token ledger of a fixed-trace replay"*;
-  `:32`: *"Only numbers in the `verified` convention may enter a gate or an external report"*). A hit's figure is
+  `verified` figures (the loop charter: *"the `verified` $ and token ledger of a fixed-trace replay"*;
+  the same file: *"Only numbers in the `verified` convention may enter a gate or an external report"*). A hit's figure is
   `inferred`, therefore it cannot enter one — this is a consequence of the frozen rules, not a new favour.
 - **The label is carried on the record, and the exclusion is structural.** `cache.verdict: "inferred"` (§10.1,
   the same one-word vocabulary `forward.rs:457` already writes — *`verdict: "inferred"`* with its comment *"A
@@ -451,12 +449,12 @@ plugins:
   construction** (the kind does not exist, so nothing can be on), which is a property, not a weakness: it cannot
   be made green by the implementation, so it pins the *default* rather than the feature.
 - **Its red control is a sabotage run, not a case.** A build whose loader defaults that key to `true` must turn
-  `CONF-88` red on its first limb; the rig that proves it is recorded under `autowork/harness/r51-*/` (§12.5's
-  control list), in the shape R50-1 used for `CONF-46` (`autowork/harness/r50-1/sabotage-control-conf46.md`).
+  `CONF-88` red on its first limb; the rig that proves it is recorded under the loop's evidence for that decision (§12.5's
+  control list), in the shape R50-1 used for `CONF-46` (the loop's sabotage-control record).
   The point of recording it is that a later config edit **cannot** enable the capability without a case turning
   red.
 - **The gate corpus and the L1 envelope run with the cache off.** The four frozen corpora (§7), the four blocking
-  gates (`autowork/program.md:34-42`) and the L1 envelope's own parameter runs are executed against roots that
+  gates (the loop charter) and the L1 envelope's own parameter runs are executed against roots that
   do not mount the capability; no gate reads a cache field, and no gate, corpus, threshold or assertion may be
   changed to accommodate the feature (AGENTS 9 / ADR-012). If a future round wanted the corpus to include a
   cache-enabled arm, that is a human decision — and §7.3 explains why the corpus **cannot** answer the question
@@ -468,19 +466,12 @@ plugins:
 
 ### 7.1 What was measured, and how
 
-**The frozen corpora** are the only corpora this repository has, and `harness.replay.Corpus` is the one reder of
-them; the measurement is a script beside this ADR:
-
-```
-cd autowork && uv run python harness/r51-0/measure-repeat-rate.py
-   → autowork/harness/r51-0/repeat-rate.txt   (the printed receipt, quoted below)
-   → autowork/harness/r51-0/repeat-rate.json  (the same numbers, machine-readable)
-   → autowork/harness/r51-0/corpus-verify.txt (all four corpora `ok: True`, digests unmoved)
-```
+**The frozen corpora** are the only corpora this repository has, and the loop corpus reader is the one reder of
+them; the measurement was taken by a script kept with this decision record. It writes a printed receipt (quoted below), the same numbers machine-readable, and a corpus-verify output (all four corpora `ok: True`, digests unmoved).
 
 Method, in full, because the number is worth nothing without it:
 
-- the corpora are **loaded through the signed-corpus rule set** (`harness.replay.Corpus`, replay.py:204-285),
+- the corpora are **loaded through the signed-corpus rule set** (the loop corpus reader, replay.py:204-285),
   which **refuses** any item whose bytes do not hash to the manifest's own `sha256` — so loading *is* the
   integrity check, and a corrupted body is a refusal rather than a number;
 - the key under test is `(session, sha256(body bytes as stored))` — session-scoped, content-keyed, **no
@@ -550,16 +541,16 @@ means for the feature's justification.
 
 - **What the cache reads**: the request's own bytes (to digest them), the request's own path, session and mode
   word, and the revision's `config_digest` — all values that already exist on the request path, read where the
-  pipeline already reads them. **Nothing else**: no file, no `autowork/` path, no store (`Query`), no config
+  pipeline already reads them. **Nothing else**: no file, no loop-tree path, no store (`Query`), no config
   re-read, no clock.
 - **What the cache writes**: entries in its own in-process memory (§3.4) and — through the existing writer,
   never its own — the record of the request it served, whose only new content is the `cache` group (§10.1). It
   writes **no** event-log row of its own: the hit's request writes its own `request.received` anchor exactly as
   any request does, and a hit's session already has its binding (the identical bytes were sent in this session
   before), so no binding write is due. Nothing durable is written by the cache; **the trace JSONL stays the only
-  product → autowork channel** (ADR-005), and a hit is a record *in* it, not a second path *out* of the process.
-- **The reverse direction is equally closed**: nothing under `autowork/` is read by this capability; a grep of
-  the module for `autowork` must stay **0**. The DESIGN landing states the rule where the code lives (§12.22),
+  product → analysis-loop channel** (ADR-005), and a hit is a record *in* it, not a second path *out* of the process.
+- **The reverse direction is equally closed**: nothing under the loop's tree is read by this capability; a grep of
+  the module for a path into the loop's tree must stay **0**. The DESIGN landing states the rule where the code lives (§12.22),
   so the next reader finds it there rather than here.
 - **What a consuming round may do with it**: a hit's record is evidence *of the product's own behaviour* like any
   other record — it may be counted, but only ever as an `inferred` figure, and never as a gate input (§5). It is
@@ -704,7 +695,7 @@ cited line, `crates/router-plugins/src/assembly.rs` +40/+44, `crates/router-core
 implementation card", and that promise was owed rather than kept: R51-1 touched no document, so **R51-3, the
 round's landing card, performed the mechanical act** — it re-derived every `path:line` in this ADR at this
 branch's HEAD, hunk by hunk, and verified each against the content it claims
-(`autowork/harness/r51-3/REANCHOR.md` carries the table, the before/after and the after-check). Every
+(the loop's re-anchor record carries the table, the before/after and the after-check). Every
 `path:line` in **this** ADR therefore resolves at this branch's HEAD (the convention in the header) **by
 re-derivation rather than trust**, with the two replacement quotes §0 keeps labelled there as the base's.
 
@@ -741,7 +732,7 @@ gives the round its red/green contrast: **`CONF-88` is green at the base by cons
 | 6 | **Fail-closed**: a non-2xx response is not stored (the repeat is a second call); an incomplete body is not stored; a request with no session is neither looked up nor stored; no partial or oversized body is ever returned. | a replayed error, a truncated stream, a `session: null` bucket |
 | 7 | **The store is not a second ledger**: it holds bytes and the source reference only — asserted by the fact that no figure in the window changes when the store's contents are dropped, apart from the call counts the dropped entries cause. | a derived figure kept in the store |
 | 8 | **The bounds hold** (§3.4): past `MAX_ENTRIES` or `MAX_STORED_BYTES`, eviction is FIFO by insertion and the counters are the constant, not the traffic. | unbounded growth |
-| 9 | **Nothing under `autowork/` is read**, and the hit's record is still the only product → autowork channel: the module's own grep for `autowork` is **0**. | a second observation path |
+| 9 | **Nothing under the loop's tree is read**, and the hit's record is still the only product → analysis-loop channel: the module's own grep for a path into the loop's tree is **0**. | a second observation path |
 | 10 | **The gate non-interference check** (a rig, not a limb of the case): the four gates + `CONF-43` + the L1 envelope run against a root that does not mount the capability, and the ledger is the base's own identity. | a gate that begins reading a cache field |
 
 ### 12.4 What the pair conserves from the exclusion it replaces
@@ -756,7 +747,7 @@ building it.
 
 ### 12.5 The controls the round's verification cards must run
 
-Minimum set, each recorded under `autowork/harness/r51-*/` (the R50-1 precedent's shape):
+Minimum set, each recorded under the loop's evidence for that decision (the R50-1 precedent's shape):
 
 1. **A red control proving the feature is really off by default** — a build whose loader defaults `config.enabled`
    to `true`, with `CONF-88` red on exactly that limb and the tree restored by hash afterwards.
@@ -810,7 +801,7 @@ Minimum set, each recorded under `autowork/harness/r51-*/` (the R50-1 precedent'
 
 | id | item | owner | due |
 |---|---|---|---|
-| `R51-0-F1` | **the spec §1 row's drift**: amending the row to name the in-scope exact-match cache drifts R49's claim rows W2/C19/C25 (`autowork/harness/r49-0/CLAIM-SOURCES.md:360`, `:204`-class), whose file is outside this card's write set and whose W2 clause reads *"do not widen or delete it"*. The amendment is made **because the R51 card's relay instructs it** and because a silent §1 is the same defect class in the other direction; the row's semantic half is untouched, so no sentence becomes false. | the claim table's next owner (a `book/`/contract-touching card) | with the next claim-table amendment |
+| `R51-0-F1` | **the spec §1 row's drift**: amending the row to name the in-scope exact-match cache drifts R49's claim rows W2/C19/C25 (the loop's claim-sources record, the same file-class), whose file is outside this card's write set and whose W2 clause reads *"do not widen or delete it"*. The amendment is made **because the R51 card's relay instructs it** and because a silent §1 is the same defect class in the other direction; the row's semantic half is untouched, so no sentence becomes false. | the claim table's next owner (a `book/`/contract-touching card) | with the next claim-table amendment |
 | `R51-0-F2` | a `router stats` line for replayed responses (§9.2's own surface; today they fold into `usage missing`) | the next `docs/spec.md` §9.2-touching card | open, with a trigger: the first round that reports the cache's own figures |
 | `R51-0-F3` | the store's bounds are frozen constants (§3.4); a configurable capacity is the widening, with its own key, default and case | the next round that owns `config.example.yaml` | open, with a trigger: a deployment where 64 MiB is the wrong bound |
 | `R51-0-F4` | the store is in-process only (§2.3(e)); persistence across restarts is the widening, and it would need a store-contract owner (ADR-009/010's writer discipline) | backend-coder + the store contract's owner | open, with a trigger: a measured repeat rate that survives a restart argument |
@@ -853,7 +844,7 @@ copies no price number (constraint 8):
 
 It writes no code: no key, no store, no plugin, no seam, no case file, no config, no `README.md` change. The
 implementation is the round's implementation card, its independent verification a verification card, and the
-`book/` paragraph a writer's edit; the orchestrator cuts all of them from `autowork/harness/r51-0/PLAN.md`.
+`book/` paragraph a writer's edit; the orchestrator cuts all of them from the loop's plan record.
 
 | the card's item | settled in |
 |---|---|
@@ -863,7 +854,7 @@ implementation is the round's implementation card, its independent verification 
 | 4. what replaces 1 : 1 | §4 (§4.1 the record, §4.2 the reference, §4.3 the reconciliation property, §4.4 the seam) |
 | 5. the label | §5 (`inferred` always, gate-invisible structurally, `forward.rs:457`'s own word) |
 | 6. default off + the case | §6 and §12.2 (`CONF-88`, and its red control) |
-| 7. the measured payoff | §7 (0 of 34, 0.0%, the method, why, and what it does not license) + `autowork/harness/r51-0/{repeat-rate.txt,repeat-rate.json,measure-repeat-rate.py,corpus-verify.txt}` |
+| 7. the measured payoff | §7 (0 of 34, 0.0%, the method, why, and what it does not license) + the loop's evidence for that decision |
 | 8. the observation boundary | §8 |
 | 9. the reopen/close condition | §2.4's trigger column, §2.3's widening rows, and the register's six triggers (§14) |
 | 10. the `book/` paragraph | §15 (landed in `book/cost-and-caching.md`) |
@@ -895,7 +886,7 @@ owner's to answer and not the loop's.
 the response-cache store's lifetime **stays clock-free**: **no TTL, no `session.ttl` reuse, and no
 timestamp comparison on the lookup path.** The implementation already reads no clock — R51's own sweep of
 the serving path (re-attacked, and re-derived, by R51-2's verification, attack 7) found **zero** time-API
-references in the two cache modules; `autowork/STATE.md` row 22 records that reading — so what the ruling
+references in the two cache modules; the loop state record row 22 records that reading — so what the ruling
 changes is not the code path but the **authority**. The clock-free contract is now the **owner's**
 decision and no longer only this ADR's: a card that proposes a TTL, a `session.ttl` reuse, a "stale after
 N seconds" rule or any other expiry by elapsed time is proposing a **contract change that needs new
@@ -932,7 +923,7 @@ The consequences are the ruling's substance, and they bind every later sentence 
   *a documented null*. The capability ships as a fidelity-preserving convenience with a measured `0.0%`
   on every corpus this repository holds, and **nothing above this section is amended.**
 
-**Where the two rulings are registered.** `autowork/STATE.md`'s waiting-on-human table carries them as
+**Where the two rulings are registered.** The loop state record's waiting-on-human table carries them as
 rows **22** and **23**; both rows were **decided** on 2026-09-28 by the commit that appends this section
 (the rows name it), their original registration text left **standing** — a row in that table is the
 record of a decision the loop could not take, and after the ruling the same row becomes the record that
@@ -947,3 +938,14 @@ Three citations of an out-of-tree plan document were replaced with a neutral
 placeholder ("<an out-of-tree plan document, :lines>"). The quoted filings, the
 supersession analysis and the decision are unchanged; only the machine-local path
 was redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

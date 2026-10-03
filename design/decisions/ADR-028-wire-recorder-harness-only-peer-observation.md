@@ -13,8 +13,8 @@
   not a composed one); the harness contract's **ARM-3.11** (the new clause), **ARM-3.2**, **ARM-3.3.1/3.3.2/3.3.7**,
   **ARM-3.4**, **ARM-3.8.3/3.8.4**, **PROV-8 §9.1 / §9.1.2 / §9.2 / §9.3 / §9.4 / §9.5**, **REAL-9 §10.1**,
   **VER-4.1.1 / VER-4.4 / VER-4.4.1** and **§16** (the revision's own provenance); the freeze that produced the
-  ruling, `autowork/harness/r26-1/VERDICT.md`; the owner's ruling in `autowork/STATE.md` row 13 (`:855`) and its
-  08:25 refresh paragraph (`:647`); the round's plan of record (**R30-1** = this ADR + contract rev 6, **R30-2**
+  ruling, the loop's verdict record; the owner's ruling in the loop state record row 13 (the same file) and its
+  08:25 refresh paragraph (the same file); the round's plan of record (**R30-1** = this ADR + contract rev 6, **R30-2**
   = harness code + one live evidence run, **R30-3** = the independent re-verification).
 
 ## Background
@@ -29,8 +29,8 @@ On a **mock** run `O` comes from the mock's own record (`<arm dir>/upstream/NNNN
 provider's response and its `usage`, which ARM-3.4.4 forbids in as many words. So the audit has been
 `not_run` on every live arm since the live path existed, and VER-4.4.1 (rev 5) says so out loud and refuses to
 let the absence read as a pass: **condition 3 fails on the live path**, and `verified` is therefore unreachable
-there. That is finding **L4**, recorded by the first real-upstream run (`autowork/harness/r23-live-run-findings.md`)
-and confirmed clause by clause in `autowork/harness/r26-1/VERDICT.md`.
+there. That is finding **L4**, recorded by the first real-upstream run (the loop live-run findings)
+and confirmed clause by clause in the loop's verdict record.
 
 The product cannot be asked to help. ADR-009 item 3 means the router persists no body; making it persist one, or
 log its peer's ciphertext, or accept an injected CA, would put an **observation surface inside the serving path**
@@ -52,8 +52,8 @@ The owner's ruling is the authority for this decision, quoted verbatim (English 
 >
 > ["As you suggested — harness only."]
 
-Recorded 2026-09-23 08:25 in `autowork/STATE.md`'s waiting-on-human **row 13** (the cell is `autowork/STATE.md:855`;
-the same ruling's summary paragraph is `autowork/STATE.md:647`), closing the question `r26-1/VERDICT.md` left open
+Recorded 2026-09-23 08:25 in the loop state record's waiting-on-human **row 13** (the cell is that row;
+the same ruling's summary paragraph sits beside it), closing the question the loop's verdict record left open
 with **option (a)**. The row's own statement of its effect:
 
 > the **harness moves and only the harness** … the product's serving path is **not** touched (option (b) — keylog /
@@ -90,7 +90,7 @@ What that fixes, and how this ADR disposes of each part:
 
 | Option | What it would have bought | Why it is refused |
 |---|---|---|
-| **(b) observe from inside the product** — a keylog, a CA/trust override, or an outbound byte tap in `crates/` | `O` obtained directly, at the exact socket the conformance rule talks about; no second process, no forward target to declare | Puts an observation surface in the serving path for the sole purpose of easing its own measurement (AGENTS constraint 3), ships it to every user, and in the TLS case requires the harness to hold a key the product trusts. The owner refused it explicitly (`STATE.md:855`), and ADR-015's two permitted mutations are the only product-side changes this repository allows. |
+| **(b) observe from inside the product** — a keylog, a CA/trust override, or an outbound byte tap in `crates/` | `O` obtained directly, at the exact socket the conformance rule talks about; no second process, no forward target to declare | Puts an observation surface in the serving path for the sole purpose of easing its own measurement (AGENTS constraint 3), ships it to every user, and in the TLS case requires the harness to hold a key the product trusts. The owner refused it explicitly (the loop state record), and ADR-015's two permitted mutations are the only product-side changes this repository allows. |
 | **(c) declare the live byte audit permanently unrunnable** | Zero new apparatus; the honest blank stays honest | The owner refused it explicitly. It also has a cost this repository has already paid for four rounds: a condition that *cannot* run is a gate that silently stops being read, and VER-4.4.1's own rule (an absence never supplies a verdict) then makes the whole live path unpublishable rather than merely unverified. |
 | **packet capture** (a passive tap beside the wire) | No peer in the path at all; nothing to forward, nothing to declare | It sees **ciphertext**. With `http2` enabled there is not even a request line to read — CAP-1.7's own judgement of 2026-09-22, made when the first capture path was rejected. A capture is evidence about *volume*, never about *body bytes*, which is what ARM-3.8 audits. |
 | **a recorder behind an IPC/plugin schema** (a second process, harness and recorder in different images) | The appearance of process separation | No added independence: the same repository writes both sides, so the trust boundary is identical while the surface to freeze grows (a schema, a protocol version, a lifecycle). ARM-3.11.7 records the refusal. |
@@ -142,7 +142,7 @@ What that fixes, and how this ADR disposes of each part:
   the HTTP envelope (ARM-3.11.4 item 5 discloses the re-addressing); the counterparty's identity rests on the
   certificate witness; and the independence of the whole chain rests on R30-3's packet, not on this ADR.
 - **What this ADR does not do:** it does not touch `crates/`, `tests/`, `docs/`, `book/`, `README.md`, the corpus,
-  `program.md`, `work-mode.md`, any threshold, the L1 envelope or `tests/conformance/`. It does not make the
+  the loop charter, the loop execution model, any threshold, the L1 envelope or `tests/conformance/`. It does not make the
   recorder reachable from the product, and it does not widen the mock path in any particular.
 - **Reversibility:** **high, and cheap in the direction that matters.** The recorder is optional by construction —
   `[wire_recorder]` absent means every pre-rev-6 behaviour holds unchanged (ARM-3.11.1) — so removing it, or
@@ -151,3 +151,14 @@ What that fixes, and how this ADR disposes of each part:
   reversible by a later round's own decision is the direction of travel: once a `verified` figure is minted on a
   recorder-mediated run, the honesty cost of item 3 above is permanent in that figure's sentence — which is why no
   figure is minted here.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

@@ -10,7 +10,7 @@
   walk's refusals — this ADR is ADR-023's continuation, not its revision: both of its rulings stand), ADR-005
   (the trace as the analysis truth); spec §4.2, §6 (the `failover_from` producer table), §8 (the refusal's two
   conditions and the `skipped[]` clause); DESIGN §12.8, §12.10.9; the findings **R19-F1** and **R19-F2**
-  registered in `autowork/progress/2026-09-22_05-33-57_R19-refusal-shape.md` §5.
+  registered in the loop's tree §5.
 
 ## Background
 
@@ -18,7 +18,7 @@ R19 (ADR-023) settled *which* body a walk that serves nothing ends with. Its own
 no card in the round had built — a **condition-N** chain whose head is refused by ADR-011's cooldown — and
 measured the two media still disagreeing on the same request. Reproduced by this card's own rig (one config,
 one request body, both media, HEAD `47ac23c`, mock/loopback upstreams, zero upstream calls and zero spend;
-evidence `autowork/harness/r20-1/`):
+evidence the loop's evidence for that decision):
 
 | | client body | `details.skipped[]` | trace `result.failover_from` |
 |---|---|---|---|
@@ -160,7 +160,7 @@ element for element — so the whole client body differs by `"stream": true` alo
 
 - **Everything was measured with mock/loopback upstreams, one binary, zero real upstream calls and zero
   spend**, and the rig's artifacts are committed in this repository
-  (`autowork/harness/r20-1/r201_mock.py`, `r201_rig.py`, `r20-1-rigD-raw.json`) rather than left in a scratch
+  (the loop's r201 mock script, `r201_rig.py`, `r20-1-rigD-raw.json`) rather than left in a scratch
   directory — the R11-F7 class is not repeated here. The run is a **red control**: it asserts the ruling's
   expected shape, and at HEAD it fails on exactly the three streaming-side checks (the two findings).
 - **One chain shape is measured**: one cooling head, one keyless candidate, one wire-ineligible candidate,
@@ -182,3 +182,14 @@ assignments at the refusal returns) and re-seed the skip list by seeding-and-app
 reversible is a client that has parsed `skipped[]` as the chain's order — which is why the array's order is the
 side that moves, rather than the buffered arm's, and the value that already has an assertion behind it is the
 side that stays.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

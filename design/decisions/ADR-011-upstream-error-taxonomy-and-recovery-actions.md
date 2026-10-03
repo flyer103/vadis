@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: ADR-003 (a revertible, individually accounted transform pipeline), ADR-004 (clients are stateless, so the gateway is the only place a failure is remembered), ADR-005 (the trace is the only product-autowork channel), ADR-006 (integer NanoUsd), ADR-009 (store, bodies are never persisted, explicit failure modes), ADR-010 (event vocabulary, write-ahead, the `unknown_outcome` crash window), ADR-012 (the pattern tables are code, outside the auto-adoptable envelope), ADR-013 (the error mix is an automatic-rollback trigger); spec §3 (selection plus guard policy), §4.0 (a plan may only reference its own provider's models), §4.2 (fallback chain), §4.5 (state), §6 (observation), §7 (accounting convention), §8 (error behaviour); DESIGN §2 (crate roles), §3 (pipeline), §5 (breakeven = the switch-cost function reused here), §7 (translation), §8 (state), §10 (test strategy), §11 (risks), §12.3 (per-step failure semantics), §12.4 (pure cost functions), §12.5 (config), §12.6 (DecisionRecord), §12.7 (error surface)
+- Related: ADR-003 (a revertible, individually accounted transform pipeline), ADR-004 (clients are stateless, so the gateway is the only place a failure is remembered), ADR-005 (the trace is the only product-analysis-loop channel), ADR-006 (integer NanoUsd), ADR-009 (store, bodies are never persisted, explicit failure modes), ADR-010 (event vocabulary, write-ahead, the `unknown_outcome` crash window), ADR-012 (the pattern tables are code, outside the auto-adoptable envelope), ADR-013 (the error mix is an automatic-rollback trigger); spec §3 (selection plus guard policy), §4.0 (a plan may only reference its own provider's models), §4.2 (fallback chain), §4.5 (state), §6 (observation), §7 (accounting convention), §8 (error behaviour); DESIGN §2 (crate roles), §3 (pipeline), §5 (breakeven = the switch-cost function reused here), §7 (translation), §8 (state), §10 (test strategy), §11 (risks), §12.3 (per-step failure semantics), §12.4 (pure cost functions), §12.5 (config), §12.6 (DecisionRecord), §12.7 (error surface)
 
 ## Background
 
@@ -299,3 +299,14 @@ retry policy that kept choosing the outage was not.
 - Not covered here: pre-flight quota probing beyond the header capture of item 5; the credential key list
   (item 7) as an additive config key; and a 200-with-an-error-in-the-stream, which belongs to the SSE
   path.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

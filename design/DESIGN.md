@@ -20,7 +20,7 @@ flowchart LR
   RT --> ST["state service<br/>cache ledger · sticky table · quota counters"]
   ST --> DB[("SQLite/WAL store<br/>events + projections<br/>ADR-009 / ADR-010")]
   ST --> TRC["trace JSONL"]
-  TRC --> AW["autowork loop side"]
+  TRC --> AW["analysis loop side"]
   AW --> ART["policy artifacts<br/>config / rule TOML / tier-B plugin"]
   ART --> RT
 ```
@@ -174,7 +174,7 @@ The plugin-facing surface stays the service traits of §12.2 (`CacheLedger`, `Se
 | event log (`events`) | SQLite/WAL behind `trait Store` | intent / accounting events `synchronous=FULL`, committed **before** the effect they authorize (ADR-010) | the truth: every state transition is a row |
 | sticky table / cache ledger / quota counters | projections in the same store | `NORMAL` + group commit | rebuildable from `events`; losing one regresses statistics, never correctness |
 | provider cooldown (demotion, ADR-011) | projection in the same store | `NORMAL` + group commit | rebuildable from `events`; losing it costs one doomed attempt, never a wrong charge |
-| trace | append-only JSONL, rolled hourly (spec §4.1; record shape in §12.6) | OS defaults | the analysis truth and the only product → autowork channel (ADR-005), unchanged |
+| trace | append-only JSONL, rolled hourly (spec §4.1; record shape in §12.6) | OS defaults | the analysis truth and the only product → analysis-loop channel (ADR-005), unchanged |
 | request / response bodies | **never persisted by the product** | — | the log keeps `body_hash` + a pointer; raw bytes exist only in captures taken outside the product |
 
 - **Store path**: `<directory containing the config file>/state/router.db` (`state/` is gitignored). v0.1
@@ -232,7 +232,7 @@ existing `errors[]` element (`kind = upstream_error`, `details.*`), so no spec �
 only the outbound HTTP with a local simulation (or a real replay once, behind a budget gate). It outputs
 a cost/cache/latency report contrasted against `prefix_continuity`.
 
-This is the foundation of autowork: a policy cannot be re-implemented in Python without producing skew
+This is the foundation of the analysis loop: a policy cannot be re-implemented in Python without producing skew
 (the lesson of the old project), so policy simulation is always a subcommand of the product.
 
 **Not implemented in v0.1** and taken by no round yet: there is no `replay` subcommand and no simulation seam
@@ -732,7 +732,7 @@ and the two file digests are resolved **once**, in `router-cli`, and travel to `
 
 ```rust
 pub struct DecisionRecord {
-    pub schema_version: u16,            // trace version (2 since ADR-018: `cost.currency` / `plan_switch.cost_currency`); the autowork side uses it for compatibility (ADR-005)
+    pub schema_version: u16,            // trace version (2 since ADR-018: `cost.currency` / `plan_switch.cost_currency`); the analysis-loop side uses it for compatibility (ADR-005)
     pub ts: String,                     // RFC3339 UTC, milliseconds
     /// The identity of the **effective configuration** that priced this record (ADR-037; spec §6, §4.14):
     /// the byte digest `sha16(root_sha16 + ":" + roster_sha16)`, each half the first 16 hex chars of SHA-256
@@ -852,7 +852,7 @@ spec §6 field groups → Rust paths (auditable line by line):
   `./state/traces`), **append-only, rolled hourly** (DESIGN §8); a write failure does not block the
   request and records `errors[].kind = trace_write_failed`.
 - `schema_version` only increments on a **breaking** change; adding an optional field does not change the
-  version (the autowork side tolerates unknown fields).
+  version (the analysis-loop side tolerates unknown fields).
 - **It moved to 2 with ADR-018** (spec §6/§4.8): the cost group gains `cost.currency` and `plan_switch`
   gains `cost_currency`. Neither is an *optional* addition in the sense above — their absence is not a value
   (`requested_model: null` and `plan_switch: null` are), and a consumer that ignores `cost.currency` will sum
@@ -1051,7 +1051,7 @@ not written).
 | CONF-86 | §4.11's `--check` row + `docs/spec.md:1079-1083` (D9's *reported, never silent* list) + ADR-038 **D9**·the roster fact is stated for an inline root, and only for an inline root | **pinned on the binary's wire output**: over a root whose roster is inline, `router setup --check` prints one `roster: inline in this file — a writing run moves it to <name>` line above the key rows and carries a `roster` member in `--json`; over an already-split root it prints **neither**, and the key rows, the export snippets and the exit codes are identical in both shapes (the inline arm's own output minus its first line is the relation). The behavior is ADR-038 D9's and shipped with R45; what **R45-1-F2** measured missing was the *assertion* — no case pinned the line, so a regression of it would have been invisible. Drives the real `router` binary of this build as a subprocess (the only way to assert on stdout), green at the base by construction, and its fixtures live in its own temp dirs | the `setup --check` printer (§12.14). **Allocated by the human's 2026-09-26 authorisation** (the gate side is normally the owner's: ADR-012 / AGENTS 9) — it **adds** an assertion and moves no existing one. Its row is **registered retroactively** by R50 (this table is the registry and a case file without a row is the drift the section forbids — CONF-26's precedent), closing half of `R46-4-F2`; the case file is untouched |
 | CONF-87 | spec §4.16·the metrics surface's **single owner** + §9.2's provenance table·the figures and their labels + §4.8·money per currency + §4.1·the rollover | **the numbers are §9.2's, rendered — and the surface cannot invent one.** Against the real `serve` assembly with the case's own `trace.dir` pre-seeded: (a) **every** series' value equals the case's **own** independently computed count/sum/quantile/ratio over its own fixture records (`CONF-41`'s method), and the figures both surfaces carry also equal `stats::report_json`'s for the same window (`CONF-56`'s method) — one derivation, two readers; (b) the series set is a function of the **config**, not of traffic: two rigs holding **N** and **10N** records in one window produce the same metric-name+label set and the same line count (only digits differ), and the body stays under 8 KiB; (c) the read is bounded and sourced: `router_trace_files_read` equals the §4.1 rollover files the window actually intersects (`≤ 2`), and a **decoy** trace directory full of records outside the config's `trace.dir` contributes **nothing**; (d) **determinism**: two admitted scrapes with no intervening traffic are **byte-identical** (no timestamp, no uptime — so no wall-clock value exists to differ); (e) **zero is not absent**: a window holding records but no input tokens keeps the token series at `0` and **omits** the ratio series, with its `# router: … omitted — …` comment naming why, while a window whose `trace.dir` is removed after boot answers `200` with every trace-derived figure absent, its comments present, `router_metrics_omitted_figures ≥ 1` and **no** §8 body; (f) the `provenance` label is §9.2's own word per series and is never re-labelled (an `inferred` figure cannot be emitted as `verified`); (g) the formatter is called **directly** with a hand-built `TraceFigures` and renders exactly the series those values imply — the single-owner rule's structural half: a figure derived from records is not expressible through `metrics::exposition`'s signature (ADR-041 §4) | `router-cli/src/metrics.rs` (new) over `stats::read_window_records` + `stats::aggregate` + the hoisted ratio helpers; the route and the guard seam are §12.21's |
 
-| CONF-88 | spec §1·the amended non-goal row + §4.17·`config.enabled` and its default + AGENTS 1·the default path | **the capability is off by default, and a later config edit cannot silently enable it.** Over a root that does not mount the kind (and over one that mounts it with `config.enabled` absent or `false`), a byte-identical repeat inside one session is **still forwarded upstream**: two calls, two records, **no `cache` group anywhere**, and outbound bytes byte-identical to the same build's bodies with the kind deleted from the registry. **Green at the base by construction** (the kind does not exist, so nothing can be on) — which is the point: it cannot be made green by the implementation, so it pins the *default* rather than the feature. Its red control is a sabotage run, not a limb: a build whose loader defaults that key to `true` must turn this case red (`autowork/harness/r51-*/`, the R50-1 sabotage-control shape) | the plugin's inert mount + the loader's default (`builtin/response_cache`) |
+| CONF-88 | spec §1·the amended non-goal row + §4.17·`config.enabled` and its default + AGENTS 1·the default path | **the capability is off by default, and a later config edit cannot silently enable it.** Over a root that does not mount the kind (and over one that mounts it with `config.enabled` absent or `false`), a byte-identical repeat inside one session is **still forwarded upstream**: two calls, two records, **no `cache` group anywhere**, and outbound bytes byte-identical to the same build's bodies with the kind deleted from the registry. **Green at the base by construction** (the kind does not exist, so nothing can be on) — which is the point: it cannot be made green by the implementation, so it pins the *default* rather than the feature. Its red control is a sabotage run, not a limb: a build whose loader defaults that key to `true` must turn this case red (the loop's evidence for that decision, the R50-1 sabotage-control shape) | the plugin's inert mount + the loader's default (`builtin/response_cache`) |
 | CONF-89 | spec §4.17·the key's five components, the never-stored list and the store's two frozen bounds + §6·the `cache` group and its three properties + §7·the `inferred` label and the gate's exclusion | **a hit is the recorded bytes, and the record refuses to be counted.** After one miss, a byte-identical repeat of the same session returns a response **byte-identical** to the recorded one with the upstream seeing **one** request; the hit's record carries `cache` with `verdict: "inferred"`, `key_digest` = the sha256 of the bytes **as sent**, `replayed.request_id` = the miss's own id (same session), `replayed_bytes` = the returned length; it is `usage_missing: true` with `usage` zeroed, `cost.*` `0`, `upstream_status`/`upstream_ms`/`protocol_out` `null` and `cache` **absent** on the miss and on the run's ordinary records. Plus the arm set: a changed session / mode / revision / single body byte is a **miss**; a non-`2xx` or incomplete response is never stored; a request with no session is neither looked up nor stored; past either bound, eviction is FIFO by insertion; and the ledger reconciles (the window's `Σ usage` is unmoved by the repeat, the reference resolves inside the session, hits are never counted as calls). **Red at the base** — no store exists, so no hit can happen | the key, the store, the one seam in `forward.rs`, and the record's `cache` group |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
@@ -1358,7 +1358,7 @@ its configured deadline by 1000×; (b) a session moving `p1/m-x` → `p2/m-x` wr
 (its create arm) where the rule gives two, the `sessions` projection keeps `p1/m-x`, and the moved turn's
 `turn_index` repeats its predecessor's instead of advancing; (c) the unchanged-route leg is green on both
 trees — it is the arm the fix must not break; (d) both media fail (a)/(b) the same way. Measured at
-`b9fd007` by this round's freeze card: `autowork/harness/r27-1/r27-1-probe-output.txt` (29 checks; both
+`b9fd007` by this round's freeze card: the loop probe output for that decision (29 checks; both
 defects present; the unchanged-route control green on the same tree). **Occupancy now**: `01–47, 53–70,
 71–80` spent; `48–51` reserved; the next free ID is **`CONF-81`**. No existing assertion is touched:
 `conf_66`'s two media legs, `conf_17`'s and `conf_35`'s `sticky_hit` literals, `conf_20`'s and `conf_21`'s
@@ -1378,7 +1378,7 @@ witnesses, in `tests/conformance/tests/conf_81_account_move_is_a_binding_move.rs
 — the CONF-27 / CONF-41/42 / CONF-45 / CONF-57 parking rule, unchanged. The ID is spent: not renumbered,
 not reused. Every leg observes a value that is **red on the pre-fix tree** — the anchor R28-3 rebuilds it
 from is **`9f2ed21`**, the commit this round is cut from, and R27-3's rig is the measured witness of the same
-three values in the same shape (`autowork/harness/r27-3/r27-3-green-at-head.txt:55-56`, legs
+three values in the same shape (the loop green-at-HEAD record, legs
 `GPL.R27-F1.*` / `GPL-S.R27-F1.*`): (a) a re-pointed session has **no** `session.bound` row of its own (one
 row where the rule gives two); (b) the live projection reads `('p-api','m1',2)` while the event-derived
 rebuild gives `('p-plan','m1',1)` — a **provider-level** disagreement, so a rebuild silently undoes the
@@ -1393,8 +1393,8 @@ byte-identical, and nothing here moves a gate definition, a threshold, the corpu
 (AGENTS 9 / ADR-012). One **prediction** is registered with this allocation rather than left to be
 discovered: R27-3's rig asserts the pre-fix values as its *expected* values, so four of its legs must flip
 when this round's shape lands (`GPL.{buffered,streaming}.spill-turn-writes-no-row-per-R6-postguard-route`
-and both `R27-F1` legs — `R28-F1` in `autowork/harness/r28-1/FREEZE.md`). That rig is a past round's
-committed evidence under `autowork/harness/r27-3/`, not a gate and not part of any frozen set, so no frozen
+and both `R27-F1` legs — `R28-F1` in the loop's freeze note). That rig is a past round's
+committed evidence under the loop's evidence for that decision, not a gate and not part of any frozen set, so no frozen
 byte moves; whoever re-runs it must re-derive its expectation and must not read a flipped leg as a
 regression.
 
@@ -1431,7 +1431,7 @@ requests (the streamed requests in those rigs are `200`s or refusals with nothin
 streamed classification leg is the pre-head `NotSent` arm, and the refusal shapes (`conf_57`, `conf_58`,
 `conf_64`, `conf_71`) are unchanged by a read that relays no byte. `conf_80`'s four legs, `conf_66`'s two media
 legs and its `session.bound`-count control, `conf_33`'s `turn_index > 2` and the store's own unit fixtures stay
-byte-identical, and nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md` or the
+byte-identical, and nothing here moves a gate definition, a threshold, the corpus, the loop replay contract or the
 L1 envelope (AGENTS 9 / ADR-012). One **prediction** is registered with this allocation rather than left to be
 discovered: `conf_81`'s leg-(d) docstring says "the relay's 403 arm cannot fire in v0.1 because the
 failure-head classification never sees the error body, registered in the card" — after this round that sentence
@@ -1456,9 +1456,9 @@ report's p99 is taken over the raw field, so raising a record's `upstream_ms` mo
 above leave them; the next free ID is **`CONF-85`**. No existing assertion is touched: `conf_17` builds a
 fixture record carrying `overhead_ms: 0` and asserts the verdict algebra, never the report's figure; and no
 existing case drives a request body anywhere near a megabyte — the largest authored payload on this machine at
-this base is the synthetic suite's own **22 317**-byte item (`autowork/corpus-auto/r23-selfcheck-synth`'s score
+this base is the synthetic suite's own **22 317**-byte item (the recorded synthetic self-check item's score
 card, `size` criterion), some two orders of magnitude below `CONF-83`'s smallest configured bound. Nothing here
-moves a gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 /
+moves a gate definition, a threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 /
 ADR-012).
 
 **Allocation of `CONF-85` (R43 — the roster file and the configuration's identity) — recorded 2026-09-25 by
@@ -1480,9 +1480,9 @@ compare against. The inline control is green at base by construction, and it is 
 break. **Occupancy now**: the spent ID set is `01–47, 53–70, 71–85`; `48–51` stay reserved exactly as the
 paragraphs above leave them; the next free ID is **`CONF-86`**. No existing assertion is touched: the **34**
 files under `tests/conformance/**` that carry a top-level `providers:` block (measured at this branch's
-`c4ae04f`) and the maintained harness config (`autowork/harness/live-base.yaml:100`) stay **byte-identical**,
+`c4ae04f`) and the maintained harness config (the loop live-base config) stay **byte-identical**,
 because the exactly-one-of rule keeps the inline shape legal — which is why R43 edits no fixture, no case file
-and no harness config; and nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md`
+and no harness config; and nothing here moves a gate definition, a threshold, the corpus, the loop replay contract
 or the L1 envelope (AGENTS 9 / ADR-012).
 
 **Allocation of `CONF-87` (R50 — the `GET /metrics` surface, ADR-041) — recorded 2026-09-27 by the round's
@@ -1490,7 +1490,7 @@ contract card, the R9/R10/R17/R22/R28/R29/R32/R43 precedent.** The occupancy che
 real directory at this card's HEAD (`ac44181`): `ls tests/conformance/tests/*.rs | wc -l` → **76** files, ids
 `01–47, 53–66, 71–78, 80–86`; cross-read with the paragraphs above, the last of which (**R43/CONF-85**) closes
 with *"the next free ID is **`CONF-86`**"* — **stale since R46**, because a file for `CONF-86` exists and no
-row for it does (`R46-4-F2`, `progress/2026-09-26_19-57-19_R46-overdue-register.md:204`). R50 therefore takes
+row for it does (`R46-4-F2`, the round record). R50 therefore takes
 the lowest free id above **both** the tree's maximum (86) and the register's own stale claim: **`CONF-87`**,
 on `tests/conformance/tests/conf_87_metrics_single_owner.rs`, landed **with the implementation it witnesses**
 in one card — R50 writes neither case ahead of its surface (ADR-041 §2.2/§2.5; the CONF-27 / CONF-41/42 /
@@ -1508,7 +1508,7 @@ allocations (`R22-F4`) — which is the one correction this paragraph makes to t
 next free ID is **`CONF-88`**. No existing assertion is touched: the round **replaces** `CONF-46`'s own
 assertion (same ID, renamed file) and **adds** `CONF-87`, both landing with the code they assert. `CONF-45`'s
 six arms, `CONF-47`'s parser refusals and every other case file stay **byte-identical**. Nothing here moves a
-gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope (AGENTS 9 / ADR-012).
+gate definition, a threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 / ADR-012).
 
 **Allocation of `CONF-88` and `CONF-89` (R51 — the exact-match response cache, ADR-042) — recorded
 2026-09-27 by the round's contract card, the R9/R10/R17/R22/R28/R29/R32/R43/R50 precedent.** The occupancy
@@ -1528,9 +1528,9 @@ base commit, plus the two this round adds). The register's accumulated **spent**
 above states, gaining `88`/`89`; `48–51` stay reserved exactly as the paragraphs above leave them; **the next
 free ID is `CONF-90`**. No existing assertion is touched: these two are **added**, and every other case file —
 including `CONF-43`'s whitelist, `CONF-45`'s six arms and `CONF-46`'s own arm set — stays **byte-identical**.
-Nothing here moves a gate definition, a threshold, the corpus, `replay-contract.md` or the L1 envelope
+Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract or the L1 envelope
 (AGENTS 9 / ADR-012), and the four frozen corpora's digests are unmoved, re-read for this round
-(`autowork/harness/r51-0/corpus-verify.txt`).
+(the loop's corpus-verify output).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -1567,7 +1567,7 @@ items are written into the spec, unsettled ones stay registered.)
 | Q7 | which tier breakeven's `p_stay` uses (hit price vs miss price) | `p_stay = input_hit`; `switch_cost` uses `p_new_miss` | failover/spill decisions (D5) |
 | Q8 | the 400 criterion for `stateful_inbound` when it "cannot keep fidelity" is undefined | as long as the sticky table has that session it counts as able to keep fidelity | landing ADR-004 — **not landed in v0.1**: `stateful_inbound` is a constant `false`, so no request is ever judged stateful and the 400 cannot fire (gap G-F; §12.6's state note) |
 | Q9 | the behavior when `context` is exceeded (400, or hand it to the upstream) | hand it to the upstream (do not judge on the upstream's behalf) | guard behavior |
-| Q10 | the error-body schema and `errors[]` are not listed in spec §6 | pinned down by §12.6/§12.7, recommended to be written back into the spec | autowork parsing the trace |
+| Q10 | the error-body schema and `errors[]` are not listed in spec §6 | pinned down by §12.6/§12.7, recommended to be written back into the spec | the analysis loop parsing the trace |
 | Q11 | the plugin `inject` is not in spec §4's schema (DESIGN §4 requires it) | already landed in `config.example.yaml` and marked GAP | out-of-order loading safety |
 | Q12 | the `fallback` chain schema and its switching granularity (global / per model) are not given in spec §4 | a global ordered route list | failover (D5) |
 | Q13 | whether an alias may point at `auto` or carry parameter overrides | `provider/model` only | selection semantics (§3) |
@@ -2144,7 +2144,7 @@ large.
   single owner (`PlanPolicyCfg::cooldown_us`: milliseconds × 1_000, saturating via `try_from` so a u64→i64
   cast cannot wrap negative) — the same rule at the other knob (L1b), not a second unit. The shipped build
   multiplied × 1 000 000, so a configured `12h` expired at ~12 000 h; measured at `b9fd007`, a configured
-  `60s` reached the store as `60_000_000_000` µs (`autowork/harness/r27-1/`).
+  `60s` reached the store as `60_000_000_000` µs (the loop's evidence for that decision).
 - **Both are observation/accounting, and the boundary is exact.** Not one forwarded request byte moves: the
   rewrite of the top-level `model` value and every other byte the client sent stay as they are (AGENTS 1),
   the new value is a pure function of (content, stable config) — no clock, turn number or RNG enters it
@@ -2169,7 +2169,7 @@ large.
   on that row, so the anchor, the route and the counter are all read off `session.bound` rows and
   `rebuild_sessions`' own rule is **unchanged** (it already reads those rows only). The second shape — a
   re-defined ownership of the move, with the rebuild applying `plan.switched`'s re-point itself — was
-  rejected on three counts, recorded in `autowork/harness/r28-1/FREEZE.md`: it puts a second copy of "which
+  rejected on three counts, recorded in the loop's freeze note: it puts a second copy of "which
   bindings are on the abandoned route" inside the store (the leak register's L1a shape), it would make the
   live write set a function of the switch instant's clock read — a predicate `rebuild_sessions` cannot
   reconstruct (`expires_at_us > now_us()` at the switch vs `> that row's ts_us` in a replay) — and it leaves
@@ -2192,7 +2192,7 @@ event behind it, which is the one thing ADR-010 forbids (the log is the state's 
 truth) and which `R27-F1` measured on both media (`requests_seen` live 3 vs an event-derived rebuild
 1; and after a spill with no recovery, a **provider-level** disagreement, live `api` vs rebuild
 `coding_plan`, so a rebuild would silently undo the re-point). The freeze below is the reference
-implementation of the shape; `autowork/harness/r28-1/FREEZE.md` carries the decision table, the
+implementation of the shape; the loop's freeze note carries the decision table, the
 rejected alternatives and the consumer table.
 
 - **The row, and the shape.** The handoff writes, per live binding of the abandoned route
@@ -2264,7 +2264,7 @@ rejected alternatives and the consumer table.
   regresses by one, which §4.5's "losing a projection regresses statistics, never correctness"
   covers.
 - **What the freeze does not move.** No forwarded byte (AGENTS 1), no gate definition, no
-  **existing** assertion in `tests/conformance/`, no corpus byte, no `replay-contract.md` byte and
+  **existing** assertion in `tests/conformance/`, no corpus byte, no replay-contract byte and
   no L1-envelope value; §13.3's leak register gains no row (this removes a second implementation
   rather than adding one — the projection rule stays in one place, `rebuild_sessions`, and the two
   writers keep feeding it the one row it reads). The round's measurement artifact is `CONF-81`'s
@@ -2307,9 +2307,9 @@ is no answer body to read and the transport kind is the whole evidence (spec §4
   pre-fix tree read `auth`; that is the repair, and the buffered path already said it for the same bytes.
 - **The measurement artifact.** `CONF-82`'s allocation (§12.8), and nothing else: no forwarded byte moves
   (AGENTS 1 — the read is on the response side of an attempt that is already over), no gate definition, no
-  **existing** assertion in `tests/conformance/`, no corpus byte, no `replay-contract.md` byte, no
+  **existing** assertion in `tests/conformance/`, no corpus byte, no replay-contract byte, no
   L1-envelope value, no transform and no `verified` figure. What the round does not fix is registered as a
-  finding in `autowork/harness/r29-1/FREEZE.md` §8 — a byte cap would have to land on both media, and the
+  finding in the loop's freeze note §8 — a byte cap would have to land on both media, and the
   buffered path's own post-head read-failure arm (`unknown_outcome`) is a different question.
 
 **R9 — row 13's second trigger is the reload's publish, and only an *accepted* diff is an application
@@ -2405,7 +2405,7 @@ row 5 of §12.10.5 is written (`upstream.submitted.body_hash` hashes exactly tho
   enumeration a pure tail append in template order (a cache hit upstream: 99.1% verified on the
   real pair) registered as a mid-sequence insertion and reported 0.250 (a ~4× under-report).
   Enumerating in template order closes that gap: the same traffic reports 1.000. The decision
-  and its evidence are recorded under `autowork/progress/` (2026-09-20); CONF-31 pins the
+  and its evidence are recorded under the round-record directory (2026-09-20); CONF-31 pins the
   order, and the harness guard `prefix_continuity_order_guard.py` records the history.
 - **`tokens` per block (GAP-Q14).** The dependency allowlist has no tokenizer, and putting an
   unverifiable one in the money path would be worse than estimating: block `tokens` is a
@@ -2727,7 +2727,7 @@ the round record's R19-F1 / R19-F2 measured; the buffered halves of both are alr
 in-walk `demoted` entry). ADR-023 records that the rule was
 implemented experimentally in a throwaway worktree and the whole suite stayed green (368/0/12, 85 result lines)
 with **no** existing assertion moved — that experiment is evidence for the freeze, not a delivery.
-The rig that measures ADR-024's two shapes at their HEAD (`autowork/harness/r20-1/`) is a red control: it asserts
+The rig that measures ADR-024's two shapes at their HEAD (the loop's evidence for that decision) is a red control: it asserts
 the frozen shape and fails at `47ac23c` on exactly the three streaming-side checks.
 
 **What this section does not do.** No mapper and no translation cell is unblocked; no `error.type` is added
@@ -3021,7 +3021,7 @@ outcome than serving the bytes the client sent.
 
 **Latency.** One scan per candidate payload node, one rule-engine pass per matched node, one splice
 pass over the body — no whole-body re-encoding, so the plan is O(body + Σ payload) with no
-allocation of a rewritten document. The budget is `autowork/program.md`'s gate ("the decision +
+allocation of a rewritten document. The budget is the loop charter's gate ("the decision +
 transform overhead p99 stays within budget, benchmarked against rtk's <10ms shape"), and the quantity
 it is read from is ADR-029 D1's (`result.overhead_ms − result.upstream_ms`, integer ms,
 `upstream_ms: null` records excluded). **No latency number is claimed here**, and the rule format's own
@@ -3032,26 +3032,26 @@ expected to use.
 (the four-assembly shape — R32's own assembly plus a mode arm, a mode-closed carrier control and the
 measured carrier arm; the attribution model and its stated confound; the R = 3 repetitions, the band
 and the citation rule; and the body-bound legs; and D5's boundary that the **budget itself is a human
-decision**, `autowork/STATE.md`'s waiting-on-human row 1). The *quantity*, the ladder, the per-rung
+decision**, the loop state record's waiting-on-human row 1). The *quantity*, the ladder, the per-rung
 rules and the ceiling criterion are ADR-029's and are not restated here. The load figures are
-**measured** — by R33-2 (`autowork/harness/r33-2/`, runs of record and report) and to be reproduced
-by R33-3 — and live in `autowork/harness/r33-*/` and the round record, never in
+**measured** — by R33-2 (the loop's evidence for that decision, runs of record and report) and to be reproduced
+by R33-3 — and live in the loop's evidence for that decision and the round record, never in
 this section (§12.16's own rule: a measured number in DESIGN is a copy that drifts). Two facts a reader
 of this paragraph needs, both measured at R33's base and recorded in
-`autowork/harness/r33-1/EVIDENCE.md`: R32's own synthetic payload shape (a user message carrying the pad)
+the loop's evidence record: R32's own synthetic payload shape (a user message carrying the pad)
 **has no payload node at all**, so it exercises the mode channel and the locator scan and **no rule**;
 and at R33's base **three of `rules/tool_output.toml`'s four rules could fire on the live path while
 `tool-result-json` could not** (its `match_kind = ["json"]` had no counterpart in the declared `TOOL_KINDS`
 table, and the TOML map's alphabetical try order let `bash-log-noise` win the same payload first), which
-R33's ledger registered as `R33-F1`, blocking — **closed by R33-FIX** (`autowork/harness/r33-fix/`): the
+R33's ledger registered as `R33-F1`, blocking — **closed by R33-FIX** (the loop's evidence for that decision): the
 rule's `match_kind` now declares the kinds the shell family actually produces and the rule-file format
 carries an explicit `order` key (ascending, default 0, ties alphabetical), so all four rules can fire on
 the live path. *(R35-1's qualifier, added 2026-09-24: "the live path" in that sentence means the
 **declared table's own** names — R33-1's carriers are `Bash`/`Grep`/`Diff`, taken from `TOOL_KINDS` itself
-(`autowork/harness/r33-1/EVIDENCE.md:169-173`). The clients this repository configures send
+(the loop's evidence record). The clients this repository configures send
 `exec_command`, which is in **no** row of the table, so today **no** shipped rule selects a payload node
 on real client traffic: 36 nodes, 0 selected, 0 edited, measured in
-`autowork/harness/r35-1/corpus-shape.json`. See §12.18 and `R35-1-F1`.)*
+the loop's corpus-shape record. See §12.18 and `R35-1-F1`.)*
 
 **What it does not change.** `RouteSpec` and the route vocabulary (the mode is a request fact, never a
 route property, so CONF-27's "alias ≡ direct, byte-identical" claim is untouched); the two-mutation
@@ -3190,7 +3190,7 @@ repository has (§12.10.2's `load` / `ResolvedConfig` path is the first, and it 
 `router-cli` command like the others, and like them it is **not** in the serving path: no request path reaches
 it, and it writes no trace, no event and no store row.
 
-The comparison this landing follows is the round's survey, `autowork/survey/2026-09-22_config-setup-usability.md`
+The comparison this landing follows is the round's survey, the survey record (2026-09-22)
 (hermes-agent / opencode / codex / `docker init`, measured locally with sources); "technique N" below is that
 file's §2, and "anti-pattern N" its §4.
 
@@ -3552,7 +3552,7 @@ case is red at the base tree on its decisive legs: the refusal there is the fram
 ### 12.16 The scale/latency baseline: the quantity, the method, and where the numbers live (ADR-029)
 
 **The gate quantity is a subtraction, and this section records the two fields it is taken from.** The
-blocking latency gate (`autowork/program.md:41`) is about the **router's own** work, so the quantity is
+blocking latency gate (the loop charter) is about the **router's own** work, so the quantity is
 `result.overhead_ms − result.upstream_ms`: `overhead_ms` is measured from the request's own start
 (`crates/router-proxy/src/forward.rs:593`) to the record's commit
 (`crates/router-proxy/src/accounting.rs:410`) and therefore **includes** the upstream attempt, while
@@ -3565,8 +3565,8 @@ derivation is corrected in step with spec §6/§9.2 as written (`CONF-84`, §12.
 in R32's ledger, classified blocking.
 
 **Where the baseline is measured, and why not here.** The load shape, the load generator and the reading path
-are **harness-side** (`autowork/harness/r32-*/`, Python, driving the real binary against a loopback
-stand-in) — the harness is governed by `autowork/program.md`, `work-mode.md` and the replay contract, not by
+are **harness-side** (the loop's evidence for that decision, Python, driving the real binary against a loopback
+stand-in) — the harness is governed by the loop charter, the loop execution model and the replay contract, not by
 this chapter. What belongs here is only the product-side surface the harness reads: the two trace fields
 above (and nothing else for the gate quantity), the `events` log for the store arm, and the process's RSS from
 the operating system. ADR-029 is the method's contract home; it states the quantity, the load shape, the
@@ -3574,17 +3574,17 @@ saturation criterion and the evidence's home.
 
 **Where the numbers live — and why not in this file.** A measured number in a DESIGN section would be a second
 copy of a measurement, and this repository states each figure once (the same single-source rule §12.5's prices
-obey). Measured baseline figures therefore live in the per-run evidence under `autowork/harness/r32-*/` and in
-`autowork/STATE.md`'s *Key measured facts*, and are restated by a round record. The **budget** those numbers
-are compared against is not a loop decision at all (ADR-012; `autowork/STATE.md`'s waiting-on-human row 1): R32
+obey). Measured baseline figures therefore live in the per-run evidence under the loop's evidence for that decision and in
+the loop state record's *Key measured facts*, and are restated by a round record. The **budget** those numbers
+are compared against is not a loop decision at all (ADR-012; the loop state record's waiting-on-human row 1): R32
 freezes the measurement, R33 measures the transform path with it, and the threshold stays the human's.
 
 **The transform-inclusive half of that measurement is ADR-030's** (the four-assembly shape `P`/`M`/`K0`/`K`,
 the mode-closed carrier control, the attribution model with its stated confound, the R = 3 band and its citation
-rule, and the body-bound legs); its load figures live under `autowork/harness/r33-*/` and in the round record,
-**measured by R33-2 (`autowork/harness/r33-2/results/`) and reproduced by R33-3 at `68f79a8`
-(`autowork/harness/r33-3/results/`) — `R33-4-F2` closed here**, and the ladder's own counts are reconciled in
-`autowork/harness/r34-1/FREEZE.md` §12.1: the freeze's §4 table enumerates **37** rung ids, the two rigs ran
+rule, and the body-bound legs); its load figures live under the loop's evidence for that decision and in the round record,
+**measured by R33-2 (the loop's evidence for that decision) and reproduced by R33-3 at `68f79a8`
+(the loop's evidence for that decision) — `R33-4-F2` closed here**, and the ladder's own counts are reconciled in
+the loop's freeze note §12.1: the freeze's §4 table enumerates **37** rung ids, the two rigs ran
 **40** declarations — the 37 plus the three `K0` twins (`K0-N2`, `K0-S2`, `K0-S3`) the attribution model needed —
 and **104** runs (`8 × 1 + 32 × 3`), so the §4 prose's "34 … ≈ 77 runs" is superseded (**`R33-3-F4`**,
 reconciled there; the line itself is outside this card's write set). §12.12's latency clause carries the
@@ -3603,7 +3603,7 @@ requests) on a **named, committed base**, with the basis and the sample count pr
 **no combined total** — ADR-018); and the **label rule** (`inferred` is never mixed with `verified`, and a
 ranking mints nothing).
 
-**Where the numbers live.** In R34-2's committed artifacts under `autowork/harness/r34-2/` — one row per lever,
+**Where the numbers live.** In R34-2's committed artifacts under the loop's evidence for that decision — one row per lever,
 each carrying its base, its basis, its sample count, the price entry's official source URL + date, and its
 label — restated by the round record, and **never here**. This is the same single-source rule §12.5's prices
 and §12.16's baseline figures obey: a measured number copied into this file would be a second copy that goes
@@ -3617,13 +3617,13 @@ promises one.
 
 **What it may never claim** (ADR-031 D6, restated where a product reader meets it): no `verified` figure; no
 price without its official source URL and date; **no threshold** — the L1 envelope and the transform band stay
-`autowork/STATE.md`'s waiting-on-human **row 1**; and no saving whose retrieval path does not exist (`tee`'s
+the loop state record's waiting-on-human **row 1**; and no saving whose retrieval path does not exist (`tee`'s
 originals store and its retrieve channel are still unimplemented, spec §4.4).
 
 **The one thing this section does require, and it is a relation rather than a figure.** A ranking row's
 arithmetic must reproduce the trace row it was computed from — field by field, including `peak_applied_pct` —
 or the row is not citable. R34's freeze demonstrates the relation against two committed live rows
-(`autowork/harness/r34-1/FREEZE.md` §2, `§7`), and the red control that keeps it honest is a deliberately
+(the loop's freeze note §2, `§7`), and the red control that keeps it honest is a deliberately
 wrong window and a cross-currency addition that must be refused.
 
 ### 12.18 The L2 measurement's home: the method is ADR-032's, and no figure of it lives in this file
@@ -3642,8 +3642,8 @@ HAND-10 §11.3/§11.4, CORP-12 §14.1/§14.2); and **the provenance obligation**
 delegated freeze, from an ADR-028 recorder-mediated `external`, or from composed rather than captured
 bytes says so in the same breath — R23-F6).
 
-**Where the numbers live.** In R35's own artifacts under `autowork/harness/r35-*/` — the probe's reading
-(`r35-1/corpus-shape.json`), the round's record and the live row's `result.jsonl` — restated by the round
+**Where the numbers live.** In R35's own artifacts under the loop's evidence for that decision — the probe's reading
+(the loop's corpus-shape record), the round's record and the live row's `result.jsonl` — restated by the round
 record, and **never here**. This is §12.5's, §12.16's and §12.17's own single-source rule: a measured
 number copied into this file would be a second copy that goes stale silently.
 
@@ -3654,7 +3654,7 @@ engine's own unit batch, including the reachability assertion whose subject is a
 vocabulary** rather than the declared table). **`crates/router-core` is not in that card's write set**:
 `kinds_for_tool`'s declared table (`router-core/src/transform.rs:157-164`) is a declaration about names no
 configured client sends, and whether it should cover them is a human's wording decision — see
-`autowork/harness/r35-1/FREEZE.md` §PREREQUISITE and `R35-1-F1`.
+the loop's freeze note §PREREQUISITE and `R35-1-F1`.
 
 **The implementation note (R35-2, landed).** What the implementing card actually
 did, and where the evidence lives (the numbers themselves stay in the round's
@@ -3666,7 +3666,7 @@ unit batch (`observed_client_tool_vocabulary_selects_a_shipped_rule`, R35-1's
 D7 R-c) and by a byte witness whose passthrough digest is identical across the
 rule change (AGENTS 1: the repair moves nothing on the passthrough path). The
 corpus that can exercise L2 exists as an auto-layer nomination under
-`autowork/corpus-auto/`; the promotion into the signed tier is the human's
+the auto-corpus; the promotion into the signed tier is the human's
 delegated freeze, never the loop's act. What the card deliberately did **not**
 land: the `tee` half of `R35-1-F4` — that prescription collides with the frozen
 CONF-63 (`tests/conformance/tests/conf_63_i2_prefix_monotonicity.rs:295`
@@ -3685,7 +3685,7 @@ prerequisite of adoption, never a saving.
 
 **What it may never claim** (ADR-032 D5, restated where a product reader meets it): no `verified` figure
 minted outside the five conditions; **no threshold** — the L1 envelope and the transform band stay
-`autowork/STATE.md`'s waiting-on-human **row 1**; no price number in `book/`; and no saving whose
+the loop state record's waiting-on-human **row 1**; no price number in `book/`; and no saving whose
 retrieval path does not exist.
 
 ### 12.19 The RRSI subset's home: the decision is ADR-033's, and the product is untouched
@@ -3693,8 +3693,7 @@ retrieval path does not exist.
 **What this section is.** The loop's adoption of three of RRSI's seven regularizers — a **candidate ledger**
 with a pre-spend refusal clause (B), a **reachability witness** required of a card that adds a rule, a stage,
 a module or a switch (D), and a **conditioned** unproductive-components report (G, conditional on the noise
-band E) — has one decision home, **ADR-033**, and its clauses live in `autowork/ledger/README.md` (the
-ledger's data contract) and `autowork/work-mode.md` §"The pre-spend declarations" (the card-body
+band E) — has one decision home, **ADR-033**, and its clauses live in the ledger's data contract and the loop execution model §"The pre-spend declarations" (the card-body
 obligations). This section exists for the two things a product reader must be able to see without opening
 the loop's files.
 
@@ -3710,7 +3709,7 @@ product rule.
 **What it deliberately does not touch.** No new trace field, no new event, no schema move
 (`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command, no reporting surface: the ledger is
 loop-side and is never read by the serving path (AGENTS 3). **No threshold** — the L1 envelope and the
-transform band stay `autowork/STATE.md`'s waiting-on-human **row 1** — and neither the ledger nor the pruning
+transform band stay the loop state record's waiting-on-human **row 1** — and neither the ledger nor the pruning
 report mints a `verified` figure (ADR-033 D6, D7).
 
 ### 12.20 The reload: the revision, the publish and the invariants (ADR-040; **specified and landed — R47, merge `db2ac77`**)
@@ -3720,7 +3719,7 @@ this is the landing — the sequence, the seam the request path touches, what a 
 the assertions a card is held to. The mechanism is ADR-039's (`notify`, `router-cli` only, §12.1's row):
 the watcher decides *when to look*; the digest (ADR-037 D6) decides *whether anything changed*; this
 section decides *what happens next*. **All of it is in the tree since R47** (the merge `db2ac77`;
-R47-3's independent verification returned **NO BLOCKING FINDING**, `autowork/harness/r47-3/VERDICT.md`):
+R47-3's independent verification returned **NO BLOCKING FINDING**, the loop's verdict record):
 the watcher is `crates/router-cli/src/reload.rs` (`Watcher` registered on the pair's two directories
 with an exact-path filter; the leading-edge `Coalescer` over the one `COALESCE_WINDOW` constant), the
 second `load` entry point is `reload::look` running the same `config_load::load` `serve` starts with,
@@ -3828,7 +3827,7 @@ file does **not** exercise (i)–(iii) or (viii): the landing is a `temp` + `ren
 trace is one `DecisionRecord` per request and a switch is not a request (no `request_id`, no `event_id` to
 anchor, no bytes, no usage — spec §4.5's two-record table), the event log is the log's own home for the row
 and its siblings (row 12, row 15), and the list therefore stays on the operator's side of the observation
-boundary (§4.5 marks the log **internal — autowork never reads it**, ADR-005) — what the analysis channel
+boundary (§4.5 marks the log **internal — the analysis loop never reads it**, ADR-005) — what the analysis channel
 sees about a switch is the **digest on each record** (RV-1) and a window carrying both digests
 (ADR-040 D3). Consequence: **no new trace field, no new record, `TRACE_SCHEMA_VERSION` stays 2.**
 
@@ -3859,7 +3858,7 @@ looks harmless. It is a **leading-edge, one named constant** in the reload's mod
 burst starts a look at once, events inside the following window fold into it, and one further look runs when
 the burst ends — so a reload's latency is the *load*, never a timer (ADR-039 D2's criterion 1, which is what
 keeps A4's ladder meaningful). The constant's lower bound is the landing's own write gap, measured on this
-machine at **max 0.258 ms** (N = 200, `autowork/harness/r47-0b/probe.out` P18), so the proposed **200 ms**
+machine at **max 0.258 ms** (N = 200, the loop's probe output P18), so the proposed **200 ms**
 sits orders of magnitude above it; the implementing card pins the value with its own measurement. **No
 second crate** (§12.1's note): the coalescer is a pure function of (event times, window), unit-testable with
 no filesystem and no watcher. The **registration is on the two directories** (the root's, the roster's) with
@@ -3937,8 +3936,8 @@ read; a **refused** scrape writes the guard's own boundary-class line (`event_id
 refusal, and the reader takes it from `errors[].kind`, never from `decision.selection_source`.
 
 **The observation boundary, stated where the code lives** (constraint 3): the read site is the config's own
-trace directory and nothing else — no path under `autowork/` is opened by this module, and the exposition is
-a **derived view for operators**, never a product → autowork channel (ADR-005: the trace JSONL is that
+trace directory and nothing else — no path under the loop's tree is opened by this module, and the exposition is
+a **derived view for operators**, never a product → analysis-loop channel (ADR-005: the trace JSONL is that
 channel) and never a gate's or a corpus's input. A future round that wants to consume it must say which
 measurement it replaces.
 
@@ -3984,7 +3983,7 @@ from ADR-041 §4):
 **What the code must not become** (each is a named defect, not a style preference): a second key derivation
 (including one inside a test helper a case then asserts against — the case tests the owner); a second store, a
 per-protocol map, a cache-of-the-cache, or persistence; a second trace writer; a `verified` word anywhere on
-this path; a read of anything under `autowork/`; and an early lookup that would strip the record of the route it
+this path; a read of anything under the loop's tree; and an early lookup that would strip the record of the route it
 did not call (ADR-042 §4.4).
 
 **The record** (spec §6's `cache` group, §12.6's additive class): present **iff** a hit; `verdict` `inferred`;
@@ -3995,8 +3994,8 @@ is not a hit. The hit's other fields are spec §6's own list: `usage_missing: tr
 `decision.provider`/`model` the route it did **not** call, `errors: []`.
 
 **The observation boundary, stated where the code lives** (constraint 3): the key reads the request's own
-values; the store is in-process memory; the trace JSONL stays the only product → autowork channel. A grep of
-`response_cache.rs` for `autowork` must stay **0**, and no measurement definition may cite the store (it is not
+values; the store is in-process memory; the trace JSONL stays the only product → analysis-loop channel. A grep of
+`response_cache.rs` for a path into the loop's tree must stay **0**, and no measurement definition may cite the store (it is not
 durable, so it is not observable after a restart).
 
 | invariant | case |
@@ -4019,10 +4018,10 @@ has).
 
 **These are definitions, not a gate.** Nothing in this section is an operand of any gate; no threshold, corpus,
 conformance assertion or L1-envelope value moves with it, and whether these observables ever *become* a blocking
-gate is the owner's question and stays ADR-036's (AGENTS 9, ADR-012; `autowork/STATE.md`). They are written here
+gate is the owner's question and stays ADR-036's (AGENTS 9, ADR-012; the loop state record). They are written here
 because a number whose definition is prose in a report cannot be cited (the same reason ADR-029's method has its
 home in §12.16), and because the design names the observables — *"R41-4's moat measurement (inter-chunk jitter,
-chunk fidelity)"* — while their definitions were never written (**R41-4 never ran**: `autowork/progress/` holds
+chunk fidelity)"* — while their definitions were never written (**R41-4 never ran**: the round-record directory holds
 R41-0…R41-3 and nothing else; the gap was registered by the round that had to stop, `R41-1-F5`, owner the human).
 
 **The route is outside the process, and that is a decision** (ADR-045 §4): a harness rig — a **loopback stub**
@@ -4030,7 +4029,7 @@ that emits a declared chunk sequence with declared emission instants, plus a **r
 timestamps every arrival — so the instrument is **zero product bytes**, works on any build, and perturbs nothing
 it measures. The `Observer` plugin route stays exactly where ADR-036 D3 put it (unamended, still `yes, and
 first`): it would add in-process visibility the client cannot have (pre-transport bytes, per-chunk attribution),
-and it would also put the instrument's most load-bearing check inside the subject under test — the shape STATE.md
+and it would also put the instrument's most load-bearing check inside the subject under test — the shape the loop state record
 row 13 refused for the byte audits. **R41-4 is a forward reference this file carried and no round ran**; the
 `Observer` row below is amended only to say so.
 
@@ -4065,8 +4064,8 @@ label** — those belong to the saving convention (constraint 4, spec §7).
 
 **The citable-number rule (ADR-045 §2), which is a rule about documents and not about gates.** A figure a report
 or the book shows is citable iff **(1)** its raw artifact lives under a `tracked` path (never `state/`,
-`autowork/results/`, `autowork/captures/`, `autowork/corpus/*/raw/` — the evidence-homing rule R46 wrote into
-`work-mode.md`), **(2)** the exact command that produced it is published, **(3)** the **reducer** is committed and
+the loop's results tree, the loop's capture tree, the corpus — the evidence-homing rule R46 wrote into
+the loop execution model), **(2)** the exact command that produced it is published, **(3)** the **reducer** is committed and
 **runs offline against the raw** (no rerun, no network), and **(4)** the machine and the commit are named —
 ADR-029 D3's clause, unchanged: *a figure that does not name its machine is not citable*. **The acid test is the
 definition of done:** a third party, given only the repository, reproduces the figure by reducing the committed
@@ -4074,9 +4073,9 @@ raw. **The counterexample this rule exists for**: R32's chat-streaming C=32 tail
 aggregates read `p99 9` and `p99 23` ms on the same cell while the 220 per-request records each was reduced from
 are excluded by `.gitignore:29`, and whose reducer has **no offline mode** (`qa3_rig.py`-class rig: `scan_trace` is
 pure but no CLI command takes a raw and prints the figure; `summary` re-reads `*/result.json`). The rule adds no
-gate operand, mints no label (`loop-local` and a caveat-carrying `verified` are `STATE.md` row 18's owner
-question), and is **not** `autowork/program.md` text — that file is a gate definition (AGENTS 9). **Where the
-numbers live**: in the per-run evidence under `autowork/harness/r59-*/` and in `autowork/STATE.md`'s *Key measured
+gate operand, mints no label (`loop-local` and a caveat-carrying `verified` are the loop state record row 18's owner
+question), and is **not** the loop charter text — that file is a gate definition (AGENTS 9). **Where the
+numbers live**: in the per-run evidence under the loop's evidence for that decision and in the loop state record's *Key measured
 facts*, restated by the round record — never as a second copy of a measurement in this file (§12.16's rule).
 
 ## 13. Primitive register, module map and leak register (ADR-016)
@@ -4100,7 +4099,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | P2 | `inbound-admission` | one guard above the path split and the pipeline; headers only; a refusal leaves one pre-pipeline record and no store row | spec §4.7, §9.1; §12.11 | `router-proxy/src/auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:438,714-742` | wired |
 | P3 | `resolution` | exactly one route per request from the roster (explicit/alias); the native id is what the outbound body carries; `auto` → 400, undeclared capability → 400 | spec §3, §4, §8; §3, §7, §12.3 | `router-core/src/config.rs:226,746,872`; `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | wired, with L2/L3/L4 |
 | P4 | `policy-guard` | the route/refusal decision is a pure predicate over (route, projections, stable config, one clock read) with a normative order; transitions follow upstream evidence only | spec §4.2, §4.6, §8; ADR-011; ADR-014; §12.3, §12.4, §12.10.8 | `router-core/src/plan.rs:109,151,183`; `error_class.rs:226`; `quota.rs:113`; `breakeven.rs:70`; `forward.rs:1121-1200` | wired, with L1/L6 |
-| P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → autowork channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
+| P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → analysis-loop channel | ADR-005; spec §6, §7; §8, §12.6 | `router-core/src/trace.rs:22,27,88,311`; writer `router-proxy/src/accounting.rs:358`; sink `router-store/src/trace_sink.rs:40,73` | wired |
 | P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `router-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `router-core/src/transform.rs`; composition step `router-proxy/src/forward.rs::compose_transform_stage`; assembly `router-plugins/src/assembly.rs` (mounts the engine from the `plugins:` list, **R41-3**); wiring `router-cli/src/lib.rs:273` (one `assemble` call); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) — and **mounted from the `plugins:` list since R41-3** (the first migration: the launcher mounts what the list declares, `inject`/`disabled` honoured) |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `router-core/src/store.rs:26,180,361,412,442`; `router-store/src/lib.rs:218` | wired |
 | P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `router-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
@@ -4135,7 +4134,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | `router-runtime/` | P9 — **implemented** in R41-2 (`service.rs` identities + `ServiceKey<T>`, `effect.rs` the inverse stack, `ctx.rs` the fiber scope, `fiber.rs` the state machine + `trait Plugin`, `loader.rs` load-time resolution and the four-step unload) and **driven** since R41-3 by `router-plugins`' assembly from the `plugins:` list | a claim that every shipped capability is mounted from `plugins:` (one kind is; the three residents stay resident), or that the four product service keys exist (their traits do not) |
 | `router-plugin-sdk/` | P9's tier-B half — **contract-only** (`src/lib.rs:1-4` stub) | a claim that a realm exists today |
 | `tests/conformance/` | the assertions that pin P1/P3/P5/P7 (and the ones that will pin the others; §12.8 is the table) | a place to move an invariant in order to pass (AGENTS 9; ADR-012) |
-| `autowork/` | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
+| the loop's tree | nothing here; the loop's own workflow is W5 (ADR-016 item 6) and its artefacts are outside the product | a serving-path dependency in either direction (AGENTS 3) |
 | `router-core/src/response_cache.rs` + `router-plugins/src/response_cache.rs` | **no primitive of P1–P9** — a *mountable capability* (§12.22, ADR-042): the key and the store, and nothing else | a second key derivation, a second store, a second trace writer, or a `verified` word on its path (§12.22's prohibition list). It holds **response** bytes; it never builds a request byte, so P1's boundary is untouched by construction |
 
 ### 13.3 The leak register
@@ -4215,7 +4214,7 @@ plugin?"* is answerable without reading the ADR.
 **The falsifiable definition (ADR-036 D1):** *the core is minimal when the released binary, started
 with an empty `plugins:` list, still serves the passthrough path — and every capability we ship today
 is mountable from that list.* The first half **holds since R41-3** (the launcher mounts nothing and
-the byte suite passes; the measured run is `autowork/harness/r41-3/`). The second half stays **false**:
+the byte suite passes; the measured run is the loop's evidence for that decision). The second half stays **false**:
 the three always-resident builtins remain resident, and the `Selector`/`Guard` surfaces stay blocked
 (L4/L6) — "everything else is a plugin" is still a direction, not a property.
 
@@ -4225,7 +4224,7 @@ the three always-resident builtins remain resident, and the `Selector`/`Guard` s
 | P2 `inbound-admission` | **yes** | it runs above the pipeline; a component mounted inside it cannot be the thing that admits (spec §4.7, §12.11) |
 | P3 `resolution` | surface `Selector` — **blocked** | **L4** (a human decision: define the `plugin` value or delete the slot) and **L2a/L2b** (one implementation, not two) |
 | P4 `policy-guard` | surface `Guard` — **blocked** | **L6**: the answer vocabulary is prose today, so a protocol would freeze `PlanMove` as the interface |
-| P5 `decision-record` | **yes** | the only product → autowork channel; a pluggable observation boundary makes every gate negotiable (ADR-005; AGENTS 3) |
+| P5 `decision-record` | **yes** | the only product → analysis-loop channel; a pluggable observation boundary makes every gate negotiable (ADR-005; AGENTS 3) |
 | P6 `transform-chain` | surface `Transform` | the only content-edit surface, and only as a path-addressed plan; tier-1 wired, `CONF-16` landed with R41-0; **mountable from the `plugins:` list since R41-3** — the first migration, and the only one so far |
 | P7 `state-truth` | **yes** | intent-before-effect and "projections are never the truth" are write-path properties (ADR-009/010) |
 | P8 `accounting` | **yes** for the **label**; prices and quota data are plugin-hosted **data** | constraint 4 is a labelling invariant: `verified` has one definition and gates read it alone (ADR-006/018; ADR-021/§12.13 for the data half) |
@@ -4246,3 +4245,14 @@ arithmetic has one path, `verified` has one definition — the same trick ADR-01
 cross-currency addition a compile error. And a surface declared before its types exist is a
 documented-but-unreachable defect (spec §9.3), which is why the order above is the **leak register's**
 order and not the order of ambition.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

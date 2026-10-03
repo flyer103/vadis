@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: ADR-002 (`ctx.isolate` gives two coexisting sets of bindings; `ctx.intercept` sets the sample rate or shadow switch without changing a binding; config-level coordination never needs a rebuild), ADR-003 (artifacts are revertible and individually accounted), ADR-005 (the trace is the only product-autowork interface), ADR-008 (rule files load at startup and on a keyed config diff), ADR-009 (the store; a lost projection is rebuilt), ADR-010 (events and write ordering; the restart story), ADR-011 (`error.classified` and the demotion are this ADR's error-rate signal), ADR-012 (the ladder, the envelope, and the never-mutable list); AGENTS hard constraints 2 (content determinism) and 3 (the observation boundary); spec §4 (the plugin schema: `isolate`, `intercept`, `disabled`), §4.2 (fallback), §6 (metrics), §7 (the accounting convention); DESIGN §4 (realms and `intercept`, and the config-diff reload), §6 (prefix stability), §9 (`router replay`), §11 (risks); `autowork/program.md` (the per-round flow)
+- Related: ADR-002 (`ctx.isolate` gives two coexisting sets of bindings; `ctx.intercept` sets the sample rate or shadow switch without changing a binding; config-level coordination never needs a rebuild), ADR-003 (artifacts are revertible and individually accounted), ADR-005 (the trace is the only product-analysis-loop interface), ADR-008 (rule files load at startup and on a keyed config diff), ADR-009 (the store; a lost projection is rebuilt), ADR-010 (events and write ordering; the restart story), ADR-011 (`error.classified` and the demotion are this ADR's error-rate signal), ADR-012 (the ladder, the envelope, and the never-mutable list); AGENTS hard constraints 2 (content determinism) and 3 (the observation boundary); spec §4 (the plugin schema: `isolate`, `intercept`, `disabled`), §4.2 (fallback), §6 (metrics), §7 (the accounting convention); DESIGN §4 (realms and `intercept`, and the config-diff reload), §6 (prefix stability), §9 (`router replay`), §11 (risks); the loop charter (the per-round flow)
 
 ## Background
 
@@ -71,12 +71,12 @@ the measurement*.
      taking different policies is *routing*, not payload rewriting.
    - No state is needed for the assignment (it is derived), so a restart re-derives it exactly (ADR-009/010's
      restart story is unchanged). The live artifact is config, applied as a keyed diff (ADR-002); the
-     rollback history is the round file plus `autowork/STATE.md`.
+     rollback history is the round file plus the loop state record.
 
 3. **The blast radius is declared before the canary starts.** A canary declares, in its round file: the
    variant, the salt, the bucket share, the horizon (turns and sessions), the minimum sample
    (`envelope.min_sample`, ADR-012 item 3), and the tolerances item 4 compares against. One canary at a
-   time, matching the project's serial pipeline (`autowork/program.md`).
+   time, matching the project's serial pipeline (the loop charter).
    - **No promotion without the minimum sample**, and **no permanence by neglect**: a canary that reaches its
      horizon without the minimum sample is **rolled back**, not left running. Otherwise a "temporary"
      canary becomes the default with the measurement never having happened — which is the quiet way an
@@ -90,14 +90,14 @@ the measurement*.
    |---|---|---|
    | conformance failure | any CONF case fails on the candidate build | the pinned evaluator (ADR-012 item 2) |
    | cost over envelope | the canary bucket's verified $/1M exceeds the baseline's by more than the declared tolerance | the trace's `cost` and `usage`, verified convention only (spec §7) |
-   | quality degradation | structured-output parse rate / sampled judge comparison below the baseline by the declared margin | the semantic-corroboration signal (`autowork/program.md`) |
+   | quality degradation | structured-output parse rate / sampled judge comparison below the baseline by the declared margin | the semantic-corroboration signal (the loop charter) |
    | error-rate spike | the canary bucket's `error.classified` rate over the content-independent reasons (`rate_limit`, `overloaded`, `server_error`, `timeout`) rises past the declared factor | ADR-011 item 8's events |
 
    - Restricting the error trigger to the **content-independent** reasons is deliberate: `content_policy_blocked`
      and `format_error` depend on what the user sent, so a bucket that happened to draw a refusal-heavy
      workload would otherwise trigger a rollback for the wrong reason.
    - A triggered rollback: write the previous artifact back (an artifact revert — nothing in the product
-     changes, ADR-003), record the round file line and `STATE.md`, and apply a **cooldown**: the same
+     changes, ADR-003), record the round file line and the loop state record, and apply a **cooldown**: the same
      candidate may not be re-proposed without new evidence, which is what stops an oscillating
      adopt-rollback-adopt loop from consuming the pipeline.
    - **The rollback path must exist before the canary starts.** It is a precondition of adopting, not a
@@ -148,8 +148,8 @@ the measurement*.
 
 - DESIGN §11 gains the mid-session-experiment and auto-adoption risks. DESIGN §4's `isolate` and `intercept`
   rows, which already name the A/B and shadow use case, now have a normative consumer.
-- The autowork round template gains a canary block (variant, salt, share, horizon, minimum sample, declared
-  tolerances) and a rollback record; `autowork/program.md`'s per-round flow gains one step between Execute
+- The analysis loop's round template gains a canary block (variant, salt, share, horizon, minimum sample, declared
+  tolerances) and a rollback record; the loop charter's per-round flow gains one step between Execute
   and Gate ("canary") for L1 adoptions. Its gate table is unchanged for L0, L2 and L3.
 - ADR-011's `error.classified` events become load-bearing for a gate (item 4's error-rate trigger), which is
   why that event is written per classification rather than aggregated.
@@ -162,3 +162,14 @@ the measurement*.
 - Not covered here: the tier-B candidate's isolation requirements (timeout, crash isolation) belong to
   ADR-002 and the plugin protocol; and the mechanics of *which* artifact file the loop writes are a round
   template detail, not a product surface.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

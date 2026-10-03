@@ -8,16 +8,16 @@
   and frozen computations rather than snapshots), **9** / **ADR-012 item 2** (the measurement is not part of
   the search space: no gate, no fixed corpus, no conformance assertion, no L1 envelope moves here), 3 and 7
   (the observation boundary and English-only); **ADR-009 item 3** (the product persists no body — the reason a
-  corpus is an out-of-band artifact at all); **ADR-005** (the trace is the only product→autowork channel);
-  `autowork/program.md` (the D3 cost gate, the direction pool, the per-round flow — which gains step 0.5),
-  `autowork/work-mode.md` (one builder per suite, the fan-out rule); the replay harness contract's **COR-2**
+  corpus is an out-of-band artifact at all); **ADR-005** (the trace is the only product→analysis-loop channel);
+  the loop charter (the D3 cost gate, the direction pool, the per-round flow — which gains step 0.5),
+  the loop execution model (one builder per suite, the fan-out rule); the replay harness contract's **COR-2**
   (the corpus schema), **ARM-3.9** (the two pairing kinds), **VER-4.4 rev 3** (the five conditions `verified`
   needs), **PROV-8 §9.3.0** (the declaration ban), **HAND-10 §11.3/§11.4/§11.6** (the freeze act, what the
-  loop may not do, the admitted string), and the round's own landing, **CORP-12** (`replay-contract.md` §14).
+  loop may not do, the admitted string), and the round's own landing, **CORP-12** (the loop replay contract §14).
 
 ## Background
 
-The user's ruling of 2026-09-22 (recorded in round 23's freeze card, `t_6fd3b39b`) settles what the loop may
+The user's ruling of 2026-09-22 (recorded in round 23's freeze card) settles what the loop may
 automate, and it settles it in one direction: **corpus engineering is fully automated, and the source of the
 word `verified` is narrowed.** The ruling's points, as the card states them:
 
@@ -31,7 +31,7 @@ word `verified` is narrowed.** The ruling's points, as the card states them:
 
 Three facts about the state of the loop make that ruling a design problem rather than a policy statement:
 
-- **`verified` is the only currency the cost gate accepts.** `program.md`'s D3 ("a new rule's net gain > 0") is
+- **`verified` is the only currency the cost gate accepts.** The loop charter's D3 ("a new rule's net gain > 0") is
   the one blocking gate never met, and its criterion is counted only from `verified` figures. At this round's
   base there are **zero** such figures in the repository's history — the two human rows (the corpus freeze, the
   live replay budget) are untouched, so the replay harness's `verified` branch has never executed.
@@ -60,8 +60,8 @@ absence of a field can only produce a refusal.
 ## Decision
 
 **1. Two tiers, two artifact types — never one artifact with a flag.** The **signed layer** is
-`autowork/corpus/<corpus-id>/manifest.toml` (COR-2, unchanged: `schema_version = 1`, a human `created_by`, both
-pairing kinds). The **auto layer** is `autowork/corpus-auto/<suite-id>/suite.toml`
+a corpus's manifest (COR-2, unchanged: `schema_version = 1`, a human `created_by`, both
+pairing kinds). The **auto layer** is the auto-corpus
 (`schema = "router-auto-suite/1"`, `created_by = "auto:<builder>"`, `paired-arms` only, and a `source`
 vocabulary of `synthetic` / `hermes-record` / `hf` / `github` — no `capture`). Same id regex, same digest
 recipe, same `[[pair]]` reference rule; different file name, different schema key, different loader. A
@@ -84,14 +84,14 @@ routes (a signed manifest under the auto root, a suite under the corpus root) ar
 relabellings.
 
 **4. The auto layer is the loop's to write, and it is uncommitted where it is bulky.** The builder and its
-adapters write it (`harness.corpus_auto build`); the loader and the scorer are read-only. Its metadata
+adapters write it (`the loop auto-corpus tool build`); the loader and the scorer are read-only. Its metadata
 (`suite.toml`, `suite-spec.toml`, `nomination.json`, `score-card.json`) is committed; its bodies
 (`raw/`) are gitignored — the same split CAP-1.5 already freezes for a corpus, and the `.gitignore` line is one
 card's, landing before any body is written.
 
 **5. Promotion is a nomination, never a write.** The layer's only offer to the human is a list of items it
 recommends — hashes, licences, proposed roles — and the human's §11.3 act is what turns one into a corpus. No
-auto-layer tool may write, create, move or grow anything under `autowork/corpus/`; a path there is a refusal at
+auto-layer tool may write, create, move or grow anything under the corpus; a path there is a refusal at
 exit 2, which is §11.2.1's rule carried to a second tool. **The loop may find the item; only the human may
 freeze it.**
 
@@ -104,9 +104,9 @@ proxy, `est_tokens` and the transform ledger's saved-input figure are **inferred
 restated as a saving.
 
 **7. Coverage becomes an input to the direction decision, and nothing else changes.**
-`program.md`'s per-round flow gains one step ("corpus score", before the direction decision, beside the
+The loop charter's per-round flow gains one step ("corpus score", before the direction decision, beside the
 five-round lookback), and a coverage gap or a `needs` entry is what the direction's rationale must answer.
-`needs` carries `closer: "loop" | "human"` — which is how `program.md` step 1.2's "no human prerequisite" rule
+`needs` carries `closer: "loop" | "human"` — which is how the loop charter step 1.2's "no human prerequisite" rule
 becomes visible instead of discovered.
 
 **8. `verified` stays exactly where it was.** A gate number still requires the signed layer plus REAL-9's live
@@ -137,7 +137,7 @@ and `6`.
   **byte-derived**, and the auto layer composes bytes. A composed item can carry a `prompt_cache_key` and a
   `session_source` string, so a byte witness cannot separate composed bytes from captured bytes. Candidate (c)
   would have been a declaration in bytes' clothing.
-- **Put the auto layer entirely under the gitignored `autowork/results/`.** Rejected: a suite is a **fixed
+- **Put the auto layer entirely under the gitignored results tree.** Rejected: a suite is a **fixed
   input** — a digest a screen verdict cites and a round re-derives — not a run artifact; unversioned, a screen
   verdict could not name what it screened. The corpus's own split (metadata committed, bodies not) is the right
   precedent, and it is the one taken.
@@ -171,7 +171,7 @@ and `6`.
   reproducibly?"* — a question about the instrument. Naming the second with the first's word is what AGENTS
   constraint 4 exists to prevent, and its cheapest enforcement is that the word is not in the second's schema.
 - **Automating collection is what makes the human's act a decision instead of a chore.** The human's freeze is
-  kept (and must be kept) as the only route into `autowork/corpus/`; a loop that has already measured a
+  kept (and must be kept) as the only route into the corpus; a loop that has already measured a
   candidate set makes that freeze a choice among named, hashed, licence-checked items rather than a curation
   project. The nomination is that difference made concrete: it carries no bodies, and it executes nothing.
 - **A rubric earns its keep only if it can fail.** Each metric in the frozen rubric carries a threshold *and* a
@@ -183,12 +183,12 @@ and `6`.
   makes that the *named* proxy, and `screen_claim` is a sentence about bytes — which is exactly what "spend
   real money here" needs, and exactly what it must not overstate.
 - **One builder per suite is a write-set rule, not housekeeping.** A suite's digest is cited by a screen
-  verdict; two cards building one suite would produce two incompatible inputs to one claim. `work-mode.md`'s
+  verdict; two cards building one suite would produce two incompatible inputs to one claim. The loop execution model's
   resource table gains that row for the same reason it already has one for a state dir.
 
 ## Consequences
 
-- **Contract.** `autowork/harness/replay-contract.md` rev 4 — **CORP-12** (§14) is the landing: the clause map,
+- **Contract.** The loop replay contract rev 4 — **CORP-12** (§14) is the landing: the clause map,
   the tier table and the loader's refusal matrix (§14.1), the candidates/the mechanism/the twelve-row negative
   battery with its exit codes (§14.2), the coverage rubric with the frozen `payload_kind` classifier (§14.3),
   the quality rubric with the frozen near-dup metric and the discriminability proxy (§14.4), the score card's
@@ -197,22 +197,21 @@ and `6`.
   money-free acceptance clauses **ACC-13.1…13.6** (§14.9) and the honest boundary (§14.10). §0.1, §0.2, §9.3,
   §11.3 and §11.4 each gain one pointing sentence or row; **no frozen sentence changes** and nothing is
   un-frozen.
-- **Process.** `autowork/program.md`'s per-round flow gains step **0.5** ("corpus score", before the direction
+- **Process.** The loop charter's per-round flow gains step **0.5** ("corpus score", before the direction
   decision, beside the five-round lookback), numbered so every existing step keeps its meaning;
-  `autowork/work-mode.md`'s scheduling step 0 reads the score card beside the lookback table, and its resource
+  the loop execution model's scheduling step 0 reads the score card beside the lookback table, and its resource
   table gains one row (one builder per suite).
-- **Implementation.** A new module, `autowork/harness/corpus_auto.py` (`build` / `verify` / `score` /
+- **Implementation.** A new module, the loop auto-corpus tool (`build` / `verify` / `score` /
   `nominate`), is a **second entry point to its own rule set** — it does not import the corpus loader's
   validation, and the corpus loader does not import it. `run.toml`'s key sets gain `suite` /
-  `expected_suite_digest`, and a declaration carrying both a corpus and a suite is refused. `harness.corpus
-  draft|verify` and `harness.replay check|run|compare` keep their spellings, flags and exit codes.
-  `.gitignore` gains exactly one line, `autowork/corpus-auto/*/raw/` — measured not-yet-ignored at this round's
+  `expected_suite_digest`, and a declaration carrying both a corpus and a suite is refused. The loop corpus tool's `draft|verify` and the loop replay driver's `check|run|compare` keep their spellings, flags and exit codes.
+  `.gitignore` gains exactly one line for the auto-corpus's raw captures — measured not-yet-ignored at this round's
   base, and one card's to land.
 - **The instrument.** The score card is a *second* artifact with a *second* determinism allowlist; DET-5.1/5.2
-  keep theirs. The card records the harness commit and the router binary it ran against, and `harness.commit`
+  keep theirs. The card records the harness commit and the router binary it ran against, and the loop committed records
   is deliberately **not** on its allowlist, so a card cannot be read as covering a different instrument.
 - **Money and quota.** Nothing here spends. Every suite run is loopback `mock`; the auto layer has no live path
-  at all. The live layer's budget discipline (REAL-9 §10, `work-mode.md`) is untouched.
+  at all. The live layer's budget discipline (REAL-9 §10, the loop execution model) is untouched.
 - **The corpus.** No corpus is created, moved, grown or re-frozen by this ADR or by the round that lands it,
   and none may be created by any tool it introduces.
 
@@ -250,7 +249,7 @@ and `6`.
 Reversible in both directions, and cheaply, because the auto layer touches nothing that already ran.
 
 **Toward one layer:** deleting the auto layer is deleting one module, one root, one `.gitignore` line, one
-`run.toml` key pair and one `program.md` step — no corpus, no gate, no conformance assertion and no serving
+`run.toml` key pair and one the loop charter step — no corpus, no gate, no conformance assertion and no serving
 path is involved, and no `verified` figure in the repository's history was produced by it (there are none).
 The screen vocabulary disappears with it; nothing else referenced it.
 
@@ -268,3 +267,14 @@ itself is not a threshold and is not tunable: it is a schema.
 **The asymmetry to keep in mind:** the corpus side of this split is the expensive half to move. A signed corpus
 that a human already froze stays exactly what it is; what this ADR changes is only what the loop may call the
 sets it builds for itself.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

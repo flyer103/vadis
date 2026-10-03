@@ -1,4 +1,4 @@
-# ADR-001 — Rust product + single repo (root = the product, `autowork/` = the loop side)
+# ADR-001 — Rust product + single repo (root = the product, the loop side beside it)
 
 - Status: accepted
 - Date: 2026-09-19
@@ -6,16 +6,16 @@
 ## Background
 
 We need a gateway for everyday codex / hermes use: it must be byte-faithful, low-overhead and extensible in
-the long run (plugin-based experiments), and it needs a loop side (autowork) that keeps iterating on it.
-Two candidate shapes: a single repo (the root is the product, `autowork/` is the loop) or two repos (the
-product + a separate autowork repo).
+the long run (plugin-based experiments), and it needs a loop side that keeps iterating on it.
+Two candidate shapes: a single repo (the root is the product, the loop tree beside it) or two repos (the
+product + a separate analysis-loop repo).
 
 ## Decision
 
 1. **The product uses Rust** (a workspace, multiple crates): the data plane needs no GC jitter, a
    predictable p99, and the strong typing constraint of "never alter a byte" (`serde_json`'s order
    preservation and raw byte passthrough are easier to get right than in a dynamic language).
-2. **Single repo**: the repo root = the product; `autowork/` is the loop side.
+2. **Single repo**: the repo root = the product, with the loop side beside it.
 
 ## Rationale
 
@@ -30,8 +30,19 @@ product + a separate autowork repo).
 
 ## Consequences
 
-- The large files under `autowork/` (traces/results/corpus) must be gitignored; the repository keeps only
+- The large files under the loop's tree (traces/results/corpus) must be gitignored; the repository keeps only
   the harness/config/round files.
 - The loop side's language need not match the product's (see ADR-005).
-- A single repo means CI must distinguish two planes: the `cargo` group (blocking) and the `autowork` group
+- A single repo means CI must distinguish two planes: the `cargo` group (blocking) and the analysis loop group
   (reporting-style, non-blocking).
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

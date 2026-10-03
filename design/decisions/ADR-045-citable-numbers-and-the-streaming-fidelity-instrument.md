@@ -1,7 +1,7 @@
 # ADR-045 — the citable number: the evidence contract, and the streaming fidelity instrument's definitions (TTFT, the **added** inter-chunk jitter, chunk fidelity as an assertion)
 
 - Status: accepted (the **definitions**; the instrument itself is R59-1's, the verification R59-2's, the landing R59-3's)
-- Date: 2026-09-29 (round R59's contract card `t_e7681f2d`)
+- Date: 2026-09-29 (round R59's contract card)
 - Kind: **a measurement definition for an instrument that gates nothing** — plus the rule that makes a
   figure *citable*. It adds **no gate**, changes **no threshold**, and touches **no product byte**: nothing
   under `crates/`, `tests/conformance/` or `.github/` is in the round's diff, `TRACE_SCHEMA_VERSION` and
@@ -21,9 +21,9 @@
   (the `Observer` row — `:4137` as this round's card cites it, `:4202` once §12.23's insertion below moved
   it); `docs/spec.md` §6 (the observation contract), §7 (the labels), §9.2/§9.3
   (reporting surfaces); `tests/conformance/tests/conf_13_sse_passthrough.rs` (what the suite asserts today);
-  `autowork/harness/r32-2/results/C22/result.json` + `autowork/harness/r32-3/results/C22/result.json` (the
-  counterexample); `autowork/harness/r32-3/qa3_rig.py` (its reducer); `autowork/harness/r59-0/**` (this
-  round's evidence); `autowork/STATE.md` row 18 (why the rule lands here and not in `program.md`).
+  the loop's result record + the loop's result record (the
+  counterexample); the loop's qa3 rig script (its reducer); the loop's records for that decision (this
+  round's evidence); the loop state record row 18 (why the rule lands here and not in the loop charter).
 - Numbering note: **ADR-044** landed with R57. This is the next free number in `design/decisions/`.
 
 ---
@@ -55,7 +55,7 @@ This is the round's provenance, stated plainly rather than dressed up:
   first … R41-4's moat measurement (inter-chunk jitter, chunk fidelity) is the first plugin"*;
   `ADR-036` D3 (`:110`) and its roadmap (`:216`) say the same; `DESIGN:338` lists R41-4 beside R41-3 as the
   round that would first bind a service key.
-- **R41-4 does not exist.** `autowork/progress/` holds **R41-0 … R41-3** and nothing else. The design cites a
+- **R41-4 does not exist.** The round-record directory holds **R41-0 … R41-3** and nothing else. The design cites a
   measurement that was never run.
 - The gap was already registered, by the round that had to stop: **`R41-1-F5`** — *"the moat observable
   (client-observed chunk-interval jitter; chunk fidelity with a recorder mediating) has **no number anywhere
@@ -77,15 +77,15 @@ Two consequences the round must carry with it, and neither is optional:
 
 The repository already has a citation *rule*, as prose in one round file: R32's *"a figure that does not name
 its machine is not citable"*. What it has never had is a rule about the figure's **carrier**. The
-counterexample, measured (this round's own evidence, `autowork/harness/r59-0/counterexample-evidence.txt`,
+counterexample, measured (this round's own evidence, the loop's evidence for that decision,
 produced by `counterexample-evidence.sh`):
 
 | fact | reading |
 |---|---|
-| R32-3's aggregate for the chat-streaming C=32 cell (`C22`) | `autowork/harness/r32-3/results/C22/result.json` — **tracked**; `router_overhead_ms: {p50 3, p95 16, p99 23, max 24, n 220}` |
-| R32-2's aggregate for the *same* cell | `autowork/harness/r32-2/results/C22/result.json` — **tracked**; `{p50 2, p95 7, p99 9, max 13, n 220}` |
-| the 220 per-request records the 23 ms was reduced from | `autowork/harness/r32-3/results/C22/state/traces/2026-09-23T08.jsonl` — **present on the machine that ran it, absent from the repository**: `git ls-files … /state \| wc -l` = **0**, and git says why: `.gitignore:29:state/` |
-| the reducer | `autowork/harness/r32-3/qa3_rig.py` — tracked, and it *is* a pure function of a trace directory (`scan_trace`, `:458`) … but its CLI is `rung`/`ladder`/`summary` only, and `summary` re-reads **`*/result.json`** (`:848`), i.e. the aggregate. **There is no published command that turns a raw into the figure.** |
+| R32-3's aggregate for the chat-streaming C=32 cell (`C22`) | the loop's result record — **tracked**; `router_overhead_ms: {p50 3, p95 16, p99 23, max 24, n 220}` |
+| R32-2's aggregate for the *same* cell | the loop's result record — **tracked**; `{p50 2, p95 7, p99 9, max 13, n 220}` |
+| the 220 per-request records the 23 ms was reduced from | the loop captured trace for that run — **present on the machine that ran it, absent from the repository**: `git ls-files … /state \| wc -l` = **0**, and git says why: `.gitignore:29:state/` |
+| the reducer | the loop's qa3 rig script — tracked, and it *is* a pure function of a trace directory (`scan_trace`, the same file) … but its CLI is `rung`/`ladder`/`summary` only, and `summary` re-reads **`*/result.json`** (the same file), i.e. the aggregate. **There is no published command that turns a raw into the figure.** |
 
 **The finding, in one sentence.** The two readings disagree by 14 ms (9 vs 23) on the same cell, the
 repository carries neither the evidence that produced either number nor a command that could re-derive them,
@@ -103,9 +103,9 @@ measurement.
 1. **A raw artifact exists under a `tracked` path.** What the figure was reduced *from*, not a copy of the
    figure: the per-request records, the per-chunk arrival and emission logs, the run's own config and
    command output. `.gitignore` is not a place a citable raw may live in. The tracked home follows
-   `autowork/work-mode.md`'s evidence-homing rule (R46) and the landed rounds' own precedent
-   (`autowork/harness/<round>/**`) — never `state/` (`.gitignore:29`), never `autowork/results/`
-   (`.gitignore:13`), never `autowork/captures/`, never `autowork/corpus/*/raw/`.
+   the loop execution model's evidence-homing rule (R46) and the landed rounds' own precedent
+   (the loop's records for that decision) — never `state/` (`.gitignore:29`), never the loop's results tree
+   (`.gitignore:13`), never the loop's capture tree, never the corpus.
 2. **The exact command that produced it.** Copy-pasteable from a fresh clone, with every argument that
    matters (the build, the flags, the stimulus, the caps). Not "the rig was run", not an ellipsis.
 3. **The reducer.** The code that turns the committed raw into the figure — committed, and **runnable
@@ -130,12 +130,12 @@ the figure, and the two are not the same thing: R32's two rigs ran the same ladd
   what `AGENTS.md` constraint 4 and spec §7 say it is — the *saving* convention. A latency or fidelity figure
   is neither: it is a measurement of the gateway's own behaviour, and it must not be smuggled into either
   label.
-- **It does not land in `autowork/program.md`.** That file is a **gate definition**, and `AGENTS.md` 9 /
-  ADR-012 put gate definitions outside a round's reach. `autowork/STATE.md` row 18 records the same class of
+- **It does not land in the loop charter.** That file is a **gate definition**, and `AGENTS.md` 9 /
+  ADR-012 put gate definitions outside a round's reach. The loop state record row 18 records the same class of
   text (`"Evidence reproducibility"`, the W1 dossier's second hunk) as **owner adjudication required; no round
   may land this**. The rule above is its *documentation-side* half: it binds what a report or the book may
   show, it adds no operand to any gate, and it therefore can be landed. If the owner ever adopts the
-  `program.md` sub-section, this ADR's clauses are the text it should agree with — or the divergence must be
+  the loop charter sub-section, this ADR's clauses are the text it should agree with — or the divergence must be
   stated, not discovered.
 - **It does not retroactively invalidate landed rounds.** A figure already labelled and recorded stays
   recorded; it becomes **non-citable**, not false. The counterexample of §1.3 is the shape: the pair is
@@ -164,7 +164,7 @@ The instrument is a **declared-stimulus** rig, and the declaration is the whole 
   directly), reporting the harness's own floor. Every figure is published beside its baseline. A figure
   without its floor is a figure whose ruler is unknown.
 - `$0.00`, offline: **loopback only, no provider dialled, no credential read** (the same class as
-  `autowork/harness/r32-*`'s stand-ins, ADR-029 D3).
+  the loop's records for that decision's stand-ins, ADR-029 D3).
 
 ### 3.2 TTFT — from the client's clock, as a distribution, with its confound named
 
@@ -232,7 +232,7 @@ client receives equal the bytes the stub emitted, modulo nothing at all.
   chunk, verbatim"*) — while the *suite* reserves it. R59 asserts F3 (it is the strongest form of the claim
   the round exists to make checkable) and, when F3 fails, the finding is against the **contract or the
   implementation**, decided by a later round and never silently absorbed: **whether the product formally
-  promises transport-level unit preservation is registered for the owner** (§6, and `STATE.md` row 26), and
+  promises transport-level unit preservation is registered for the owner** (§6, and the loop state record row 26), and
   R59 mints no product promise.
 
 A fidelity **failure** is not a figure: it is a verdict with the first offending index, the emitted span and
@@ -319,7 +319,7 @@ take that route**, and the reason is a decision, not an accident:
 2. **An in-process observer perturbs what it measures.** Its own scheduling, its service-table lookups and
    its effect stack sit inside the latency being measured; the outside client's clock does not.
 3. **Its evidence would rest on the subject's cooperation.** This repository has already ruled on that shape:
-   STATE.md **row 13** (the L4 byte-audits) chose the **harness-only** option, refusing the product-side tap
+   the loop state record **row 13** (the L4 byte-audits) chose the **harness-only** option, refusing the product-side tap
    precisely because *"the instrument's most load-bearing check would rest on the subject's cooperation"*
    (AGENTS 3). A fidelity verdict produced by the component under test is that shape.
 4. **It could not measure an arbitrary build.** The outside rig works on any commit's binary — which is what
@@ -342,7 +342,7 @@ records why, and **adds no gate, no plugin, no key and no product byte** — the
 
 **The designated figure.** R59's instrument makes **the added inter-chunk jitter at p99 on the declared
 stimulus** — `jitter_added_ms.p99`, with `ttft_added` (p50/p99) and the F1/F2/F3 verdicts beside it, the
-bench's own command and reducer committed next to the raw under `autowork/harness/r59-*/`, the machine and
+bench's own command and reducer committed next to the raw under the loop's evidence for that decision, the machine and
 the commit named in the report — the round's **one citable latency figure**, and the first figure in this
 repository produced under §2's rule end to end (raw in a tracked path · command · offline reducer · machine +
 commit). R59-1 produces it; R59-2 verifies it by running the reducer over the committed raw in a fresh
@@ -372,7 +372,7 @@ is named here rather than taken as a side effect.*
   promises it (§12.10.3 R1/R2, the relay's own comment) while the *suite* reserves it (`CONF-13`'s comment).
   R59 asserts it from outside and mints no product promise; making it a formal promise — and with it a
   conformance case that withdraws `CONF-13`'s reserved freedom — is a `design/`+`crates/`-side contract act
-  and is registered as `STATE.md` **row 26**.
+  and is registered as the loop state record **row 26**.
 - **The `Observer` plugin route** (§4). Open, unchanged, ADR-036's.
 - **Adjudicating R32's `C22` pair** (§5). Superseded, not reconciled; the cause of the disagreement stays
   unknown, and the owner may commission the measurement.
@@ -418,10 +418,21 @@ is named here rather than taken as a side effect.*
   D3 + `:110`/`:216` (residue), ADR-042, ADR-044
 - `docs/spec.md` §2, §6, §7, §9.2, §9.3
 - `tests/conformance/tests/conf_13_sse_passthrough.rs:106-108` (what the suite asserts, and what it reserves)
-- `autowork/harness/r32-2/results/C22/result.json`, `autowork/harness/r32-3/results/C22/result.json`,
-  `autowork/harness/r32-3/qa3_rig.py:458,848,878,886`
-- `autowork/harness/r59-0/counterexample-evidence.{sh,txt}` (this round's evidence)
-- `autowork/progress/2026-09-23_16-52-00_R32-scale-baseline.md` §5.3 (the pair, as R32 left it);
-  `autowork/progress/2026-09-25_14-51-39_R41-1-minimal-core-plugin-surface.md:129` (`R41-1-F5`)
-- `autowork/STATE.md` row 13 (harness-only observation), row 18 (`program.md` is a gate definition),
+- the loop's result record, the loop's result record,
+  the loop's qa3 rig script
+- the loop counterexample record (this round's evidence)
+- the loop's tree §5.3 (the pair, as R32 left it);
+  the loop's tree (`R41-1-F5`)
+- the loop state record row 13 (harness-only observation), row 18 (the loop charter is a gate definition),
   row 26 (registered by this round: the framing promise)
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

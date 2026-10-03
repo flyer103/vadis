@@ -7,7 +7,7 @@
 - Related: AGENTS 1–6, 8 and 9 (the byte boundary, content determinism, the observation boundary, the
   verified/inferred convention, no fabricated prices, no change-detector tests, docs-before-code, the
   measurement outside the search space); ADR-003 (a revertible, individually accounted transform
-  pipeline), ADR-005 (the trace is the only product ↔ autowork channel), ADR-007 (span-faithful
+  pipeline), ADR-005 (the trace is the only product ↔ analysis-loop channel), ADR-007 (span-faithful
   forwarding), ADR-009 (the store; the write-path latency budget), ADR-010 (the event log is state
   truth), ADR-011 (one classifier; the action set; the pattern tables are code), ADR-012 (the ladder,
   the L1 envelope, the never-mutable paths), ADR-013 (shadow → session-bucketed canary → automatic
@@ -17,7 +17,7 @@
   reserved `auto` slot), §4.6 (plan-first), §6 (observation), §7 (the accounting convention), §8 (error
   semantics), §9.1/§9.2/§9.3 (the reporting surfaces and the ones deliberately not served);
   DESIGN §5, §6, §9 (`router replay`), §10, §12.3, §12.4, §12.6, §12.8 (the CONF rule), §13 (the
-  register, the leaks, the seam's placement); `autowork/program.md` (the gate table, direction D10, the
+  register, the leaks, the seam's placement); the loop charter (the gate table, direction D10, the
   cost discipline); `book/roadmap.md`.
 
 ## Background
@@ -53,7 +53,7 @@ The vendor also publishes a **methodology** ("workflow evals") that matters more
 either model does: *assume the code contains the right compute graph; use the strongest model's average
 prediction as the **reference probability** — not ground truth — and score the system under test against
 it.* The repository has exactly one surface in that shape: the **semantic-corroboration gate**
-(`autowork/program.md`), which today has no judge convention and no samples (direction D10's groundwork
+(the loop charter), which today has no judge convention and no samples (direction D10's groundwork
 is undone).
 
 ### The evidence this ADR is written against
@@ -160,12 +160,12 @@ models whose end-to-end latency is 70–500 ms (vendor) / 31.7–90 ms (our own 
 First, the honest provenance of that budget, because it is load-bearing:
 
 - The envelope `p50 < 15 ms / p99 < 50 ms` is **cited as ADR-009's** in R2/R3/R4/R5's round records and in
-  `autowork/STATE.md:149`, but **ADR-009 contains no such numbers** (its own text says the write-path
+  the loop state record, but **ADR-009 contains no such numbers** (its own text says the write-path
   budget must name *measured* numbers, and "Re-measurement is owed"). ADR-016's DP-1.4 registered this as
   a finding and required the envelope be given a contract home by a human decision. **This ADR therefore
   does not cite it as an existing contract.** It writes the envelope as **"declared value + measured
   value"**: declared `p50 15 ms / p99 50 ms`; measured at R4, router's own overhead `p50 1 ms / p99 6 ms /
-  max 6 ms` over 61 requests (`result.overhead_ms`, `autowork/STATE.md:147-149`; spec §9.2 fixes that this
+  max 6 ms` over 61 requests (`result.overhead_ms`, the loop state record; spec §9.2 fixes that this
   figure *excludes* `upstream_ms`).
 - That exclusion matters: an advisor's wait is **not** an upstream forward. Under spec §9.2's own
   convention it is **router's own work**, so it lands inside the envelope rather than beside it.
@@ -265,7 +265,7 @@ human.
 *Constraint verdict:* holds on 1/2/3/4 by construction (DP-1.2, DP-1.3, config-in-trace-out, route
 rather than figure). **Latency: fails inline by default** (§3).
 *Measurement available today:* none for *this* question. The bench measured classification, not route
-choice; a selector evaluation needs the D10 evaluation set (`program.md`), which does not exist.
+choice; a selector evaluation needs the D10 evaluation set (the loop charter), which does not exist.
 *Verdict:* **not adoptable now**; the path is: human decides L4 → a frozen evaluation set → an offline
 comparison → opt-in M6 with a declared budget. Note honestly that a *good* selector would not be
 exercised by a 40-item classification set at all; it needs session-shaped traffic with the candidates
@@ -289,7 +289,7 @@ a 100%-class score would have made it look safe.
 (§7.8's budget arithmetic).
 
 #### ③ Guard / validation — the semantic gate's missing judge samples
-*The gap:* `autowork/program.md`'s semantic-corroboration gate is *"structured-output parse rate, sampled
+*The gap:* the loop charter's semantic-corroboration gate is *"structured-output parse rate, sampled
 judge comparison"*, warning-grade; **no judge convention and no samples exist** (D10's groundwork is a
 direction, not an artifact), and ADR-012 item 4 makes this signal **blocking for any round whose claim is
 "cheaper"** — so a cost claim today rests on a gate that cannot currently be evaluated.
@@ -297,7 +297,7 @@ direction, not an artifact), and ADR-012 item 4 makes this signal **blocking for
 precisely the input a reference-probability instrument needs. The vendor's own methodology says what to do
 with them (§7.8).
 *Boundaries:* loop-side only (AGENTS 3: research never enters the serving path; the product never reads
-`autowork/`); the **gate definition and the corpus are human-owned** (AGENTS 9, ADR-012 item 2), so this
+the loop's tree); the **gate definition and the corpus are human-owned** (AGENTS 9, ADR-012 item 2), so this
 adds *samples and a convention*, never a threshold; and the reference is **not ground truth** — treating
 it as such is precisely the failure ADR-012 item 5 warns about ("the verifier is empirical").
 *Verdict:* **suitable, loop-side, warning-grade.** The cheapest useful thing in this ADR.
@@ -331,8 +331,8 @@ does not already own.
 ### 7. The shadow-evaluation plan (executable to "the next round's first step")
 
 #### 7.0 What exists, and what is missing — the honest inventory
-- **`autowork/traces/` does not exist in this worktree**, and neither does `autowork/corpus/` — `.gitignore`
-  names them (`autowork/traces/`, `autowork/results/`, `autowork/corpus/raw/`) and no capture round's output
+- **the loop's captured-trace tree does not exist in this worktree**, and neither does the corpus — `.gitignore`
+  names them (the loop's captured-trace tree, the loop's results tree, the corpus's raw records) and no capture round's output
   is in the tree. `router replay` — the same-code-path replay DESIGN §9 specifies — is **not served** in
   v0.1 (spec §9.3: the CLI accepts `serve` and `stats` only). DP-1.5's reproducibility test therefore has a
   prerequisite that does not exist yet, and this plan must not assume it.
@@ -353,14 +353,14 @@ does not already own.
 
 #### 7.1 Step 0 — freeze the evaluation set as an L0 artifact
 Lands in the repository, loop-side, product-invisible (AGENTS 3):
-- `autowork/corpus/decision-eval/manifest.toml` — corpus digest, item count, the scope note (what task
+- the decision-eval corpus manifest — corpus digest, item count, the scope note (what task
   is being measured), the exclusion note (`connect_failure`/`timeout`, per ADR-011 item 1: the transport
   supplies that evidence and the classifier never guesses it from text — a **scope limit, not a gap**),
   and the labelling rule.
 - one JSONL item per line: `{id, task, http_status, response_body, truth_class, truth_consequence,
   truth_note, source}` — `source` ∈ {hand-authored, captured}. The 40 existing fixtures are **seed 0**,
   verbatim, keeping their per-item `note`.
-- `autowork/corpus/` is on ADR-012 item 2's never-mutable list: the loop may **not** move it. Growing it
+- the corpus is on ADR-012 item 2's never-mutable list: the loop may **not** move it. Growing it
   is a human-owned round (and, when it grows, the manifest digest changes *with* it, in that round).
 
 #### 7.2 Step 1 — make the harness re-runnable and pinned
@@ -441,14 +441,14 @@ moves it (the gate table and the corpus are on the never-mutable list: AGENTS 9,
 is the *only* signal that can make a "cheaper" claim blocking (ADR-012 item 4) — which is the real
 reason to build it.
 
-Budget, declared in advance per `program.md`'s cost discipline: the operator's full 40-item two-backend
+Budget, declared in advance per the loop charter's cost discipline: the operator's full 40-item two-backend
 run is measured at **$0.000987** (Jev, published-rate derived; 23,496 input tokens over 40 calls at
 587.4 tok/call). The reference-probability method multiplies by `k` repeats: `k = 5` × 40 items = 200
 calls ≈ 117,480 tokens ≈ **$0.0049**. The constraint on this work is sample size and labelling, not money.
 
 #### 7.9 The next round's first step, as a write-set
 One card, docs+harness only, no product change:
-`autowork/corpus/decision-eval/{manifest.toml,items.jsonl}` (the 40 fixtures as seed 0, plus the digest
+the decision-eval corpus (the 40 fixtures as seed 0, plus the digest
 and the conventions of §7.3), the harness fix of §7.2, and a declared budget for the first paid run.
 Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
 
@@ -462,7 +462,7 @@ Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
 | Wire a model's *consequence* answer (`noul`) straight into a retry/refusal decision | measured: 4/40 systematic errors on exactly the account/credential cases a failover exists for (§5) |
 | Let a model move the account (spill / return) | ADR-014 item 2 (upstream evidence only), item 1 (stickiness) |
 | Let a model explore mid-session, or advise per request | ADR-013 item 2; DP-1.3 |
-| Read `autowork/` from the serving path, or write the product from the loop except via an artifact | AGENTS 3 |
+| Read the loop's tree from the serving path, or write the product from the loop except via an artifact | AGENTS 3 |
 | Move the gate, the corpus, the conformance assertions or the envelope | AGENTS 9; ADR-012 item 2 |
 | Allocate a CONF id, a new trace field, a new event kind, a new `error.type`, or a new pipeline stage for an advisor | ADR-016 item 4's refuse-list; DESIGN §12.8 (IDs are a human decision) |
 | Quote Laya's model-card numbers as *our* measurements, or the blog price as a *bill* | AGENTS 5; §7.3's cost convention |
@@ -542,7 +542,7 @@ Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
   used on this task it must be evaluated or fine-tuned on our distribution* — which is the vendor's own
   requirement, and which §7 exists to make possible.
 - **This ADR does not decide what happens next.** It names a candidate, an admissible form, a budget and
-  a write-set; the alignment with the human happens in a round, per `program.md`'s per-round flow.
+  a write-set; the alignment with the human happens in a round, per the loop charter's per-round flow.
 
 ## Redaction note (2026-10-03, R62-1)
 
@@ -550,3 +550,14 @@ A personal absolute path (the owner home directory) inside the `#[path = …]` q
 bench-corpus bullet was replaced with the neutral placeholder `<home>`. The decision,
 its reasoning and the measurement are unchanged; only the machine-local path prefix
 was redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

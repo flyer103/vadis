@@ -10,7 +10,7 @@
   truth — why a "skip" is not an event), ADR-011 (the upstream-error taxonomy and the failover action set),
   ADR-014 (plan-first routing: the `overflow` route is a candidate of the same walk); spec §2, §4.2, §6, §8;
   DESIGN §12.8 (CONF-57), §12.10.5 note R1, **§12.10.9** (the landing); R11-F1 (the measured defect this ADR
-  closes) — `autowork/progress/2026-09-21_13-04-34_R11-onboarding-smoke.md` §7 and §10 recommendation 1
+  closes) — the loop's tree §7 and §10 recommendation 1
 
 ## Background
 
@@ -194,3 +194,14 @@ it later — for example when a mapper exists — is choosing a different eligib
 wire differs, at which point this ADR is **superseded** (append-only: a new ADR states the new rule and cites
 this one). What is *not* reversible is a served cross-wire request: those bytes exist once delivered, which is
 why the ADR freezes the refusal rather than the tolerance.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

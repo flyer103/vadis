@@ -12,18 +12,18 @@
   the latency budget as the router's own work); spec §2.1 (the mode channel), §4.4 (rule files, `tee`),
   §4.13 (the body bound), §6 (the trace contract), §7 (the labels), §8 (the refusal contract),
   §9.2/§9.3 (the report); DESIGN §12.1 (the dependency allowlist), §12.12 (the pipeline and its
-  ledger), §12.15 (the body bound), §12.16 (the baseline's quantity); `autowork/program.md:41` (the
+  ledger), §12.15 (the body bound), §12.16 (the baseline's quantity); the loop charter (the
   **blocking** latency gate and its declared reference, rtk's <10 ms shape);
-  `autowork/STATE.md:781` (**R9-G5**: the transform path's latency unmeasured) and `:870` (the
+  the loop state record (**R9-G5**: the transform path's latency unmeasured) and the same file (the
   waiting-on-human **row 1**, still open).
 
 ## Background
 
-**The blocking gate names the transform and no measurement has ever included it.** `program.md:41`
+**The blocking gate names the transform and no measurement has ever included it.** The loop charter
 makes *"the decision **+ transform** overhead p99 stays within budget (benchmarked against rtk's <10 ms
 shape)"* blocking. Every latency figure in the repository predates the transform path: R4's
 `overhead_ms` p50 1 ms / p99 6 ms (a mock upstream, no rule engine) and R2G6's narrow self-overhead pair
-(`STATE.md:722`'s R2G6 pair). R9's landing wired the pipeline and measured nothing (`STATE.md:781`, **R9-G5**:
+(the loop state record's R2G6 pair). R9's landing wired the pipeline and measured nothing (the loop state record, **R9-G5**:
 "R9-3's probe has **no** timing section"), and DESIGN §12.12 said in its own words that the budget "is
 re-measured by the round that lands this" — a sentence the landing round did not discharge. R32 froze
 the *quantity*, the *ladder*, the *per-rung rules* and the *ceiling criterion* (ADR-029) and declared,
@@ -32,7 +32,7 @@ the **method** by which the transform-inclusive measurement is taken, comparably
 
 **Two structural facts about the transform path decide the shape of the measurement.** Both are
 measured, not assumed, at R33's base by the harness-side probe
-`autowork/harness/r33-1/freeze_probe.py` (its relations are the evidence; the numbers live in that
+the loop's freeze probe script (its relations are the evidence; the numbers live in that
 file and are not restated here):
 
 1. **The payload locator returns tool-output nodes only.** `router-core::transform::payload_nodes`
@@ -145,11 +145,11 @@ promises a complete `413` with a closed connection.
 ### D5. What this ADR does not decide: the bar
 
 **No threshold, no band, no envelope value is set here or anywhere else in R33 by a loop card.** The
-number the blocking gate compares against is a **human** decision (ADR-012; `STATE.md`'s
+number the blocking gate compares against is a **human** decision (ADR-012; the loop state record's
 waiting-on-human row 1, still open), and ADR-016's registered finding was not that the envelope was
 unknown but that it had **no contract home**. R33's cards hand over a **proposal with numbers** — the
 threshold's *shape* (an assembly clause, a transform clause and the flatness relation), candidate
-values justified by the measured envelope and by `program.md:41`'s declared reference, a recommended
+values justified by the measured envelope and by the loop charter's declared reference, a recommended
 contract home, and the sentence that would go into the specification — marked
 `PROPOSAL — pending row 1`. A loop card that writes a bar into spec, DESIGN or an ADR has exceeded its
 authority, whichever document it picks.
@@ -160,7 +160,7 @@ inputs are named.
 
 ### D6. Where the numbers live
 
-Per-run raw files under `autowork/harness/r33-*/` (one machine-readable file per rung, the run's own
+Per-run raw files under the loop's evidence for that decision (one machine-readable file per rung, the run's own
 trace JSONL beside it) and a summary table; the round record; the freeze's decision tables. **Not in
 this ADR and not in DESIGN:** DESIGN §12.12 records the *method's* home by pointer and states no
 number, and the round's figures are restated by the round record — the same single-source rule
@@ -172,7 +172,7 @@ Any product change for the sake of measurement (a per-step timing field, a count
 such a change is a spec §6 / product decision, it must be justified as **non-gate and non-observable in
 the served bytes** (AGENTS 1's byte boundary, AGENTS 3's observation boundary), and it must land in its
 own round with its own red control — the shape frozen by R33 needs none. Also not authorized: any change
-to `program.md:41`'s gate definition, to a threshold, to the corpus or to the L1 envelope (ADR-012); any
+to the loop charter's gate definition, to a threshold, to the corpus or to the L1 envelope (ADR-012); any
 new Rust dependency (the harness stays Python and drives the real binary as a black box, DESIGN §12.1);
 `GET /metrics` (spec §9.3 keeps it planned-not-served); rate limiting; a sharded store; inbound TLS;
 and re-adjudicating R32's published numbers, which are quoted as a **prior run** and are neither
@@ -229,3 +229,14 @@ re-derived nor re-labelled here.
   integer-millisecond coarse; the transform's cost is a **difference of two p99s** and is `NOT
   established` whenever it sits inside the declared band; the per-rule *time* is not attributable from
   the trace; and the envelope's ⟨budget⟩ remains waiting-on-human row 1.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

@@ -8,11 +8,11 @@
   under `crates/`, `tests/` or `.github/` is in the round's diff, **no timeout value moves, no
   config key is added**, and the code's own behaviour is not edited at all (this decision *is* that
   the code is right).
-- The question was registered as `autowork/STATE.md` §"Waiting on human adjudication" **row 24** by
-  R54's close-out (`t_519241c7`), on the orchestrator's instruction, from the finding
+- The question was registered as the loop state record §"Waiting on human adjudication" **row 24** by
+  R54's close-out, on the orchestrator's instruction, from the finding
   **`R54-1-F2`** (first raised as R54-0's own registration, carried re-derived by R54-1).
-- Decided against: the measurements of `autowork/harness/r54-0/REPORT.md` (`:108-111`) and
-  `autowork/harness/r54-1/REPORT.md` §"Control 2" (`:40-64`), both on 2026-09-28, each on its own
+- Decided against: the measurements of the loop's report (the same file) and
+  the loop's report §"Control 2" (the same file), both on 2026-09-28, each on its own
   rig, at the base `8e2cd66` and the tip `6bad197` of `round/54-sse-tap-scan`.
 - Related: `AGENTS.md` constraints 1 (the byte boundary — the bound changes no relayed byte), 2
   (content determinism — untouched: the bound is a function of config and traffic, never of content),
@@ -164,7 +164,7 @@ ceiling as every other stream, with no distinction between "a fast stream that j
 Distinguishing the two needs a **new contract** — a new parameter (a minimum-throughput floor, a
 separate streaming ceiling, or a per-route override) — and a new parameter is an owner-level act,
 not a loop outcome. It is therefore **registered, not built**: a new row in
-`autowork/STATE.md` §"Waiting on human adjudication" (row **25**, owner: the human), stating the
+the loop state record §"Waiting on human adjudication" (row **25**, owner: the human), stating the
 question with both branches. Until it is decided, **the total-elapsed bound is the whole contract**
 and no card may add a guard of its own.
 
@@ -217,5 +217,16 @@ owner's rather than as a loop's tidy-up.
 | `R54-1-F2` (carried from R54-0's own registration) | **CLOSED by this ADR** — the divergence between R4's letter and the code is resolved in the code's favour, with the letter amended. |
 | `R54-1-F1` (case sensitivity of `CONF-90` to the cursor limb) | Untouched by this round; owner `registry owner`, due the next conformance-registry pass. |
 | `R54-1-F3` (DESIGN §12.8 has no `CONF-90` row; its header reads `CONF-01…CONF-89`) | Untouched by this round; same owner and due. |
-| **New: the busy-but-slow guard** | **Registered, not built** — `autowork/STATE.md` waiting-on-human **row 25**, owner the human (§4 above). |
+| **New: the busy-but-slow guard** | **Registered, not built** — the loop state record waiting-on-human **row 25**, owner the human (§4 above). |
 | The code's "idle bound" comments and the neighbouring documents that still name R4's bound by its old label (`DESIGN` §12.8's `CONF-82` cell, §12.10.3 R12, §12.10.5's note; `docs/spec.md`'s read clause) | **Left as written.** They cite **R4**, whose rule now covers both applications of the knob, so none of them is false; this ADR names them so a future docs pass can align the vocabulary if it wants to. `crates/` comments are outside this round's write set by construction. |
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

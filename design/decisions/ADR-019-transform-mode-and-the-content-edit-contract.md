@@ -11,7 +11,7 @@
   ADR-015 (the two-mutation boundary; its item 5 forbids widening the **passthrough** path),
   ADR-016 (primitive P6 `transform-chain` is `contract-only`; workflow W2); spec §2 (+ new §2.1) /
   §4.4 / §6 / §7 / §8; DESIGN §3, §6, §12.3, §12.3.1, §12.10.6, §12.10.7, **§12.12** (the landing);
-  `rules/tool_output.toml` (the landed rule-file format); `autowork/program.md` direction **D3** and
+  `rules/tool_output.toml` (the landed rule-file format); the loop charter direction **D3** and
   its gate
 
 ## Background
@@ -155,7 +155,7 @@ world (the same content served without the edit) does not appear in the trace. H
 - A figure becomes **`verified`** only where the pair exists: a control turn with the transform on
   and off over the same content, read from the upstream's own normalized `usage` (spec §7), or the
   replay path computing the counterfactual with the same code (DESIGN §9 — designed, **not served**).
-  `autowork/program.md`'s D3 gate (*"inline tests green + the cache regression passes + verified net
+  The loop charter's D3 gate (*"inline tests green + the cache regression passes + verified net
   gain > 0"*) is exactly such a pair, and it is the only place a saving may be claimed.
 - The ledger's honest arithmetic is `net = saved − added`: the added side counts the tee marker, a
   payload's re-encoding and any replaced text. A rule whose **verified** net is ≤ 0 is not adopted.
@@ -282,3 +282,14 @@ every turn), and nothing here is a measurement:
   "payload category declaration", but nothing in the wire format or the config says where the category
   comes from. It is the implementing card's to settle; the transform contract does not depend on it
   (`match_tool` is sufficient for tier 1).
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

@@ -8,12 +8,12 @@
   (b) replaces the top-level `model` *value*, which is why a routing scalar is not content);
   **ADR-022** (a candidate serves only on its own wire — the rule the two namespaces meet at);
   **ADR-026** (corpus tiers and automated scoring); **ADR-032** (the L2 measurement; **D5**, the composed
-  bytes' honesty cost); `autowork/harness/replay-contract.md` §11 (HAND-10, the capture→freeze handoff)
-  and §14 (CORP-12, the tiers); `autowork/harness/r35-1/FREEZE.md` §D2.0·A2 (the promotion path's ten
+  bytes' honesty cost); the loop replay contract §11 (HAND-10, the capture→freeze handoff)
+  and §14 (CORP-12, the tiers); the loop's freeze note §D2.0·A2 (the promotion path's ten
   steps with one owner each) and §A3 (reading (a): the authored session identity);
-  `autowork/work-mode.md` §"Promoting an auto-layer nomination into the signed tier";
-  `autowork/harness/corpus_route_check.py` (the gate), `autowork/harness/r38-freeze/RECEIPTS.md` (the
-  re-freeze's receipts), `autowork/harness/r38-1/receipts/route-probe.json` (the measurement).
+  the loop execution model §"Promoting an auto-layer nomination into the signed tier";
+  the loop route check (the gate), the loop's receipts record (the
+  re-freeze's receipts), the loop's route-probe record (the measurement).
 - Numbering note: **ADR-033 is reserved** by R37's unmerged branch (`round/37-rrsi-adoption`, where the
   RRSI adoption contract lives). This number is taken deliberately so the two branches cannot collide at
   merge time; the gap in `design/decisions/` is a reservation, not an omission.
@@ -21,7 +21,7 @@
 ## Background
 
 **A promoted corpus can name a route that the run it was frozen for cannot serve — and nothing in the
-promotion path checked.** The recipe (`r35-1/FREEZE.md` §D2.0·A2) copies a nominated body **byte for
+promotion path checked.** The recipe (the loop's freeze note §D2.0·A2) copies a nominated body **byte for
 byte** (step 6) and then writes the signed manifest (step 7). The bytes come from the **auto** layer,
 whose composer writes the model string that matches **that layer's own mock-only base**:
 
@@ -31,7 +31,7 @@ whose composer writes the model string that matches **that layer's own mock-only
 - `sources/__init__.py`'s composing template — `model = f"deepseek-{protocol}/deepseek-v4-pro"`, with the
   comment that the model names the provider whose wire matches the protocol.
 
-The **signed** tier's live run declares a different namespace by contract: `autowork/harness/live-base.yaml`
+The **signed** tier's live run declares a different namespace by contract: the loop live-base config
 (a dedicated declaration of what is being measured, not the deployed onboarding config — ARM-3.3.2 rev 3)
 declares **provider `deepseek`** (one entry, three wires) and the alias **`coding-fast`**, and nothing
 else. The router's route resolution (`crates/router-proxy/src/forward.rs`'s `resolve_route`, the single
@@ -39,7 +39,7 @@ owner on both media) consults the alias map, then the literal `provider/model` s
 wire-suffixed provider form**.
 
 **Measured, not argued.** The first freeze of the L2 exercise corpus
-(`autowork/corpus/l2-composed-pair-2026-09-24`, commit `a25b493`) promoted the nomination's bytes verbatim.
+(the recorded L2-composed pair, commit `a25b493`) promoted the nomination's bytes verbatim.
 R38-1's money-free, loopback-only pre-flight probe (`harness/r38-1/receipts/route-probe.json`) measured:
 
 | body | answer |
@@ -53,14 +53,14 @@ declared. And the repair could not be an edit: an item row's bytes are an input 
 a corrected body is a **new freeze** (COR-2.3/COR-2.4: refuse, do not repair), which is a human act under
 AGENTS 9 / ADR-012 and the row-11 policy.
 
-**Why the existing tripwires were silent.** `harness.corpus verify` (§11.3 step 3) validates the manifest
+**Why the existing tripwires were silent.** `The loop corpus tool verify` (§11.3 step 3) validates the manifest
 against the bodies — schema, `created_by`, per-item sha256, `item_count`, the pair block — and the auto
 layer's scorer had run the suite against its **own** mock base, where the namespace resolves and the suite
 scored 9/9 discriminative. Both are green, and both are green about **different bases**. Nothing compared
 the body's route against the base the run declares.
 
-**The finding this ADR remedies.** The card that stopped (`R38-1`, `t_805170d7`) registered it as
-**R38-1-F1** in `autowork/harness/r38-1/EVIDENCE.md` §6 — blocking for the round's third limb, owner the
+**The finding this ADR remedies.** The card that stopped (R38-1) registered it as
+**R38-1-F1** in the loop's evidence record §6 — blocking for the round's third limb, owner the
 human (freeze repair, delegated) or the operator (`live-base.yaml`) — and closed with a process note that
 proposed, in one line, the step D2 now makes mandatory: *"every item's `model` resolves under the intended
 live `base_config`"*. That note is the ancestry of this decision; D1–D5 are its executable form.
@@ -70,20 +70,20 @@ live `base_config`"*. That note is the ancestry of this decision; D1–D5 are it
 namespace reconciled to the declared live base, and **(b)** give the promotion path a step that refuses an
 unreconciled body. (a) was executed as a **delegated freeze** — the owner authorized, the orchestrator ran
 HAND-10 §11.3's steps, the disclosure is in the corpus's own FREEZE DISCLOSURE block, and the precedent is
-R23-F6; receipts in `autowork/harness/r38-freeze/`). This ADR is (b)'s WHY.
+R23-F6; receipts in the loop's evidence for that decision). This ADR is (b)'s WHY.
 
 ## Decision
 
 ### D1. The gate, its command, and the rules it mirrors
 
-`harness.corpus_route_check` refuses a corpus whose item bodies name a route the declared base config
+the loop route check refuses a corpus whose item bodies name a route the declared base config
 cannot serve. It mirrors the router's own two rules **and no others** — `aliases[model]` (whose target's
 provider and model must themselves be declared, the load-time rule), then the literal `provider/model`
 form — and it reports the refusal in the router's own words (`unknown provider '…'`, `unknown model '…'
 on provider '…'`), so a reader can compare the gate's verdict with the answer the router would give.
 
 - **It refuses; it never repairs.** A failing corpus is not frozen as it is. No body is rewritten by the
-  tool, and nothing is written under `autowork/corpus/` (COR-2.4).
+  tool, and nothing is written under the corpus (COR-2.4).
 - **It binds both artifacts by sha256** — the base config and the corpus manifest — so a green card names
   the exact pair it read.
 - **Exit codes follow FAIL-6**: `0` every body resolves; `2` at least one refusal.
@@ -92,16 +92,12 @@ on provider '…'`), so a reader can compare the gate's verdict with the answer 
 
 ### D2. One new step in the promotion path, and its owner
 
-`autowork/work-mode.md` §"Promoting an auto-layer nomination into the signed tier" adds the step between
+the loop execution model §"Promoting an auto-layer nomination into the signed tier" adds the step between
 the body copy (recipe step 6) and the manifest write (step 7):
 
-```
-cd autowork && uv run python -m harness.corpus_route_check \
-    --corpus ../autowork/corpus/<corpus-id> \
-    --base-config ../autowork/harness/live-base.yaml
-```
+the loop's route check, run over the nomination's corpus against the declared base config.
 
-**Owner: the card that owns the promotion** — the same card that owns `autowork/corpus-auto/**` and prints
+**Owner: the card that owns the promotion** — the same card that owns the auto-corpus tree and prints
 the freeze commands (§D2.0·A2 step 1–5's owner). It runs the gate **before** it hands the bodies to the
 human's freeze, so a human is never asked to freeze a corpus that cannot run. The freeze itself stays the
 human's act; this step moves no authority.
@@ -125,7 +121,7 @@ When the gate refuses, exactly two acts are legitimate, and both are visible:
 target lives under `input`. So a byte-level rewrite of that one scalar does not move what the corpus
 measures — and the freeze must **assert** that mechanically rather than assume it: the rewrite receipt
 records, per item, that the prefix and suffix are byte-identical and that the two bodies' JSON is identical
-except for `model` (`autowork/harness/r38-freeze/nomination-diff.json`).
+except for `model` (the loop's nomination diff).
 
 ### D4. What the gate is not
 
@@ -147,7 +143,7 @@ refuses a corpus that demonstrably ran, the gate is wrong about the world and th
 *Not taken here.* It is the more thorough repair — it removes the mismatch instead of gating it — but it
 moves **every** auto suite's bodies and every suite digest, and the mock-only base is what the auto scorer
 scores against; that is a change to the auto layer's own artifact set, and it belongs in the round that
-owns `autowork/corpus-auto/**` and can re-measure the suites. Registered as an open candidate (owner
+owns the auto-corpus tree and can re-measure the suites. Registered as an open candidate (owner
 `harness-conv`) for the round close-out to carry; this ADR deliberately does not take it.
 
 **(b) Make `live-base.yaml` carry the auto layer's provider names by default.** *Refused as the default.* It
@@ -181,3 +177,14 @@ happen to run is not a gate.
   wire. It closes exactly one class: *a promoted body whose route the declared base does not declare* — the
   class that cost this repository one authorized live invocation it could not spend, and one freeze it had
   to re-cut.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

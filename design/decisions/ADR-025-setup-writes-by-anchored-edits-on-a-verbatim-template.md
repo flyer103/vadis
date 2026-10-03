@@ -12,7 +12,7 @@
   §4.10, **§4.11** and **§4.12** (the contracts this ADR justifies: the writer, and where the file it writes is
   found); DESIGN §12.1, §12.5, §12.8 (CONF-67…70 and **CONF-79**), §12.9 (the new **GAP-Q21**, **Q22**, **Q23**),
   §12.10.2, §12.11, **§12.14** (the landing); the round's survey
-  `autowork/survey/2026-09-22_config-setup-usability.md` (hermes-agent / opencode / codex / `docker init`,
+  the survey record (2026-09-22) — hermes-agent / opencode / codex / `docker init`,
   measured locally, every claim sourced).
 
 *(The number R21 declined to spend. §12.8's R21 close-out note records that R21 needed no ADR and therefore
@@ -322,3 +322,14 @@ restoring `--config`'s `required = true`, after which the serving path refuses a
 and no stored data moves, because the rule never wrote anything (only the *writer* creates, and only the file the
 operator named). The asymmetry to keep in mind: a config a user already put in `~/.config/router/` does not move
 if the default is reverted, so such a revert is a flag's strictness, never a migration.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

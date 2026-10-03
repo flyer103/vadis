@@ -98,7 +98,7 @@ absence from a plugin is forced:
 |---|---|---|
 | **P1 `byte-fidelity`** — the client's bytes and ADR-015's exactly **two** span mutations | the only API that can touch client bytes must be owned by the component that answers for the invariant. A plugin holding it could return any body, and **no test could distinguish that from a legitimate translation** — which is precisely the capability this ADR's owner decision declines to ship | AGENTS 1; ADR-007; ADR-015; §13.1 P1 (`body.rs:29,56,90,197`; `forward.rs:223,528`; `stream_forward.rs:365`) |
 | **P2 `inbound-admission`** | it runs **above** the pipeline (one guard, headers only, and a refusal leaves exactly one pre-pipeline record). A component mounted *inside* the pipeline cannot be the thing that admits to it | spec §4.7, §9.1; §12.11; §13.1 P2 (`auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:314,344-375`) |
-| **P5 `decision-record`** | it is the **only** product → autowork channel (constraint 3). If a plugin could write the record, the observation boundary becomes pluggable, and every gate below it becomes negotiable | ADR-005; spec §6, §7; §13.1 P5 (`trace.rs:22,27,88,311`; writer `accounting.rs:358`; sink `trace_sink.rs:40,73`) |
+| **P5 `decision-record`** | it is the **only** product → analysis-loop channel (constraint 3). If a plugin could write the record, the observation boundary becomes pluggable, and every gate below it becomes negotiable | ADR-005; spec §6, §7; §13.1 P5 (`trace.rs:22,27,88,311`; writer `accounting.rs:358`; sink `trace_sink.rs:40,73`) |
 | **P7 `state-truth`** | intent-before-effect ordering and "projections are never the truth" are **write-path** properties, not features: a plugin that could write state directly could reorder them silently | ADR-009; ADR-010; spec §4.5; §13.1 P7 (`store.rs:26,180,361,412,442`) |
 | **P8 `accounting`** — the integer `Nano` amounts **and the `verified`/`inferred` label** | constraint 4 is a **labelling** invariant: gates read `verified` only. Prices and quota data may be plugin-hosted (they are data, ADR-021/§12.13); the **label** may not be, or a plugin could mint a `verified` saving nobody measured | ADR-006; ADR-018; spec §7, §4.0, §4.8; §13.1 P8 (`cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297`) |
 | **P9 `plugin-runtime`** | the thing that loads plugins cannot itself be loaded — and if it could, unload order and failure isolation would be the loaded thing's promises about itself | ADR-002; §4; §12.2; §13.1 P9 (**none**; `contract-only`) |
@@ -292,7 +292,7 @@ must cite the row and get it settled first.
   on. If it is ever built it must be a plugin, **off by default, disclosed in the trace, and excluded
   from every gate**; the decision is *"is parity on a feature chart worth diluting the one axis where
   we are alone"*, not *"is it hard"*.
-- **`STATE.md` rows 14–16** (R40's registrations) and the standing owner rows carried there.
+- **the loop state record rows 14–16** (R40's registrations) and the standing owner rows carried there.
 
 ## References
 
@@ -307,3 +307,14 @@ must cite the row and get it settled first.
   the candidate walk), ADR-029 (the latency baseline), ADR-012 (the mutable scope)
 - `CONF-15`, `CONF-16` (§12.8's cache rows, the second landed by R41-0), `CONF-60`…`CONF-63`
   (the transform chain's cases)
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

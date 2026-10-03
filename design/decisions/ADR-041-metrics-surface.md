@@ -7,15 +7,14 @@
   metric contract (spec §4.16), the §9.3 move, the DESIGN landing (§12.21 + §12.8's row/paragraph) and the
   README sites the round's writer card must change. **The amended assertion and the code land together in
   one card** (§2.5), so the tree is never red in between.
-- Authority: the **owner's direction of 2026-09-27, item 2 of four**, relayed to the loop through this
-  round's card `t_87e4b60b`; quoted verbatim in §1.1.
+- Authority: the **owner's direction of 2026-09-27, item 2 of four**, relayed to the loop by the owner's card, quoted verbatim in §1.1.
 - Supersedes (in the narrow sense of §1.2): the W1 dossier's *dropped* item (`w1-dossier.md`, the
   "Candidates considered and dropped" entry) and the competitiveness plan's *park* (`:134`). It supersedes
   **nothing else** — §1.3 enumerates what it does **not** license.
 - Related: `AGENTS.md` constraints **1** (the byte boundary — the client's bytes and exactly two permitted
   mutations), **2** (content determinism), **3** (the observation boundary), **4** (no unverified savings
   presented as measured), **5** (no fabricated prices), **8** (docs before code), **9** (**the measurement
-  is not part of the search space**); ADR-005 (the trace is the only product → autowork channel);
+  is not part of the search space**); ADR-005 (the trace is the only product → analysis-loop channel);
   ADR-006 (integer nano accounting); ADR-012 (the never-mutable paths); ADR-015 (the byte mutations);
   ADR-022/023 (the walk's eligibility and its refusals); ADR-040 D2/D5 (the capture-once rule; the keys a
   reload refuses); spec §4.1 (`:370`), §4.7 (`:675`), §4.8 (`:734`), §4.13 (`:1338`), §4.15 (`:1482`),
@@ -27,7 +26,7 @@
   from memory: §2.3.
 - Numbering note (observation, not a decision): the ADR register's newest landed entry is `ADR-040`;
   **`ADR-041` and `ADR-042` are unused** (`design/decisions/ADR-043-ingress-three-verdicts.md:22-24`
-  records the same observation, and `autowork/harness/r47-0b/EVIDENCE.md:44` the 40-ADR count behind it).
+  records the same observation, and the loop's evidence record the 40-ADR count behind it).
   This ADR carries the number the round's cards fixed for it.
 - **Line-number convention (so every `path:line` below can be checked).** Every reference resolves at **this
   branch's HEAD** — the commit that carries this ADR — and where a number is a *measurement of the base*
@@ -38,8 +37,8 @@
   :2433-2439`); in `design/DESIGN.md`, §12.8's two new rows and the `CONF-87` allocation paragraph move
   §12.11 by **+28** (`2671 → 2699`) and §12.21's insertion moves §13.1 by **+126** (`3772 → 3898`). The
   remap was applied mechanically and each pair's replacement count is in
-  `autowork/harness/r50-0/remap-refs.py`'s own output, with every resolved line printed in
-  `autowork/harness/r50-0/anchors.txt` beside the claim it supports.
+  the loop's remap-refs script's own output, with every resolved line printed in
+  the loop's anchors record beside the claim it supports.
 
 ---
 
@@ -47,8 +46,8 @@
 
 ### 1.1 The owner's authorisation, verbatim and dated
 
-**The owner's direction of 2026-09-27 (item 2 of four)**, relayed to the loop by this round's card
-`t_87e4b60b` (card body, "Round R50", first paragraph), verbatim:
+**The owner's direction of 2026-09-27 (item 2 of four)**, relayed to the loop by the owner's card
+(card body, "Round R50", first paragraph), verbatim:
 
 > *"authorised: amend `CONF-46` and `spec` §9.3, and implement `/metrics` to contract"*
 
@@ -70,28 +69,28 @@ Three facts about that sentence are part of the record, and none of them may be 
 ### 1.2 What the ruling supersedes — and what the prior artifacts actually said
 
 Every claim in this table was re-read at this card's HEAD (`ac44181`) or at the path named; the commands and
-their raw output are in `autowork/harness/r50-0/anchors.txt`.
+their raw output are in the loop's anchors record.
 
 | Artifact | What it says, verbatim or closely | Superseded? |
 |---|---|---|
 | `<an out-of-tree kanban attachment: the W1 reconciled dossier, w1-dossier.md>` (**the W1 reconciled dossier**, an attachment outside the repo), "Candidates considered and dropped (named, with the reason)": *"**Serve `router replay` / `GET /metrics` (gap probe G2) — DROPPED from this wave's pool.** ADR-sized (simulation seam + plugin-config surface), the axis (A5 observability) is crowded and sold by everyone …, and cheap-to-prove fails: the one number it would mint is obtainable via the existing harness for ≤ $0.01 (Candidate 2) without the ADR. It stays the right answer to *"who owns the product-side verified path"* — **an owner direction decision, registered as open human row, not a D-pool item this wave can justify.**" | **Yes — and the dossier said so itself.** The entry drops the surface *from one wave's pool* on **budget** grounds (ADR-sized, crowded axis, no number to mint), and in the same breath refers it to the owner. The owner's ruling is that referral being taken. Nothing in the entry measured the surface's *value*; nothing here is contradicted. |
 | `<an out-of-tree plan document, line 134>` | *"Semantic cache · MCP / A2A / gRPC ingress · dashboards / `/metrics` before v0.2 · SDKs · …"* — under the heading at `:132`, **"## Not doing (write it down so the loop does not drift into it)"** | **Yes, for the `/metrics` clause only.** It is a *filing* — a "so the loop does not drift" list, not a measurement and not a contract. The other entries in that line stay filed and untouched (MCP/A2A/gRPC were separately declined by ADR-043; the semantic cache is R51's question; SDKs and provider breadth are not this ADR's business). |
-| the cut-spec card `t_1d86acb2`'s reopening rule (card body), verbatim: *"不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**"* — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | The rule is scoped to **the dossier's own four dropped items** (`ADR-043:29-31` names them: "`router replay`/`/metrics`", cache-breakpoint auto-injection, multi-tenancy/per-key identity, "Be Rust"/benchmark-chasing) | **The rule *does* govern this item — `/metrics` is one of the four — and the owner's ruling supersedes it for this item.** The rule is the owner's own standing instruction to the *loop*; an owner act is not bound by it. This is the honest reading and it is written down here so no reader later mistakes the event for a loop reopening a rejected item: **no round reopened anything**; the owner did, and this round carries it. Note also what the rule's *purpose* was — do not spend a round on a filing with no measurement behind it — which is exactly why the act had to be the owner's. |
+| the cut-spec card's reopening rule (card body), verbatim: *"不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**"* — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | The rule is scoped to **the dossier's own four dropped items** (`ADR-043:29-31` names them: "`router replay`/`/metrics`", cache-breakpoint auto-injection, multi-tenancy/per-key identity, "Be Rust"/benchmark-chasing) | **The rule *does* govern this item — `/metrics` is one of the four — and the owner's ruling supersedes it for this item.** The rule is the owner's own standing instruction to the *loop*; an owner act is not bound by it. This is the honest reading and it is written down here so no reader later mistakes the event for a loop reopening a rejected item: **no round reopened anything**; the owner did, and this round carries it. Note also what the rule's *purpose* was — do not spend a round on a filing with no measurement behind it — which is exactly why the act had to be the owner's. |
 | `docs/spec.md:2304-2314` at the base `ac44181` (§9.3's "not served" entry, the clause **this round removes**; at this HEAD the entry no longer exists and §9.3's heading is `:2414`) | *"…and `GET /metrics` (Prometheus) are **planned, not served**"*, with the sub-bullet at `:2310-2314` (*"not registered: the route answers a bare `404` … its metric names, labels and units are frozen by the change that implements it"*) | **Yes, the list entry moves** — that is half the authorisation. The sub-bullet's *expectation* ("frozen by the change that implements it") is precisely what §3 discharges. |
 | `docs/spec.md:2433-2434` (§9.3's rule) | *"a surface's shape is frozen by the change that implements it, and a documented-but-unreachable surface is a defect"* | **No.** The ruling *is* that rule being obeyed: the surface stops being documented-but-unreachable because a change implements it and freezes its shape in the same round. |
 | `tests/conformance/tests/conf_46_metrics_is_bare_404.rs` (its assertion, `:104-122`) | a bare `404`, no §8 body, no `X-Router-Request-Id`, with a `/health` 200 liveness control | **Yes, the assertion is replaced** (§2.2) — a frozen assertion, hence an owner act, hence this ADR. |
-| `autowork/STATE.md:910` (R6-G2's row) | spec §9.3's two claims were *"witnessed by hand but **not** in the suite"*: `GET /metrics` → **404** with an empty body and no `content-type`; the parser's refusals → rc=2 | **Historic.** R6-G2 turned the hand-witness into `CONF-46`/`CONF-47`; this ADR re-points one of the two at its new truth. `CONF-47` (the parser's refusals) is **not touched** — `router replay` / `router trace tail` still do not exist. |
+| the loop state record (R6-G2's row) | spec §9.3's two claims were *"witnessed by hand but **not** in the suite"*: `GET /metrics` → **404** with an empty body and no `content-type`; the parser's refusals → rc=2 | **Historic.** R6-G2 turned the hand-witness into `CONF-46`/`CONF-47`; this ADR re-points one of the two at its new truth. `CONF-47` (the parser's refusals) is **not touched** — `router replay` / `router trace tail` still do not exist. |
 
 **One more delta the ruling does not close, stated here because it was registered as "the next round's
-decision"**: `autowork/progress/2026-09-27_12-14-42_R49-readme.md:231` (`R49-2-F6`) records that the bare
+decision"**: the loop's tree (`R49-2-F6`) records that the bare
 universal *"one DecisionRecord per request"* (`docs/spec.md:1694`, §6's own heading; the same sentence at
 `:2436`) is over-general — an abandoned-mid-stream request leaves no record at all (README's own carve-out at
 `:341-344`, DESIGN §12.10.3 R5). That finding's standing instruction is *"no card may edit the contract for
 this; it is the next contract round's decision"*, and its carriers are ≥ 4 (spec §6's heading, spec §9.3's
-closing sentence, `autowork/harness/r49-0/CLAIM-SOURCES.md` rows C3/C40 — another card's artifact, outside
+closing sentence, the loop's claim-sources record rows C3/C40 — another card's artifact, outside
 every R50 write set — and DESIGN's repeated phrase). **This card does not edit it**: a partial narrowing is
 the same class of defect as the one being closed (R49's own completeness lesson,
-`progress/2026-09-27_12-14-42_R49-readme.md:150-160`), and the atomic edit needs a card that owns all four
+the round record), and the atomic edit needs a card that owns all four
 carriers. Registered in §8 as `R50-0-F1` with the recommended home.
 
 ### 1.3 What the authorisation does **not** license
@@ -99,7 +98,7 @@ carriers. Registered in §8 as `R50-0-F1` with the recommended home.
 The sentence authorises **one surface** and the two documents that describe it. By its own terms it does not
 reach:
 
-- **any other route.** Not `/mcp` (STATE.md row 20's question, still the owner's), not a dashboard, not
+- **any other route.** Not `/mcp` (the loop state record row 20's question, still the owner's), not a dashboard, not
   `router replay`, not `router trace tail`, not a second metrics path (`/metrics/v1`, a query-parameterised
   variant, a per-window endpoint). What is registered today is exactly what `serve` assembles at
   `crates/router-cli/src/lib.rs:891-910` — `health_router`'s `/health` (`:584-591`) plus the three
@@ -167,7 +166,7 @@ The frozen obligations the old case carried are **conserved limb for limb** — 
 |---|---|
 | the tree's case files | `ls tests/conformance/tests/*.rs \| wc -l` → **76**; the ids present are `01–47, 53–66, 71–78, 80–86` |
 | the register's occupancy (DESIGN §12.8's allocation paragraphs) | the last of them (**R43/CONF-85**) closes with *"the spent ID set is `01–47, 53–70, 71–85`; `48–51` stay reserved exactly as the paragraphs above leave them; the next free ID is **`CONF-86`**"* (`design/DESIGN.md:1466-1468`; `:1448-1465` at the base `ac44181`). Its `53–70` is a **stale slip the paragraphs above contradict** — `CONF-52` **is** spent, with its witness deliberately a `compile_fail` doctest in `router-core` rather than a case file (`design/DESIGN.md:1142`, `:1208`) — so the register's own accumulated spent set at this HEAD is `01–47`, `52–70` (67–70 file-less, R22), `71–85`; reserved `48–51` |
-| the tree's maximum | **86** — a file for it exists (`conf_86_setup_check_roster_fact.rs`) although §12.8 has no row for it (**`R46-4-F2`**, `progress/2026-09-26_19-57-19_R46-overdue-register.md:204`; open, "next docs round") |
+| the tree's maximum | **86** — a file for it exists (`conf_86_setup_check_roster_fact.rs`) although §12.8 has no row for it (**`R46-4-F2`**, the round record; open, "next docs round") |
 | therefore the lowest free id | **`CONF-87`** — the first id above both the tree's maximum and the register's own (stale) next-free claim. Taken by this card, on the file `tests/conformance/tests/conf_87_metrics_single_owner.rs`. |
 
 The id is **spent**: not renumbered, not reused (§12.8's closing rule, `design/DESIGN.md:1496-1498`;
@@ -376,7 +375,7 @@ class, whose `protocol.protocol_in` is `"metrics"`: *the endpoint's own protocol
 The landed type already permits it: `ProtocolRec.protocol_in` is a `String`
 (`crates/router-core/src/trace.rs:87`), and **no consumer branches on its value** — measured: a grep of
 `crates/**` and `tests/conformance/tests/**` for `protocol_in` finds writes and per-case literal assertions,
-never a match on the three wire words (`autowork/harness/r50-0/anchors.txt`, section "protocol_in
+never a match on the three wire words (the loop's anchors record, section "protocol_in
 consumers"). So the vocabulary gains one word and no code path gains an arm. Consequences, stated:
 
 - `router stats` counts a refused scrape in `requests`/`failed` and splits it out as `unauthorized`
@@ -492,7 +491,7 @@ A formatter that cannot see a record cannot derive a second value from one; the 
 rendering directly (`CONF-41`/`CONF-56`'s exposed-builder precedent) *and* the served bytes
 (`CONF-87`). Two further requirements ride with it: **the metrics path may not read the store** (it holds
 no `Query`, and §3.10 removes the only figure that would need one — `AppState.store` is not touched), and
-**it may not read anything under `autowork/`** (§6).
+**it may not read anything under the loop's tree** (§6).
 
 **A shared-read change the live surface forces — the torn tail.** `read_window_records` today **errors** on
 any line that is not a parseable trace record (`crates/router-cli/src/stats.rs:439-440`, *"not a trace
@@ -553,15 +552,15 @@ one of the four: the surface is now served, and the owner said so.
   `AppState.trace_dir` carries (`crates/router-proxy/src/health.rs:20-22`). `trace.dir` is in ADR-040 D5's
   **refused set** (a reload may not move it, spec §4.15's `:1507-1512`), so the surface needs no revision
   coupling and cannot be pointed at a second directory by a config change. **Nothing else is read**: not the
-  store (§3.10), not the config beyond the plan family, not any path under `autowork/`.
+  store (§3.10), not the config beyond the plan family, not any path under the loop's tree.
 - **The direction that must not be opened**: the exposition is a **derived view for operators**. It is not a
-  product → autowork channel (ADR-005: the trace JSONL is that channel and only that), it may not be read by
+  product → analysis-loop channel (ADR-005: the trace JSONL is that channel and only that), it may not be read by
   the harness as evidence, and no gate, corpus or acceptance column may cite it — the gates are the frozen
   measurement (constraint 9 / ADR-012) and this surface is *downstream* of the same records the gates read.
   A future round that wants to consume it must say which measurement it replaces, not merely that it is
   available.
-- **The reverse direction is equally closed**: the serving path reads no `autowork/` file, and this surface
-  adds no exception to that. A `grep` of the metrics path for `autowork` must stay 0 (its read site is the
+- **The reverse direction is equally closed**: the serving path reads no file under the loop's tree, and this surface
+  adds no exception to that. A `grep` of the metrics path for a path into the loop's tree must stay 0 (its read site is the
   config's own directory); the DESIGN landing states it (§12.21) so the next reader sees the rule where the
   code lives.
 
@@ -602,10 +601,10 @@ one of the four: the surface is now served, and the owner said so.
 
 | id | item | owner | due |
 |---|---|---|---|
-| `R50-0-F1` | the `R49-2-F1`/`R49-2-F6` class: the over-general universal *"one decision record per request"* still stands at `docs/spec.md:1694` (§6's heading) and `:2436` (§9.3's close), and `autowork/harness/r49-0/CLAIM-SOURCES.md` rows C3/C40 carry its wording — **not repaired here** (§1.2), because a partial narrowing is the same defect class and the atomic edit needs one card that owns all four carriers (the row file is outside every R50 write set). Recommended home: one contract-wording card. | architect (the contract's next owner) | open |
+| `R50-0-F1` | the `R49-2-F1`/`R49-2-F6` class: the over-general universal *"one decision record per request"* still stands at `docs/spec.md:1694` (§6's heading) and `:2436` (§9.3's close), and the loop's claim-sources record rows C3/C40 carry its wording — **not repaired here** (§1.2), because a partial narrowing is the same defect class and the atomic edit needs one card that owns all four carriers (the row file is outside every R50 write set). Recommended home: one contract-wording card. | architect (the contract's next owner) | open |
 | `R50-0-F2` | the unknown-outcome figure is absent from `/metrics` by design (§3.10); the widening (a windowed, non-scanning store read) needs a store-contract owner | backend-coder + the store contract's owner | open — with a trigger |
 | `R50-0-F3` | the metrics window is a constant (§3.3); a configurable window is the registered widening, with its own key, read site, reload answer and case | the next round that owns `config.example.yaml` | open — with a trigger |
-| `R50-0-F4` | the `conf_46` **rename** moves a case file name. Re-measured at HEAD with `git grep --untracked -n`, because the sentence this row first carried (`grep -rn 'conf_46_metrics_is_bare_404' .`, "finds `DESIGN §12.8`'s row only") is **false and was not a measurement**: a recursive filesystem grep over this repo also walks `target/`, and what it returns is not the tree. The real set is **74 files / 85 lines outside this card's own evidence** (the command in `measurements.txt` carries the `':!autowork/harness/r50-0'` exclusion, because the receipt that prints this number is a file in that directory and a count taken while it is being written is a self-reference rather than a measurement; the excluded half is measured on its own below). It splits: **must move** — `design/DESIGN.md:1005`, §12.8's `CONF-46` row, which §2.4 rewrites to carry both names, and *nothing else* (R50-1's rename owes no other document an edit). **Must not move**, each because it quotes or seals an event in which the file really carried that name: `.github/workflows/ci.yml:65` — a **live** file: the free-disk comment quotes the targets run 36299293578 died on, and rewriting the quotation would make the workflow assert an event that did not happen (`ci.yml` is R53's file, outside every R50 write set); this ADR's own lines (a record that authorises a rename must name both names); R49's fourteen, including the two audit rigs that `grep` the case **by path** (`r49-0/anchors.sh:67,250,252`, `r49-0b/my-anchors.sh:67,250,252`) and `r49-0/CLAIM-SOURCES.md:160,359`; three round records; fifty-four sealed `gates*.log`/`*.out` receipts under `autowork/harness/r2*–r53*`; and this card's **9** evidence files, which the same command reports separately (`git grep --untracked -l … -- autowork/harness/r50-0` → `9`) because they seal the pre-rename state and must outlive the rename as they are. What is **not** in the set, and is the part that would have bitten: no `book/` page, no manifest (`tests/conformance/Cargo.toml` names no case) and no live harness entry point | R50-1 — nothing owed beyond the rename itself (one re-scoped verdict, no edit) | due R50-1 |
+| `R50-0-F4` | the `conf_46` **rename** moves a case file name. Re-measured at HEAD with `git grep --untracked -n`, because the sentence this row first carried (`grep -rn 'conf_46_metrics_is_bare_404' .`, "finds `DESIGN §12.8`'s row only") is **false and was not a measurement**: a recursive filesystem grep over this repo also walks `target/`, and what it returns is not the tree. The real set is **74 files / 85 lines outside this card's own evidence** (the command in `measurements.txt` carries the `':!The loop's records for that decision'` exclusion, because the receipt that prints this number is a file in that directory and a count taken while it is being written is a self-reference rather than a measurement; the excluded half is measured on its own below). It splits: **must move** — `design/DESIGN.md:1005`, §12.8's `CONF-46` row, which §2.4 rewrites to carry both names, and *nothing else* (R50-1's rename owes no other document an edit). **Must not move**, each because it quotes or seals an event in which the file really carried that name: `.github/workflows/ci.yml:65` — a **live** file: the free-disk comment quotes the targets run 36299293578 died on, and rewriting the quotation would make the workflow assert an event that did not happen (`ci.yml` is R53's file, outside every R50 write set); this ADR's own lines (a record that authorises a rename must name both names); R49's fourteen, including the two audit rigs that `grep` the case **by path** (the loop's anchors script, the loop's anchors script) and the loop's claim-sources record; three round records; fifty-four sealed `gates*.log`/`*.out` receipts under the loop's records; and this card's **9** evidence files, which the same command reports separately (`git grep --untracked -l … -- the loop's records for that decision` → `9`) because they seal the pre-rename state and must outlive the rename as they are. What is **not** in the set, and is the part that would have bitten: no `book/` page, no manifest (`tests/conformance/Cargo.toml` names no case) and no live harness entry point | R50-1 — nothing owed beyond the rename itself (one re-scoped verdict, no edit) | due R50-1 |
 | `R50-0-F5` | **`DESIGN §12.11` contradicts `router-cli/src/lib.rs:579-583` on the key-absent case** — the section still reads *"When `server.auth_token_env` is absent, **no layer is installed** and the assembled router is byte-for-byte the assembly v0.1 had before this key existed"*, while the landed wiring (R47-2) installs the layer **always** and gives the key-absent revision a gate that admits everything, precisely so the two revisions have one code path. `R50-0` noticed it while adding this round's bullet directly above that sentence and **did not edit it** (the sentence is not this card's subject and the fix is a sentence in a file another round owns); the evidence is `crates/router-cli/src/lib.rs:579-583` against `design/DESIGN.md` §12.11's bullet list | the next round that owns `design/DESIGN.md` §12.11 (the auth landing; `R47-2`/`R48`'s truth-repair class) | next §12.11-touching card |
 | `R50-0-N1` | `AGENTS.md` constraint 2's discipline is what forbids the timestamp/uptime in the body (§3.2); a future "add `router_uptime_seconds`" idea must be recorded as a *new* contract, not a convenience | — (note) | n/a |
 | `R50-0-N2` | cost: this card is docs-only, offline, `$0.00` — no provider dialled, no credential read | — (note) | n/a |
@@ -630,11 +629,11 @@ excludes it). The writer's touch, four edits, all in `README.md`:
    reader needs: it **is** served; it answers **§9.2's own figures** over a frozen 900-second window; and it
    sits **behind the same token guard** as the protocol endpoints (the `/health` exemption is `/health`'s
    alone).
-3. **`R49-2-F1` — `README.md:272`, *"one decision record per request"*** (`progress/2026-09-27_12-14-42_R49-readme.md:226`).
+3. **`R49-2-F1` — `README.md:272`, *"one decision record per request"*** (the round record).
    Class: an over-general universal whose domain is "the requests the gateway served", while the file
    carves out the abandoned-mid-stream class at `:341-344`. Proposed clause (the register's own):
    *"one decision record per **completed** request"*. **Coupling the writer must know**: that sentence is
-   claim row **C40**'s own wording (`autowork/harness/r49-0/CLAIM-SOURCES.md:204`, anchored at
+   claim row **C40**'s own wording (the loop's claim-sources record, anchored at
    `docs/spec.md:2436`), so narrowing it in the README alone **drifts a claim row** — the register's own
    "two owners" caveat. The row and the spec sentence are outside every R50 write set (§1.2/`R50-0-F1`), so
    this card's ruled form is: **write the narrowed clause and register the drift**, or leave the sentence and
@@ -705,3 +704,14 @@ Two internal planning-artifact paths (an out-of-tree kanban attachment and an
 out-of-tree plan document) were replaced with neutral placeholders. The quoted
 verdicts, the supersession analysis and the decision are unchanged; only the
 machine-local path prefixes were redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

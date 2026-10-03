@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: spec §1 (non-goals) / §4.5 (state) / §6 (observation); DESIGN §8 (state and persistence), §12.1 (crate list), §12.5 (config types); ADR-005 (trace as the only product↔autowork interface); ADR-010 (the event log is the state truth)
+- Related: spec §1 (non-goals) / §4.5 (state) / §6 (observation); DESIGN §8 (state and persistence), §12.1 (crate list), §12.5 (config types); ADR-005 (trace as the only product↔analysis-loop interface); ADR-010 (the event log is the state truth)
 
 ## Background
 
@@ -163,3 +163,14 @@ database, 410-byte `events` rows and the per-statement timing loop described her
   The two records are joined by `request_id` + `event_id` (spec §4.5).
 - Because the DB is a new artifact in the workspace, the docs-first rule applies to it: this ADR and spec
   §4.5 are the contract, and the implementation follows them rather than defining them.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-03 (round R60's contract card, `R60-1`; the owner's authorization recorded in
-  `autowork/STATE.md`'s paragraph *\"Refreshed 2026-10-03 11:19\"*, itself committed on the round branch
+  the loop state record's paragraph *\"Refreshed 2026-10-03 11:19\"*, itself committed on the round branch
   **before** any card of the round was cut)
 - Kind: **a product-behaviour contract, docs-only in this card.** It adds no gate, changes no threshold, moves
   no corpus, touches no conformance assertion, and changes no product byte *here* — `R60-2` implements it and
@@ -217,12 +217,12 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
   `crates/router-cli/src/setup/sections.rs:314-328`.
 - The resolution rule the named path obeys: `crates/router-cli/src/config_load.rs:219`, cited by spec §4.1
   and restated in §4.11/§4.12.
-- The measured defect: `autowork/STATE.md`'s *\"Refreshed 2026-10-03 11:19\"* paragraph (the opener's
+- The measured defect: the loop state record's *\"Refreshed 2026-10-03 11:19\"* paragraph (the opener's
   reproduction, the cause, and the collision surface), which this card is bound to and by which its own body
   is overridden where the two disagree.
-- The round's own probes (this card, `$0.00`, offline, loopback only): `autowork/harness/r60-1/base-check.txt`
+- The round's own probes (this card, `$0.00`, offline, loopback only): the loop base check
   (the shipped example still loads; 9 names, all absent under `env -i`, exit 4) and
-  `autowork/harness/r60-1/base-surfaces.txt` (what `--dry-run` / `--print` / `--check --json` say today).
+  the loop base surfaces (what `--dry-run` / `--print` / `--check --json` say today).
 
 ## What this ADR does not decide
 
@@ -241,3 +241,14 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
 The owner home path inside the quoted rule-file warning log block was
 replaced with `<home>`. The logged behaviour and the decision are unchanged; only
 the machine-local path prefix was redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

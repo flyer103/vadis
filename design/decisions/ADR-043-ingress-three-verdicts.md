@@ -7,8 +7,8 @@
   deliverable is **one verdict per question**, the constraint verdict per direction, the cheapest
   falsifiable experiment each adopted direction would need, and the decisions this round may **not**
   take.
-- Decided against: `autowork/survey/2026-09-27_ingress-mcp-a2a-grpc.md` at **`786eb40`** (the survey),
-  and its independent citation audit `autowork/harness/r52-0b/REPORT.md` at **`8bff7ca`** (verdict
+- Decided against: the survey record (2026-09-27) at **`786eb40`** (the survey),
+  and its independent citation audit the loop's report at **`8bff7ca`** (verdict
   `PASS-with-findings`; 43 citations re-walked), both on `round/52-ingress-evaluation`.
 - Related: `AGENTS.md` constraints 1 (byte boundary — the client's original bytes and **exactly two**
   permitted mutations), 2 (content determinism), 3 (the observation boundary), 5 (no fabricated
@@ -18,9 +18,9 @@
   `AGENTS.md` constraint 1, "which no round may make on its own"); ADR-017 (the shape this ADR
   follows for an evaluation); spec §1 (`:6`, the v0.1 non-goals), §2 (`:24`, the protocol contract),
   §9.3 (`:2302` and its rule at `:2316-2317`); `book/protocols.md:54-61`; `book/roadmap.md:22`;
-  `autowork/STATE.md` §Waiting on human adjudication (rows 1, 17, 18).
+  the loop state record §Waiting on human adjudication (rows 1, 17, 18).
 - Numbering note (observation, not a decision): the newest landed ADR is `ADR-040` and **`ADR-041`
-  and `ADR-042` are unused** (`autowork/harness/r47-0b/EVIDENCE.md:44` records the register as holding
+  and `ADR-042` are unused** (the loop's evidence record records the register as holding
   40 ADRs with `ADR-041` free). This ADR carries the number the round's cards fixed for it; the gap is
   flagged here so no reader infers that two ADRs exist that do not.
 
@@ -28,17 +28,17 @@
 
 The owner's direction **of 2026-09-27 (item 4 of four)** asks this question explicitly: *should the
 router speak MCP, A2A or gRPC?* That direction — relayed to the loop through this round's cards
-(`t_1ffcfde6` for the survey, `t_ab048a10` for this ADR) — is the **authority for reopening** the item,
+(the survey's card and this ADR's card) — is the **authority for reopening** the item,
 and it is the only authority this ADR relies on for the act of asking.
 
 What the prior artifacts actually said, verified by this card at `8bff7ca` with its own commands (raw
-output in `autowork/harness/r52-1/REPORT.md` §5):
+output in the loop's report §5):
 
 | Artifact | What it says about this axis | Does the owner's ruling supersede it? |
 |---|---|---|
 | `<an out-of-tree plan document, line 134>` | "Semantic cache · **MCP / A2A / gRPC ingress** · dashboards / `/metrics` before v0.2 · SDKs · …", under the heading at `:132` "## Not doing (write it down so the loop does not drift into it)" | **Yes, for the act of evaluating it.** The entry is a *filing*, not a measurement — nothing behind it measured this axis. The owner's ruling reopens the item for evaluation. It does **not** adopt anything, and it supersedes no other entry in that list. |
 | `<an out-of-tree kanban attachment: the W1 reconciled dossier, w1-dossier.md>` (the W1 reconciled dossier) | **Silent on this axis**: `grep -c -iE 'mcp\|a2a\|grpc\|ingress'` → **0**; `grep -c -i reopen` → **0** | **Nothing to supersede.** The dossier never considered MCP/A2A/gRPC. It *does* drop four neighbouring items ("`router replay`/`/metrics`", "cache-breakpoint auto-injection", "multi-tenancy / per-key identity", "'Be Rust' / benchmark-chasing" — `:180-198`), each with a reason. |
-| the cut-spec card `t_1d86acb2` (card body) | carries the reopening rule the loop operates under, verbatim: "不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**" — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | **No — the rule stands, and by its own terms it is not the rule that governs this item.** It is scoped to the dossier's own four dropped items, and MCP/A2A/gRPC is not among them. |
+| the cut-spec card (card body) | carries the reopening rule the loop operates under, verbatim: "不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**" — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | **No — the rule stands, and by its own terms it is not the rule that governs this item.** It is scoped to the dossier's own four dropped items, and MCP/A2A/gRPC is not among them. |
 
 **The two consequences, stated plainly, because the survey's citation was wrong here and this ADR must
 not repeat it (audit finding **F1**, severe).** The survey attributed to the W1 dossier both a
@@ -88,7 +88,7 @@ HTTP/1 as well as HTTP/2" (`E30`), and the survey's prior-knowledge-h2c sentence
 and the counterexample was found in one search**: Lemonade (AMD's local inference server) ships chat
 completion as a documented MCP tool (`lemonade_chat`) at `POST /mcp`, on a regular API route that
 honours the same API key as its OpenAI-compatible endpoints (evidence:
-`autowork/harness/r52-0b/evidence/falsification-lemonade-mcp.md`). The counterexample carries a
+the loop's falsification record). The counterexample carries a
 distinction — Lemonade is a **single-backend local model server**, not a multi-provider routing
 gateway — but the distinction does not rescue the unbounded sentence. The form this ADR uses, and the
 only form that survives the audit: **of the eleven gateways the survey sampled, none exposes LLM chat
@@ -108,9 +108,9 @@ ADR-012: a constraint amendment or a frozen-surface change is a human decision, 
 | **(a1)** MCP chat-completions-as-tool | **named conflict.** Inbound bytes are MCP JSON-RPC, not the client's LLM request; the reply is a synthesized MCP content block. The proxy cannot forward these bytes and has nothing upstream that speaks MCP | would bite if the mapping were not a pure function — a new mapping must be a translation cell with its own determinism obligation | not engaged (product surface), but the mapping is a serving-path object | **yes — a seventh declared translation cell / a third mutation** | yes, in effect: constraint 1 text | **DECLINED** → §7 **O1** |
 | **(a2)** A2A agent card + task surface | **named conflict**, same shape: task messages in, a synthesized chat completion, task artifacts out — translation, not forwarding | as (a1) | not engaged | **yes** | constraint 1 text | **DECLINED** → §7 **O1** |
 | **(a3)** gRPC / Connect service | **named conflict.** A proto schema *is* a new semantic contract; requests arrive in a shape the proxy must translate. There is also no existing proto to implement: no public LLM provider documents chat over gRPC except Vertex (`E35`, against `E37`'s REST-only references), so the work would be *authoring* a new API | as (a1) | not engaged | **yes** | constraint 1 text | **DECLINED** → §7 **O1** |
-| **(a′)** MCP management-plane facade | **none.** MCP requests never enter the LLM serving path; the facade reads product state as `/health` does (`lib.rs:584-593`) | none (no transform) | **none** (product surface, no autowork involvement) | **no third mutation**; but **yes, a new documented surface** | **yes — spec §9.3's documented-surface rule (`:2316-2317`)** and the plan's new-contract rule | **NOT ADOPTED in v0.1** → §7 **O2** |
+| **(a′)** MCP management-plane facade | **none.** MCP requests never enter the LLM serving path; the facade reads product state as `/health` does (`lib.rs:584-593`) | none (no transform) | **none** (product surface, no analysis-loop involvement) | **no third mutation**; but **yes, a new documented surface** | **yes — spec §9.3's documented-surface rule (`:2316-2317`)** and the plan's new-contract rule | **NOT ADOPTED in v0.1** → §7 **O2** |
 | **(b)** h2c / HTTP-2 ingress, same bytes | **none.** Constraint 1 governs application bytes; HTTP/2 changes **framing** only. The byte-boundary assertions compare **body** bytes and are framing-blind — *to be verified by the experiment, not assumed* | **none** (no transform is involved) | none | **no** | no constraint and no gate definition; the implementing card owes a **framing clause in spec §2/DESIGN §12.10 first** (constraint 8) | **ADOPT, conditionally** (§4.1) |
-| **(c1)** external adapter, book-only | **none by construction** — the adapter sits outside the process; the router sees ordinary OpenAI-compatible bytes | none | **none** — no autowork involvement | **no** | no; a `book/` page is the write set | **ADOPT** (docs; §4.2) |
+| **(c1)** external adapter, book-only | **none by construction** — the adapter sits outside the process; the router sees ordinary OpenAI-compatible bytes | none | **none** — no analysis-loop involvement | **no** | no; a `book/` page is the write set | **ADOPT** (docs; §4.2) |
 | **(c2)** MCP client-side consumption | **fatal on the serving path**: injecting merged tool definitions mutates request bytes, and `tools` are part of the prompt (schema order/formatting changes destroy the prefix cache for the whole conversation). As pure forwarding of MCP traffic it does not conflict — but then it is a second product | bites wherever the tool list is merged deterministically-or-not | not engaged | **yes, if it is to be useful on the serving path** | constraint 1 text | **DECLINED** (serving-path half); the "second product" half is the owner's roadmap call |
 
 **What this table therefore says, in one sentence:** the only directions that need **no** amendment are
@@ -136,7 +136,7 @@ Shape follows the repository's evaluation rounds (a question, a cheap experiment
   the negative. There is **no comparable measurement** of an h2c benefit on this router today, and this
   ADR mints none.
 - **What it must not do:** mint a latency claim. Any statement of an h2c latency effect is a claim
-  about the L1 quantity, and `autowork/STATE.md`'s waiting-on-human **row 1** is that the latency
+  about the L1 quantity, and the loop state record's waiting-on-human **row 1** is that the latency
   envelope has no contract home: the loop writes *declared + measured*, invents no number, and derives
   no timeout from it.
 
@@ -181,14 +181,14 @@ Not run by this round; named so a future round can run them without re-litigatin
 
 **Cited by commit hash, on `round/52-ingress-evaluation`:**
 
-- the survey — `autowork/survey/2026-09-27_ingress-mcp-a2a-grpc.md` at **`786eb40`** (plus its sources
+- the survey — the survey record (2026-09-27) at **`786eb40`** (plus its sources
   file `…sources.txt`); every external claim below is one of its `[E#]` ids.
-- the audit — `autowork/harness/r52-0b/REPORT.md` at **`8bff7ca`**, verdict **`PASS-with-findings`**
+- the audit — the loop's report at **`8bff7ca`**, verdict **`PASS-with-findings`**
   (43 citations re-resolved by the auditor's own commands and fetches: **34 resolved fully, 4 with a
   nit, 5 failed, 1 link-rot re-verified**), with its raw artifacts under
-  `autowork/harness/r52-0b/evidence/`.
+  the loop's evidence for that decision.
 - the survey's `[R#]` in-repo anchors were held clean at HEAD by the audit; this card re-read the ones
-  this ADR leans on itself (`autowork/harness/r52-1/REPORT.md` §5 carries the commands and their
+  this ADR leans on itself (the loop's report §5 carries the commands and their
   output).
 
 **Per-claim sources the audit confirmed, as this ADR uses them:**
@@ -205,7 +205,7 @@ Not run by this round; named so a future round can run them without re-litigatin
 | no public LLM provider documents chat over gRPC except Vertex | `E35`, `E37` | consistent with the auditor's own reads (a negative claim, honestly sourced) |
 | management-plane MCP prior art (the (a′) shape) | `E15` (TensorZero release note), `E21` (OpenRouter, explicitly a *development assistant*, "keep calling the OpenRouter API directly"), `E38` (Helicone) | verified; `E17` (deepwiki) is a **secondary** source, flagged as such |
 | REST→MCP wrapping exists and is maintained (the (c1) prior art) | `E36` (IBM mcp-context-forge, Apache-2.0), `E13a` (Kong "Map a RESTful API to MCP tools") | verified (the Kong **"AI Gateway 2.0"** qualifier is **unverified** — **F10**; the 3.14 min-version is verified) |
-| the Lemonade counterexample | `r52-0b/evidence/falsification-lemonade-mcp.md` | the auditor's own fetch; recorded because it **falsifies the unbounded negative** (**F2**) |
+| the Lemonade counterexample | the loop's falsification record | the auditor's own fetch; recorded because it **falsifies the unbounded negative** (**F2**) |
 
 **Findings carried into this ADR as limits on what the evidence supports** (not quietly repaired —
 they are limits, and the reader is entitled to them):
@@ -221,7 +221,7 @@ they are limits, and the reader is entitled to them):
    agentgateway gRPC cell unsupported as cited; the Cloudflare and LiteLLM cells narrowed; Portkey's
    moved URL) or does not use at all (no vote of this ADR rests on a dangling `[E23]`). The
    survey's own "the repository's only *MCP* mention" sentence is false as worded (**F4**): the mention
-   also exists at `rules/tool_output.toml:110`, and in four loop-side `autowork/` files (the audit's
+   also exists at `rules/tool_output.toml:110`, and in four loop-side the loop's tree files (the audit's
    sweep). The claim this ADR *does* rely on — **no MCP/A2A/gRPC/SDK code, dependency or config key
    exists in this repository** — the audit verified TRUE and this card re-verified at HEAD (no match in
    `Cargo.toml` or any crate manifest).
@@ -241,14 +241,14 @@ page as a primary source; and any inference from "other products ship it" to "th
 Each of these is a decision the loop **may not take** (AGENTS constraint 9 with ADR-012: the gate
 definitions, the frozen corpus, the conformance assertions, the L1 envelope and the contracts
 themselves are outside the loop's mutable scope; and `AGENTS.md` constraint 1 is the charter itself).
-They are written in the shape `autowork/STATE.md`'s *Waiting on human adjudication* table uses, so
+They are written in the shape the loop state record's *Waiting on human adjudication* table uses, so
 R52's close-out can carry them into it as new rows.
 
 | # | What it is | Why it is not the loop's to decide | What the human must decide | Source | State |
 |---|---|---|---|---|---|
 | **O1** | **Whether the byte boundary ever admits a semantic ingress** — i.e. whether to grant a **third permitted mutation** (ADR-015 item 1's "exactly two" becomes three or more), or to declare a **seventh translation cell** for MCP/A2A/gRPC semantics alongside the six `501` cells | `AGENTS.md` constraint 1 *is* the charter, and ADR-015 item 5 says a third mutation is a change to it "which no round may make on its own"; ADR-012 puts `AGENTS.md`, `docs/spec.md` and `design/` outside the loop's reach, and spec §2's translation contract is the same class of text. This ADR's **(a)** verdict is a *refusal to take* this decision, not a substitute for it | whether such an ingress is wanted at all; and if so, which shape — a new mutation with its own conformance assertions, or a declared translation cell held to the determinism/lossy-point obligations of `book/protocols.md:54-82`. Until then the six `501` cells stay the whole cross-protocol promise | §2/§3 above; ADR-004; ADR-015 items 1 and 5; ADR-012 item 2; `book/protocols.md:54-61` | **open — registered 2026-09-27 by R52-1, not acted on.** No code, no cell, no text was changed by this ADR |
 | **O2** | **Whether the router's own facts become a served MCP surface** (the **(a′)** `/mcp` management-plane facade) | it is a **new documented surface**: spec §9.3's rule is that a surface's shape is frozen by the change that implements it and a documented-but-unreachable surface is a defect; and the plan's rule for a new contract is "ADR + owner signature". Nothing in this ADR authorizes the route, the tool names, or what a tool may read | whether to open this surface at all; and if so, its shape as a contract (tool set, auth model, what state a tool may read/export) and its owner signature. The one-day `rmcp` spike of §4.3 is the feasibility instrument, not the decision | §2 **(a′)**/§3 above; spec §9.3 (`:2302`, rule `:2316-2317`); `crates/router-cli/src/lib.rs:584-593`; `E15`/`E17`/`E21`/`E38` (prior art) | **open — registered 2026-09-27 by R52-1.** `grep -rn -i 'mcp' crates/ Cargo.toml` remains 0 matches; no route, no dependency |
-| **O3** | **Whether a comparison instrument for this question is ever funded** — the question "does anyone want a non-OpenAI ingress?" has **no comparable measurement** anywhere, and the one cheap instrument that would produce one (a shared benchmark) was **declined by the owner** | funding a shared benchmark is an owner act (it spends the owner's budget and puts the product on a public axis); the loop may not invent a demand figure, and constraint 5 forbids entering an estimated price or a borrowed competitor number as evidence | whether to reinstate a shared benchmark (or any demand instrument), or to leave this question answered on constraint grounds and user signal alone. Until then, every "who would use it" statement in this ADR is a **capability** statement with a named audience, never a measured demand | §1 item 2, §2, §5 above; the survey's §3/§5; `autowork/STATE.md` waiting-on-human row 1 (the latent-claim class) | **open — registered 2026-09-27 by R52-1.** No benchmark was run, no provider dialled |
+| **O3** | **Whether a comparison instrument for this question is ever funded** — the question "does anyone want a non-OpenAI ingress?" has **no comparable measurement** anywhere, and the one cheap instrument that would produce one (a shared benchmark) was **declined by the owner** | funding a shared benchmark is an owner act (it spends the owner's budget and puts the product on a public axis); the loop may not invent a demand figure, and constraint 5 forbids entering an estimated price or a borrowed competitor number as evidence | whether to reinstate a shared benchmark (or any demand instrument), or to leave this question answered on constraint grounds and user signal alone. Until then, every "who would use it" statement in this ADR is a **capability** statement with a named audience, never a measured demand | §1 item 2, §2, §5 above; the survey's §3/§5; the loop state record waiting-on-human row 1 (the latent-claim class) | **open — registered 2026-09-27 by R52-1.** No benchmark was run, no provider dialled |
 
 **What this round decided, in contrast (so the boundary is unambiguous):** the three verdicts of §2,
 the constraint table of §3, the experiments of §4, the change-my-mind conditions of §5, and the
@@ -287,13 +287,13 @@ is in the table above and **not** decided here.
   experiment and after the framing clause is written into spec §2/DESIGN §12.10 first (constraint 8) —
   and which must re-run the four gates and the byte/cache invariants, not only the new case.
 - **The open decisions go to the human-decision ledger.** R52's close-out should carry **O1, O2 and
-  O3** into `autowork/STATE.md`'s *Waiting on human adjudication* table as new rows (the next free row
+  O3** into the loop state record's *Waiting on human adjudication* table as new rows (the next free row
   is **19**), in that table's six-column shape, since none of them is loop-actionable.
 - **The evidence chain is reproducible from the branch:** the survey at `786eb40`, its audit at
-  `8bff7ca`, this card's own re-reads in `autowork/harness/r52-1/REPORT.md`. **No figure of any kind is
+  `8bff7ca`, this card's own re-reads in the loop's report. **No figure of any kind is
   minted by this ADR** — it touches no cost model, no trace field and no `verified` label, and the
   `verified` rows this repository already holds (R39/R40; `D3` closed as **MET** by R41's row,
-  `autowork/STATE.md:466-481`) are untouched and un-retracted by it.
+  the loop state record) are untouched and un-retracted by it.
 - **Nothing in this ADR authorizes any implementation.** If a later round adopts (b) or (a′) it must
   satisfy its own gate; this document is a decision about *directions*, and its adoption clauses are
   conditions, not permissions.
@@ -326,3 +326,14 @@ Two internal planning-artifact paths (an out-of-tree plan document and an out-of
 kanban attachment) were replaced with neutral placeholders. The quoted filings, the
 supersession analysis and the decision are unchanged; only the machine-local path
 prefixes were redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

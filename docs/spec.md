@@ -2581,3 +2581,14 @@ the trace record of §6 **is** the interface: append-only JSONL, one decision re
 any JSON tool. `router replay` in particular is the analysis harness's prerequisite (DESIGN §9, ADR-005 item 3)
 and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
 promise, and no implementation has yet taken it.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

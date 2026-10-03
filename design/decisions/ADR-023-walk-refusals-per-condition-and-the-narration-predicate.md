@@ -11,7 +11,7 @@
   ADR-010 (the event log as state truth — why a skip is not an event), ADR-011 (the upstream-error taxonomy,
   the provider-level exclusion, `failover_from`'s producer), ADR-012 (the evaluator and the frozen
   apparatus); spec §2, §4.2, §6, §8; DESIGN §12.8 (CONF-57/58/59), §12.10.9; R17-F1 and R17-F2 — the two
-  findings this ADR adjudicates, registered in `autowork/progress/2026-09-22_04-42-49_R17-wire-gate.md` §5
+  findings this ADR adjudicates, registered in the loop's tree §5
 
 ## Background
 
@@ -249,3 +249,14 @@ Two machine-local scratch paths (a reviewer-profile scratch directory and a thro
 scratch directory", "an out-of-tree experimental directory"). The probes, their
 results and the decision are unchanged; only the machine-local path prefixes were
 redacted for publication.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

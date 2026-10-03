@@ -13,16 +13,16 @@
   orders), **ARM-3.3.7** (a live arm's providers are verbatim), **ARM-3.5** (the driver), **ARM-3.9**
   (the two pairing kinds), **VER-4.1.1** / **VER-4.4 rev 3** (the five conditions), **PROV-8 §9.3.0**
   (the declaration ban), **REAL-9 §10.1** (the printed call count), **ACC-11 §12.4** (`ACC-12.2`); the
-  first real-upstream run's findings, `autowork/harness/r23-live-run-findings.md` (defects **L1**, **L2**,
+  first real-upstream run's findings, the loop live-run findings (defects **L1**, **L2**,
   **L3**; defect **L4** deliberately left to R26); the frozen corpus
-  `autowork/corpus/codex-pair-2026-09-22/manifest.toml`; the user's ruling recorded in commit `e49fcf4`
-  (2026-09-22 23:53 +08:00) and in `autowork/STATE.md`; the round's plan of record (**R24** = L1 + L2 +
+  the recorded codex-pair manifest; the user's ruling recorded in commit `e49fcf4`
+  (2026-09-22 23:53 +08:00) and in the loop state record; the round's plan of record (**R24** = L1 + L2 +
   L3, **R26** = L4).
 
 ## Background
 
 On 2026-09-22 21:01 the operator ran the first real-upstream replay (cold then warm, 32 upstream calls,
-$0.000781 actually spent, `autowork/harness/r23-live-run-findings.md` §"Operator declaration used"). It
+$0.000781 actually spent, the loop live-run findings §"Operator declaration used"). It
 produced no `verified` label — and, more importantly, it **could not have**: the three defects it exposed
 are in the apparatus, not in the product, and each one is a blocker of a different kind.
 
@@ -212,7 +212,7 @@ consequence (condition 3 fails until a live byte audit exists) is the *honest* s
 - **This ADR mints no `verified`, and the round it belongs to claims none.** What it does is remove two
   structural impossibilities (condition 0 by construction, the verbatim audit by a rendering asymmetry),
   extend the accepted base dialect, and close one seam through which a *false* `verified` would have been
-  reachable. The cost gate's criterion (`program.md` D3, a `verified` net gain > 0) is untouched and, on the
+  reachable. The cost gate's criterion (the loop charter D3, a `verified` net gain > 0) is untouched and, on the
   frozen corpus, still unmet: the corpus's own `exclusion_note` says it does not exercise the compression
   target, and R23's measurement found `delta.input_total = 0` in both orders — so even a fully eligible run
   of *this* corpus would report a delta of zero (AGENTS constraint 4: no figure is presented as a saving).
@@ -238,7 +238,7 @@ consequence (condition 3 fails until a live byte audit exists) is the *honest* s
 
 ## Reversibility
 
-- **The plan rule — reversible only by re-measuring.** It is text in `replay-contract.md`, so a later
+- **The plan rule — reversible only by re-measuring.** It is text in the loop replay contract, so a later
   revision can change it; but every row produced under it describes what *was* sent, so reverting means the
   affected runs are no longer comparable to newly produced ones. Rows produced before it are not invalidated
   (they remain honest records of the old plan), which is why the old formula and the R23 numbers are kept in
@@ -247,3 +247,14 @@ consequence (condition 3 fails until a live byte audit exists) is the *honest* s
   emitter and comparator; reverting changes no artifact format, no row field and no exit code.
 - **Decision 4 — reversible, and that is its point.** It is one comparison; if a future live byte audit
   makes the audits run, the clause is satisfied rather than relaxed.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

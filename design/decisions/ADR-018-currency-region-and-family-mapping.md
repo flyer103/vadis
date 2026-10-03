@@ -25,7 +25,7 @@ Three facts make the naive answers wrong, and they are the reason this is an ADR
   unit. A second currency that is folded in at any exchange rate — even a published one, even once — destroys
   that property *and* violates AGENTS constraint 5, which is about numbers nobody can read off an official page.
   So the second currency has to be carried as data, not converted.
-- **The trace is read without the config** (ADR-005: `router stats` / `router replay` / autowork). A trace field
+- **The trace is read without the config** (ADR-005: `router stats` / `router replay` / the analysis loop). A trace field
   that says only `184000 nano` is ambiguous the moment a CNY route exists, and a consumer that guesses USD is
   silently wrong in exactly the way this repository forbids.
 - **The CN plans do not publish token allowances.** `GLM Coding Plan` publishes **credits** (Lite 2,000 per 5
@@ -216,7 +216,7 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
 | Alternative | Why not |
 |---|---|
 | Fold the CNY table into USD with an exchange rate (one rate, one place, "good enough") | Forbidden twice over: the rate is a number nobody published (AGENTS constraint 5), and the ledger's single-unit property (ADR-006) is what makes replay bit-identical — a rate makes the report depend on when it was fetched (AGENTS constraint 2, content determinism) |
-| Keep CNY figures in a field named `usd` (or leave the unit implicit and document it) | The defect this ADR exists to remove: a reader (human or autowork) cannot tell a CNY figure from a USD one, and nothing fails when they are added |
+| Keep CNY figures in a field named `usd` (or leave the unit implicit and document it) | The defect this ADR exists to remove: a reader (human or the analysis loop) cannot tell a CNY figure from a USD one, and nothing fails when they are added |
 | `currency` on the model entry, or on each tier | See item 1: an entry's models are one invoice line, and a per-tier unit has no legal disagreement |
 | Derive `currency` from `region` | Manufactures a fact from a nearby one; a CN endpoint billed in USD is legal |
 | Keep the name `NanoUsd` and carry the currency out of band (a struct field only at the aggregation boundary) | The type would assert USD while holding CNY, and every intermediate would need an unwritten invariant to be safe |
@@ -312,3 +312,14 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
 | `DecisionRecord.schema_version` 1 → 2 and the two currency fields | **No.** Records are append-only and never rewritten (ADR-005/ADR-010); the field can be ignored by a future reader, but a record written without it cannot be recovered, and a v2 record must keep saying what its money is |
 | `EVENT_SCHEMA_VERSION` 1 → 2 and the two payload fields | **No**, for the same reason (the event log is append-only); the change is one field per payload, and a v1 row stays readable as USD |
 | The load error on a USD cap over a non-USD overflow route | **Yes** — it is a check, not a data shape |
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

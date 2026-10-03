@@ -20,7 +20,7 @@
   is a temp file plus a `rename`, the fact behind D4's torn-pair case); **ADR-038** (the shape step and its
   dated note — the pair is written by one run, which is why D4's torn-pair case is a *reader's* window and
   not a writer's defect); **ADR-003 / ADR-005** (the
-  observation boundary: the trace is the only product → autowork channel); AGENTS hard constraints
+  observation boundary: the trace is the only product → analysis-loop channel); AGENTS hard constraints
   **1** (the byte boundary — untouched by definition here), **2** (content determinism — the constraint
   D2's capture-once decision exists to protect), **3** (the observation boundary), **4** (no unverified
   savings — D7 refuses to claim the upstream cache is preserved or lost without measuring it),
@@ -45,7 +45,7 @@ in its own round and names three pre-requisites: *"the watcher decision (a file-
 std-only mtime poll), the atomic-swap decision, and a fresh p99 ladder run."* ADR-039 closed the first
 and explicitly left this one (its D4, row 1: *"what a revision switch is: which structures are replaced,
 how the old revision stops being used, what an in-flight request sees"*) together with the state store's
-side of it (its D4, row 2). `autowork/STATE.md`'s waiting-on-human row 17 carries the same item.
+side of it (its D4, row 2). The loop state record's waiting-on-human row 17 carries the same item.
 
 **What already exists, so the decision is as small as it is.** The reload does not need an identity
 invented: `config_digest` is computed once at load (`crates/router-cli/src/config_load.rs:199`), carried
@@ -336,7 +336,7 @@ reversibility note anticipates exactly that).
 Three further invariants are inherited and restated only so a reader holds them while reading this ADR:
 **the byte boundary** (AGENTS 1) is untouched by definition — a reload moves no request byte, and the
 only mutations are the two §12.10.7 already owns; **the observation boundary** (AGENTS 3/ADR-003) is
-untouched — the reload's only product → autowork channel is the trace JSONL, and the *revision identity
+untouched — the reload's only product → analysis-loop channel is the trace JSONL, and the *revision identity
 on that trace is `config_digest` on every record*, additive as ADR-037 D6 left it, with
 `TRACE_SCHEMA_VERSION` staying **2**; and **there is no new user-facing flag** — the reload is default
 behaviour, as the owner's standing R44 ruling requires (`setup`'s pair write is the precedent: the
@@ -475,8 +475,8 @@ session-level policy may land** — a card that needs it blocks on the owner.
   narrow one D7.2 names (a same-bytes-serving revision is prefix-neutral), not a new byte assertion.
 - **No gate, no corpus, no conformance assertion and no L1-envelope value moves** (AGENTS 9 / ADR-012).
   §12.8's allocation is untouched: this ADR names assertion *intent* (RV-1…RV-9, D8) and allocates no ID.
-- **STATE.md's waiting-on-human row 17 is now fully answered at the contract level**, and this ADR does
-  not edit `STATE.md` — the round's close-out records it. The row's remaining live part is the owner's
+- **the loop state record's waiting-on-human row 17 is now fully answered at the contract level**, and this ADR does
+  not edit the loop state record — the round's close-out records it. The row's remaining live part is the owner's
   ruling on the question above.
 
 ## Honest boundaries
@@ -521,8 +521,7 @@ The readings that ask *"is the number free?"* (the register, §4.15, §12.20) we
 post-landing state, which is why `probe.out` labels each probe with what it expects at which commit.
 
 ```
-# the facts this ADR rests on; the raw output is tracked, and probe.sh re-runs it anywhere
-bash autowork/harness/r47-0a/probe.sh > autowork/harness/r47-0a/probe.out   # P1..P19
+# the facts this ADR rests on; the raw output is tracked, and the probe re-runs it anywhere (P1..P19)
 
 # the register's last number (040 is free) and the two free section numbers
 ls design/decisions/ | sort | tail -1              -> ADR-039-file-watch-crate-for-the-reload.md   (39 ADRs)
@@ -550,8 +549,8 @@ grep -n rename docs/spec.md   -> spec 4.11: temp file "flushed, and is then rena
   # (one atomic replace on one filesystem) ... Nothing lands partially"
 ```
 
-The probe script and its raw output are tracked at **`autowork/harness/r47-0a/probe.sh`** and
-**`probe.out`** (flat names, one `git ls-files` away in a fresh clone), per `autowork/work-mode.md`'s
+The probe script and its raw output are tracked at **the loop's probe script** and
+**`probe.out`** (flat names, one `git ls-files` away in a fresh clone), per the loop execution model's
 evidence rule (*"every number a claim rests on must resolve in a fresh clone"*).
 
 ## Dated note — 2026-09-26, the entering card's premise, corrected rather than inherited
@@ -598,9 +597,9 @@ that a decision rather than an inheritance:
    per request". A revision switch has no `request_id`, no `event_id` to anchor, no inbound bytes and no
    usage — the fields a record is made of — and §4.5's pairing rule (*"paired exactly, never by
    timestamp"*) would have nothing to join.
-2. **The changed-keys list is not something autowork may read, and that is the boundary working as
-   designed.** §4.5 marks the event log **internal — autowork never reads it (ADR-005)** (`:517`); the trace
-   is *"the only product → autowork channel"* (`:518`). So the key list stays on the operator's side, and
+2. **The changed-keys list is not something the analysis loop may read, and that is the boundary working as
+   designed.** §4.5 marks the event log **internal — the analysis loop never reads it (ADR-005)** (the same file); the trace
+   is *"the only product → analysis-loop channel"* (the same file). So the key list stays on the operator's side, and
    what the analysis channel learns about a switch is what it already learns: **the digest on each record**
    (RV-1). A window spanning a switch carries both digests (D3), and that is the switch's signature there.
 3. **The row's siblings are already in that log** — row 12 (`plugin.loaded`/`unloaded`) and row 15
@@ -761,7 +760,7 @@ timer*). The value is a **constant** (no `server.reload_window`, no flag — D8'
 owner's standing no-new-parameter ruling), and its **lower bound is the landing's own write gap**: measured
 on this machine, spec §4.11's writer sequence (`temp` create + write + fsync + `rename`-over) takes **min
 0.128 ms / median 0.138 ms / p95 0.182 ms / max 0.258 ms** (N = 200; the tracked run is
-`autowork/harness/r47-0b/probe.out` P18, re-runnable by its `gap.py`), so a window of
+the loop's probe output P18, re-runnable by its `gap.py`), so a window of
 **200 ms** sits ~3 orders of magnitude above the gap it must not be shorter than (776× on that run) and
 far below anything an
 operator could perceive. The implementing card pins the constant with its own measurement; what is decided
@@ -824,7 +823,7 @@ window, or must a fresh p99 ladder be run — and if so, which gate consumes it?
 
 | # | What the ruling decides | The measured fact it decides about |
 |---|---|---|
-| 1 | whether a switch's own cost is inside the gate quantity or outside it | the L1 quantity is `result.overhead_ms − result.upstream_ms` (DESIGN §12.16, `design/DESIGN.md:3439-3441`; `autowork/program.md:41`'s blocking Latency row), and a reload's load + gate + publish happens **off the request path** (D2) — so the quantity is **blind to a reload by construction**. The ruling says whether that blindness is intended. |
+| 1 | whether a switch's own cost is inside the gate quantity or outside it | the L1 quantity is `result.overhead_ms − result.upstream_ms` (DESIGN §12.16, `design/DESIGN.md:3439-3441`; the loop charter's blocking Latency row), and a reload's load + gate + publish happens **off the request path** (D2) — so the quantity is **blind to a reload by construction**. The ruling says whether that blindness is intended. |
 | 2 | whether the first turn that crosses an outbound-visible change belongs in the sample | such a turn re-prefills (D7.3), and the re-prefill lands in `upstream_ms` — the **subtracted** term — so it *lowers* the measured router overhead. In the sample, excluded, or a quantity of its own: the ruling's. |
 | 3 | whether a new instrument is needed at all | the quantity a ladder would most naturally read (a publish → the first request served by the new revision) is **derivable today** from the two media the repo already has: the `config.applied` row's `ts_us` (store, microseconds) and the `ts` of the first record carrying the new `config_digest` (trace, **RFC3339 UTC at millisecond precision**, `crates/router-core/src/trace.rs:35-36`). Millisecond resolution, no new instrument; anything finer is a gate-side decision. |
 
@@ -848,8 +847,8 @@ in **R47** (merge `db2ac77`). Both corrections are pointers rather than restatem
    `reload::Publisher` (R47-2, `2a04c9a` / `078094c`); and the keyed diff is
    `crates/router-core/src/config_diff.rs` (`router_core::changed_keys` — R47-2, `d4c849b`). R47-3's
    independent verification of the landing returned **NO BLOCKING FINDING**
-   (`autowork/harness/r47-3/VERDICT.md`), and R47-4 measured D7.2's prefix-neutrality claim on the
-   frozen corpus at $0 — it **HOLDS** (`autowork/harness/r47-4/`).
+   (the loop's verdict record), and R47-4 measured D7.2's prefix-neutrality claim on the
+   frozen corpus at $0 — it **HOLDS** (the loop's evidence for that decision).
 2. **The evidence block's `git grep -n notify -- Cargo.toml crates/*/Cargo.toml -> no output (the
    dependency has not landed; ADR-039 D3)`** — the dependency has landed: `notify = "8"` at
    `Cargo.toml:65` and `notify = { workspace = true }` at `crates/router-cli/Cargo.toml:41` (R47-1,
@@ -862,3 +861,14 @@ second owner question above stays the owner's ruling, and no session-level polic
 (spec §4.15's status line records the same). **What this note does not do:** it re-opens no decision
 (D1–D12 stand), changes no behaviour, and edits no line above; the honest-boundaries bullet and the
 evidence block stand as written, to be read with this note.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

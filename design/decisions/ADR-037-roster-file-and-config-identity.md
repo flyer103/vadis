@@ -93,7 +93,7 @@ which sees a joined config and can no longer tell the two shapes apart.
 Consequences, stated because they are the reason this form was chosen over a hard cut: every existing
 inline configuration stays **byte-identical**, so the 34 files under `tests/conformance/**` that carry a
 top-level `providers:` block (measured at `c4ae04f`) and every recorded or maintained harness config —
-including `autowork/harness/live-base.yaml:100`, the base the live-replay generator copies verbatim —
+including the loop live-base config, the base the live-replay generator copies verbatim —
 keep parsing with no edit at all. A pre-R43 rig re-run against a post-R43 binary therefore still loads;
 what changes is only that a *new* config may name its roster.
 
@@ -202,7 +202,7 @@ printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16
 **`TRACE_SCHEMA_VERSION` stays `2`** (`crates/router-core/src/trace.rs:28`). The version exists to warn
 a consumer that a record would be **misread**; the v1→v2 move happened because `cost.currency` changes
 how the money fields must be read (DESIGN §12.6). A digest changes the reading of no existing field, and
-every consumer on the autowork side already tolerates an unknown key — which is precisely the
+every consumer on the analysis-loop side already tolerates an unknown key — which is precisely the
 additive-field rule §12.6 states. A bump would instead create two vintages that mean the same thing,
 which is what a version is not for. A reader must therefore treat a **missing** `config_digest` as "this
 record predates the field", never as an empty digest.
@@ -247,8 +247,8 @@ loadable") holds at every step. The split path is exercised from R43-2 on by `CO
 round's own byte-identity arm, not by the example. `providers.example.yaml` **does not exist in the
 tree at this commit**; it lands with R43-4.
 
-`autowork/harness/live-base.yaml` **stays inline** for the same species of reason: it is copied verbatim
-into every generated arm config (`r39-3/run.toml:49`), and teaching the generator about a second file is
+The loop live-base config **stays inline** for the same species of reason: it is copied verbatim
+into every generated arm config (the loop's run config), and teaching the generator about a second file is
 a harness change no card of this round needs — the round's arms build their own pair instead.
 
 ### D9. What Q23's four consequences get here, and what stays unlanded
@@ -393,3 +393,14 @@ in both directions. Toward layering, the shape is deliberately *not* reusable: a
 ladder, so if Q23 ever lands, the roster *file* survives and the join is replaced — the seam is the type,
 not the file. The one thing a later round must revisit rather than inherit is the recipe itself: a second
 roster file would change what `config_digest` hashes, and that is a decision for the round that wants it.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

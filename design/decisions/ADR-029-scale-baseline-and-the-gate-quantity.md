@@ -2,26 +2,26 @@
 
 - Status: accepted
 - Date: 2026-09-23
-- Related: AGENTS constraints 1, 2, 4, 5 and 9; ADR-005 (the trace is the only product → autowork channel);
+- Related: AGENTS constraints 1, 2, 4, 5 and 9; ADR-005 (the trace is the only product → analysis-loop channel);
   ADR-006/ADR-007 (integer NanoUsd; span-faithful forwarding); ADR-009 (one local store; **"Re-measurement is
   owed"**, and the latency budget as *router's own work*); ADR-012 (the gate definitions, the corpus, the
   conformance assertions and the L1 envelope are outside the loop's mutable scope); ADR-016 **DP-1.4**'s
   registered finding (the operative envelope has no contract home); ADR-017 §3 (declared value vs measured
   value); ADR-019/ADR-028 (the transform contract and the recorder); spec §6 (the metric definitions), §7 (the
   labels), §8 (the refusal contract), §9.2 (the report); DESIGN §12.1 (the dependency allowlist), §12.15,
-  §12.16; `autowork/program.md:41` (the **blocking** latency gate); `autowork/STATE.md:722` (R2G6's
-  self-overhead), `:753`/`:857` (*Key measured facts* + waiting-on-human **row 1**), `:774` (R9-G5).
+  §12.16; the loop charter (the **blocking** latency gate); the loop state record (R2G6's
+  self-overhead), the same file/the same file (*Key measured facts* + waiting-on-human **row 1**), the same file (R9-G5).
 
 ## Background
 
-**The blocking gate rests on a number that was measured without the path it guards.** `program.md:41` makes
+**The blocking gate rests on a number that was measured without the path it guards.** The loop charter makes
 *"the decision + transform overhead p99 stays within budget (benchmarked against rtk's <10 ms shape)"* a
 **blocking** gate. The only latency figures that exist are R4's `overhead_ms` p50 1 ms / p99 6 ms — a mock
-upstream, measured **without** the transform path (`autowork/STATE.md:774`, R9-G5) — and R2/R2G6's self-overhead
-p50 ≈ 3.6–3.8 ms / p99 ≈ 4.5–5.3 ms at a ~20 KB payload, n = 60/side (`:722`). There is **no throughput number,
+upstream, measured **without** the transform path (the loop state record, R9-G5) — and R2/R2G6's self-overhead
+p50 ≈ 3.6–3.8 ms / p99 ≈ 4.5–5.3 ms at a ~20 KB payload, n = 60/side (the same file). There is **no throughput number,
 no concurrency number and no request-size number anywhere in the tree**, and the envelope the round records
 quote as "ADR-009's" (`p50 < 15 ms / p99 < 50 ms`) has no contract home at all — ADR-016 DP-1.4 registered
-that, and `autowork/STATE.md`'s waiting-on-human row 1 still carries it as open.
+that, and the loop state record's waiting-on-human row 1 still carries it as open.
 
 **The quantity the gate names is not the quantity the shipped field reports.** `result.overhead_ms` is measured
 from the request's own start to the record's commit — `crates/router-proxy/src/forward.rs:593` sets `started`,
@@ -48,7 +48,7 @@ until R32 no number said so.
 attempt's own latency (`forward.rs:1194-1198`), so their difference is the router's own work. A record whose
 `upstream_ms` is **`null`** (a boundary refusal, a pre-route rejection, a connect failure) is **excluded from
 the sample** — spec §6's definition, and §7's rule that an absent measurement is never read as a value. This
-quantity is the one `program.md:41` means, and it is the only latency quantity R32's numbers may be reported
+quantity is the one the loop charter means, and it is the only latency quantity R32's numbers may be reported
 for.
 
 Two consequences are part of the decision rather than footnotes:
@@ -131,8 +131,8 @@ This ADR is the **method's** home — the quantity (D1), the metric set (D2), th
 sense the waiting-on-human row means, and it deliberately does not become one:
 
 - **No threshold is set here.** The number the blocking gate compares against is a **human** decision (ADR-012;
-  `autowork/STATE.md`'s row 1, still open). R32 reports measured numbers against the **declared** reference
-  `program.md:41` already names (rtk's <10 ms shape) and asserts no budget of its own.
+  the loop state record's row 1, still open). R32 reports measured numbers against the **declared** reference
+  the loop charter already names (rtk's <10 ms shape) and asserts no budget of its own.
 - **R32's numbers are the non-transform baseline.** The run's transform plugin configuration is declared with
   its numbers (ladder A–E: **no rule engine loaded and no `X-Router-Transform` header**, i.e. the v0.1 assembly
   with `plugins:` absent), and R33 re-runs **the same shape** with the plugin enabled so the two are comparable
@@ -143,8 +143,8 @@ sense the waiting-on-human row means, and it deliberately does not become one:
 
 ### D6. Where the numbers live
 
-Per-run raw files under `autowork/harness/r32-*/` (one machine-readable file per rung plus a summary table), the
-round record, and `autowork/STATE.md`'s *Key measured facts*. **Not in this ADR and not in DESIGN**: DESIGN
+Per-run raw files under the loop's evidence for that decision (one machine-readable file per rung plus a summary table), the
+round record, and the loop state record's *Key measured facts*. **Not in this ADR and not in DESIGN**: DESIGN
 §12.16 records the quantity's two fields and points here, and states no number, for the same reason §12.5's
 prices have one source — a second copy of a measurement is a copy that drifts.
 
@@ -154,7 +154,7 @@ prices have one source — a second copy of a measurement is a copy that drifts.
 number anyway); rate limiting or per-client connection limits (each is a second admission rule with its own
 contract, and spec §4.13 is explicit that the body bound is not one); a sharded or multi-process store
 (ADR-009's single writer is the design whose cost this baseline measures); inbound TLS termination; any change
-to `program.md:41`'s gate definition, to a threshold, to the corpus or to the L1 envelope (ADR-012); and any
+to the loop charter's gate definition, to a threshold, to the corpus or to the L1 envelope (ADR-012); and any
 new Rust dependency — the load harness is **Python-side** (DESIGN §12.1: `criterion` would be an allowlist
 decision, and the harness must drive the real `serve` binary as a black box rather than a benchmark target).
 
@@ -163,7 +163,7 @@ decision, and the harness must drive the real `serve` binary as a black box rath
 | Alternative | Why rejected |
 |---|---|
 | report `client_elapsed_ms` as the gate's quantity | it measures the client, the socket and the stand-in as well as the router, and it cannot separate them; the trace already carries the router's own two fields, so the client-side number is demoted to corroboration (D2) rather than used as the measurement |
-| change `overhead_ms` itself to exclude the upstream | it moves the meaning of a field that has shipped (R2G6 records its inclusive reading, `STATE.md:722`), and every past record's value would need re-reading; the report-side derivation reaches the same number while leaving the trace's field and every historical record unchanged |
+| change `overhead_ms` itself to exclude the upstream | it moves the meaning of a field that has shipped (R2G6 records its inclusive reading, the loop state record), and every past record's value would need re-reading; the report-side derivation reaches the same number while leaving the trace's field and every historical record unchanged |
 | add µs-resolution trace fields (`overhead_us` / `upstream_us`) | additive and schema-preserving in principle, but it is a spec §6 field-group change and a product change; this round's constraints keep both schema versions at 2 and spend the round's contract budget on the body bound. It is the right change if a future round needs sub-millisecond claims |
 | a real provider as the upstream | the round's cap is $0.00, a real upstream's latency is not the router's, and an unmeasured cross-machine delay would make D1's quantity unreadable |
 | `criterion` / a Rust benchmark binary | a new dependency is a decision, not an import (DESIGN §12.1), and an in-process benchmark bypasses the listener, the store and the trace — i.e. exactly the layers whose capacity is unknown |
@@ -174,7 +174,7 @@ decision, and the harness must drive the real `serve` binary as a black box rath
 
 ## Rationale
 
-- **The quantity follows the gate's own words.** `program.md:41` says *the decision + transform overhead* —
+- **The quantity follows the gate's own words.** The loop charter says *the decision + transform overhead* —
   the router's work, not the provider's. The subtraction is not a convenience; it is the only reading under
   which the gate is about this repository at all.
 - **A declared injected delay is what makes a nonzero measurement meaningful.** With a zero-delay stand-in the
@@ -193,7 +193,7 @@ decision, and the harness must drive the real `serve` binary as a black box rath
 
 ## Consequences
 
-- R32's implementing cards build the harness and the ladder under `autowork/harness/r32-*/`, run it, and report
+- R32's implementing cards build the harness and the ladder under the loop's evidence for that decision, run it, and report
   rungs, the ceiling and the machine. **No `verified` figure is minted by any of it** (AGENTS 4): these are
   latency and capacity numbers, and no token or dollar delta is claimed.
 - `R32-F5`'s repair lands with `CONF-84`, and `CONF-83` lands with spec §4.13's bound (DESIGN §12.8's rows).
@@ -205,3 +205,14 @@ decision, and the harness must drive the real `serve` binary as a black box rath
   coarse; `write_pressure_delta` is a delta and is not a store-write latency; the store's own write latency
   stays unmeasured for want of a field; and nothing here says anything about how the router behaves above the
   ceiling, because D4 defines the ceiling and stops there.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

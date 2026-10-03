@@ -103,7 +103,7 @@ the resolution is a lookup, and the lookup's precondition is enforced at load ti
 ### 5. One migration, in this change
 
 The contract, the parser, the assembly, `config.example.yaml`, the operator's live `config.yaml`, the
-conformance fixtures and the autowork harness's generated configs move together. A half-migrated tree is
+conformance fixtures and the analysis harness's generated configs move together. A half-migrated tree is
 not a state this repository should ever be in.
 
 ## Alternatives considered
@@ -165,3 +165,14 @@ The change is a delete-and-add of one key plus a lookup, so a rollback is the in
 `base_url`, restore the three literals, and re-migrate the configs. Nothing is written to traces or to the
 store that depends on the shape — the outbound URL is not a trace field, and the prefix hash covers body
 bytes only.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.

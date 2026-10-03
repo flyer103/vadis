@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: ADR-005 (the trace is the only product↔autowork interface), ADR-009 (storage boundary and tiered durability), ADR-002 (keyed config diff), ADR-004 (v0.1 has no server-side session state); spec §4.5 (state) / §6 (observation) / §8 (degradation); DESIGN §8
+- Related: ADR-005 (the trace is the only product↔analysis-loop interface), ADR-009 (storage boundary and tiered durability), ADR-002 (keyed config diff), ADR-004 (v0.1 has no server-side session state); spec §4.5 (state) / §6 (observation) / §8 (degradation); DESIGN §8
 
 ## Background
 
@@ -76,7 +76,7 @@ recorded at all. If router loses an intent, nobody else kept a copy.
    carries `body_hash` plus `trace_ref`, so a payload is checkable and joinable when it was captured, and
    honestly unavailable when it was not.
 7. **Boundary with ADR-005: the event log is not a second observation channel.** It is serving-time
-   internal state. autowork never reads the store; the product → autowork channel remains **trace JSONL
+   internal state. The analysis loop never reads the store; the product → analysis-loop channel remains **trace JSONL
    only**. Anything the loop must observe has to appear in the trace — which is why the trace's identity
    group gains `event_id` (spec §6, DESIGN §12.6), making the join key `request_id` + `event_id` explicit.
    Research that wants state over time reads the trace, never the database.
@@ -123,3 +123,14 @@ recorded at all. If router loses an intent, nobody else kept a copy.
 - Operator tooling for the projections and the `unknown_outcome` report (a `router state`-style surface)
   becomes necessary, but it is a **separate change** with its own doc update; this ADR does not add it to
   the CLI surface.
+
+## Publication note (2026-10-03, R62-2)
+
+The `R<n>` labels and finding ids in this document name iterations of the project's own
+private analysis loop — a loop that is not part of this repository, so no label here is
+resolvable by a reader of it; they are kept as the provenance of the decision. This
+publication pass removed only the dead-pointer class: every reference into that loop's
+working tree (its file paths and round-record names, its state record, charter, execution
+model and replay contract, its scripts and module names, and the kanban card ids), each
+replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
+threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
