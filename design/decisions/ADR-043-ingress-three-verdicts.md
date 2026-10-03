@@ -36,8 +36,8 @@ output in `autowork/harness/r52-1/REPORT.md` §5):
 
 | Artifact | What it says about this axis | Does the owner's ruling supersede it? |
 |---|---|---|
-| `$HERMES_HOME/plans/2026-09-25_130500-router-competitiveness-plan.md:134` | "Semantic cache · **MCP / A2A / gRPC ingress** · dashboards / `/metrics` before v0.2 · SDKs · …", under the heading at `:132` "## Not doing (write it down so the loop does not drift into it)" | **Yes, for the act of evaluating it.** The entry is a *filing*, not a measurement — nothing behind it measured this axis. The owner's ruling reopens the item for evaluation. It does **not** adopt anything, and it supersedes no other entry in that list. |
-| `$HERMES_HOME/kanban/boards/router/attachments/t_fc8fd11a/w1-dossier.md` (the W1 reconciled dossier) | **Silent on this axis**: `grep -c -iE 'mcp\|a2a\|grpc\|ingress'` → **0**; `grep -c -i reopen` → **0** | **Nothing to supersede.** The dossier never considered MCP/A2A/gRPC. It *does* drop four neighbouring items ("`router replay`/`/metrics`", "cache-breakpoint auto-injection", "multi-tenancy / per-key identity", "'Be Rust' / benchmark-chasing" — `:180-198`), each with a reason. |
+| `<an out-of-tree plan document, line 134>` | "Semantic cache · **MCP / A2A / gRPC ingress** · dashboards / `/metrics` before v0.2 · SDKs · …", under the heading at `:132` "## Not doing (write it down so the loop does not drift into it)" | **Yes, for the act of evaluating it.** The entry is a *filing*, not a measurement — nothing behind it measured this axis. The owner's ruling reopens the item for evaluation. It does **not** adopt anything, and it supersedes no other entry in that list. |
+| `<an out-of-tree kanban attachment: the W1 reconciled dossier, w1-dossier.md>` (the W1 reconciled dossier) | **Silent on this axis**: `grep -c -iE 'mcp\|a2a\|grpc\|ingress'` → **0**; `grep -c -i reopen` → **0** | **Nothing to supersede.** The dossier never considered MCP/A2A/gRPC. It *does* drop four neighbouring items ("`router replay`/`/metrics`", "cache-breakpoint auto-injection", "multi-tenancy / per-key identity", "'Be Rust' / benchmark-chasing" — `:180-198`), each with a reason. |
 | the cut-spec card `t_1d86acb2` (card body) | carries the reopening rule the loop operates under, verbatim: "不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**" — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | **No — the rule stands, and by its own terms it is not the rule that governs this item.** It is scoped to the dossier's own four dropped items, and MCP/A2A/gRPC is not among them. |
 
 **The two consequences, stated plainly, because the survey's citation was wrong here and this ADR must
@@ -319,3 +319,10 @@ is in the table above and **not** decided here.
   spec §9.3 makes its *shape* the owner's either way.
 - **The ADR-number gap (041/042 unused) is registered, not decided.** If the register's numbering is
   meant to be dense, that is a bookkeeping decision for whoever owns the register.
+
+## Redaction note (2026-10-03, R62-1)
+
+Two internal planning-artifact paths (an out-of-tree plan document and an out-of-tree
+kanban attachment) were replaced with neutral placeholders. The quoted filings, the
+supersession analysis and the decision are unchanged; only the machine-local path
+prefixes were redacted for publication.

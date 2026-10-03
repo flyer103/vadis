@@ -209,3 +209,9 @@ that one fact for an inline root and moves nothing else: not a name, not an expo
 contract: it points at the sections as R45 left them. Both items stay in the register until the round that
 reads them marks them closed; a future reader of `:16`–`:19` or `:164` should read this note with them.
 
+
+## Redaction note (2026-10-03, R62-1)
+
+The owner home path inside the quoted `router setup --print` log line was
+replaced with `<home>`. The logged behaviour and the decision are unchanged; only
+the machine-local path prefix was redacted for publication.

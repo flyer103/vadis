@@ -543,3 +543,10 @@ Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
   requirement, and which §7 exists to make possible.
 - **This ADR does not decide what happens next.** It names a candidate, an admissible form, a budget and
   a write-set; the alignment with the human happens in a round, per `program.md`'s per-round flow.
+
+## Redaction note (2026-10-03, R62-1)
+
+A personal absolute path (the owner home directory) inside the `#[path = …]` quote at the
+bench-corpus bullet was replaced with the neutral placeholder `<home>`. The decision,
+its reasoning and the measurement are unchanged; only the machine-local path prefix
+was redacted for publication.

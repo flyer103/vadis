@@ -25,8 +25,8 @@ implementer nor its verifier had built**, on the round's own HEAD, with mock ups
 - **R17-F2** — `details.skipped[]` is documented as "every candidate the walk refused without attempting it",
   but a second candidate sharing a **keyless** provider appears in no member at all.
 
-Both are reproduced by this card's own run of the R17 close-out's probes against the same HEAD binary
-(`$HERMES_HOME/profiles/reviewer/cache/scratch/r17-4/probe_{refusal_asymmetry,skipped_gap}.py`,
+Both are reproduced by this card's own run of the R17 close-out's probes (the scripts
+`probe_{refusal_asymmetry,skipped_gap}.py`, run from an out-of-tree scratch directory;
 results `asymmetry-repro.json` / `skipped-repro.json` beside this card's scratch dir), and this card added
 five rigs of its own (`probe_walk_narration.py`) to separate the conditions — see "What was measured" below.
 The mechanism, from the code at the round's HEAD:
@@ -211,7 +211,7 @@ in place, no attempt-bearing ending reaches it.
   (`git diff --stat 8264f61..HEAD -- crates/ tests/ docs/ design/ book/ config.example.yaml` → empty), so the
   measured behaviour is HEAD's.
 - **The proposed rule was implemented experimentally to prove it is implementable and non-breaking** — in a
-  throwaway worktree (`/tmp/r19-1-exp`, removed afterwards; its `crates/**` bytes are **not** committed by
+  throwaway worktree (an out-of-tree experimental directory, removed afterwards; its `crates/**` bytes are **not** committed by
   this card, whose diff is docs-only), with the probes re-run against the patched binary
   (`walk-narration-exp.json`: rigs A–E all agree across media; rig C's `failover_from` is `null` on both and
   no `failover.triggered` row is written; rig D's `to` names `kn/m` on both; rig E lists three entries on
@@ -241,3 +241,11 @@ sentence back at the streaming walk end (the previous divergence returns with it
 "what was measured" section names it). What is *not* reversible is a client that has parsed `stage` as "no
 upstream was contacted" — which is why the choice made here is the one that makes that reading true, rather
 than the one that leaves the reporting sites shortest.
+
+## Redaction note (2026-10-03, R62-1)
+
+Two machine-local scratch paths (a reviewer-profile scratch directory and a throwaway
+/tmp experiment worktree) were replaced with neutral descriptions ("an out-of-tree
+scratch directory", "an out-of-tree experimental directory"). The probes, their
+results and the decision are unchanged; only the machine-local path prefixes were
+redacted for publication.

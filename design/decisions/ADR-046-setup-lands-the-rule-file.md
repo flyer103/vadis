@@ -235,3 +235,9 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
   is an additive change with its own card.
 - **Rule-content anchoring.** The wizard does not edit a rule's knobs (D5); if the L1 envelope ever wants a
   rule parameter editable through the wizard, that is a section-table change, not a lane.
+
+## Redaction note (2026-10-03, R62-1)
+
+The owner home path inside the quoted rule-file warning log block was
+replaced with `<home>`. The logged behaviour and the decision are unchanged; only
+the machine-local path prefix was redacted for publication.
