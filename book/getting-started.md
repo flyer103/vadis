@@ -71,10 +71,14 @@ router setup --non-interactive  # CI / containers: no questions, every answer at
 
 A few things worth knowing before you run it:
 
-- **The file comes from the shipped example, and what you get is always the pair.** Without `--from`, the
+- **The files come from the shipped example, and what you get is always the working set.** Without `--from`, the
   starting point is the `config.example.yaml`
   embedded in your binary — the one of its own commit — together with the embedded `providers.example.yaml` it
-  names: a fresh run writes **both**. Where the result goes is described below; the absolute
+  names: a fresh run writes **both**. It also writes the **third** file that same config names — the rule file
+  the `plugins` entry points at (`./rules/tool_output.toml`), copied from the rule file embedded in your binary
+  — so a fresh install's transform engine finds its rules instead of starting with a dangling reference
+  ([ADR-046](../design/decisions/ADR-046-setup-lands-the-rule-file.md); [`docs/spec.md` §4.11](../docs/spec.md)).
+  Where the result goes is described below; the absolute
   path is always printed. If the file already exists it is the starting point
   instead, so your own edits are what the questions start from — and if that file carries the roster
   **inline** (`providers:` in the config itself, the shape every config written before the example split
@@ -113,6 +117,16 @@ A few things worth knowing before you run it:
   [Operations](operations.md#backup) assumes. To keep your traces somewhere else — a directory you already back
   up, or a drive that is not your dotfiles — write an **absolute** `trace.dir` in the `paths` section: a
   leading `~` is not expanded, so spell the path out in full.
+- **Where the rule file lives — written for you, yours afterwards.** The `plugins` entry names its rule file
+  (`plugins[].config.rules_file`), and `router setup` writes it beside the config, resolved against the config
+  file's own directory like every other path above, from the rule file embedded in the binary: **created** when
+  it is not there, left **untouched** when it is, and replaced only by `--force` with the `plugins` section
+  selected — the previous bytes kept at `<file>.bak` first — so a reconfigure never discards rules you wrote.
+  The directory it creates is mode `0700` and the file it creates `0600`; nothing *inside* the file is ever
+  edited by the wizard, because a rule's own knobs are yours
+  ([ADR-046](../design/decisions/ADR-046-setup-lands-the-rule-file.md);
+  [`docs/spec.md` §4.11](../docs/spec.md)). Without this the file the shipped config names would not exist on a
+  fresh install, and a request that asks for transform mode would run with an empty ledger.
 - **Where the roster lives — its own file, named.** The `providers:` block (its prices, its `source`
   citations, its key-variable names) sits in `providers.example.yaml`, which the config **names** with
   `providers_file:` — and it may instead sit **in the config file** inline. Exactly one of the two keys is
