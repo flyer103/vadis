@@ -65,20 +65,57 @@ wire_api = "responses"                  # must equal the route's native protocol
 env_key  = "ROUTER_TOKEN"
 ```
 
-and a catalog entry for the slug in `~/.codex/models.json` — the copy-paste JSON (verified
-against codex-cli 0.137.0) is in the [README quick start](../README.md#quick-start). Then:
+and a catalog entry for the slug in `~/.codex/models.json` — without one a one-shot
+`codex exec` still runs, but codex then has no context-window or capability metadata for
+your route. The catalog entry that was verified against codex-cli 0.137.0:
+
+```json
+{
+  "models": [
+    {
+      "slug": "coding-fast",
+      "display_name": "coding-fast (via router)",
+      "description": "router alias -> deepseek/deepseek-flash",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "supported_reasoning_levels": [],
+      "visibility": "list",
+      "shell_type": "shell_command",
+      "supported_in_api": true,
+      "priority": 1,
+      "base_instructions": "You are a helpful assistant.",
+      "supports_reasoning_summaries": false,
+      "support_verbosity": false,
+      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "supports_parallel_tool_calls": true,
+      "experimental_supported_tools": []
+    }
+  ]
+}
+```
+
+Then smoke it, from any scratch directory you own:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
 codex exec --skip-git-repo-check -C <dir> "Reply with the single word: pong" < /dev/null
 ```
 
+Expected: the banner names `provider: router` and `model: coding-fast`, the reply is `pong`,
+and the router's trace records the session (codex sends a stable `prompt_cache_key`).
+
 `wire_api` here is the one easy mistake: it must equal the **provider's** `wire_api` for the
 route you picked, because v0.1 serves only native routes — a chat wire against the example
 roster's `deepseek` entry (native `responses`) answers `501 not_implemented`. Pick a
-chat-native route from your roster if your codex build cannot speak `responses`. The
-`--skip-git-repo-check` and `< /dev/null` flags and the `NO_PROXY` export are explained line
-by line in the README quick start.
+chat-native route from your roster if your codex build cannot speak `responses`.
+
+Why the non-obvious parts are there:
+
+- `--skip-git-repo-check` — codex refuses to run outside a trusted git directory without it: `Not inside a trusted directory and --skip-git-repo-check was not specified.`
+- `< /dev/null` — `codex exec` reads stdin for additional input (`Reading additional input from stdin...`); pointing it at `/dev/null` gives that read an immediate EOF when you drive it from a script or CI.
+- `NO_PROXY` — the prerequisite above; reqwest does not honour the system proxy's exclusion list for `127.0.0.1`.
+- `wire_api = "responses"` — a chat wire against the example roster's `deepseek` entry would answer `501 not_implemented` (an inbound protocol the entry does not declare in `supports` answers `400` before that).
+- `env_key = "ROUTER_TOKEN"` — the token a client sends router is router's own **inbound** token, not a provider credential; provider keys live only in the router process's environment.
 
 The **failover chain never crosses protocols either**: a `fallback` entry — or a plan family's `overflow`
 route — whose `wire_api` is not your inbound protocol is skipped exactly as an entry the router holds no key
@@ -118,7 +155,8 @@ HERMES_HOME=<hermes-home> hermes --continue -z \
 # rc=0, stdout: router-hermes-tool
 ```
 
-Two pitfalls are load-bearing (both were hit for real during the smoke):
+Why the non-obvious parts are there — all three are load-bearing (the first two were hit for
+real during the smoke):
 
 - **`api_mode: codex_responses` must be written explicitly.** That is what makes hermes post
   `POST /v1/responses` — the same native path codex uses. For a loopback `base_url` hermes's
@@ -129,6 +167,8 @@ Two pitfalls are load-bearing (both were hit for real during the smoke):
   `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`
   when it cannot find it. `key_env: ROUTER_TOKEN` in the entry plus `ROUTER_API_KEY` holding
   the token in `.env` is the combination that reached 200.
+- **An isolated `HERMES_HOME`.** The config, `.env` and sessions of that run all live under
+  it, so your default profile is left untouched — use it for every command above.
 
 What that run left in the trace, so you know the healthy shape of a hermes session:
 
@@ -205,7 +245,8 @@ server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout
           auth_token_env: ROUTER_TOKEN }
 ```
 
-3. Give the same value to each client. Both header forms are accepted, so either works:
+3. Give the same value to each client. Either accepted header form works, so send whichever you
+   prefer:
 
 ```bash
 curl -s http://127.0.0.1:8790/v1/chat/completions \
@@ -223,6 +264,19 @@ these examples is the chat one: pair it with a chat-native route from your roste
 file's `zai` or `kimi` entries), or use `/v1/responses` for a responses-native route like
 `coding-fast` — v0.1 refuses the cross-protocol cell with `501 not_implemented` (see
 [Protocols](protocols.md)).
+
+A refused request answers `401` with the correlation header present — nothing reaches the
+upstream, and the refusal still leaves exactly one trace record (pre-pipeline, cost `0`):
+
+```
+HTTP/1.1 401 Unauthorized
+x-router-request-id: req-1
+
+{"error":{"type":"unauthorized","message":"inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')","details":{"header":null},"request_id":"req-1"}}
+```
+
+`details.header` names the header that was read and rejected — `"authorization"` for a wrong or
+malformed `Authorization` value, `null` when no token was presented at all.
 
 Four things worth knowing before you rely on this:
 
@@ -304,8 +358,9 @@ not. Backup, inspection and what the store does when it cannot be opened are in
 5. If anything looks wrong, check prefix continuity between turns first — that number, not
    the model choice, is what tells you whether a transform is breaking the upstream cache.
 
-The three protocol endpoints are served today (the [README](../README.md) status lists what has
-landed). What still answers `501 not_implemented` is a route that would need cross-protocol
+The three protocol endpoints are served today (the [README](../README.md) says what is **not**
+in v0.1, and [`docs/spec.md` §9.3](../docs/spec.md) is the served/not-served list for the
+reporting surfaces). What still answers `501 not_implemented` is a route that would need cross-protocol
 translation — an inbound protocol that is not the provider's own `wire_api` (see
 [Protocols](protocols.md)). The proxy prerequisite above is the one you need before any of it can
 reach router at all; the token (if you turned inbound auth on) is what gets a request through the
