@@ -140,6 +140,10 @@ plugins:
   - id: tool-output-rules
     kind: builtin/transform_rules                 # rules as data (TOML + inline tests, ADR-003)
     config:
+      # `router setup` writes this file beside the config, from the rule file embedded
+      # in the binary: created when it is absent, left untouched otherwise, and replaced
+      # only by `--force` with the `plugins` section selected (spec §4.11's rule-file
+      # lane; ADR-046). Without that, a fresh XDG install carries a named absence here.
       rules_file: ./rules/tool_output.toml        # resolved relative to **this config file's directory** (not the CWD)
       on_failure: passthrough                     # rule load/execution failure → fall back to the original text (spec §8 fail-safe)
       # Rules may declare `tee` (spec §4.4); but v0.1 provides **no** on-disk

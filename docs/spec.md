@@ -1083,6 +1083,47 @@ alike:
   names, a `roster` member in `--json` (the row above) — and states nothing of the kind for a root that
   already names its roster.
 
+**The rule-file lane: the third file the template names (ADR-046).** A writing run also owns the **rule file
+its base config names** — `plugins[id=<entry>].config.rules_file` on the base's `builtin/transform_rules`
+entry (the shipped template's entry is `tool-output-rules`, naming `./rules/tool_output.toml`), resolved by
+§4.1's rule against the directory containing the config file, never the CWD. Its bytes come from the rule file
+**embedded in this binary** — the third embedded template beside the root example and the roster example,
+embedded for exactly the reason the `--from` row gives for the other two: an installed binary with no example
+beside it must still land a working bundle. The path is **read** from the base, never prompted and never
+invented, and the `plugins` section's askable key set does not change. A base that names no rule file (no
+`builtin/transform_rules` entry, or one without `config.rules_file`) has **no** third lane, and nothing is
+materialized. Four properties, each a sentence a stranger can check:
+
+- **Absent ⇒ created, reported.** Any writing run — bare, `all` or one section — writes the file from the
+  embedded template when it is not there, and says so.
+- **Present ⇒ untouched.** A run that does not replace it leaves an existing rule file byte-identical, mtime
+  unmoved, and says at most `no change` about it: the operator's rules are data, and a routine reconfigure
+  does not touch them.
+- **`--force` with the `plugins` section in the run's section list ⇒ replaced** by the embedded template, the
+  previous bytes kept at `<file>.bak` **before** the write (the `--force ⇒ --backup` row below; the shape
+  step's own D6 shape). `--force` without the `plugins` section, and every run without `--force`, replaces
+  nothing.
+- **A roster-scoped replacement is not a rule-file replacement.** `router setup providers --from <roster>
+  --force` over an existing split root swaps the roster as a unit and does not replace the rule file — the
+  `plugins` section is not in that run's section list.
+
+The run never edits a rule's content: the rule file's bytes are the embedded template's own, always — no rule,
+no value and no comment inside it is composed by the wizard, and its lane's report says `0 edits applied`
+truthfully (a rule's numeric knobs, §4.4's L1 envelope, are edited by hand). `G7` is therefore unqualified
+here: the bytes written are a function of the template alone. `G3`'s idempotence is **extended to the third
+file** — a second run with the same inputs leaves the rule file's bytes **and** its mtime unmoved (`CONF-69`'s
+property, read for this file) — and `G8`'s modes hold for what the run creates: the `rules/` directory `0700`,
+the file `0600`, set explicitly and read back from the filesystem, with an existing directory or file never
+re-moded and a rule file the run **replaces** keeping the mode it had (the `0600` is a **creation** mode).
+
+**The read-only surfaces, and the dry run.** `--check`'s stdout does not change one byte: a rule file names no
+environment variable and is not one of the facts that surface states, and
+`tests/conformance/tests/conf_86_setup_check_roster_fact.rs` — the only case that pins `router setup`'s output
+— pins that surface. **`--dry-run` names the file it would create or replace**, in the same per-lane `# <path>`
+/ `would write …` report the other two lanes already print. **`--print` shows nothing new**: the rule file's
+existence is a filesystem fact about a file beside the config, not a fact about the config's content, which is
+what `--print` renders. The materialization is reported by the run's own report and by `--dry-run`.
+
 Three consequences of the target column and the shape step, all part of this contract:
 
 - **The candidate is the pair.** `--check` / `--print` and the write path load and validate the **root and
@@ -1102,7 +1143,10 @@ Three consequences of the target column and the shape step, all part of this con
 
 *Shipped since the example's split (§4.14):* the target-file column above is the behaviour — the shipped
 example is the pair (`config.example.yaml` naming `providers.example.yaml`), the wizard embeds **both**
-templates, and a fresh run writes both files. Since **ADR-038** an existing inline root is normalized by the
+templates, and a fresh run writes both files. Since **ADR-046** it embeds a **third** template and writes a
+**third** file: the rule file the template's `plugins` entry names, materialized beside the config (created
+when absent, replaced only by `--force` with the `plugins` section selected — the rule-file lane above), so a
+landing is the complete working bundle. Since **ADR-038** an existing inline root is normalized by the
 same run: a bare `router setup`, or any section-scoped one, moves the block into the roster file and writes
 `providers_file:` in its place, so the shape a run produces is the pair whatever the file's history. The
 inline root stays a legal shape **for the reader** — `serve`, `stats` and `--check` load it exactly as they
@@ -1261,6 +1305,7 @@ refusal, so `router setup | tee setup.log` works.
 | read, write or echo any key value; create a key; write a `.env` | §4.7 / §12.11: the value never enters a struct, a log line, a trace field or an event payload — and a wizard is none of those |
 | write any vendor fact (price, `source`, `context`, endpoint, model id) | constraint 5: those values are transcriptions of an official page, and a copy of one in code is exactly what the example's comments exist to prevent |
 | add, remove, reorder or reformat anything in the file | ADR-025: the edits are value replacements on existing lines; the comment-destroying rewrite is not offered |
+| overwrite the operator's rule file on a routine run, or leave the one the file names unwritten | the rule file the base config names at `plugins[id=<entry>].config.rules_file` is **materialized when it is absent** (reported) and **replaced only by `--force` with the `plugins` section selected** — the previous bytes kept at `<file>.bak` first — while a bare run leaves an existing rule file byte-identical and never edits a rule's content (ADR-046; the rule-file lane above) |
 | change anything on the decision path or the byte boundary | AGENTS constraint 1: this command is not in the serving path, and it writes no trace, no event and no store row |
 | enable a transform | ADR-019 I3: transform mode is a **request** fact, the client's own opt-in. Switching a plugin entry off or on is a config change; it never edits a request that did not ask |
 | introduce a config key | `deny_unknown_fields`: a key only the wizard understands is an unservable file. There is **no `_config_version`** and no `setup`-owned key — "what is missing" is measured against the shipped example, which §4 already makes the contract, not against a second table |
@@ -1272,9 +1317,18 @@ refusal, so `router setup | tee setup.log` works.
 **What must be asserted when this lands** (the shape the implementing round's rig takes; IDs in DESIGN §12.8):
 the non-interactive file is byte-identical to the template and loads (G1); one overridden key moves only its own
 line (G2); the refusal ladder — an unresolvable anchor, an ambiguous anchor, a not-settable key with a requested
-change, a candidate that fails the loader — leaves the target untouched (G4); idempotence (G3); the secret canary
+change — leaves the target untouched (G4); idempotence (G3); the secret canary
 (G5); `--check`'s three exit codes and the token's absent-versus-empty distinction; and the interactive path
 driven by a **PTY** script rather than by a Rust test harness.
+
+The **rule-file lane** (ADR-046) adds its own assertions to that list, all in-crate: the file the base names is
+**created** when absent, its bytes equal the embedded template's (one hash comparison), and the `rules/`
+directory it creates reads back `0700` while the file reads back `0600` (G8, read off the filesystem); a second
+run leaves that file's bytes **and** its mtime unmoved with `no change` (G3, extended); a **present** rule file
+is byte-identical after a bare run and after `--force` **without** the `plugins` section, and is replaced with
+its previous bytes kept at `<file>.bak` by `--force` **with** it; `--check`'s stdout is byte-identical whether
+the file is there or not, while `--dry-run` names the file it would create or replace; and a base that names no
+rule file materializes nothing.
 
 ### 4.12 The config file's location, and the paths inside it
 
@@ -1475,7 +1529,10 @@ never a score** — it is not a config key, it enters no gate, and no report tot
 
 **Shipped.** `providers_file` is parsed and resolved at load, and the shipped example is the split form:
 `config.example.yaml` names `providers.example.yaml`. `router setup` writes both files from its embedded
-templates, `--check` validates the pair — a root naming a roster that is not there exits 2, naming the
+templates — and, beside them, the **third** file the same template names: the rule file its `plugins` entry
+points at, so one landing is the complete working bundle, the root and the roster and the rules together (the
+rule-file lane in §4.11; ADR-046) — `--check` validates the pair — a root naming a roster that is not there
+exits 2, naming the
 resolved path — and `GET /health` reports the identity above (§9.1). Nothing in §4.14 changed a single byte
 of the inline form, which stays legal, unchanged and loadable: exactly one of `providers:` and
 `providers_file:` is written, and a root that writes both or neither is refused (§4's rule).

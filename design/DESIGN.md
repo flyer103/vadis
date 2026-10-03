@@ -3182,7 +3182,7 @@ field is introduced); `cost.currency`; the store (no event kind, no projection);
 guard; `quota`'s chargeable-token convention (`input_total + output`, GAP-Q1); and the in-plan zero marginal
 price. For an entry written flat, every one of these is unchanged by construction — the vector has one element.
 
-### 12.14 The `router setup` writer: the anchored-edit landing (ADR-025; spec §4.11, §4.12)
+### 12.14 The `router setup` writer: the anchored-edit landing (ADR-025; the rule-file lane ADR-046; spec §4.11, §4.12)
 
 The contract is spec §4.11 (the writer) and §4.12 (where the file it writes is found); this is where they land.
 `setup` is the **second writer of a config file** this
@@ -3198,7 +3198,7 @@ file's §2, and "anti-pattern N" its §4.
 
 | Module | Holds |
 |---|---|
-| `setup/mod.rs` | the run: the target/base decision, the section list, the plan → validate → land sequence, the exit codes |
+| `setup/mod.rs` | the run: the target/base decision, the section list, the plan → validate → land sequence, the exit codes — and the three embedded templates it starts from: the root example (`EMBEDDED_TEMPLATE`), the roster example (`EMBEDDED_ROSTER`) and, from **ADR-046**, the rule file (`EMBEDDED_RULES`, `rules/tool_output.toml`) |
 | `setup/sections.rs` | **the section table** — the single place the wizard's key set is written (section, key path, edit kind, how to ask, style hint) |
 | `setup/anchor.rs` | the line-oriented locator: key paths → a unique `(line, byte range)` inside the file's own bytes |
 | `setup/edit.rs` | the two edit kinds, the value codec, `Plan`, `apply` |
@@ -3292,10 +3292,27 @@ never touches a line it has no edit for.
    step is part of the run's candidate: the roster lane lands first, the root second, both validated as a
    pair before either lands (D8). The insertion is labelled `1b` so that no step number below and no
    cross-reference elsewhere in this document moves.
+1c. **The rule-file lane (ADR-046).** The run also owns the file its **base config** names at
+   `plugins[id=<entry>].config.rules_file` on its `builtin/transform_rules` entry, resolved by §4.1's rule
+   against the config file's own directory (`config_load::resolve`), never the CWD. The path is read from the
+   base — never prompted, never invented, and the section table's askable key set is unchanged
+   (`sections.rs:314-328` carries `plugins[id=<entry>].disabled` only) — and a base that names no rule file
+   has **no** such lane. The lane's bytes are the third embedded template (`EMBEDDED_RULES`,
+   `rules/tool_output.toml`), and its replacement rule is the roster lane's own, read for a file no section
+   owns: `replaced = !exists || (args.force && <the `plugins` section is in the run's section list>)`
+   (`setup/mod.rs:299-306`'s shape). Its `base` is the file's own bytes when it is untouched — so the plan is
+   empty for it, the wizard composing no rule content — the template's when it is created or replaced
+   (`Lane { existed, replaced, base }`, `setup/mod.rs:162-196`). `--force` implies `--backup`, so a
+   replacement keeps the previous bytes at `<file>.bak` before the write — the same
+   `backup_path`/`fs::copy` path the other lanes use (`setup/mod.rs:542-561`, `:642`); a creation has nothing
+   to keep. The file the run creates is `0600` and the `rules/` directory it creates `0700`, through the same
+   explicit-mode landing (`setup/mod.rs:1161`, `:1191`, `:1213`); an existing file or directory is never
+   re-moded and a replaced file keeps the mode it had (step 11's rule, read for the third file). The insertion
+   is labelled `1c` for the same reason `1b` is: no step number and no cross-reference moves.
 2. `--print` and `--check` print and return here (no prompt, no write; over a base root that carries the roster
    inline, both prepend the same one-line fact, naming the file a writing run would move it to, and a `roster`
-   member in either `--json` — and nothing else on those surfaces moves, the exit codes included).
-   `--dry-run` runs the plan and prints it
+   member in either `--json` — and nothing else on those surfaces moves, the exit codes included). `--dry-run`
+   runs the plan and prints it
    in place of step 9.
 3. Build the section list (bare / `all` = all seven, in the order spec §4.11's table lists them).
 4. For each key of each section: resolve the anchor against the **base**; the shown default is the file's
@@ -3395,6 +3412,12 @@ strategy moves:
   **move**: the `providers_file:` line it writes is the shipped template's own, and the roster file it
   creates carries the root's own bytes. It never composes a key, a value or a comment of its own, and it
   never repairs a file that does not load (ADR-038 D5).
+- **And a third file, which is not a section target (ADR-046, step 1c above).** Beside the pair the writer
+  owns the **rule file its base names** (`plugins[id=<entry>].config.rules_file`): no section's keys land in
+  it, the wizard never edits its content, and the only things the run may do to it are copy the embedded
+  rule template over it (when it is absent, or under `--force` with `plugins` selected) and leave it alone
+  otherwise. It is the third of the run's write targets, and the pair's rules above — one target per
+  section, the pair as the candidate, the template per target — are unqualified by it.
 
 All of this landed **together with the shipped example's split and the embedded roster template** — R43-4,
 the card that also gives the section table its *target file* column (`providers.example.yaml`, one roster and
@@ -3438,6 +3461,17 @@ unchanged.
   roster's name is kept at `<roster>.bak` before it is overwritten; a root writing **both** keys, one writing
   **neither** and one that does not parse are refused with nothing written; and a roster whose bytes already
   equal the moved block is neither written nor backed up.
+- **The rule-file lane's own rig** (spec §4.11's rule-file paragraph; ADR-046): over a base whose config names
+  a `builtin/transform_rules` entry and a path that is not there — the file is **created** and its bytes equal
+  the embedded `rules/tool_output.toml` (one hash comparison against `EMBEDDED_RULES`), the `rules/` directory
+  it creates reads back `0700` and the file `0600` (off the filesystem); a second run leaves that file's bytes
+  **and** its mtime unmoved (`CONF-69`'s property, extended — the hash pair and the mtime, over the third
+  file); a **present** rule file is byte-identical after a bare run and after `--force` on a section list
+  without `plugins`, while `--force` **with** `plugins` replaces it and keeps the previous bytes at
+  `<file>.bak`; the file's bytes are the template's after every one of those writes (the wizard edited
+  nothing inside it); a base naming no rule file materializes nothing; and `--check`'s stdout over an absent
+  and over a present rule file is **byte-identical** (the surface this lane must not move), while
+  `--dry-run` names the file it would create or replace.
 - **The interactive path is driven by a PTY script** (the survey's own technique for `docker init`), not by a
   Rust test harness: a PTY test dependency would be a dependency-allowlist change (§12.1) and therefore a human
   decision, and the zero-dependency path is a script.

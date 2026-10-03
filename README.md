@@ -21,7 +21,7 @@ Every transform is a pure function of (content, stable config). The prefix on tu
 | **Prefix-cache continuity** | session identity is the client's own key (`prompt_cache_key`, then the configured headers), and every rewrite is content-deterministic, so one turn cannot invalidate the cache for the turns after it |
 | **A declarative plugin runtime** | the runtime mounts what the `plugins:` list declares — exactly one kind today, `builtin/transform_rules`, the rule engine over `rules/tool_output.toml`; `inject` and `disabled` are honoured, `isolate` / `intercept` are inert, tier-B is a stub, and the three always-resident builtins stay resident |
 | **Hot reload** | a configuration change takes effect without a restart |
-| **Guided setup** | `router setup` writes the config pair from the two templates embedded in the binary, byte for byte, and edits only the keys that are yours |
+| **Guided setup** | `router setup` writes the config pair — and the rule file that config names — from the templates embedded in the binary, byte for byte, and edits only the keys that are yours |
 
 ## Requirements
 
@@ -256,7 +256,12 @@ neither exists, `serve` / `stats` refuse and name `router setup`, which creates 
 (mode `0600`; any directory it creates `0700`).
 
 `router setup` writes the pair from the two templates embedded in the binary — `config.example.yaml`
-and the roster it names, `providers.example.yaml` — byte for byte, and asks only about the keys
+and the roster it names, `providers.example.yaml` — byte for byte, and it writes the **third** file the same
+config names: the rule file its `plugins` entry points at (`rules/tool_output.toml`), copied from the rule
+file embedded in the binary, so a fresh install's transform engine finds its rules instead of starting with a
+dangling reference — created when it is absent, left untouched when it is there, replaced only by `--force`
+with the `plugins` section selected
+([ADR-046](design/decisions/ADR-046-setup-lands-the-rule-file.md)). It asks only about the keys
 that are yours, editing them by anchored single-line edits; a config that still carries the
 roster inline is **moved** into the roster file by the same run, so the wizard's output is one
 shape ([ADR-038](design/decisions/ADR-038-setup-writes-the-pair.md)). `router setup providers`
