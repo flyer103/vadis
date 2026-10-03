@@ -42,6 +42,12 @@ fashion.
   guard and the sticky (session) table. They are compiled in and always on.
 - **Explicit model selection.** `auto` is an empty slot: explicit selection is the behaviour, and a
   request asking for `auto` is refused with a clear error rather than guessed.
+- **A second builtin kind: the exact-match response cache.** `builtin/response_cache` (spec §4.17,
+  ADR-042) replays a recorded response when a request is byte-identical to one the same session
+  already sent — off by default, and turning it on takes both a `plugins:` entry of that kind
+  **and** `config.enabled: true` inside it. A served repeat is a replay, not a prediction, and its
+  figure is labelled `inferred` and kept out of every rate and sum. See
+  [Cost and caching](cost-and-caching.md#response-caching-exact-match-only-off-unless-you-ask).
 
 ## What is specified but not built yet
 

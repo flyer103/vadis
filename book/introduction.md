@@ -31,5 +31,5 @@ cache, and records every decision and every cent into a replayable trace.
 - [`design/DESIGN.md` §1](../design/DESIGN.md) — the system panorama (HOW it is built).
 - [`AGENTS.md`](../AGENTS.md) — the hard constraints that bind every change, including
   the rule that this book links rather than duplicates.
-- [`autowork/STATE.md`](../autowork/STATE.md) — current state and the measured facts that
-  decisions here rest on.
+- [`docs/spec.md` §1](../docs/spec.md) — goals and non-goals (WHAT is contractual).
+- [`docs/spec.md` §9.3`](../docs/spec.md) — what is served and what is not.

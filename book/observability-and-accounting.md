@@ -140,6 +140,9 @@ truth, and neither prices anything you cannot already find in a record:
   instant at which the plan may be probed again, plus why a probe would not be admitted yet
   (the cooldown, the plan's own window, a provider cooldown). It reports state; it can also say
   that no family is configured, and it never invents one.
+- **`GET /metrics`** (spec §4.16) renders §9.2's own figures over the last 900 seconds in the
+  Prometheus text exposition format, behind the same token guard as the three protocol
+  endpoints, with each labelled figure carried as a machine-readable `provenance` value.
 - **`router stats --config config.yaml --window 24h`** reads the traces in that window and prints
   the cost and cache report, the measured savings per transform, the plan family's switches and
   what they cost, and how many requests in the window have an outcome router cannot verify (see
@@ -151,10 +154,10 @@ conventions are the table above): you can tell a measured number from an estimat
 the report, not afterwards. The field-by-field shape, each figure's provenance and which record
 it comes from are [`docs/spec.md` §9](../docs/spec.md).
 
-Three things are deliberately **not** served in v0.1: **`router replay`** (recompute cost and
-cache over a fixed trace through the same code path that served it), **`router trace tail`**
-(follow the live decision stream) and **`GET /metrics`**. They are planned; the report above does
-not depend on them. Until they land, the trace file itself is the interface — one decision record
+Two things are deliberately **not** served in v0.1: **`router replay`** (recompute cost and
+cache over a fixed trace through the same code path that served it) and **`router trace tail`**
+(follow the live decision stream). They are planned; the report above does not
+depend on them. Until they land, the trace file itself is the interface — one decision record
 per request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
 reason a surface's shape is frozen only by the change that implements it is the rule in
 [`docs/spec.md` §9.3](../docs/spec.md).
@@ -197,9 +200,9 @@ behaviour obeys one rule: its **raw artifact is committed under a tracked path i
 beside **the exact command** that produced it and **the reducer** that turns the raw into the
 figure, with **the machine and the commit** named (a figure that does not name its machine is not
 citable). So you can check one without trusting it, and without re-running any measurement: clone
-the repository, find the run's directory under `autowork/harness/`, run the published reducer over
-the committed raw, and compare. What that gives you is the **figure**, not the **measurement**: a
-stranger reproduces the figure from the committed raw and the reducer alone, while repeating the
+the repository, find the committed raw under the measurement evidence the figure names, run the
+published reducer over it, and compare. What that gives you is the **figure**, not the **measurement**:
+a stranger reproduces the figure from the committed raw and the reducer alone, while repeating the
 measurement — re-running the run the raw came from — needs a built gateway binary (it is not in the
 repository; it is built from the commit the figure names) and a machine of the kind the figure
 names. The figure is the part that has to hold still; the measurement is yours to repeat. If a
@@ -250,7 +253,7 @@ figures are not savings figures: `verified` and `inferred` (the table above) are
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — where the numbers are computed in the
   request pipeline, and where prefix blocks come from.
 - [`design/decisions/ADR-005-trace-as-interface.md`](../design/decisions/ADR-005-trace-as-interface.md)
-  — why the trace is the sole interface to the iteration loop.
+  — why the trace is the sole interface to anything that analyses it.
 - [`design/decisions/ADR-010-event-log-as-state-truth.md`](../design/decisions/ADR-010-event-log-as-state-truth.md)
   — the state truth, the join key and the unknown-outcome rule.
 - [`design/decisions/ADR-045-citable-numbers-and-the-streaming-fidelity-instrument.md`](../design/decisions/ADR-045-citable-numbers-and-the-streaming-fidelity-instrument.md)
@@ -258,5 +261,3 @@ figures are not savings figures: `verified` and `inferred` (the table above) are
   measurement's route, and the rule that makes a figure citable.
 - [`design/DESIGN.md` §12.23](../design/DESIGN.md) — those definitions as contract text; §12.16
   for where a baseline's measured numbers live.
-- [`autowork/STATE.md`](../autowork/STATE.md) — the measured facts and the current
-  state-of-the-world as of the last round.
