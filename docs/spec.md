@@ -365,7 +365,7 @@ Config-change semantics (aligned with Cordis's keyed diff, see ADR-002): a `conf
 the plugin to diff by itself and reload (the process is not rebuilt); `disabled: true` → unload that
 fiber and fully roll back its effects; an `id`/`kind` change → rebuild that entry.
 **This paragraph describes the contract, not today's binary** — the loader that would act on it is P9,
-whose implementation is R41-2 (ADR-036; §4.3's honesty note above).
+whose implementation is ADR-036's machinery (§4.3's honesty note above).
 
 ### 4.1 `trace` (the on-disk parameters of the observation medium)
 
@@ -515,8 +515,8 @@ One request leaves two records, and they have different jobs:
 
 | Record | Job | Shape | Who reads it |
 |---|---|---|---|
-| **event log** (`events`) | the **state truth**: every state transition (session binding, upstream intent, quota charge, config applied, …) | one row per event, ordered by `event_id` | the serving path and its projections; **internal** — autowork never reads it (ADR-005) |
-| **trace** (`trace.dir` JSONL) | the **analysis truth**: one `DecisionRecord` per request (§6) | one JSON line per request | `router replay` / `router stats` / autowork: the only product → autowork channel |
+| **event log** (`events`) | the **state truth**: every state transition (session binding, upstream intent, quota charge, config applied, …) | one row per event, ordered by `event_id` | the serving path and its projections; **internal** — the analysis loop never reads it (ADR-005) |
+| **trace** (`trace.dir` JSONL) | the **analysis truth**: one `DecisionRecord` per request (§6) | one JSON line per request | `router replay` / `router stats` / the analysis loop: the only product → loop channel |
 
 - **Join key: `request_id` + `event_id`.** The trace's `event_id` (§6 "identity") is that request's
   `request.received` event, and the rest of that request's events share its `request_id`; the two records
@@ -537,9 +537,9 @@ One request leaves two records, and they have different jobs:
   handoff of §4.6 that re-points live bindings — and that handoff's rows are anchored on the
   `session.bound` row they write, **never** on the `plan.switched` row that caused the move: *the binding
   event* is the row that carries the binding, and the anchor is a function of that row's own `ts_us`
-  (`R27-F1`, closed by R28; `DESIGN` §12.10.5 note R7). (Stated here because it is the sticky table's own state.
+  (a finding later closed; `DESIGN` §12.10.5 note R7). (Stated here because it is the sticky table's own state.
   The shipped v0.1 build converted × 1 000 000 instead, so a configured `12h` was honoured as ~12 000 h —
-  the pre-existing `R21-F6`, frozen and corrected by R27; the store's own fixtures are the convention's
+  the pre-existing defect, frozen here and since corrected; the store's own fixtures are the convention's
   witness, `43_200_000_000` µs for a 12 h binding.)
 - **A binding's state is read off one row, and a move is a write to that row.** The sticky table is a
   projection of `session.bound` rows **alone**: a session's `provider`/`model` come from its **latest**
@@ -548,8 +548,8 @@ One request leaves two records, and they have different jobs:
   (§6's `route_changed`) *and* the plan policy's account handoff (§4.6 rule 1) — so the handoff re-points a
   family's live bindings by writing **one `session.bound` row per re-pointed session**, never by writing
   the projection alone: a state transition the log does not carry is not state (ADR-010), and a projection
-  written without its row is exactly the disagreement a rebuild repairs *away* (`R27-F1`, closed by R28;
-  the landing is `DESIGN` §12.10.5 note R7). A move is not a client request, and `requests_seen` therefore
+  written without its row is exactly the disagreement a rebuild repairs *away* (the finding above, since
+  closed; the landing is `DESIGN` §12.10.5 note R7). A move is not a client request, and `requests_seen` therefore
   counts **binding writes**, not requests: `turn_index` (§6) is this count + 1, and it advances on a move.
   (One consequence is worth stating because it looks like a defect and is not: a session can gain two rows
   in one request — its own resolution moved it onto the route the handoff is abandoning, and the handoff
@@ -784,7 +784,7 @@ of one vendor sit in one roster.
 ids** be one family. When the plan-side entry's native id differs from the metered one (a plan may expose a
 different id shape than the metered catalogue — measured example: ZAI's coding plans serve the **bare** ids
 `glm-5.3` / `glm-5.3-flash` on every wire; the `[1m]` form their docs mention is a Claude-Code client-side
-switch, refused 400 `[1211]` by the upstream when sent as an id, R16-1), each side must state the same `family:`
+switch, refused 400 `[1211]` by the upstream when sent as an id), each side must state the same `family:`
 tag explicitly to complete the pairing; the pairing is never inferred from id equality.
 
 - **A name, not an address.** A client never writes a tag: it writes `provider/model` or an alias (§3), and a
@@ -1078,7 +1078,7 @@ alike:
 - the root takes **no** automatic backup from this step (its block *is* the new file's content);
   `--backup` and `--force` are unchanged;
 - the move is **reported**, never silent: the run's report, `--dry-run` and `--print` each state the span
-  and the file it goes to (ADR-038 D9). **Since R45 (2026-09-26)** the same fact is stated on the fourth
+  and the file it goes to (ADR-038 D9). **Since 2026-09-26** the same fact is stated on the fourth
   surface, the one D9 did not name: over an inline root `--check` carries it too — one line before its
   names, a `roster` member in `--json` (the row above) — and states nothing of the kind for a root that
   already names its roster.
@@ -1314,7 +1314,7 @@ refusal, so `router setup | tee setup.log` works.
 | add a crate dependency | zero new dependencies: stdin lines, stdout, and `std::io::IsTerminal` from std. No prompt/TUI crate, no dotenv, no schema generator |
 | touch an existing conformance assertion, a gate or the corpus | AGENTS constraint 9 / ADR-012 |
 
-**What must be asserted when this lands** (the shape the implementing round's rig takes; IDs in DESIGN §12.8):
+**What must be asserted when this lands** (the shape the implementing rig takes; IDs in DESIGN §12.8):
 the non-interactive file is byte-identical to the template and loads (G1); one overridden key moves only its own
 line (G2); the refusal ladder — an unresolvable anchor, an ambiguous anchor, a not-settable key with a requested
 change — leaves the target untouched (G4); idempotence (G3); the secret canary
@@ -1618,7 +1618,7 @@ the owner's, and nothing measures it before the ruling.
 ### 4.16 `GET /metrics` (the operator's scrape surface)
 
 *Status: **served** — the contract below, the amended `CONF-46` and the handler land **together** in the
-round that implements it (R50), so the tree is never documented-but-unreachable and never red in between
+change that implements it, so the tree is never documented-but-unreachable and never red in between
 (§9.3's rule). The route's home, the seam it joins and the derivation it must not duplicate are
 `design/DESIGN.md` §12.21; the authority, the rejected alternatives and the register are
 [ADR-041](../design/decisions/ADR-041-metrics-surface.md).*
@@ -1636,7 +1636,7 @@ figure of its own — its numbers are §9.2's, rendered.
 | Any other status | **a defect.** The status set is exactly `{200, 401}`: never `404` (the surface is served), never `501`, never `503`, and never §8's error body on the `200` arm |
 | Window | **`900` seconds, a process constant** (`WINDOW_MS`), not a key, not a flag, not a query parameter; stated in every response by the `router_metrics_window_seconds` series, because §9.2's rule (*"a report must state the window it covers"*) has no other way to be kept in-band |
 | Timestamps | **none.** The scrape's own instant is the scraper's; the body carries no wall-clock value and no uptime, so two scrapes over an unchanged window are **byte-identical** |
-| Reads | the resolved `trace.dir` (`AppState`, §4.1's resolution; a key the reload **refuses**, §4.15). **Not** the store, **not** the config beyond the plan family below, and nothing under `autowork/` (constraint 3) |
+| Reads | the resolved `trace.dir` (`AppState`, §4.1's resolution; a key the reload **refuses**, §4.15). **Not** the store, **not** the config beyond the plan family below, and no path outside the product tree (constraint 3) |
 | Writes | nothing: no trace record, no event row, no state — on the admitted arm (a refusal writes the one record named above) |
 
 **The series.** Every row is a **`gauge`** (no `_total` name: these are window-scoped figures that may go
@@ -1780,7 +1780,7 @@ plugins:
   the decision is the owner's, ADR-042 §2.4); per-key capacity config; and persistence across restarts.
 - **Assertions**: `CONF-88` (off by default, with the red control that can fail it) and `CONF-89` (a hit is the
   recorded bytes, the record's shape, the ledger's reconciliation). **This section and the code that implements
-  it land in one round** — the contract is not written ahead of the feature (the R50-0 → R50-1 shape).
+  it land together** — the contract is not written ahead of the feature.
 
 ## 5. Onboarding prerequisite (mandatory)
 
@@ -1806,7 +1806,7 @@ set up wrong, not router), which is why it is stated here as well as in §5's ne
 
 ## 6. Observation contract (one DecisionRecord per request)
 
-The trace is the **analysis truth**: one JSON line per request, and the only product → autowork channel
+The trace is the **analysis truth**: one JSON line per request, and the only product → analysis-loop channel
 (ADR-005). State has its own truth — the event log of §4.5 — and the two records are paired by
 `request_id` + `event_id`.
 
@@ -1835,7 +1835,7 @@ changes no existing record: the field names the wire the request's bytes actuall
 went out. `translated` is true only when the
 attempt that carried the request re-encoded the body through a mapper; v0.1 ships no mapper, so it is **`false`
 on every record this build writes** and a record of this vintage may not be read as "a translation happened"
-(the R11-F1 record — `protocol_out` a foreign wire with `translated: true` over an untranslated body — is the
+(a record — `protocol_out` a foreign wire with `translated: true` over an untranslated body — is the
 defect this sentence retires). `lossy[]` stays `[]` for the same reason.
 
 **A record's money is in one currency, and the record says which** (§4.8). One request is priced by one
@@ -1890,12 +1890,13 @@ what the request finds in the store, never by the wire it travels: a **new** ses
 once it has lapsed — that expiry is the projection's own), and `session: null` is always `false`. It is
 **one value per request, and the same value on both forwarding media**: the value that decides whether a
 `session.bound` event is written (§4.5) is the value the record carries — read **once**, before any binding
-write, and never recomputed within the request. Both halves of that rule were broken until R21 (on the
+write, and never recomputed within the request. Both halves of that rule were once broken (on the
 streaming path the read sat *after* its own binding write, so a fresh session's first request reported
-`true`); that finding is R11's `R11-F2`, with its three measurements and its read sites — the two reads
+`true`); the departure was measured, with three measurements on record and its read sites — the two reads
 inside `bind_session` at `stream_forward.rs:499`/`:506` and the record's own read at `:831-834` → `:1519`,
-against the buffered path's single read before its write, `forward.rs:896`. The **shared failure record** is
-the same class, registered structurally by R21-1 (which does not measure it): `record_failure_trace`
+against the buffered path's single read before its write, `forward.rs:896` — and the paths are aligned to the
+rule. The **shared failure record** is
+the same class, registered structurally (a registration that does not measure it): `record_failure_trace`
 evaluates the predicate at record time — `forward.rs:628`, reached from the buffered path's failure branch
 at `:594` and the streaming one at `stream_forward.rs:228` — which is *after* that same request's binding
 write. DESIGN §12.6 carries the symbol-level landing and §12.8 the case that pins it (`CONF-66`).
@@ -1925,12 +1926,12 @@ client requests; where that matters — the probe's `turn_index == 1` boundary (
 by construction, because a re-point can only reach a session that already has a live binding (both writers
 insert `1` on create), so its count was already ≥ 1 and the boundary is not crossed. The row is not
 optional: without it the log does not contain the move, so a rebuild repairs the projection *back* onto the
-abandoned route, which is what `R27-F1` measured (twice: `requests_seen` live 3 vs rebuild 1, and, after a
-spill with no recovery, a **provider-level** disagreement — live `api` vs rebuild `coding_plan`) and what
-R28 closes. All three writers of this row (the create arm, the request's own move arm, the handoff) share one
-shape and one projection rule, which is what makes `requests_seen` a pure function of the log. (Both halves were unmeasured until R27: the shipped build
+abandoned route — measured twice (`requests_seen` live 3 vs rebuild 1, and, after a
+spill with no recovery, a **provider-level** disagreement — live `api` vs rebuild `coding_plan`) — and since
+closed. All three writers of this row (the create arm, the request's own move arm, the handoff) share one
+shape and one projection rule, which is what makes `requests_seen` a pure function of the log. (Both halves were unmeasured before that: the shipped build
 passed a literal `false`, so a moved binding wrote **no** row and left the `sessions` projection on the
-stale route — the pre-existing `R21-F5`, frozen here and pinned by `CONF-80`, `DESIGN` §12.8.)
+stale route — the pre-existing defect, frozen here and pinned by `CONF-80`, `DESIGN` §12.8.)
 
 **The rest of the group is a constant in v0.1** (known gap G-F): a record has one writer
 (`Accountant::commit`) and it writes `stateful_inbound: false` and `cache_control_breaks: 0` on every
@@ -1942,7 +1943,7 @@ both the `session.bound` event and the record's field. A reader must therefore n
 §8 cannot fire. ADR-004 item 3 is the ruling this part of the group lands.
 
 **This restores a definition, it does not change one.** `sticky_hit`'s meaning was stated above from the
-start; R11-F2 measured a serving path departing from it, and R21 aligns the paths to it — so no field is
+start; a serving path was measured departing from it, and the paths are aligned to it — so no field is
 added, removed or retyped, no `errors[]` / refusal shape and no price moves (DESIGN §12.8).
 
 **The `transform` group is a mode plus a ledger, and both are needed** (ADR-019). `transform_mode` is
@@ -2115,12 +2116,11 @@ each improvise):
   the provider's template places tools before the conversation, so a client's tail append in
   template order is a true tail append upstream and must measure `prefix_continuity == 1.0`. This
   enumeration order is a **measurement-definition change by user decision on 2026-09-20 (Plan A)**
-  under AGENTS constraint 9 / ADR-012; the decision and its evidence are recorded under
-  `autowork/progress/` (2026-09-20). The block **domain** is unchanged by it.
+  under AGENTS constraint 9 / ADR-012; the decision and its evidence are on record. The block **domain** is unchanged by it.
 - The on-disk path / rollover is specified by `trace` in §4.1; a write failure does not block the request
   (§8), and records `errors[].kind = trace_write_failed`.
 
-**Metric definitions** (exposed by `router stats`, referenced by autowork gates):
+**Metric definitions** (exposed by `router stats`, referenced by the analysis loop's gates):
 
 - `cache_hit_rate` = Σ`input_cached` / Σ`input_total`
 - `stateful_inbound_rate` = stateful requests / total requests (used to keep confirming "whether it
@@ -2576,8 +2576,8 @@ figures are §9.2's).
 
 The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect
-as a documented `plan_switch` reason no code can produce (DESIGN §12.8's case registry, R4-G2). Until they land,
+as a documented `plan_switch` reason no code can produce (DESIGN §12.8's case registry, a registered finding). Until they land,
 the trace record of §6 **is** the interface: append-only JSONL, one decision record per request, readable with
-any JSON tool. `router replay` in particular is the autowork harness's prerequisite (DESIGN §9, ADR-005 item 3)
+any JSON tool. `router replay` in particular is the analysis harness's prerequisite (DESIGN §9, ADR-005 item 3)
 and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
-promise, and no round has yet taken it.
+promise, and no implementation has yet taken it.
