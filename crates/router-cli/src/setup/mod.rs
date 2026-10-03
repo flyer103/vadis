@@ -34,6 +34,16 @@ pub const EMBEDDED_TEMPLATE: &str = include_str!("../../../../config.example.yam
 /// row: "the embedded **roster** template for the roster target").
 pub const EMBEDDED_ROSTER: &str = include_str!("../../../../providers.example.yaml");
 
+/// The rule file embedded in this binary (ADR-046 D2): the shipped
+/// template's `plugins` entry names `./rules/tool_output.toml`, resolved
+/// against the config file's own directory — a fresh landing outside the
+/// repository would otherwise carry a named absence. Embedded for exactly
+/// the reason the root and the roster are: an installed binary with no
+/// example beside it must still land a working bundle. The repository's
+/// `rules/tool_output.toml` is **read** here, never edited (the wizard
+/// composes no rule content — ADR-046 D5).
+pub const EMBEDDED_RULES: &str = include_str!("../../../../rules/tool_output.toml");
+
 /// The root's shape, as the **loader parses it** (spec §4.14) — a parse
 /// fact read off the same wire type the loader parses, never a text scan.
 /// Three cases, and the third is "not this run's business":
@@ -88,6 +98,75 @@ fn shipped_roster_line() -> (String, String) {
         .trim_end()
         .to_string();
     (a.value, line)
+}
+
+/// The rule file the base root names, read from the base's own text
+/// (ADR-046 D1): `plugins[id=<entry>].config.rules_file` on its
+/// `builtin/transform_rules` entry, resolved by §4.1's rule against the
+/// config file's own directory (never the CWD). The first entry of the
+/// kind that carries the key wins — `serve`'s own assembly rule (first
+/// hit wins), so the writer materializes the file the reader would
+/// mount. A base that names no rule file (no `builtin/transform_rules`
+/// entry, or one without `config.rules_file`) returns `None`: **no**
+/// third lane, nothing materialized. Never a constant in code — the
+/// same rule the roster's name follows.
+fn rule_file_target(base: &str, config_dir: &std::path::Path) -> Option<PathBuf> {
+    // The first `builtin/transform_rules` entry that carries the key
+    // wins — `serve`'s own assembly rule (first hit wins), so the
+    // writer materializes the file the reader would mount. An entry of
+    // the kind without `config.rules_file` falls through to the next of
+    // the kind, exactly as a failed entry does at assembly.
+    let ids = anchor::entry_names(base, "plugins", "id");
+    let mut candidates = ids.iter().filter(|id| {
+        anchor::resolve_typed(base, &format!("plugins[id={id}].kind"))
+            .map(|a| a.value == "builtin/transform_rules")
+            .unwrap_or(false)
+    });
+    let path = candidates.find_map(|id| {
+        let a = anchor::resolve_typed(base, &format!("plugins[id={id}].config.rules_file")).ok()?;
+        let written = a.value.trim().to_string();
+        (!written.is_empty()).then(|| crate::config_load::resolve(config_dir, &written))
+    });
+    path
+}
+
+/// Step 1c — **the rule-file lane** (ADR-046; DESIGN §12.14 step 1c):
+/// the third write target, in the roster lane's own shape. The path
+/// comes from the base root's own text; the bytes are the embedded rule
+/// template's when the file is created or replaced, and the file's own
+/// when it is untouched (so the plan is empty and the wizard composes no
+/// rule content — D5). The replacement rule is the roster lane's own,
+/// read for a file no section owns:
+/// `replaced = !exists || (force && the plugins section is selected)`
+/// — D3's create arm unqualified by section, D4's replacement arm
+/// qualified by it. A base that names no rule file has no lane.
+fn build_rule_lane(
+    base_root: &str,
+    config_dir: &std::path::Path,
+    selected: &[Section],
+    force: bool,
+) -> Result<Option<Lane>, Failure> {
+    let Some(path) = rule_file_target(base_root, config_dir) else {
+        return Ok(None);
+    };
+    let exists = path.is_file();
+    let plugins_selected = selected.contains(&Section::Plugins);
+    let replaced = !exists || (force && plugins_selected);
+    let rule_base: String = if exists && !replaced {
+        std::fs::read_to_string(&path)
+            .map_err(|e| io(format!("cannot read rule file {}: {e}", path.display())))?
+    } else {
+        EMBEDDED_RULES.to_string()
+    };
+    Ok(Some(Lane {
+        path,
+        existed: exists,
+        replaced,
+        reshaped: false,
+        overwrite: false,
+        base: rule_base,
+        plan: Plan::default(),
+    }))
 }
 
 /// `router setup`'s flags, as `main` parsed them.
@@ -162,9 +241,13 @@ fn io(reason: String) -> Failure {
 /// One file the run may write: the root lane always exists; the roster
 /// lane exists when the base root names a roster **or** carries it inline
 /// (the shape step creates the file it names) — spec §4.11's target-file
-/// column; §4.14. `base` is the bytes the plan edits — the file's own
+/// column; §4.14. Since ADR-046 a third lane exists beside them: the
+/// rule file the base root names at
+/// `plugins[id=<entry>].config.rules_file` (the rule-file lane, DESIGN
+/// §12.14 step 1c). `base` is the bytes the plan edits — the file's own
 /// bytes, the lane's template when the run starts it fresh, or the block
-/// the shape step moved.
+/// the shape step moved. The rule lane's plan is always empty (the
+/// wizard composes no rule content, ADR-046 D5).
 struct Lane {
     path: PathBuf,
     /// The file was there before the run.
@@ -367,6 +450,15 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     };
     let mut roster_lane = roster_lane;
 
+    // Step 1c — the rule-file lane (ADR-046; DESIGN §12.14 step 1c):
+    // built from the **base root** — the file's own bytes under a bare
+    // run (so a `--from` template is not the writer's rule-file authority
+    // either), and the post-shape-step root under an inline base, so the
+    // lane follows the run's candidate rather than the file that is
+    // there.
+    let rule_lane: Option<Lane> =
+        build_rule_lane(&root_lane.base, &config_dir, &selected, args.force)?;
+
     // No terminal on stdin and no --non-interactive: refuse with the
     // working command in hand (spec §4.11; the `interactive` flag the
     // prompter carries is exactly this disjunction).
@@ -517,6 +609,13 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
                     &format!("selected by {}", target.selected_by.as_str()),
                 );
             }
+            // The rule-file lane's own `--dry-run` line (ADR-046 D9):
+            // the file it would create or replace is named, in the same
+            // per-lane report shape.
+            if let Some(rule) = &rule_lane {
+                println!("# {}", rule.path.display());
+                print_lane(rule, report::NAMED_BY_RULES_FILE);
+            }
         }
         return Ok(EXIT_OK);
     }
@@ -530,10 +629,16 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     // file of the pair says its own no-change line — a roster that
     // silently did nothing is how "no roster file appeared" reads as a
     // bug (ADR-038 D9).
-    if !root_lane.lands() && !roster_lane.as_ref().is_some_and(|l| l.lands()) {
+    if !root_lane.lands()
+        && !roster_lane.as_ref().is_some_and(|l| l.lands())
+        && !rule_lane.as_ref().is_some_and(|l| l.lands())
+    {
         print!("{}", report::no_change_text(&target.path));
         if let Some(roster) = &roster_lane {
             print!("{}", report::no_change_text(&roster.path));
+        }
+        if let Some(rule) = &rule_lane {
+            print!("{}", report::no_change_text(&rule.path));
         }
         return Ok(EXIT_OK);
     }
@@ -544,10 +649,13 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     // The shape step's own overwrite is unconditional: a file this run
     // replaces without having written it is kept whatever the flags say
     // (ADR-038 D6).
-    let lanes: Vec<&Lane> = match &roster_lane {
+    let mut lanes: Vec<&Lane> = match &roster_lane {
         Some(r) => vec![&root_lane, r],
         None => vec![&root_lane],
     };
+    if let Some(rule) = &rule_lane {
+        lanes.push(rule);
+    }
     for lane in &lanes {
         if lane.lands()
             && lane.existed
@@ -565,13 +673,20 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
     }
 
     // Step 11: land, roster first (an orphan roster is harmless where a
-    // root naming a missing roster is not), temp file + sync + rename.
+    // root naming a missing roster is not), the rule file second, the
+    // root last — the root's `plugins` entry names the rule file, so the
+    // name never dangles between landings. Temp file + sync + rename.
     if let Some(roster) = &roster_lane {
         if roster.lands() {
             land(
                 &roster.path,
                 roster_candidate.as_deref().unwrap().as_bytes(),
             )?;
+        }
+    }
+    if let Some(rule) = &rule_lane {
+        if rule.lands() {
+            land(&rule.path, rule.base.as_bytes())?;
         }
     }
     if root_lane.lands() {
@@ -620,6 +735,14 @@ fn run_inner(args: &SetupArgs, prompter: &Prompt) -> Result<i32, Failure> {
                         },
                         roster.plan.edits.len()
                     )
+                );
+            }
+        }
+        if let Some(rule) = &rule_lane {
+            if rule.lands() {
+                print!(
+                    "{}",
+                    report::landed_roster_text(&rule.path, report::NAMED_BY_RULES_FILE, 0)
                 );
             }
         }
@@ -2609,6 +2732,385 @@ mod tests {
             "the root was not written, so it was not backed up"
         );
         assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------
+    // The rule-file lane (ADR-046; spec §4.11's rule-file paragraph;
+    // DESIGN §12.14 step 1c and its rig). The shipped template's
+    // `tool-output-rules` entry names `./rules/tool_output.toml`,
+    // resolved against the config file's own directory — so every
+    // helper below reads the lane's path from the base's own text.
+    // -----------------------------------------------------------------
+
+    /// The rule file a landed tree carries, read from the base root's
+    /// own text through the same anchor walk the run uses (`fn
+    /// rule_file_target`), never from a constant in the test.
+    fn rule_file_of(config: &std::path::Path) -> std::path::PathBuf {
+        let dir = config.parent().unwrap().to_path_buf();
+        let base = std::fs::read_to_string(config).unwrap();
+        rule_file_target(&base, &dir).expect("the shipped base names a rule file")
+    }
+
+    /// The repository's own `rules/tool_output.toml`, read from the
+    /// source tree at test time — the byte-equal witness that stands in
+    /// for the sha256 comparison in-process (the hash itself is taken by
+    /// the round's harness probe on the real binary; byte equality is
+    /// strictly stronger, and no hash crate is a router-cli dependency).
+    fn repo_rules_file() -> std::path::PathBuf {
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../rules/tool_output.toml"
+        ))
+        .to_path_buf()
+    }
+
+    /// Limb 1 — fresh run: the root, the roster **and** the rule file
+    /// land; the rule file's bytes equal the embedded template's (one
+    /// hash comparison — taken byte-exact here, by `shasum -a 256` in
+    /// the round's harness probe), and `rules/` / the file carry
+    /// `0700` / `0600` read back from the filesystem (G8, the creation
+    /// half). The landed bundle loads through the same loader `serve`
+    /// runs.
+    #[test]
+    fn fresh_run_lands_the_rule_file_with_modes() {
+        let dir = temp_root("rule-fresh");
+        let target = dir.join("config.yaml");
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        let rule = rule_file_of(&target);
+        assert_eq!(rule, dir.join("rules/tool_output.toml"));
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            EMBEDDED_RULES.as_bytes(),
+            "the created rule file's bytes are the embedded template's"
+        );
+        assert_eq!(
+            EMBEDDED_RULES.as_bytes(),
+            std::fs::read(repo_rules_file()).unwrap().as_slice(),
+            "the embedded template is the repository's own rule file, unedited"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let file_mode = std::fs::metadata(&rule).unwrap().permissions().mode();
+            assert_eq!(file_mode & 0o777, 0o600, "created rule file is 0600");
+            let dir_mode = std::fs::metadata(dir.join("rules"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(dir_mode & 0o777, 0o700, "created rules/ is 0700");
+        }
+        assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A creation arm unqualified by section (ADR-046 D3): a one-section
+    /// run that touches neither the roster nor the rule file's section
+    /// still creates the rule file when it is absent — the same reason
+    /// `router setup server` lands the pair.
+    #[test]
+    fn a_section_run_creates_an_absent_rule_file() {
+        let dir = temp_root("rule-create-section");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        // The operator deleted the rule file; a bare one-section run
+        // recreates it.
+        let rule = rule_file_of(&target);
+        std::fs::remove_file(&rule).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("server".to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &scripted(&["127.0.0.1:9911", "", ""]),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(std::fs::read(&rule).unwrap(), EMBEDDED_RULES.as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Limb 2 — idempotence (G3 / CONF-69's property, extended to the
+    /// third file): the same command again leaves **all three** files'
+    /// bytes and mtimes unmoved.
+    #[test]
+    fn second_run_leaves_all_three_files_untouched() {
+        let dir = temp_root("rule-idem");
+        let target = dir.join("config.yaml");
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        let rule = rule_file_of(&target);
+        let before: Vec<_> = [&target, &dir.join("providers.example.yaml"), &rule]
+            .iter()
+            .map(|p| {
+                (
+                    std::fs::read(p).unwrap(),
+                    std::fs::metadata(p).unwrap().modified().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        for (p, (bytes, mtime)) in [&target, &dir.join("providers.example.yaml"), &rule]
+            .iter()
+            .zip(before.iter())
+        {
+            assert_eq!(&std::fs::read(p).unwrap(), bytes, "{} moved", p.display());
+            assert_eq!(
+                &std::fs::metadata(p).unwrap().modified().unwrap(),
+                mtime,
+                "{} was rewritten",
+                p.display()
+            );
+        }
+        assert!(
+            !rule.with_extension("toml.bak").exists(),
+            "a no-op run takes no rule-file backup"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Limb 3 — replacement and its RED control, both directions
+    /// observed: with the rule file hand-edited, `plugins --force`
+    /// replaces it with the embedded template **and** keeps the
+    /// operator's bytes at `<file>.bak`; the control — the same
+    /// hand-edited file under a bare `router setup` — is not touched
+    /// (bytes and mtime identical).
+    #[test]
+    fn force_with_plugins_replaces_the_rule_file_bare_does_not() {
+        let dir = temp_root("rule-force");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let rule = rule_file_of(&target);
+        let bak = backup_path(&rule);
+        // The operator's own rules — deterministic distinct bytes: a
+        // header the template does not carry, prepended.
+        let hand = format!("# R60-2 hand edit\n{EMBEDDED_RULES}");
+        std::fs::write(&rule, &hand).unwrap();
+
+        // The RED control FIRST: a bare run leaves it alone.
+        let (h_bytes, h_mtime) = (
+            std::fs::read(&rule).unwrap(),
+            std::fs::metadata(&rule).unwrap().modified().unwrap(),
+        );
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            h_bytes,
+            "the control: a bare run leaves the operator's rule file byte-identical"
+        );
+        assert_eq!(
+            std::fs::metadata(&rule).unwrap().modified().unwrap(),
+            h_mtime,
+            "the control: a bare run leaves the operator's rule file's mtime unmoved"
+        );
+        assert!(!bak.exists(), "the control: no .bak was taken");
+
+        // `--force` **without** the plugins section: still not replaced.
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("server".to_string()),
+                force: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &scripted(&["127.0.0.1:9911", "", ""]),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            hand.as_bytes(),
+            "force without the plugins section replaces nothing"
+        );
+        assert!(!bak.exists());
+
+        // `--force` **with** the plugins section: replaced, `.bak` first.
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("plugins".to_string()),
+                force: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            EMBEDDED_RULES.as_bytes(),
+            "plugins --force replaced the rule file with the embedded template"
+        );
+        assert_eq!(
+            std::fs::read(&bak).unwrap(),
+            hand.as_bytes(),
+            "the operator's bytes survive at <file>.bak before the replacement"
+        );
+        // The wizard composed nothing inside the file: the bytes are the
+        // template's own, always (D5).
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            std::fs::read(repo_rules_file()).unwrap(),
+            "the replaced bytes are the repository's own rule file, unedited"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D4 — a roster-scoped replacement is not a rule-file replacement:
+    /// `providers --from <roster> --force` over a split root swaps the
+    /// roster as a unit and does not replace the rule file; only the
+    /// create arm can touch it, and it fires only if the file is absent.
+    #[test]
+    fn a_roster_scoped_force_does_not_replace_the_rule_file() {
+        let dir = temp_root("rule-roster-force");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let rule = rule_file_of(&target);
+        let hand = format!("# R60-2 hand edit\n{EMBEDDED_RULES}");
+        std::fs::write(&rule, &hand).unwrap();
+        let replacement =
+            EMBEDDED_ROSTER.replace("api_key_env: DEEPSEEK_API_KEY", "api_key_env: DS_KEY");
+        let from = dir.join("my-roster.yaml");
+        std::fs::write(&from, &replacement).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("providers".to_string()),
+                from: Some(from.display().to_string()),
+                force: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read(&rule).unwrap(),
+            hand.as_bytes(),
+            "the roster swap does not replace the rule file (the plugins section is not in the list)"
+        );
+        assert!(
+            !backup_path(&rule).exists(),
+            "and it takes no rule-file backup"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("providers.example.yaml")).unwrap(),
+            replacement.as_bytes(),
+            "the roster itself was swapped (the run's own semantics held)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A base that names no rule file has no third lane: `plugins: []`
+    /// materializes nothing (ADR-046 D1's last sentence; spec §4.11's
+    /// *a base that names no rule file … materializes nothing*).
+    #[test]
+    fn a_base_naming_no_rule_file_materializes_nothing() {
+        let dir = temp_root("rule-none");
+        let target = dir.join("config.yaml");
+        // The shipped template with its whole `plugins:` block replaced
+        // by `plugins: []` — a legal config the loader accepts, and one
+        // no transform entry of. The block's own bytes are located the
+        // way the shape step locates the roster's: header line through
+        // the last line before the next top-level key.
+        let lines: Vec<&str> = EMBEDDED_TEMPLATE.lines().collect();
+        let header = lines
+            .iter()
+            .position(|l| l.starts_with("plugins:"))
+            .expect("the template carries a plugins block");
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(header + 1)
+            .find(|(i, l)| {
+                !l.trim().is_empty() && !l.starts_with(' ') && !l.starts_with('\t') && *i > header
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(lines.len());
+        let mut text = lines[..header].join("\n");
+        text.push_str("\nplugins: []\n");
+        text.push_str(&lines[end..].join("\n"));
+        text.push('\n');
+        std::fs::write(&target, &text).unwrap();
+        let roster = dir.join("providers.example.yaml");
+        std::fs::write(&roster, EMBEDDED_ROSTER).unwrap();
+        assert!(
+            crate::config_load::load(&target).is_ok(),
+            "the spliced base loads (the run is not a repair)"
+        );
+        let mtime = std::fs::metadata(&target).unwrap().modified().unwrap();
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        assert!(
+            !dir.join("rules").exists(),
+            "no rule file lane: nothing materialized"
+        );
+        assert_eq!(
+            mtime,
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+            "the root itself is a no-op (an empty plan over the file that is there)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Limb 5(a) — the end-to-end witness, in-process half: the plugins
+    /// of the **landed** config, assembled with the landed config's own
+    /// directory as the resolver (the same closure `serve` passes,
+    /// `lib.rs`'s one `assemble` call), mount the transform engine —
+    /// `transform_engine().is_some()`. Before the lane this was the
+    /// named absence (ADR-046's *Background*): the declared entry
+    /// pointed at a file nothing had written.
+    #[test]
+    fn the_landed_config_mounts_the_transform_engine() {
+        let dir = temp_root("rule-assembly");
+        let target = dir.join("config.yaml");
+        assert_eq!(run_with_prompt(&args(&target), &non_interactive()), 0);
+        let rc = crate::config_load::load(&target).expect("the landed bundle loads");
+        assert!(
+            rc.router
+                .plugins
+                .iter()
+                .any(|p| p.kind == "builtin/transform_rules"),
+            "the landed config declares the transform entry"
+        );
+        let assembly = router_plugins::assemble(&rc.router.plugins, &|file| {
+            crate::config_load::resolve(&rc.config_dir, file)
+        });
+        assert!(
+            assembly.transform_engine().is_some(),
+            "the engine mounts from the landed rule file (the round's real acceptance)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--dry-run` names the file it would create (ADR-046 D9): the
+    /// same per-lane `would write …` line the other lanes print, and
+    /// nothing lands — not the rule file, not its directory.
+    #[test]
+    fn dry_run_names_the_rule_file_and_lands_nothing() {
+        let dir = temp_root("rule-dryrun");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        let rule = rule_file_of(&target);
+        std::fs::remove_file(&rule).unwrap();
+        std::fs::remove_dir(dir.join("rules")).unwrap();
+        let code = run_with_prompt(
+            &SetupArgs {
+                dry_run: true,
+                non_interactive: true,
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &non_interactive(),
+        );
+        assert_eq!(code, 0);
+        assert!(!rule.exists(), "--dry-run: the rule file is not created");
+        assert!(
+            !dir.join("rules").exists(),
+            "--dry-run: no rules/ directory"
+        );
+        // Over a present rule file the same run says `no change` for it
+        // — asserted on the binary in the round's behavioral probe
+        // (stdout is not capturable in-process); here the lane not
+        // landing is the fact under test.
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 pub const NAMED_BY_PROVIDERS_FILE: &str = "named by providers_file";
 pub const MOVED_FROM_INLINE: &str = "the root's inline roster, moved";
 
+/// How the run came to write the rule file (ADR-046): the root's own
+/// `plugins` entry names it at `config.rules_file` — read from the base,
+/// never invented. Used for the lane's landing line and its `--dry-run`
+/// `because` clause, in the same per-lane report shape the pair's lanes
+/// print (`landed_roster_text` / `dry_run_would_write_text`).
+pub const NAMED_BY_RULES_FILE: &str = "named by plugins[].config.rules_file";
+
 /// One `--check` row: a variable the file names, and its presence state.
 /// For the token, "absent" and "empty" are distinct states — the
 /// distinction `serve` refuses the start on (spec §4.7 / §12.10.2).
