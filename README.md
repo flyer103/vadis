@@ -131,15 +131,6 @@ cargo fmt --all -- --check
 
 `cargo test` includes the protocol matrix in `tests/conformance` (the 3×3 wire matrix plus the byte / cache / accounting invariants). All four must be green before a pull request; CI runs exactly these four commands on every push and pull request.
 
-## Not in v0.1
-
-- the six cross-protocol translation cells are not served: a route the client names in a cell that needs translation answers `501 not_implemented`, while a candidate the client did not name is skipped rather than translated
-- the `replay` / `trace tail` subcommands — the parser refuses them with a usage error and a non-zero exit
-- the `router_meta` response block
-- tier-B (out-of-process) plugins
-- automatic model selection (`model: auto` answers `400`; the slot is reserved for a plugin)
-- server-side session state: `store` / `previous_response_id` are forwarded like every other client field and never inspected
-
 ## Documentation
 
 - [User book](book/SUMMARY.md) — the user-facing guide: introduction, getting started, connecting clients, protocols, cost and caching, plugins, observability and accounting, operations, FAQ, roadmap.
