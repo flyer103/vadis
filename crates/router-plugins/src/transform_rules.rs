@@ -925,8 +925,8 @@ expected = '''{"a":1.10,"b":7}
     /// R35-2 red control (R35-1's D7 R-c, finding R35-1-F1): the shipped
     /// rule set must SELECT at least one payload node on the tool names
     /// this repository's own captured traffic carries. The vocabulary is
-    /// the committed measurement (`autowork/harness/r35-1/corpus-shape.json`
-    /// — the frozen corpus's 36 payload nodes, every one named
+    /// the committed measurement (a product-side fixture byte-identical
+    /// to the frozen corpus's 36 payload nodes, every one named
     /// `exec_command`), never a recalled list. The pre-existing invariant
     /// (`every_shipped_rule_kind_is_reachable_on_the_live_path`) asserts
     /// over the DECLARED table and cannot fail for this reason; this case
@@ -939,9 +939,9 @@ expected = '''{"a":1.10,"b":7}
         let shape: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../autowork/harness/r35-1/corpus-shape.json"
+                "/tests/data/r35-1-corpus-shape.json"
             ))
-            .expect("r35-1's committed corpus-shape.json on disk"),
+            .expect("product-side fixture tests/data/r35-1-corpus-shape.json on disk"),
         )
         .expect("corpus-shape.json is JSON");
         let names: Vec<&str> = shape["summary"]["tool_names_seen"]
