@@ -197,6 +197,34 @@ verdict for the round records the evaluator commit and the corpus digest (ADR-01
   `router-auto-suite/1` (`design/decisions/ADR-026-corpus-tiers-and-automated-scoring.md:65`).
 - The workspace members: `Cargo.toml:3-14`; the binary: `crates/router-cli/Cargo.toml:11`.
 
+## R59-0b audit (2026-10-04, the map's gate before R59-1 is cut)
+
+The audit re-measured every count in `RENAME-MAP.md` §A against the tree, re-ran the crates.io
+driver query, and hand-applied the map to protected and mechanical samples. Verdict per check:
+coverage **pass** (one count error, repaired), protect-set **pass** (two precedence collisions,
+repaired), frozen-corpus hit list **pass** (exact), honesty **pass**, falsifiability **pass after
+repair**. Repairs committed to `rename/vadis`, all inside the two contract files:
+
+1. **The metric-series count was 28; the true count is 21** — `conf_87`'s `FROZEN_SERIES` array
+   holds 21 names, identical to the 21 `"router_*"` literals `metrics.rs` emits (§A row 12, §D,
+   §G corrected).
+2. **§0 rule 0 added — allowlists beat mechanics.** B12 `\brouter-` matches the protected
+   `router-auto-suite` and B14 `\brouter\b` matches the deferred `router.db`; whole-token §C/§D
+   matching now runs before any §B rule, so a mechanical sweep cannot rename either.
+3. **§G gate now excludes the two contract files** (`RENAME-MAP.md`, this ADR). They quote
+   pre-rename tokens — including the `iron/router` evidence URL — *as the record*; sweeping them
+   would destroy it. They are exempt from sweep and gate; every other `design/**` file is swept.
+4. **§E.1 added — the exhaustive generic-noun leave-list** (8 prose sites where `router` is the
+   class noun, not the product), so B14's prose judgment is falsifiable, not vibes.
+5. **§F records the second client-contract break:** a client still sending old `router_meta`
+   post-rename has it forwarded upstream verbatim (mutation (a) covers only `vadis_meta` now).
+   R59-1w must document it next to the config-dir move.
+6. `health_router` is 2 code sites (not 3; the third is a prose mention in ADR-041), and §G now
+   warns about the one line-wrapped token (`body.rs:954`) a line-based sweep can miss.
+
+`health_router`'s rename is **not** authorised by this audit — it is a code identifier whose move
+is R59-1's business under §C's boundary; the audit only corrected its site count.
+
 ## What this ADR does not decide
 
 - **The metric series names and the store filename** (D5/§D). Each is its own decision, gated on its own

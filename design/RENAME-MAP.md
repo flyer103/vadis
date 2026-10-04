@@ -10,6 +10,12 @@
 
 ## §0 — How to use this map
 
+0. **Precedence: allowlists beat mechanics.** Before applying any §B rule, match the *whole*
+   token (longest match) against §C and §D. If it is on either allowlist it is never touched —
+   even though a §B residue rule may also match a prefix of it. This is load-bearing for exactly
+   two collisions an unguarded mechanical sweep would commit: **B12 `\brouter-` matches the
+   protected `router-auto-suite`** (§C), and **B14 `\brouter\b` matches the deferred
+   `router.db`** (§D). Neither may move.
 1. Apply **§B (mechanical)** in the order given: longest literal token first, then the three residue
    rules. This order is load-bearing — applying a short rule before a long one can mint a token the
    allowlists no longer recognise (e.g. touching `router_meta` before the `router_` rule).
@@ -39,7 +45,7 @@ git-excluded tree (`.git/info/exclude:13`), not part of the product (`AGENTS.md`
 | 9 | config dir | `.config/router` 21 (of which `~/.config/router` 17) | 21 | spec §4.7/§4.12, book, `config_path.rs` |
 | 10 | binary / subcommands | `router setup` 105 · `router replay` 40 · `router serve` 17 · `router trace` 14 · `router version` 1 · `router stats` ~50 | ~230 cmd sites | `[[bin]] name = "router"` (`crates/router-cli/Cargo.toml:11`) |
 | 11 | store filename | `router.db` **79** | 79 | **§D deferred** — `state/router.db`, `config_load.rs:209`, pinned by `conf_25` |
-| 12 | metric series names | 28 distinct `router_*` names (e.g. `router_requests`, `router_cache_hit_rate`, `router_metrics_window_seconds`, …) | ~230 | **§D deferred** — `crates/router-cli/src/metrics.rs`, pinned by `conf_87` |
+| 12 | metric series names | 21 distinct `router_*` names (`router_requests`, `router_cache_hit_rate`, `router_metrics_window_seconds`, …) | ~230 | **§D deferred** — `crates/router-cli/src/metrics.rs`, pinned by `conf_87` (the frozen set is `conf_87`'s `FROZEN_SERIES`, 21 names, identical to `metrics.rs`'s emitted literals; count re-verified by R59-0b) |
 | 13 | compound prose/idents | `router-owned` 57 · `router-visible` 7 · `Router-specific` 4 · `Router-owned` 1 · `router-owned-key` 1 | 70 | product-name compounds |
 | 14 | test scaffolding idents/strings | `start_router` 15 · `router_binary` 7 · `router_store_now_us` 4 · `router_hint` 4 · `router_field_removal_…` 1 · `router-conf-port-locks` 2 · `router-hermes-tool` 2 · tempdir prefixes `router-store-` `router-cfg-` `router-setup-` `router-reload-watch` `router-reload-` `router-cli-lib-` `router-r60-2-serve-` | ~50 | ours; test-only (see §C note on `health_router`) |
 | 15 | struct field | `ResolvedConfig.router` (`config_load.rs:31`), read as `rc.router.*` | ~40 sites | the parsed config document field |
@@ -141,7 +147,7 @@ vocabulary or third-party types. The verifier greps for them (§G).
 | `route` `routes` `routed` `reroute` `routing` | HTTP-routing / mode, the domain noun | spec §2, DESIGN §12, `resolve_route`, … |
 | `resolve_route` `route_accounting` `route_*` `*_route` | domain identifiers | `router-core` routing module |
 | `failover_from` `plan_switch` | the failover/plan domain vocabulary | `router-core`, ADR-014/024 |
-| `health_router` | a local `axum::Router` value (`lib.rs:593`) — contains `router` but names the HTTP router, not the product | 3 |
+| `health_router` | a local `axum::Router` value (`lib.rs:593`) — contains `router` but names the HTTP router, not the product | 2 code sites (`lib.rs:593,949`) + 1 prose mention (`ADR-041:104`) |
 | `OpenRouter` | third-party company/product (a prior-art citation) | `design/decisions/ADR-043-ingress-three-verdicts.md:206` |
 | `routers` | generic plural noun ("the two routers actually sent") | `design/decisions/ADR-027-per-arm-plan-and-the-two-comparison-rules.md:173` |
 | `router-auto-suite/1` | a **data-format schema id** consumed by the private analysis loop (out of scope); renaming it desyncs a format from its writer | `design/decisions/ADR-026-corpus-tiers-and-automated-scoring.md:65` |
@@ -160,7 +166,7 @@ its own authorisation owns them.
 
 | Token | Where | Why deferred | Follow-up |
 |---|---|---|---|
-| the 28 `router_*` **metric series names** (`router_requests`, `router_requests_succeeded`, `router_cache_hit_rate`, `router_metrics_window_seconds`, `router_overhead_ms_p99`, …) | `crates/router-cli/src/metrics.rs`; `tests/conformance/tests/conf_87_metrics_single_owner.rs`; spec §4.16/§9; ADR-041 | pinned by conformance `conf_87`; not in the owner's R59 authorisation enumeration (ADR-047 §D) | a `VADIS_*`/`vadis_*` metrics-rename round that also edits `conf_87` under owner authorisation |
+| the 21 `router_*` **metric series names** (`router_requests`, `router_requests_succeeded`, `router_cache_hit_rate`, `router_metrics_window_seconds`, `router_overhead_ms_p99`, …) | `crates/router-cli/src/metrics.rs`; `tests/conformance/tests/conf_87_metrics_single_owner.rs`; spec §4.16/§9; ADR-041 | pinned by conformance `conf_87`; not in the owner's R59 authorisation enumeration (ADR-047 §D) | a `VADIS_*`/`vadis_*` metrics-rename round that also edits `conf_87` under owner authorisation |
 | the store filename `state/router.db` | `crates/router-cli/src/config_load.rs:209`; `conf_25_config_driven_serve.rs:200-201`; store tests; spec §4.5; book | pinned by conformance `conf_25`; renaming it forces an **install-migration** decision for existing operators | a round that renames the file **and** states the `<old>→<new>` migration |
 
 ## §E — PROSE rule (documentation only) + 3 worked examples
@@ -189,6 +195,28 @@ Worked examples (quoted verbatim; `→` is the result):
    binary. The generic case appears only in a handful of ADR/code-comment sentences (`ADR-014:36`,
    `ADR-018:286` "through a router at all"). This example is drawn from there so the judgment is shown
    against a real occurrence.*
+
+**§E.1 — the exhaustive generic-noun leave-list (adjudicated by R59-0b; every other standalone
+`router`/`Router` in prose names the product or binary and moves).** A mechanical B14 sweep would
+rename these too; an implementer must leave them. Verified against the whole tree at `3f16df8`:
+
+| Site | Text (the `router` in question) |
+|---|---|
+| `AGENTS.md:53-54` | "A router bound to a local port receives *no connection*" — the macOS-proxy gotcha; generic class noun |
+| `book/protocols.md:117` | "adding a field to your client's request does not require a router change" — generic (any gateway tolerates field addition) |
+| `design/decisions/ADR-014:36` | "a router that **rejects** on it refuses work…" — the worked example above |
+| `design/decisions/ADR-018:286` | "may not be legal to use through a router at all" — generic |
+| `design/decisions/ADR-027:173` | "the two routers actually sent" — protected plural (§C `routers`) |
+| `design/decisions/ADR-032:27` | "the only one that is a router transform with a landed mechanism" — generic class noun |
+| `design/decisions/ADR-045:184` | "a router `p99` that is smaller than the harness floor's spread" — generic (any router under test) |
+| `design/DESIGN.md:2501` | "sending an alias upstream would turn a router bug into a provider 400" — generic |
+
+Code-comment sites with the same shape (`crates/router-store/src/trace_sink.rs:54` "a router that
+cannot write its own analysis truth", `crates/router-providers/src/stream.rs:66` "not a router
+framing", `crates/router-cli/src/setup/mod.rs:2759` "no hash crate is a router-cli dependency",
+conf_* comments) are **code, not prose** — §0.3 says code tokens have no third case, and these
+standalone words are product references; they move with B14. If R59-1 disagrees on any single row,
+that row is escalated to the owner, not silently swept or silently kept.
 
 ## §F — Client-contract edits the rename forces (for card **R59-1w**)
 
@@ -230,6 +258,12 @@ and `SECURITY.md:8` carry `flyer103/router`. The writer sets `repository` to
 renamed) but the **GitHub repository rename itself is an owner action** outside this tree — flag it,
 do not attempt it.
 
+**Client-contract break R59-1w must document (added by R59-0b, not in the original enumeration):**
+after the rename a client that still sends the old key `router_meta` is no longer echo-removed — the
+router owns only `vadis_meta`, so the client's own `router_meta` bytes are forwarded upstream
+verbatim (mutation (a) no longer covers them). This is a second user-visible break alongside the
+config-directory move (ADR-047 D4); the book/`README.md` sections covering `vadis_meta` must say so.
+
 ## §G — Completeness gate (the proof)
 
 After the rename, this command must return **only** lines whose `router`-containing token is on §C or
@@ -239,8 +273,14 @@ After the rename, this command must return **only** lines whose `router`-contain
 rg -in 'router' \
   crates/ tests/ docs/ design/ book/ rules/ \
   README.md AGENTS.md CONTRIBUTING.md SECURITY.md NOTICE \
-  Cargo.toml Cargo.lock config.example.yaml providers.example.yaml
+  Cargo.toml Cargo.lock config.example.yaml providers.example.yaml \
+  -g '!design/RENAME-MAP.md' -g '!design/decisions/ADR-047-adopt-the-vadis-name.md'
 ```
+
+The two excluded files are the contract itself: they quote pre-rename tokens (including the
+`https://github.com/iron/router` evidence URL and the `router`→`vadis` table) *as history*, and
+sweeping them would destroy the record. They are exempt from the sweep and from the gate. All other
+`design/**` files — including every historical ADR — ARE swept (owner authorisation §3).
 
 Expected survivor tokens (the only legal ones):
 
@@ -251,8 +291,14 @@ Anything else — a bare `router`, a `router_*`/`router-*`/`Router*`/`ROUTER_*` 
 The code-only subset (`crates/ tests/`) is the sweep R59-1 runs; expect **zero** survivors there except
 `axum::Router` and `health_router` (code) — the metrics names and `router.db` live in
 `crates/router-cli/src/metrics.rs` and `config_load.rs`, so the code sweep's justified survivors are
-exactly: `axum::Router` (6), `health_router` (3), `router.db` (store path), and the `metrics.rs`
-`router_*` series (28 names).
+exactly: `axum::Router` (6), `health_router` (2 code sites), `router.db` (store path), and the
+`metrics.rs` `router_*` series (21 names).
+
+**Line-wrapped tokens (added by R59-0b):** a line-based `rg`/sed sweep can miss a token broken
+across lines. One exists today: `crates/router-core/src/body.rs:954-955` splits
+`ROUTER_OWNED`/`_TOP_LEVEL_KEYS` across a comment line break. Before running §G, re-join wrapped
+lines or run the gate over `rg -U` (multiline) output; and after any sweep, `git diff` that site to
+confirm both halves moved.
 
 ## §H — Deliberate divergences from the R59-0 card body (recorded, not silently chosen)
 
