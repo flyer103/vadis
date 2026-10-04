@@ -23,13 +23,13 @@ const CHAT_OK: &str = r#"{"id":"ok","choices":[{"index":0,"message":{"role":"ass
 
 /// The client's chat bytes, deliberately odd enough that a reserialization
 /// would show: nested braces, unicode, a float, a vadis-owned key.
-const CLIENT_BODY: &str = r#"{"model":"keyless-chat/m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"router_meta":{"echo":true},"stream":false}"#;
-/// The same bytes after exactly the two permitted mutations: `router_meta`
+const CLIENT_BODY: &str = r#"{"model":"keyless-chat/m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"vadis_meta":{"echo":true},"stream":false}"#;
+/// The same bytes after exactly the two permitted mutations: `vadis_meta`
 /// removed and the `model` value rewritten to the native route's id.
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"stream":false}"#;
 /// The streaming form of the same request (the body-level `stream` flag is
 /// the path split's only input).
-const CLIENT_BODY_STREAM: &str = r#"{"model":"keyless-chat/m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"router_meta":{"echo":true},"stream":true}"#;
+const CLIENT_BODY_STREAM: &str = r#"{"model":"keyless-chat/m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"vadis_meta":{"echo":true},"stream":true}"#;
 
 /// The rig: three mock upstreams (one per provider) and a config whose
 /// fallback chain is `[foreign/m, native/m]`. `with_native: false` drops
@@ -226,7 +226,7 @@ async fn conf_57_wire_mismatch_is_skipped_native_candidate_serves() {
     assert_eq!(
         seen.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "the upstream-visible body is the client's bytes minus router_meta, \
+        "the upstream-visible body is the client's bytes minus vadis_meta, \
          with the model value rewritten to the native id"
     );
 

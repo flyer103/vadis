@@ -78,7 +78,7 @@ impl ProviderTransport for RecordingTransport {
     }
 }
 
-const BODY: &str = r#"{"model":"p1/m1","prompt_cache_key":"conf62-sess","router_meta":{"echo":true},"messages":[{"role":"user","content":"run the build"},{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"Bash"}}]},{"role":"tool","tool_call_id":"c1","content":"noise warning line\ncompiled a.rs\nnoise another\nlinked binary"}]}"#;
+const BODY: &str = r#"{"model":"p1/m1","prompt_cache_key":"conf62-sess","vadis_meta":{"echo":true},"messages":[{"role":"user","content":"run the build"},{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"Bash"}}]},{"role":"tool","tool_call_id":"c1","content":"noise warning line\ncompiled a.rs\nnoise another\nlinked binary"}]}"#;
 
 fn forwarder(dir: &std::path::Path, engine: Option<Arc<dyn TransformEngine>>) -> Forwarder {
     let cfg_text = format!(
@@ -126,10 +126,10 @@ fallback: []
     }
 }
 
-/// The two-mutation expectation for BODY: `router_meta` deleted (a),
+/// The two-mutation expectation for BODY: `vadis_meta` deleted (a),
 /// `model` replaced by the native id (b), everything else byte for byte.
 fn expected_passthrough_bytes() -> Vec<u8> {
-    let cleaned = BODY.replace(r#","router_meta":{"echo":true}"#, "");
+    let cleaned = BODY.replace(r#","vadis_meta":{"echo":true}"#, "");
     let cleaned = cleaned.replace("\"model\":\"p1/m1\"", "\"model\":\"m1\"");
     cleaned.as_bytes().to_vec()
 }

@@ -22,7 +22,7 @@ const DIRECT_BODY: &str = r#"{
   "model": "mock/glm",
   "messages": [{"role": "user", "content": "héllo 😀 \"q\" \\ back"}],
   "temperature": 1e-9,
-  "router_meta": {"echo": true},
+  "vadis_meta": {"echo": true},
   "stream": false
 }
 "#;
@@ -34,7 +34,7 @@ const ALIAS_BODY: &str = r#"{
   "model": "fast",
   "messages": [{"role": "user", "content": "héllo 😀 \"q\" \\ back"}],
   "temperature": 1e-9,
-  "router_meta": {"echo": true},
+  "vadis_meta": {"echo": true},
   "stream": false
 }
 "#;
@@ -130,7 +130,7 @@ async fn conf_27_outbound_model_is_the_provider_native_id() {
         "direct route: the upstream body is the client's, with the model replaced by the native id"
     );
     assert!(
-        !String::from_utf8_lossy(&requests[0].body).contains("router_meta"),
+        !String::from_utf8_lossy(&requests[0].body).contains("vadis_meta"),
         "the vadis-owned member never reaches the upstream"
     );
     assert!(

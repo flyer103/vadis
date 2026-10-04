@@ -22,11 +22,11 @@ use std::borrow::Cow;
 
 /// Whitelist of vadis-owned top-level keys (spec §2 / DESIGN §12.3.1).
 ///
-/// This is the **only** deletion list: `router_meta` echo + routing hints.
+/// This is the **only** deletion list: `vadis_meta` echo + routing hints.
 /// New vadis-owned keys must be added here — a second scattered copy of the
 /// list at call sites is not allowed. Note: legitimate unknown fields in
 /// client requests (CONF-11) are **not** in this list and are never removed.
-pub const VADIS_OWNED_TOP_LEVEL_KEYS: &[&str] = &["router_meta"];
+pub const VADIS_OWNED_TOP_LEVEL_KEYS: &[&str] = &["vadis_meta"];
 
 /// Failure semantics of `remove_top_level_keys` (three distinguishable
 /// failures so callers can handle them separately).
@@ -517,7 +517,7 @@ fn scan_json_string(b: &[u8], i: usize) -> Result<usize, RawEditError> {
 
 /// Decode a JSON string literal (the range including quotes) into a `String`
 /// for key comparison. Key matching must go through decoded semantic equality:
-/// `"router_\u006deta"` and `"router_meta"` are the same key.
+/// `"vadis_\u006deta"` and `"vadis_meta"` are the same key.
 fn decode_json_string(b: &[u8], start: usize, end: usize) -> Result<String, RawEditError> {
     let mut out = String::with_capacity(end - start);
     let mut j = start + 1;
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn string_value_with_structural_chars() {
         assert_remove(
-            r#"{"model":"a{b}c:d,e","router_meta":{}}"#,
+            r#"{"model":"a{b}c:d,e","vadis_meta":{}}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"model":"a{b}c:d,e"}"#,
         );
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn escaped_quote_and_backslash_preserved() {
         assert_remove(
-            r#"{"s":"a\"b\\c\"d","router_meta":1}"#,
+            r#"{"s":"a\"b\\c\"d","vadis_meta":1}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"s":"a\"b\\c\"d"}"#,
         );
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn unicode_escape_form_preserved() {
         assert_remove(
-            r#"{"s":"\u0041\u4e2d\ud83d\ude00","router_meta":null}"#,
+            r#"{"s":"\u0041\u4e2d\ud83d\ude00","vadis_meta":null}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"s":"\u0041\u4e2d\ud83d\ude00"}"#,
         );
@@ -762,16 +762,16 @@ mod tests {
     #[test]
     fn nested_brackets_balance_and_only_top_level_removed() {
         assert_remove(
-            "{\"router_meta\":{\"x\":[1,{\"y\":\"},]\"}],\"z\":[[]]},\"a\":1}",
+            "{\"vadis_meta\":{\"x\":[1,{\"y\":\"},]\"}],\"z\":[[]]},\"a\":1}",
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"a":1}"#,
         );
-        // A nested router_meta is a client field (CONF-11), not a top-level
+        // A nested vadis_meta is a client field (CONF-11), not a top-level
         // echo → not removed.
         assert_remove(
-            r#"{"a":{"router_meta":1},"b":2}"#,
+            r#"{"a":{"vadis_meta":1},"b":2}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
-            r#"{"a":{"router_meta":1},"b":2}"#,
+            r#"{"a":{"vadis_meta":1},"b":2}"#,
         );
     }
 
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn all_value_forms_preserved() {
         assert_remove(
-            r#"{"n1":1e-9,"n2":-0.5,"n3":123456789012345678901234567890,"t":true,"f":false,"z":null,"arr":[],"obj":{},"es":"","router_meta":0}"#,
+            r#"{"n1":1e-9,"n2":-0.5,"n3":123456789012345678901234567890,"t":true,"f":false,"z":null,"arr":[],"obj":{},"es":"","vadis_meta":0}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"n1":1e-9,"n2":-0.5,"n3":123456789012345678901234567890,"t":true,"f":false,"z":null,"arr":[],"obj":{},"es":""}"#,
         );
@@ -800,7 +800,7 @@ mod tests {
     // 7. keys = [] → identity.
     #[test]
     fn empty_key_list_is_identity() {
-        let input = r#"{"router_meta":1,"a":2}"#;
+        let input = r#"{"vadis_meta":1,"a":2}"#;
         let raw = RawBody::new(input.as_bytes().to_vec());
         let out = raw.remove_top_level_keys(&[]).unwrap();
         assert_eq!(out.as_bytes(), input.as_bytes());
@@ -810,7 +810,7 @@ mod tests {
     //    boundaries).
     #[test]
     fn idempotent_double_remove() {
-        let input = "{\n  \"model\": \"m\",\n  \"router_meta\": {\"a\": [1, {\"b\": \"},\"}]},\n  \"x\": 1e-9\n}";
+        let input = "{\n  \"model\": \"m\",\n  \"vadis_meta\": {\"a\": [1, {\"b\": \"},\"}]},\n  \"x\": 1e-9\n}";
         let raw = RawBody::new(input.as_bytes().to_vec());
         let once = raw
             .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
@@ -880,7 +880,7 @@ mod tests {
     #[test]
     fn key_and_nested_order_unchanged() {
         assert_remove(
-            r#"{"z":1,"a":{"deep":[3,2,{"k":"v"}]},"router_meta":0,"m":"x","b":true}"#,
+            r#"{"z":1,"a":{"deep":[3,2,{"k":"v"}]},"vadis_meta":0,"m":"x","b":true}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"z":1,"a":{"deep":[3,2,{"k":"v"}]},"m":"x","b":true}"#,
         );
@@ -891,7 +891,7 @@ mod tests {
     #[test]
     fn trailing_newline_crlf_and_utf8_preserved() {
         assert_remove(
-            "{\n  \"a\": \"中文🚀\",\n  \"router_meta\": 1\n}\r\n",
+            "{\n  \"a\": \"中文🚀\",\n  \"vadis_meta\": 1\n}\r\n",
             VADIS_OWNED_TOP_LEVEL_KEYS,
             "{\n  \"a\": \"中文🚀\"\n}\r\n",
         );
@@ -903,12 +903,12 @@ mod tests {
     #[test]
     fn whitespace_around_members_and_first_member_removal() {
         assert_remove(
-            "{ \"router_meta\":1 , \"a\":2 , \"b\":3 }",
+            "{ \"vadis_meta\":1 , \"a\":2 , \"b\":3 }",
             VADIS_OWNED_TOP_LEVEL_KEYS,
-            "{  \"a\":2 , \"b\":3 }", // what is deleted is `, "router_meta":1`: whitespace before the key stays, the leading space is kept
+            "{  \"a\":2 , \"b\":3 }", // what is deleted is `, "vadis_meta":1`: whitespace before the key stays, the leading space is kept
         );
         assert_remove(
-            "{\"a\":1 ,\n\t\"router_meta\":2 , \"b\":3}",
+            "{\"a\":1 ,\n\t\"vadis_meta\":2 , \"b\":3}",
             VADIS_OWNED_TOP_LEVEL_KEYS,
             "{\"a\":1  , \"b\":3}",
         );
@@ -918,20 +918,20 @@ mod tests {
     //     whitespace.
     #[test]
     fn removing_all_members_yields_empty_object() {
-        assert_remove(r#"{"router_meta":1}"#, VADIS_OWNED_TOP_LEVEL_KEYS, "{}");
+        assert_remove(r#"{"vadis_meta":1}"#, VADIS_OWNED_TOP_LEVEL_KEYS, "{}");
         assert_remove(
-            r#"{"router_meta":1, "router_meta":2}"#,
+            r#"{"vadis_meta":1, "vadis_meta":2}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             "{}",
         );
     }
 
-    // 16. Escaped key form matches semantically: `"router_\u006deta"` and
-    //     `"router_meta"` are the same key.
+    // 16. Escaped key form matches semantically: `"vadis_\u006deta"` and
+    //     `"vadis_meta"` are the same key.
     #[test]
     fn escaped_key_form_still_matches() {
         assert_remove(
-            r#"{"a":1,"router_\u006deta":2}"#,
+            r#"{"a":1,"vadis_\u006deta":2}"#,
             VADIS_OWNED_TOP_LEVEL_KEYS,
             r#"{"a":1}"#,
         );
@@ -942,7 +942,7 @@ mod tests {
     #[test]
     fn leading_whitespace_preserved() {
         assert_remove(
-            "  {\"a\":1,\"router_meta\":2}",
+            "  {\"a\":1,\"vadis_meta\":2}",
             VADIS_OWNED_TOP_LEVEL_KEYS,
             "  {\"a\":1}",
         );
@@ -954,62 +954,62 @@ mod tests {
     //     future whitelist in spec §2) without changing the
     //     VADIS_OWNED constant.
     fn deletion_matrix() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
-        let two = vec!["router_meta", "routing_preference"];
+        let two = vec!["vadis_meta", "routing_preference"];
         vec![
             // The orchestrator's 5 probe-table cases.
             (
-                r#"{"routing_preference":{},"router_meta":{},"messages":[]}"#,
+                r#"{"routing_preference":{},"vadis_meta":{},"messages":[]}"#,
                 two.clone(),
                 r#"{"messages":[]}"#,
             ),
             (
-                r#"{"router_meta":1,"router_meta":2,"x":3}"#,
+                r#"{"vadis_meta":1,"vadis_meta":2,"x":3}"#,
                 two.clone(),
                 r#"{"x":3}"#,
             ),
             (
-                r#"{"messages":[],"routing_preference":1,"router_meta":2}"#,
+                r#"{"messages":[],"routing_preference":1,"vadis_meta":2}"#,
                 two.clone(),
                 r#"{"messages":[]}"#,
             ),
             (
-                r#"{"router_meta":1,"messages":[],"routing_preference":2}"#,
+                r#"{"vadis_meta":1,"messages":[],"routing_preference":2}"#,
                 two.clone(),
                 r#"{"messages":[]}"#,
             ),
             (
-                r#"{"router_meta":1,"routing_preference":2}"#,
+                r#"{"vadis_meta":1,"routing_preference":2}"#,
                 two.clone(),
                 "{}",
             ),
             // First member deleted with the next member retained.
-            (r#"{"router_meta":1,"a":2}"#, two.clone(), r#"{"a":2}"#),
+            (r#"{"vadis_meta":1,"a":2}"#, two.clone(), r#"{"a":2}"#),
             // Three consecutive owned keys.
             (
-                r#"{"router_meta":1,"routing_preference":2,"router_meta":3,"a":4}"#,
+                r#"{"vadis_meta":1,"routing_preference":2,"vadis_meta":3,"a":4}"#,
                 two.clone(),
                 r#"{"a":4}"#,
             ),
             // Permutations with the owned key at the head / middle / tail.
             (
-                r#"{"router_meta":1,"a":1,"b":2}"#,
+                r#"{"vadis_meta":1,"a":1,"b":2}"#,
                 two.clone(),
                 r#"{"a":1,"b":2}"#,
             ),
             (
-                r#"{"a":1,"router_meta":2,"b":3}"#,
+                r#"{"a":1,"vadis_meta":2,"b":3}"#,
                 two.clone(),
                 r#"{"a":1,"b":3}"#,
             ),
             (
-                r#"{"a":1,"b":2,"router_meta":3}"#,
+                r#"{"a":1,"b":2,"vadis_meta":3}"#,
                 two.clone(),
                 r#"{"a":1,"b":2}"#,
             ),
             // Adjacent deletion with whitespace: comma swallowing includes the
             // whitespace between member and comma.
             (
-                r#"{ "routing_preference" : 1 , "router_meta" : 2 , "messages" : [] }"#,
+                r#"{ "routing_preference" : 1 , "vadis_meta" : 2 , "messages" : [] }"#,
                 two.clone(),
                 r#"{  "messages" : [] }"#,
             ),
@@ -1044,30 +1044,30 @@ mod tests {
     // 19c. Deletion at three scales: whitelist of 1/2/3 keys × 3/5/8 members.
     #[test]
     fn deletion_matrix_scales() {
-        let k1 = vec!["router_meta"];
-        let k2 = vec!["router_meta", "routing_preference"];
-        let k3 = vec!["router_meta", "routing_preference", "vadis_hint"];
+        let k1 = vec!["vadis_meta"];
+        let k2 = vec!["vadis_meta", "routing_preference"];
+        let k3 = vec!["vadis_meta", "routing_preference", "vadis_hint"];
         // 3 members.
-        assert_remove(r#"{"router_meta":1,"a":1,"b":2}"#, &k1, r#"{"a":1,"b":2}"#);
+        assert_remove(r#"{"vadis_meta":1,"a":1,"b":2}"#, &k1, r#"{"a":1,"b":2}"#);
         assert_remove(
-            r#"{"router_meta":1,"routing_preference":2,"a":1}"#,
+            r#"{"vadis_meta":1,"routing_preference":2,"a":1}"#,
             &k2,
             r#"{"a":1}"#,
         );
         // 5 members.
         assert_remove(
-            r#"{"a":0,"router_meta":1,"routing_preference":2,"vadis_hint":3,"b":4}"#,
+            r#"{"a":0,"vadis_meta":1,"routing_preference":2,"vadis_hint":3,"b":4}"#,
             &k3,
             r#"{"a":0,"b":4}"#,
         );
         assert_remove(
-            r#"{"router_meta":1,"routing_preference":2,"a":0,"vadis_hint":3,"b":4}"#,
+            r#"{"vadis_meta":1,"routing_preference":2,"a":0,"vadis_hint":3,"b":4}"#,
             &k3,
             r#"{"a":0,"b":4}"#,
         );
         // 8 members.
         assert_remove(
-            r#"{"a":0,"router_meta":1,"b":2,"routing_preference":3,"c":4,"vadis_hint":5,"d":6,"e":7}"#,
+            r#"{"a":0,"vadis_meta":1,"b":2,"routing_preference":3,"c":4,"vadis_hint":5,"d":6,"e":7}"#,
             &k3,
             r#"{"a":0,"b":2,"c":4,"d":6,"e":7}"#,
         );
@@ -1082,7 +1082,7 @@ mod tests {
         let mut b = vec![0xEF, 0xBB, 0xBF];
         b.extend_from_slice(br#"{"a":1}"#);
         assert_eq!(
-            RawBody::new(b).remove_top_level_keys(&["router_meta"]),
+            RawBody::new(b).remove_top_level_keys(&["vadis_meta"]),
             Err(RawEditError::NotTopLevelObject { first_byte: 0xEF })
         );
     }
@@ -1108,9 +1108,9 @@ mod tests {
     //      asymmetry is intentional.
     #[test]
     fn invalid_utf8_in_string_value_passthrough() {
-        let input: Vec<u8> = b"{\"s\":\"\xFF\xFE\",\"router_meta\":1}".to_vec();
+        let input: Vec<u8> = b"{\"s\":\"\xFF\xFE\",\"vadis_meta\":1}".to_vec();
         let raw = RawBody::new(input);
-        let out = raw.remove_top_level_keys(&["router_meta"]).unwrap();
+        let out = raw.remove_top_level_keys(&["vadis_meta"]).unwrap();
         assert_eq!(out.as_bytes(), b"{\"s\":\"\xFF\xFE\"}");
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
     #[test]
     fn output_is_valid_json() {
         let raw = RawBody::new(
-            "{\"router_meta\":{\"x\":[1,{\"y\":\"},]\"}]},\"model\":\"m\",\"n\":1e-09}"
+            "{\"vadis_meta\":{\"x\":[1,{\"y\":\"},]\"}]},\"model\":\"m\",\"n\":1e-09}"
                 .as_bytes()
                 .to_vec(),
         );
@@ -1128,7 +1128,7 @@ mod tests {
             .unwrap();
         let v: serde_json::Value = serde_json::from_slice(out.as_bytes()).unwrap();
         assert_eq!(v["model"], "m");
-        assert!(v.get("router_meta").is_none());
+        assert!(v.get("vadis_meta").is_none());
     }
 
     // === set_top_level_string (DESIGN §12.3.1 mutation (b)) ===
@@ -1487,7 +1487,7 @@ mod tests {
     //     every other byte alone (the §12.10.7 pipeline shape).
     #[test]
     fn set_after_remove_composes() {
-        let input = r#"{"router_meta":1,"model":"alias/name","x":{"k":"v"}}"#;
+        let input = r#"{"vadis_meta":1,"model":"alias/name","x":{"k":"v"}}"#;
         let raw = RawBody::new(input.as_bytes().to_vec());
         let cleaned = raw
             .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
@@ -1504,7 +1504,7 @@ mod tests {
     //     disjoint keys.
     #[test]
     fn set_and_remove_commute_for_disjoint_keys() {
-        let input = r#"{"model":"alias","a":1,"router_meta":2,"b":3}"#;
+        let input = r#"{"model":"alias","a":1,"vadis_meta":2,"b":3}"#;
         let raw = RawBody::new(input.as_bytes().to_vec());
         let sr = raw
             .set_top_level_string("model", "native")

@@ -61,7 +61,7 @@ fallback: []
 /// The stateless-client conversation shape (from the captured codex/hermes
 /// traffic): same `prompt_cache_key` every turn, full history resent, one
 /// assistant answer and one new user message appended per turn. The
-/// `router_meta` echo rides along — removing it must not move any block
+/// `vadis_meta` echo rides along — removing it must not move any block
 /// hash (CONF-10's claim, exercised here on the live path).
 fn turn_body(turn: usize) -> String {
     // Array contents, comma-joined; the brackets are added once below.
@@ -74,7 +74,7 @@ fn turn_body(turn: usize) -> String {
         e1.to_string()
     };
     format!(
-        r#"{{"model":"mock/glm","messages":[{messages}],"prompt_cache_key":"sess-conf15","router_meta":{{"echo":true}}}}"#
+        r#"{{"model":"mock/glm","messages":[{messages}],"prompt_cache_key":"sess-conf15","vadis_meta":{{"echo":true}}}}"#
     )
 }
 

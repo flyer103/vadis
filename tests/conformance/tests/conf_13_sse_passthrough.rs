@@ -129,7 +129,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
     assert_eq!(events.len(), expected_bytes().len());
 
     // The upstream saw exactly one request with the byte-faithful body
-    // (stream: true travels verbatim; router_meta removal is CONF-10's
+    // (stream: true travels verbatim; vadis_meta removal is CONF-10's
     // concern, asserted there).
     let requests = upstream.requests();
     assert_eq!(requests.len(), 1, "exactly one upstream attempt");

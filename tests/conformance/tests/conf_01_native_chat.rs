@@ -15,12 +15,12 @@ const CLIENT_BODY: &str = r#"{
   "messages": [{"role": "system", "content": "a{b}, \"quoted\" \\ backslash"}, {"role": "user", "content": "héllo 😀"}],
   "tools": [{"type": "function", "function": {"name": "f", "parameters": {"x": [1, 2, {"y": "brace } comma ,"}]}}}],
   "temperature": 1e-9,
-  "router_meta": {"echo": true, "nested": [{"k": "v"}]},
+  "vadis_meta": {"echo": true, "nested": [{"k": "v"}]},
   "stream": false
 }
 "#;
 
-/// The same bytes minus the `router_meta` member and its leading comma, and
+/// The same bytes minus the `vadis_meta` member and its leading comma, and
 /// with the `model` value replaced by the route's native id (`mock/glm` → the
 /// roster entry `glm`) — the two permitted rewrites (AGENTS constraint 1).
 const EXPECTED_UPSTREAM_BODY: &str = r#"{
@@ -112,10 +112,10 @@ async fn conf_01_native_chat_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
+        "upstream-visible body must be byte-identical to the client body minus vadis_meta, with the native model id"
     );
-    // The router_meta substring really is absent upstream.
-    assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
+    // The vadis_meta substring really is absent upstream.
+    assert!(!String::from_utf8_lossy(&req.body).contains("vadis_meta"));
 
     // (d) auth traveled as the provider's bearer, not the client's anything.
     assert_eq!(req.header("authorization"), Some("Bearer sk-conf01"));

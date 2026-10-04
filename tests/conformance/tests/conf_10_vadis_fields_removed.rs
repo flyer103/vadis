@@ -1,5 +1,5 @@
 //! CONF-10: after removing vadis-owned fields, all remaining bytes are
-//! byte-identical to the client's; the `router_meta` echo never reaches the
+//! byte-identical to the client's; the `vadis_meta` echo never reaches the
 //! upstream.
 //!
 //! Two levels, both really executed here: the byte-level removal semantics
@@ -26,7 +26,7 @@ async fn conf_10_byte_exact_after_vadis_field_removal() {
         \"messages\": [{\"role\": \"system\", \"content\": \"a{b},\\\"c\\\\\\\"\\\\ud83d\\\\ude00\"}],\
         \"tools\": [{\"x\": [1, {\"y\": \"},]\"}]}],\
         \"temperature\": 1e-9,\
-        \"router_meta\": {\"echo\": true, \"nested\": [{\"k\": \"v\"}]},\
+        \"vadis_meta\": {\"echo\": true, \"nested\": [{\"k\": \"v\"}]},\
         \"stream\": true\
     }\n";
     let raw = RawBody::new(input.as_bytes().to_vec());
@@ -35,7 +35,7 @@ async fn conf_10_byte_exact_after_vadis_field_removal() {
         .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
         .expect("well-formed body must succeed");
 
-    // Expected = the same input minus the router_meta member + its leading
+    // Expected = the same input minus the vadis_meta member + its leading
     // comma; every other byte untouched.
     let expected = "{\
         \"model\": \"provider/model\",\
@@ -46,9 +46,9 @@ async fn conf_10_byte_exact_after_vadis_field_removal() {
     }\n";
     assert_eq!(out.as_bytes(), expected.as_bytes());
 
-    // Semantic cross-check: router_meta is gone, every other key is present.
+    // Semantic cross-check: vadis_meta is gone, every other key is present.
     let v: serde_json::Value = serde_json::from_slice(out.as_bytes()).unwrap();
-    assert!(v.get("router_meta").is_none());
+    assert!(v.get("vadis_meta").is_none());
     assert_eq!(v["model"], "provider/model");
     assert_eq!(v["stream"], true);
 }
@@ -69,7 +69,7 @@ async fn conf_10_noop_when_no_vadis_fields_present() {
 /// AGENTS hard constraint 2's content determinism).
 #[tokio::test]
 async fn conf_10_removal_is_idempotent() {
-    let input = "{\"a\":1,\"router_meta\":{\"b\":[2,{\"c\":\"},\"}],\"d\":null},\"e\":true}";
+    let input = "{\"a\":1,\"vadis_meta\":{\"b\":[2,{\"c\":\"},\"}],\"d\":null},\"e\":true}";
     let raw = RawBody::new(input.as_bytes().to_vec());
     let once = raw
         .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
@@ -81,18 +81,18 @@ async fn conf_10_removal_is_idempotent() {
     assert_eq!(once.as_bytes(), b"{\"a\":1,\"e\":true}");
 }
 
-/// The proxy-chain-level case: a client that keeps sending a `router_meta`
+/// The proxy-chain-level case: a client that keeps sending a `vadis_meta`
 /// member — which is what a client does once the vadis has echoed one back to
 /// it — must still have **every** turn's bytes reach the upstream without that
 /// member: the removal is enforced on the chain, not only inside `RawBody`.
 ///
 /// Scope, stated so this case is not read as proving more than it does: the
 /// response-side *echo injection* itself (DESIGN §12.10.5) is not implemented in
-/// v0.1 — `router_meta` appears in no forwarding source — so what is asserted
+/// v0.1 — `vadis_meta` appears in no forwarding source — so what is asserted
 /// is the enforcement that keeps an echo out of the upstream request, on both
 /// turns of one sticky session. The echo remains a tracked gap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conf_10_router_meta_echo_never_reaches_upstream() {
+async fn conf_10_vadis_meta_echo_never_reaches_upstream() {
     // Turn 1 and turn 2 of one session: an agent resends the conversation and
     // keeps carrying the vadis-owned echo field. The key of the session is
     // `prompt_cache_key`, which must itself pass through byte-identically.
@@ -100,7 +100,7 @@ async fn conf_10_router_meta_echo_never_reaches_upstream() {
   "model": "mock/glm",
   "messages": [{"role": "user", "content": "a{b}, \"quoted\" \\ backslash"}],
   "prompt_cache_key": "conf10-session",
-  "router_meta": {"echo": true, "nested": [{"k": "v"}]},
+  "vadis_meta": {"echo": true, "nested": [{"k": "v"}]},
   "stream": false
 }
 "#;
@@ -115,7 +115,7 @@ async fn conf_10_router_meta_echo_never_reaches_upstream() {
   "model": "mock/glm",
   "messages": [{"role": "user", "content": "a{b}, \"quoted\" \\ backslash"}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "again"}],
   "prompt_cache_key": "conf10-session",
-  "router_meta": {"echo": true, "nested": [{"k": "v"}]},
+  "vadis_meta": {"echo": true, "nested": [{"k": "v"}]},
   "stream": false
 }
 "#;
@@ -190,8 +190,8 @@ fallback: []
         let turn = i + 1;
         // The vadis-owned member is absent, in bytes and as a substring.
         assert!(
-            !String::from_utf8_lossy(&req.body).contains("router_meta"),
-            "turn {turn}: router_meta must never reach the upstream"
+            !String::from_utf8_lossy(&req.body).contains("vadis_meta"),
+            "turn {turn}: vadis_meta must never reach the upstream"
         );
         // Everything else is byte-identical: not a reserialization. (The
         // `model` value is the native id — mutation (b), CONF-27's domain —
@@ -199,7 +199,7 @@ fallback: []
         assert_eq!(
             req.body,
             expected.as_bytes(),
-            "turn {turn}: upstream-visible body must be the client body minus router_meta, with the native model id"
+            "turn {turn}: upstream-visible body must be the client body minus vadis_meta, with the native model id"
         );
         // The session key the sticky table uses passed through unchanged.
         assert!(

@@ -400,7 +400,7 @@ mod tests {
     fn vadis_field_removal_does_not_change_block_hashes() {
         use crate::body::VADIS_OWNED_TOP_LEVEL_KEYS;
         let with_meta = RawBody::new(
-            b"{\"router_meta\":{\"echo\":true},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"name\":\"t\"}]}"
+            b"{\"vadis_meta\":{\"echo\":true},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"name\":\"t\"}]}"
                 .to_vec(),
         );
         let cleaned = with_meta

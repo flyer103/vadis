@@ -11,7 +11,7 @@
 
 use vadis_conformance::testkit::{self, CannedResponse};
 
-const CLIENT_BODY: &str = r#"{"model":"mock/clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"router_meta":{"echo":true},"stream":false}
+const CLIENT_BODY: &str = r#"{"model":"mock/clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"vadis_meta":{"echo":true},"stream":false}
 "#;
 
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"clm","max_tokens":64,"system":"be {exact}","messages":[{"role":"user","content":"héllo 😀"}],"metadata":{"user_id":"u-1"},"stream":false}
@@ -89,9 +89,9 @@ async fn conf_03_native_anthropic_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
+        "upstream-visible body must be byte-identical to the client body minus vadis_meta, with the native model id"
     );
-    assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
+    assert!(!String::from_utf8_lossy(&req.body).contains("vadis_meta"));
 
     // Anthropic auth shape, never a bearer.
     assert_eq!(req.header("x-api-key"), Some("sk-conf03"));

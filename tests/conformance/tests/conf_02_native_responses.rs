@@ -10,7 +10,7 @@
 
 use vadis_conformance::testkit::{self, CannedResponse};
 
-const CLIENT_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","router_meta":{"echo":true},"stream":false}
+const CLIENT_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","vadis_meta":{"echo":true},"stream":false}
 "#;
 
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","stream":false}
@@ -86,9 +86,9 @@ async fn conf_02_native_responses_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
+        "upstream-visible body must be byte-identical to the client body minus vadis_meta, with the native model id"
     );
-    assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
+    assert!(!String::from_utf8_lossy(&req.body).contains("vadis_meta"));
     // The session identity (prompt_cache_key) survives verbatim upstream.
     assert!(String::from_utf8_lossy(&req.body).contains("\"prompt_cache_key\":\"sess-42\""));
 
