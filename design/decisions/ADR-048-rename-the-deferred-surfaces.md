@@ -341,7 +341,10 @@ Grounds, each checkable, so the claim is *measured* rather than assumed:
    no publish, no release job). Nothing has been distributed under either name.
 2. **Nothing has been published on crates.io.** Live check, 2026-10-04:
    `GET https://crates.io/api/v1/crates/vadis` → `404` / `{"errors":[{"detail":"crate \`vadis\` does not
-   exist"}]}`. (ADR-047's *Background* records the same for 2026-10-04.)
+   exist"}]}`. (ADR-047's *Background* records the same for 2026-10-04.) *(Re-derive note, added by
+   R65-0b: the crates.io API rejects the default `curl` User-Agent with `403 Forbidden` — send a custom
+   one, e.g. `curl -A 'vadis-audit/0.1' https://crates.io/api/v1/crates/vadis`, or the check reads
+   403, not the recorded 404. Verified 2026-10-04 both ways.)*
 3. **The population is empty, not merely small.** Any store in existence today was created by an
    in-tree build on the machine that built it, under a `state/` directory that is gitignored
    (`.gitignore:10-11`) and never shipped. The repository went public 2026-10-03; its first commit is
@@ -360,8 +363,9 @@ Grounds, each checkable, so the claim is *measured* rather than assumed:
    would be an owner's, not a round's.
 
 *If a reader disagrees with this section, the disagreement is with claim 1–3 (that nothing was released),
-not with the disposition.* Claims 1–3 are re-runnable in one command each (`git tag`, `git log v0.1.0`,
-the crates.io read above).
+not with the disposition.* Claims 1–3 are re-runnable in one command each (`git tag` → empty; `git log
+v0.1.0` → *errors* with `unknown revision` — the error is the absence being verified, not a broken
+command; the crates.io read above, with a custom User-Agent).
 
 ---
 
@@ -496,9 +500,10 @@ Ordered, so the tree is never red and the gate is provable.
 1. **One commit, one logical change**, on a branch cut from this ADR's branch (or from `main` once this
    lands). Code + cases + docs together (constraint 8).
 2. **The metric rename (D1).** Apply `\brouter_(metrics|trace_files|requests|failures|cost|cache|prefix|transform|plan|stateful|overhead_ms_p99)` →
-   `vadis_…` **in `crates/vadis-cli/src/metrics.rs` and the two case files only**, then fix the four
+   `vadis_…` **in `crates/vadis-cli/src/metrics.rs` and the two case files only**, then fix the three
    documents by hand (`docs/spec.md` §4.16's 23 lines, `design/DESIGN.md:1052,3956`,
-   `ADR-041`'s 30 occurrences). Do **not** touch `router_overhead_ms` in ADR-029/030/036/045 (§9.1) — a
+   `ADR-041`'s 30 occurrences — the three document rows of §3.1's table; an earlier draft of this
+   step said "four", corrected by R65-0b). Do **not** touch `router_overhead_ms` in ADR-029/030/036/045 (§9.1) — a
    sweep written with the bare prefix `overhead` would catch it; write the pattern as §3.1's command does.
    Include `ADR-041:250`'s pattern and `:609`'s hypothetical (D3).
 3. **The store rename (D2).** `config_load.rs:209`'s literal, then `:28`/`:319`, `reload.rs`'s 4,
