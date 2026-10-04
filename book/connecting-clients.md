@@ -332,7 +332,7 @@ directory you happen to run `vadis` from:
 - **Traces** — append-only JSONL, one file per rollover interval, under the configured
   `trace.dir`. This is the analysis record (one decision record per request) and the only
   channel to the analysis side.
-- **The local state store** — one SQLite file at `<config dir>/state/router.db`, holding the
+- **The local state store** — one SQLite file at `<config dir>/state/vadis.db`, holding the
   event log (the state truth) and the projections built from it. Both are `state/`, and
   `state/` is gitignored.
 

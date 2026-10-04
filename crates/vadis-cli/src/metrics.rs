@@ -22,7 +22,7 @@ use crate::stats::TraceFigures;
 
 /// The frozen window (spec §4.16): 900 seconds, a process constant — not
 /// a config key, not a query parameter, not a header. It is stated
-/// in-band on every response by `router_metrics_window_seconds`.
+/// in-band on every response by `vadis_metrics_window_seconds`.
 pub const WINDOW_MS: i64 = 900_000;
 
 /// Pure: the derivation's output in, the exposition out (spec §4.16).
@@ -47,7 +47,7 @@ pub fn exposition(
     // (§9.2's "a report must state the window it covers", kept in-band).
     series(
         &mut out,
-        "router_metrics_window_seconds",
+        "vadis_metrics_window_seconds",
         "The trailing window this exposition covers, in seconds (a process constant, spec §4.16 — not a knob).",
         &[],
         &(WINDOW_MS / 1_000).to_string(),
@@ -86,7 +86,7 @@ pub fn exposition(
     // #3 — the read's own count (the rollover files this read opened).
     series(
         &mut out,
-        "router_trace_files_read",
+        "vadis_trace_files_read",
         "The §4.1 rollover files this read opened (≤ 2 for a 900s window).",
         &[],
         &files_read.to_string(),
@@ -95,21 +95,21 @@ pub fn exposition(
     // #4–#6, #8 — the request counts.
     series(
         &mut out,
-        "router_requests",
+        "vadis_requests",
         "Requests in the window.",
         &[],
         &f.requests.to_string(),
     );
     series(
         &mut out,
-        "router_requests_succeeded",
+        "vadis_requests_succeeded",
         "Requests in the window answered 2xx.",
         &[],
         &f.succeeded.to_string(),
     );
     series(
         &mut out,
-        "router_requests_failed",
+        "vadis_requests_failed",
         "Requests in the window not answered 2xx.",
         &[],
         &f.failed.to_string(),
@@ -120,13 +120,13 @@ pub fn exposition(
     if !f.failure_kinds.is_empty() {
         help_type(
             &mut out,
-            "router_failures_by_kind",
+            "vadis_failures_by_kind",
             "Failed requests split by §8's errors[].kind — only kinds the window produced.",
         );
         for (kind, n) in &f.failure_kinds {
             sample(
                 &mut out,
-                "router_failures_by_kind",
+                "vadis_failures_by_kind",
                 &[("kind", kind)],
                 &n.to_string(),
             );
@@ -134,7 +134,7 @@ pub fn exposition(
     }
     series(
         &mut out,
-        "router_requests_usage_missing",
+        "vadis_requests_usage_missing",
         "Requests with usage_missing: true — excluded from every rate and every sum, never read as 0.",
         &[],
         &f.usage_missing.to_string(),
@@ -150,7 +150,7 @@ pub fn exposition(
     } else {
         help_type(
             &mut out,
-            "router_cost_nano",
+            "vadis_cost_nano",
             "Cost in integer nano of the named currency — money is reported per currency and never summed across them, and no tier=\"total\" series exists (a total would double-count under sum()).",
         );
         for cur in f.currencies.keys() {
@@ -162,7 +162,7 @@ pub fn exposition(
             ] {
                 sample(
                     &mut out,
-                    "router_cost_nano",
+                    "vadis_cost_nano",
                     &[
                         ("tier", tier),
                         ("currency", cur),
@@ -177,14 +177,14 @@ pub fn exposition(
     // #10–#11 — the hit rate's numerator and denominator, as measurements.
     series(
         &mut out,
-        "router_cache_input_cached_tokens",
+        "vadis_cache_input_cached_tokens",
         "Cached input tokens in the window (the hit rate's numerator).",
         &[("provenance", "verified")],
         &f.input_cached_tokens.to_string(),
     );
     series(
         &mut out,
-        "router_cache_input_tokens",
+        "vadis_cache_input_tokens",
         "Input tokens in the window (the hit rate's denominator).",
         &[("provenance", "verified")],
         &f.input_total_tokens.to_string(),
@@ -195,7 +195,7 @@ pub fn exposition(
     match crate::stats::cache_hit_rate(f) {
         Some(r) => series(
             &mut out,
-            "router_cache_hit_rate",
+            "vadis_cache_hit_rate",
             "Cache hit rate over the window (cached / total input tokens).",
             &[("provenance", "verified")],
             &format!("{r:.4}"),
@@ -210,7 +210,7 @@ pub fn exposition(
     match crate::stats::median(&mut f.continuity.clone()) {
         Some(c) => series(
             &mut out,
-            "router_prefix_continuity_p50",
+            "vadis_prefix_continuity_p50",
             "Prefix continuity p50 over the window (a predictor, not a measurement of what the provider did).",
             &[("provenance", "inferred")],
             &format!("{c:.4}"),
@@ -229,13 +229,13 @@ pub fn exposition(
     if f.verified_savings_tokens > 0 || f.inferred_savings_tokens > 0 {
         help_type(
             &mut out,
-            "router_transform_savings_tokens",
+            "vadis_transform_savings_tokens",
             "Transform savings in tokens, split by §7's label — the two provenance values are one metric name and are never to be summed together.",
         );
         if f.verified_savings_tokens > 0 {
             sample(
                 &mut out,
-                "router_transform_savings_tokens",
+                "vadis_transform_savings_tokens",
                 &[("provenance", "verified")],
                 &f.verified_savings_tokens.to_string(),
             );
@@ -243,7 +243,7 @@ pub fn exposition(
         if f.inferred_savings_tokens > 0 {
             sample(
                 &mut out,
-                "router_transform_savings_tokens",
+                "vadis_transform_savings_tokens",
                 &[("provenance", "inferred")],
                 &f.inferred_savings_tokens.to_string(),
             );
@@ -256,7 +256,7 @@ pub fn exposition(
     if let Some(fam) = plan_family {
         series(
             &mut out,
-            "router_plan_switches",
+            "vadis_plan_switches",
             "Requests whose result.plan_switch is present (the family's spills).",
             &[("family", fam)],
             &f.switches.to_string(),
@@ -264,13 +264,13 @@ pub fn exposition(
         if !f.currencies.is_empty() {
             help_type(
                 &mut out,
-                "router_plan_switch_cost_nano",
+                "vadis_plan_switch_cost_nano",
                 "The displaced requests' own measured cost.total, integer nano per currency.",
             );
             for cur in f.currencies.keys() {
                 sample(
                     &mut out,
-                    "router_plan_switch_cost_nano",
+                    "vadis_plan_switch_cost_nano",
                     &[
                         ("family", fam),
                         ("currency", cur),
@@ -286,7 +286,7 @@ pub fn exposition(
         }
         series(
             &mut out,
-            "router_plan_switch_reprefill_tokens",
+            "vadis_plan_switch_reprefill_tokens",
             "Re-prefill tokens over the switch records (the inferred column — never added into the verified sum).",
             &[("family", fam), ("provenance", "inferred")],
             &f.reprefill_tokens.to_string(),
@@ -294,13 +294,13 @@ pub fn exposition(
         if !f.currencies.is_empty() {
             help_type(
                 &mut out,
-                "router_plan_switch_reprefill_cost_nano",
+                "vadis_plan_switch_reprefill_cost_nano",
                 "The switch records' switch_cost_nano, integer nano per currency (inferred).",
             );
             for cur in f.currencies.keys() {
                 sample(
                     &mut out,
-                    "router_plan_switch_reprefill_cost_nano",
+                    "vadis_plan_switch_reprefill_cost_nano",
                     &[
                         ("family", fam),
                         ("currency", cur),
@@ -316,7 +316,7 @@ pub fn exposition(
         }
         series(
             &mut out,
-            "router_plan_switches_without_usage",
+            "vadis_plan_switches_without_usage",
             "Switches whose displaced record carried no usage (they keep the inferred label).",
             &[("family", fam)],
             &f.switches_without_usage.to_string(),
@@ -327,7 +327,7 @@ pub fn exposition(
     match crate::stats::stateful_inbound_rate(f) {
         Some(r) => series(
             &mut out,
-            "router_stateful_inbound_rate",
+            "vadis_stateful_inbound_rate",
             "Stateful-inbound requests as a ratio of the window's requests (always 0 in v0.1 — gap G-F).",
             &[("provenance", "count")],
             &format!("{r:.4}"),
@@ -346,7 +346,7 @@ pub fn exposition(
     match crate::stats::p99(&mut f.overhead_ms.clone()) {
         Some(v) => series(
             &mut out,
-            "router_overhead_ms_p99",
+            "vadis_overhead_ms_p99",
             "The vadis's own overhead (overhead_ms − upstream_ms), nearest-rank p99, integer milliseconds.",
             &[("provenance", "measured")],
             &v.to_string(),
@@ -402,7 +402,7 @@ pub fn snapshot(state: &vadis_proxy::AppState) -> String {
 fn emit_omitted(out: &mut String, omitted: u64) {
     series(
         out,
-        "router_metrics_omitted_figures",
+        "vadis_metrics_omitted_figures",
         "How many figures this response omitted with a named reason (the # vadis: comments) — the response's own bookkeeping, never a figure over records.",
         &[],
         &omitted.to_string(),

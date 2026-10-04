@@ -197,8 +197,8 @@ async fn conf_25_config_driven_serve() {
     );
     let state_db = v["state_db"].as_str().unwrap();
     assert!(
-        state_db.replace('\\', "/").ends_with("state/router.db"),
-        "state_db fixed at <config dir>/state/router.db: {state_db}"
+        state_db.replace('\\', "/").ends_with("state/vadis.db"),
+        "state_db fixed at <config dir>/state/vadis.db: {state_db}"
     );
     assert_eq!(v["store"], "open");
 

@@ -203,7 +203,7 @@ async fn conf_54_cny_route_records_and_reports_in_cny() {
     // (b) the spill's cost.computed store row carries the unit.
     {
         use vadis_core::store::{Query, QueryRow, Store as _};
-        let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db"))
+        let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db"))
             .expect("store opens read-only");
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events");

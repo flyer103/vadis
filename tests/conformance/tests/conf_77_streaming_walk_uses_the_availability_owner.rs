@@ -88,7 +88,7 @@ fn http_get_health(addr: &str) -> serde_json::Value {
 /// Every stored event as (kind_raw, payload), read after the server
 /// stopped (CONF-44's reader).
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

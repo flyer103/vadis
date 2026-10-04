@@ -132,7 +132,7 @@ absolute path printed at the end is what makes a mistyped `--config` visible ins
 at the XDG location keeps its traces and its store beside itself under `~/.config/vadis/`. The alternative
 (config under `~/.config`, state under `$XDG_STATE_HOME` / `$XDG_DATA_HOME`) is rejected here rather than
 deferred, because it needs a **second** anchor: the store's path is not a config key in v0.1 (fixed at
-`<config dir>/state/router.db`, spec §4.5, ADR-009 item 6), so the split cannot be expressed in the file at all
+`<config dir>/state/vadis.db`, spec §4.5, ADR-009 item 6), so the split cannot be expressed in the file at all
 and would become a rule that depends on where the config happens to sit — the drift DESIGN §12.10.2's "one rule,
 in one place" exists to prevent. It would also move where every existing installation reads and writes, which is
 a migration, not a default. The consequence is registered as **GAP-Q22** (the additive `state:` key §12.5
@@ -289,7 +289,7 @@ anticipates is the way to move the store), and the answer available today for a 
   XDG file writes to the XDG location instead, and the print is what makes that visible rather than surprising.
   CONF-79 is the case that will measure all of it.
 - **The default location puts state under `~/.config/vadis/` too** (Q22): the traces the file names and the
-  fixed `state/router.db`. That is the price of keeping §4.1's single anchor; it is stated in the book, and the
+  fixed `state/vadis.db`. That is the price of keeping §4.1's single anchor; it is stated in the book, and the
   operator has a supported answer today (an absolute `trace.dir`). Moving the *store* is the additive `state:`
   key's job, not a second resolution rule.
 - **The byte-identity claim (G1) is against the binary's own embedded template.** A stale binary carries a

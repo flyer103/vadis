@@ -186,7 +186,7 @@ fn forbidden_403(body: &[u8]) -> CannedResponse {
 // ---------------------------------------------------------------------
 
 fn events(dir: &std::path::Path) -> Vec<vadis_core::store::StoredEvent> {
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

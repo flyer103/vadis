@@ -193,7 +193,7 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 /// The `session.bound` rows of one session, in event order:
 /// `(provider, model, ttl_us, ts_us)` from the store's own event log.
 fn bound_rows(dir: &std::path::Path, session: &str) -> Vec<(String, String, i64, i64)> {
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -218,7 +218,7 @@ fn bound_rows(dir: &std::path::Path, session: &str) -> Vec<(String, String, i64,
 /// The live binding the projection holds for the session (the store's
 /// own `Query::SessionBinding` — the shipped read path's row).
 fn binding(dir: &std::path::Path, session: &str) -> Option<vadis_core::store::SessionBindingRow> {
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let row = match store.query(Query::SessionBinding {
         session_key: session,
     }) {

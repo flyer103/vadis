@@ -206,7 +206,7 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
 /// stopped (CONF-44's reader).
 fn read_events(dir: &std::path::Path) -> Vec<(String, Value)> {
     use vadis_core::store::{Query, QueryRow, Store as _};
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

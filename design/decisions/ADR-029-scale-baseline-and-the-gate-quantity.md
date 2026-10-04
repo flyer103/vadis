@@ -95,7 +95,7 @@ session/sticky × store), and every rung's report names its tuple:
 **Per-rung rules.** 200 requests or 30 s, whichever ends first; a declared warm-up excluded from every
 aggregate; **≥ 100 valid samples** (`upstream_ms` present) or the rung is reported `insufficient sample` instead
 of a number. `state.dir` is per-run **free by construction**: each rung's config file lives in its own fresh
-directory, so the fixed `state/router.db` and the trace land under it (spec §4.5, §4.1) — ADR-009's one-writer
+directory, so the fixed `state/vadis.db` and the trace land under it (spec §4.5, §4.1) — ADR-009's one-writer
 rule is respected by never sharing a directory between a running process and a seed. The grown-store arm seeds
 to a **declared and measured** size before `serve` starts and reports the file's byte size.
 

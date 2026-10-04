@@ -25,7 +25,7 @@ pub struct ResolvedConfig {
     pub config_dir: PathBuf,
     /// `<config_dir>/<trace.dir>`
     pub trace_dir: PathBuf,
-    /// `<config_dir>/state/router.db` (fixed in v0.1, spec §4.5).
+    /// `<config_dir>/state/vadis.db` (fixed in v0.1, spec §4.5).
     pub state_db: PathBuf,
     /// The validated file itself.
     pub vadis: VadisConfig,
@@ -206,7 +206,7 @@ pub fn load(path: &Path) -> Result<ResolvedConfig, String> {
 
     Ok(ResolvedConfig {
         trace_dir: resolve(&config_dir, &vadis.trace.dir),
-        state_db: resolve(&config_dir, "state/router.db"),
+        state_db: resolve(&config_dir, "state/vadis.db"),
         config_dir,
         vadis,
         identity,
@@ -316,7 +316,7 @@ fallback: []
         let (_g, path) = write_temp("config.yaml", MINIMAL);
         let rc = load(&path).expect("loads");
         assert!(rc.trace_dir.ends_with("state/traces"));
-        assert!(rc.state_db.ends_with("state/router.db"));
+        assert!(rc.state_db.ends_with("state/vadis.db"));
         assert_eq!(rc.trace_dir.parent(), rc.state_db.parent());
         assert_eq!(rc.vadis.providers.len(), 1);
     }

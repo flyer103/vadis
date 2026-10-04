@@ -29,7 +29,7 @@ fn tempdir(tag: &str) -> PathBuf {
 }
 
 fn open(tag: &str) -> vadis_store::SqliteStore {
-    vadis_store::SqliteStore::open(&tempdir(tag).join("state/router.db")).unwrap()
+    vadis_store::SqliteStore::open(&tempdir(tag).join("state/vadis.db")).unwrap()
 }
 
 /// The scenario's event sequence — identical for both stores. The intent

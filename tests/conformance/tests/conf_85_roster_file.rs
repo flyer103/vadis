@@ -580,7 +580,7 @@ fn decision_content(rec: &serde_json::Value) -> serde_json::Value {
 /// from the store after serve has stopped (the writer lock is the
 /// process's own while it runs, CONF-23).
 fn config_applied_payload(dir: &std::path::Path) -> serde_json::Value {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");

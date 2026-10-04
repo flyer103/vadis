@@ -132,7 +132,7 @@ async fn conf_66_streaming_first_request_of_a_fresh_session_reads_false() {
     // (spec §6 / §4.5 row 4) — turn 1 (sticky_hit false) wrote exactly
     // one session.bound; turn 2 (sticky_hit true, route unchanged)
     // wrote none (bind_session's early return).
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -246,7 +246,7 @@ async fn conf_66_session_null_is_false_and_writes_no_binding_event() {
         "session: null is always false (spec §6)"
     );
 
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

@@ -13,7 +13,7 @@
 //!   two rigs holding N and 10N records in the window produce identical
 //!   metric-name+label sets and identical digit-stripped line multisets;
 //!   both bodies stay under 8 KiB.
-//! - (c) **the read is bounded and sourced**: `router_trace_files_read`
+//! - (c) **the read is bounded and sourced**: `vadis_trace_files_read`
 //!   equals the §4.1 rollover files the window actually intersects
 //!   (≤ 2), and a decoy trace dir full of in-window records OUTSIDE the
 //!   config's `trace.dir` contributes nothing.
@@ -23,7 +23,7 @@
 //!   tokens keeps the token series at `0` and OMITS the ratio series,
 //!   the `# vadis:` comment naming why; a window whose `trace.dir` is
 //!   removed after boot answers `200` with every trace-derived figure
-//!   absent, each hole named, `router_metrics_omitted_figures` counting
+//!   absent, each hole named, `vadis_metrics_omitted_figures` counting
 //!   them, and never a §8 body.
 //! - (f) **the `provenance` label is §9.2's own word per series** and is
 //!   never re-labelled.
@@ -49,44 +49,44 @@ const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m
 /// emitted — limb (a)'s "no series exists that the derivation does not
 /// produce".
 const FROZEN_SERIES: [&str; 21] = [
-    "router_metrics_window_seconds",
-    "router_metrics_omitted_figures",
-    "router_trace_files_read",
-    "router_requests",
-    "router_requests_succeeded",
-    "router_requests_failed",
-    "router_failures_by_kind",
-    "router_requests_usage_missing",
-    "router_cost_nano",
-    "router_cache_input_cached_tokens",
-    "router_cache_input_tokens",
-    "router_cache_hit_rate",
-    "router_prefix_continuity_p50",
-    "router_transform_savings_tokens",
-    "router_plan_switches",
-    "router_plan_switch_cost_nano",
-    "router_plan_switch_reprefill_tokens",
-    "router_plan_switch_reprefill_cost_nano",
-    "router_plan_switches_without_usage",
-    "router_stateful_inbound_rate",
-    "router_overhead_ms_p99",
+    "vadis_metrics_window_seconds",
+    "vadis_metrics_omitted_figures",
+    "vadis_trace_files_read",
+    "vadis_requests",
+    "vadis_requests_succeeded",
+    "vadis_requests_failed",
+    "vadis_failures_by_kind",
+    "vadis_requests_usage_missing",
+    "vadis_cost_nano",
+    "vadis_cache_input_cached_tokens",
+    "vadis_cache_input_tokens",
+    "vadis_cache_hit_rate",
+    "vadis_prefix_continuity_p50",
+    "vadis_transform_savings_tokens",
+    "vadis_plan_switches",
+    "vadis_plan_switch_cost_nano",
+    "vadis_plan_switch_reprefill_tokens",
+    "vadis_plan_switch_reprefill_cost_nano",
+    "vadis_plan_switches_without_usage",
+    "vadis_stateful_inbound_rate",
+    "vadis_overhead_ms_p99",
 ];
 
 /// §9.2's own label per series (limb (f)): `None` = the series carries
 /// no `provenance` label at all.
 fn expected_provenance(name: &str) -> Option<&'static [&'static str]> {
     match name {
-        "router_cost_nano"
-        | "router_cache_input_cached_tokens"
-        | "router_cache_input_tokens"
-        | "router_cache_hit_rate"
-        | "router_plan_switch_cost_nano" => Some(&["verified"]),
-        "router_prefix_continuity_p50"
-        | "router_plan_switch_reprefill_tokens"
-        | "router_plan_switch_reprefill_cost_nano" => Some(&["inferred"]),
-        "router_transform_savings_tokens" => Some(&["verified", "inferred"]),
-        "router_stateful_inbound_rate" => Some(&["count"]),
-        "router_overhead_ms_p99" => Some(&["measured"]),
+        "vadis_cost_nano"
+        | "vadis_cache_input_cached_tokens"
+        | "vadis_cache_input_tokens"
+        | "vadis_cache_hit_rate"
+        | "vadis_plan_switch_cost_nano" => Some(&["verified"]),
+        "vadis_prefix_continuity_p50"
+        | "vadis_plan_switch_reprefill_tokens"
+        | "vadis_plan_switch_reprefill_cost_nano" => Some(&["inferred"]),
+        "vadis_transform_savings_tokens" => Some(&["verified", "inferred"]),
+        "vadis_stateful_inbound_rate" => Some(&["count"]),
+        "vadis_overhead_ms_p99" => Some(&["measured"]),
         _ => None,
     }
 }
@@ -430,24 +430,24 @@ fn p99_own(xs: &[u64]) -> Option<u64> {
 /// the case's own sums. `family` is the configured plan family, if any.
 fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Option<&str>) {
     assert_eq!(
-        value_of(samples, "router_metrics_window_seconds", &[]),
+        value_of(samples, "vadis_metrics_window_seconds", &[]),
         Some("900")
     );
     assert_eq!(
-        value_of(samples, "router_requests", &[]),
+        value_of(samples, "vadis_requests", &[]),
         Some(own.requests.to_string().as_str())
     );
     assert_eq!(
-        value_of(samples, "router_requests_succeeded", &[]),
+        value_of(samples, "vadis_requests_succeeded", &[]),
         Some(own.succeeded.to_string().as_str())
     );
     assert_eq!(
-        value_of(samples, "router_requests_failed", &[]),
+        value_of(samples, "vadis_requests_failed", &[]),
         Some(own.failed.to_string().as_str())
     );
     for (kind, n) in &own.failure_kinds {
         assert_eq!(
-            value_of(samples, "router_failures_by_kind", &[("kind", kind)]),
+            value_of(samples, "vadis_failures_by_kind", &[("kind", kind)]),
             Some(n.to_string().as_str()),
             "failure kind {kind}"
         );
@@ -455,17 +455,17 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     assert_eq!(
         samples
             .iter()
-            .filter(|s| s.name == "router_failures_by_kind")
+            .filter(|s| s.name == "vadis_failures_by_kind")
             .count(),
         own.failure_kinds.len(),
         "exactly the kinds the window produced — never a synthetic zero"
     );
     assert_eq!(
-        value_of(samples, "router_requests_usage_missing", &[]),
+        value_of(samples, "vadis_requests_usage_missing", &[]),
         Some(own.usage_missing.to_string().as_str())
     );
     if own.currencies.is_empty() {
-        assert!(!has_series(samples, "router_cost_nano"));
+        assert!(!has_series(samples, "vadis_cost_nano"));
         assert!(
             comments
                 .iter()
@@ -483,7 +483,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
                 assert_eq!(
                     value_of(
                         samples,
-                        "router_cost_nano",
+                        "vadis_cost_nano",
                         &[
                             ("tier", tier),
                             ("currency", cur),
@@ -499,7 +499,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     assert_eq!(
         value_of(
             samples,
-            "router_cache_input_cached_tokens",
+            "vadis_cache_input_cached_tokens",
             &[("provenance", "verified")]
         ),
         Some(own.input_cached.to_string().as_str())
@@ -507,13 +507,13 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     assert_eq!(
         value_of(
             samples,
-            "router_cache_input_tokens",
+            "vadis_cache_input_tokens",
             &[("provenance", "verified")]
         ),
         Some(own.input_total.to_string().as_str())
     );
     if own.input_total == 0 {
-        assert!(!has_series(samples, "router_cache_hit_rate"));
+        assert!(!has_series(samples, "vadis_cache_hit_rate"));
         assert!(
             comments
                 .iter()
@@ -525,7 +525,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         assert_eq!(
             value_of(
                 samples,
-                "router_cache_hit_rate",
+                "vadis_cache_hit_rate",
                 &[("provenance", "verified")]
             ),
             Some(want.as_str())
@@ -533,7 +533,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     }
     match median_own(&own.continuity) {
         None => {
-            assert!(!has_series(samples, "router_prefix_continuity_p50"));
+            assert!(!has_series(samples, "vadis_prefix_continuity_p50"));
             assert!(
                 comments
                     .iter()
@@ -546,7 +546,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
             assert_eq!(
                 value_of(
                     samples,
-                    "router_prefix_continuity_p50",
+                    "vadis_prefix_continuity_p50",
                     &[("provenance", "inferred")]
                 ),
                 Some(want.as_str())
@@ -554,24 +554,24 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         }
     }
     assert!(
-        !has_series(samples, "router_transform_savings_tokens"),
+        !has_series(samples, "vadis_transform_savings_tokens"),
         "this traffic ran no transforms — no savings series exists"
     );
     match family {
         None => assert!(
-            !has_series(samples, "router_plan_switches"),
+            !has_series(samples, "vadis_plan_switches"),
             "no plan_policy ⇒ no plan series at all (§9.1's rule)"
         ),
         Some(fam) => {
             assert_eq!(
-                value_of(samples, "router_plan_switches", &[("family", fam)]),
+                value_of(samples, "vadis_plan_switches", &[("family", fam)]),
                 Some(own.switches.to_string().as_str())
             );
             for cur in own.currencies.keys() {
                 assert_eq!(
                     value_of(
                         samples,
-                        "router_plan_switch_cost_nano",
+                        "vadis_plan_switch_cost_nano",
                         &[
                             ("family", fam),
                             ("currency", cur),
@@ -591,7 +591,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
                 assert_eq!(
                     value_of(
                         samples,
-                        "router_plan_switch_reprefill_cost_nano",
+                        "vadis_plan_switch_reprefill_cost_nano",
                         &[
                             ("family", fam),
                             ("currency", cur),
@@ -612,7 +612,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
             assert_eq!(
                 value_of(
                     samples,
-                    "router_plan_switch_reprefill_tokens",
+                    "vadis_plan_switch_reprefill_tokens",
                     &[("family", fam), ("provenance", "inferred")]
                 ),
                 Some(own.reprefill_tokens.to_string().as_str())
@@ -620,7 +620,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
             assert_eq!(
                 value_of(
                     samples,
-                    "router_plan_switches_without_usage",
+                    "vadis_plan_switches_without_usage",
                     &[("family", fam)]
                 ),
                 Some(own.switches_without_usage.to_string().as_str())
@@ -628,7 +628,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         }
     }
     if own.requests == 0 {
-        assert!(!has_series(samples, "router_stateful_inbound_rate"));
+        assert!(!has_series(samples, "vadis_stateful_inbound_rate"));
         assert!(
             comments
                 .iter()
@@ -640,7 +640,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         assert_eq!(
             value_of(
                 samples,
-                "router_stateful_inbound_rate",
+                "vadis_stateful_inbound_rate",
                 &[("provenance", "count")]
             ),
             Some(want.as_str())
@@ -648,7 +648,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     }
     match p99_own(&own.overhead) {
         None => {
-            assert!(!has_series(samples, "router_overhead_ms_p99"));
+            assert!(!has_series(samples, "vadis_overhead_ms_p99"));
             assert!(
                 comments
                     .iter()
@@ -659,7 +659,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         Some(p) => assert_eq!(
             value_of(
                 samples,
-                "router_overhead_ms_p99",
+                "vadis_overhead_ms_p99",
                 &[("provenance", "measured")]
             ),
             Some(p.to_string().as_str())
@@ -674,7 +674,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         "the event-log figure is named, always"
     );
     assert_eq!(
-        value_of(samples, "router_metrics_omitted_figures", &[]),
+        value_of(samples, "vadis_metrics_omitted_figures", &[]),
         Some(comments.len().to_string().as_str()),
         "omitted_figures is exactly this response's comment count"
     );
@@ -775,7 +775,7 @@ async fn conf_87_the_figures_are_the_derivations() {
 
     // (c) the read is bounded: the case's own §4.1 intersection count,
     // ≤ 2 — and the decoy dir did not add to it.
-    let files_read = value_of(&samples, "router_trace_files_read", &[])
+    let files_read = value_of(&samples, "vadis_trace_files_read", &[])
         .expect("files_read present")
         .parse::<usize>()
         .unwrap();
@@ -802,7 +802,7 @@ async fn conf_87_the_figures_are_the_derivations() {
     assert_eq!(
         value_of(
             &samples,
-            "router_cache_hit_rate",
+            "vadis_cache_hit_rate",
             &[("provenance", "verified")]
         ),
         Some(want_rate.as_str()),
@@ -815,7 +815,7 @@ async fn conf_87_the_figures_are_the_derivations() {
     assert_eq!(
         value_of(
             &samples,
-            "router_prefix_continuity_p50",
+            "vadis_prefix_continuity_p50",
             &[("provenance", "inferred")]
         ),
         Some(want_cont.as_str())
@@ -966,8 +966,8 @@ async fn conf_87_series_set_is_config_not_traffic() {
 
     // And the counts themselves ARE the traffic's — the limbs above
     // would also pass on a frozen surface, so witness the difference.
-    assert_eq!(value_of(&samples_n, "router_requests", &[]), Some("1"));
-    assert_eq!(value_of(&samples_10n, "router_requests", &[]), Some("10"));
+    assert_eq!(value_of(&samples_n, "vadis_requests", &[]), Some("1"));
+    assert_eq!(value_of(&samples_10n, "vadis_requests", &[]), Some("10"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,14 +1021,14 @@ async fn conf_87_zero_is_not_absent() {
     assert_eq!(
         value_of(
             &samples,
-            "router_cache_input_tokens",
+            "vadis_cache_input_tokens",
             &[("provenance", "verified")]
         ),
         Some("0"),
         "the token series is present as a real zero"
     );
     assert!(
-        !has_series(&samples, "router_cache_hit_rate"),
+        !has_series(&samples, "vadis_cache_hit_rate"),
         "the ratio is ABSENT — never a 0"
     );
     assert!(
@@ -1040,7 +1040,7 @@ async fn conf_87_zero_is_not_absent() {
     assert_eq!(
         value_of(
             &samples,
-            "router_overhead_ms_p99",
+            "vadis_overhead_ms_p99",
             &[("provenance", "measured")]
         ),
         Some("6"),
@@ -1104,13 +1104,13 @@ async fn conf_87_zero_is_not_absent() {
         );
     }
     for gone in [
-        "router_requests",
-        "router_trace_files_read",
-        "router_cost_nano",
-        "router_cache_input_tokens",
-        "router_cache_hit_rate",
-        "router_overhead_ms_p99",
-        "router_stateful_inbound_rate",
+        "vadis_requests",
+        "vadis_trace_files_read",
+        "vadis_cost_nano",
+        "vadis_cache_input_tokens",
+        "vadis_cache_hit_rate",
+        "vadis_overhead_ms_p99",
+        "vadis_stateful_inbound_rate",
     ] {
         assert!(
             !has_series(&samples, gone),
@@ -1118,12 +1118,12 @@ async fn conf_87_zero_is_not_absent() {
         );
     }
     assert_eq!(
-        value_of(&samples, "router_metrics_window_seconds", &[]),
+        value_of(&samples, "vadis_metrics_window_seconds", &[]),
         Some("900"),
         "the window is the surface's own constant — present always"
     );
     assert_eq!(
-        value_of(&samples, "router_metrics_omitted_figures", &[]),
+        value_of(&samples, "vadis_metrics_omitted_figures", &[]),
         Some(comments.len().to_string().as_str()),
     );
     assert_eq!(
@@ -1173,20 +1173,20 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     let (samples, comments) = parse_exposition(&text);
 
     let at = |name: &str, labels: &[(&str, &str)]| value_of(&samples, name, labels);
-    assert_eq!(at("router_metrics_window_seconds", &[]), Some("900"));
-    assert_eq!(at("router_trace_files_read", &[]), Some("2"));
-    assert_eq!(at("router_requests", &[]), Some("5"));
-    assert_eq!(at("router_requests_succeeded", &[]), Some("4"));
-    assert_eq!(at("router_requests_failed", &[]), Some("1"));
+    assert_eq!(at("vadis_metrics_window_seconds", &[]), Some("900"));
+    assert_eq!(at("vadis_trace_files_read", &[]), Some("2"));
+    assert_eq!(at("vadis_requests", &[]), Some("5"));
+    assert_eq!(at("vadis_requests_succeeded", &[]), Some("4"));
+    assert_eq!(at("vadis_requests_failed", &[]), Some("1"));
     assert_eq!(
-        at("router_failures_by_kind", &[("kind", "upstream_error")]),
+        at("vadis_failures_by_kind", &[("kind", "upstream_error")]),
         Some("1")
     );
-    assert_eq!(at("router_requests_usage_missing", &[]), Some("1"));
+    assert_eq!(at("vadis_requests_usage_missing", &[]), Some("1"));
     // A held currency's zero tier is a READ — cache_write is present at 0.
     assert_eq!(
         at(
-            "router_cost_nano",
+            "vadis_cost_nano",
             &[
                 ("tier", "cache_write"),
                 ("currency", "USD"),
@@ -1197,7 +1197,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     );
     assert_eq!(
         at(
-            "router_cost_nano",
+            "vadis_cost_nano",
             &[
                 ("tier", "input_miss"),
                 ("currency", "USD"),
@@ -1207,19 +1207,16 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
         Some("10")
     );
     assert_eq!(
-        at("router_cache_hit_rate", &[("provenance", "verified")]),
+        at("vadis_cache_hit_rate", &[("provenance", "verified")]),
         Some("0.2500")
     );
     assert_eq!(
-        at(
-            "router_prefix_continuity_p50",
-            &[("provenance", "inferred")]
-        ),
+        at("vadis_prefix_continuity_p50", &[("provenance", "inferred")]),
         Some("0.6250")
     );
     assert_eq!(
         at(
-            "router_transform_savings_tokens",
+            "vadis_transform_savings_tokens",
             &[("provenance", "verified")]
         ),
         Some("7")
@@ -1227,19 +1224,16 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     assert!(
         value_of(
             &samples,
-            "router_transform_savings_tokens",
+            "vadis_transform_savings_tokens",
             &[("provenance", "inferred")]
         )
         .is_none(),
         "a verdict the window did not produce gets no synthetic zero"
     );
-    assert_eq!(
-        at("router_plan_switches", &[("family", "fam-x")]),
-        Some("2")
-    );
+    assert_eq!(at("vadis_plan_switches", &[("family", "fam-x")]), Some("2"));
     assert_eq!(
         at(
-            "router_plan_switch_cost_nano",
+            "vadis_plan_switch_cost_nano",
             &[
                 ("family", "fam-x"),
                 ("currency", "USD"),
@@ -1250,14 +1244,14 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     );
     assert_eq!(
         at(
-            "router_plan_switch_reprefill_tokens",
+            "vadis_plan_switch_reprefill_tokens",
             &[("family", "fam-x"), ("provenance", "inferred")]
         ),
         Some("11")
     );
     assert_eq!(
         at(
-            "router_plan_switch_reprefill_cost_nano",
+            "vadis_plan_switch_reprefill_cost_nano",
             &[
                 ("family", "fam-x"),
                 ("currency", "USD"),
@@ -1267,19 +1261,19 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
         Some("12")
     );
     assert_eq!(
-        at("router_plan_switches_without_usage", &[("family", "fam-x")]),
+        at("vadis_plan_switches_without_usage", &[("family", "fam-x")]),
         Some("1")
     );
     assert_eq!(
-        at("router_stateful_inbound_rate", &[("provenance", "count")]),
+        at("vadis_stateful_inbound_rate", &[("provenance", "count")]),
         Some("0.2000")
     );
     assert_eq!(
-        at("router_overhead_ms_p99", &[("provenance", "measured")]),
+        at("vadis_overhead_ms_p99", &[("provenance", "measured")]),
         Some("9")
     );
     assert_eq!(comments.len(), 1, "only the constant omission fires");
-    assert_eq!(at("router_metrics_omitted_figures", &[]), Some("1"));
+    assert_eq!(at("vadis_metrics_omitted_figures", &[]), Some("1"));
     assert_frozen_set_and_provenance(&samples);
 
     // No policy ⇒ no plan series at all, even with switch figures in the
@@ -1288,11 +1282,11 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     let text = vadis_cli::metrics::exposition(&f, 2, None, None);
     let (samples, _c) = parse_exposition(&text);
     for plan_series in [
-        "router_plan_switches",
-        "router_plan_switch_cost_nano",
-        "router_plan_switch_reprefill_tokens",
-        "router_plan_switch_reprefill_cost_nano",
-        "router_plan_switches_without_usage",
+        "vadis_plan_switches",
+        "vadis_plan_switch_cost_nano",
+        "vadis_plan_switch_reprefill_tokens",
+        "vadis_plan_switch_reprefill_cost_nano",
+        "vadis_plan_switches_without_usage",
     ] {
         assert!(
             !has_series(&samples, plan_series),
@@ -1320,8 +1314,8 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     assert_eq!(
         names,
         [
-            "router_metrics_window_seconds",
-            "router_metrics_omitted_figures"
+            "vadis_metrics_window_seconds",
+            "vadis_metrics_omitted_figures"
         ]
         .into_iter()
         .collect(),

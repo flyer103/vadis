@@ -19,7 +19,7 @@ pub struct AppState {
     pub revision: crate::revision::SharedRevision,
     /// `<config dir>/<trace.dir>` (spec §4.1 resolution rule).
     pub trace_dir: String,
-    /// `<config dir>/state/router.db` (spec §4.5; fixed in v0.1).
+    /// `<config dir>/state/vadis.db` (spec §4.5; fixed in v0.1).
     pub state_db: String,
     /// The store `serve` opened: spec §9.1's `plan` section reads the
     /// `plan_state` projection (and the two inputs of the probe gate that

@@ -4,6 +4,11 @@
 - Authority: **ADR-047** (`design/decisions/ADR-047-adopt-the-vadis-name.md`) — the *why* and the four owner
   authorisations live there; this file is the *what* every card executes against.
 - Status: **contract, frozen for R59.** A change to this file is a decision (ADR-047), not an edit.
+  **Amended by ADR-048 (round R65, 2026-10-04): `§D`'s two deferrals are CLOSED and `§G`'s
+  expected-survivor list is narrowed.** The 21 `router_*` metric series names and the store filename
+  `state/router.db` are renamed to `vadis_*` / `state/vadis.db` by that round's `R65-1`; after it they
+  are **stragglers, not legal survivors**. The deferral's *history* is kept below (§D) because a
+  contract that erases why a rule existed cannot be audited.
 - One rule governs everything below: **after the rename, no token containing the string `router`
   (any case) may survive in the product tree except the tokens on the two allowlists in §C and §D.**
   The gate that proves it is in §G.
@@ -15,7 +20,9 @@
    even though a §B residue rule may also match a prefix of it. This is load-bearing for exactly
    two collisions an unguarded mechanical sweep would commit: **B12 `\brouter-` matches the
    protected `router-auto-suite`** (§C), and **B14 `\brouter\b` matches the deferred
-   `router.db`** (§D). Neither may move.
+   `router.db`** (§D). *(R65 note: §D is now CLOSED by ADR-048 — `router.db` is renamed, so this
+   second collision no longer exists; the precedence rule itself is unchanged and still load-bearing
+   for the §C collision.)* Neither may move.
 1. Apply **§B (mechanical)** in the order given: longest literal token first, then the three residue
    rules. This order is load-bearing — applying a short rule before a long one can mint a token the
    allowlists no longer recognise (e.g. touching `router_meta` before the `router_` rule).
@@ -151,23 +158,34 @@ vocabulary or third-party types. The verifier greps for them (§G).
 | `OpenRouter` | third-party company/product (a prior-art citation) | `design/decisions/ADR-043-ingress-three-verdicts.md:206` |
 | `routers` | generic plural noun ("the two routers actually sent") | `design/decisions/ADR-027-per-arm-plan-and-the-two-comparison-rules.md:173` |
 | `router-auto-suite/1` | a **data-format schema id** consumed by the private analysis loop (out of scope); renaming it desyncs a format from its writer | `design/decisions/ADR-026-corpus-tiers-and-automated-scoring.md:65` |
+| `router_overhead_ms` | a **data-format field** of the private analysis loop's result record (ADR-045:85 quotes it verbatim) **and** ADR-029/030's *gate quantity* (the measurement register, `AGENTS.md` constraint 9) — not a product identifier and not one of the 21 `/metrics` series; added to this table by **ADR-048 §9.1** | `ADR-029:46,70,74,93,117`; `ADR-030:6,76`; `ADR-036:221`; `ADR-045:85,353` (10 occurrences / 4 files) |
 
 > Note the boundary this table draws: `route`/`routing` do **not** contain the string `router`, so the
 > gate in §G does not see them; `axum::Router`, `health_router`, `OpenRouter` and `routers` do, and are
-> the four justified survivors of the word-level sweep. `router-auto-suite` contains `router-` and
-> survives only because renaming it is a data-format change, not a rename.
+> the four justified survivors of the word-level sweep. `router-auto-suite` contains `router-`, and
+> `router_overhead_ms` (added by ADR-048) contains `router_`; each survives only because renaming it is
+> a data-format / measurement-register change, not a rename.
 
-## §D — DEFERRED allowlist (NOT renamed in R59)
+## §D — DEFERRED allowlist (NOT renamed in R59) — **CLOSED by ADR-048 (R65)**
 
-These carry the product name but are **out of scope this round** — each is either pinned by a
+These carry the product name but were **out of scope for R59** — each is either pinned by a
 conformance assertion (`AGENTS.md` constraint 9: a conformance change is a human decision) or names a
-format shared with the out-of-scope loop. They survive the rename **on purpose**; a later round with
-its own authorisation owns them.
+format shared with the out-of-scope loop. They survived the R59 rename **on purpose**; a later round
+with its own authorisation owns them — and **that round is R65**, whose contract is
+`design/decisions/ADR-048-rename-the-deferred-surfaces.md`. The two rows are kept (with their original
+"why deferred" text) because the deferral is part of the record; each now carries its **closure**.
 
-| Token | Where | Why deferred | Follow-up |
+| Token | Where | Why deferred (R59) | Closed by / how |
 |---|---|---|---|
-| the 21 `router_*` **metric series names** (`router_requests`, `router_requests_succeeded`, `router_cache_hit_rate`, `router_metrics_window_seconds`, `router_overhead_ms_p99`, …) | `crates/router-cli/src/metrics.rs`; `tests/conformance/tests/conf_87_metrics_single_owner.rs`; spec §4.16/§9; ADR-041 | pinned by conformance `conf_87`; not in the owner's R59 authorisation enumeration (ADR-047 §D) | a `VADIS_*`/`vadis_*` metrics-rename round that also edits `conf_87` under owner authorisation |
-| the store filename `state/router.db` | `crates/router-cli/src/config_load.rs:209`; `conf_25_config_driven_serve.rs:200-201`; store tests; spec §4.5; book | pinned by conformance `conf_25`; renaming it forces an **install-migration** decision for existing operators | a round that renames the file **and** states the `<old>→<new>` migration |
+| the 21 `router_*` **metric series names** (`router_requests`, `router_requests_succeeded`, `router_cache_hit_rate`, `router_metrics_window_seconds`, `router_overhead_ms_p99`, …) | `crates/vadis-cli/src/metrics.rs`; `tests/conformance/tests/conf_87_metrics_single_owner.rs`; `tests/conformance/tests/conf_46_metrics_is_served.rs`; spec §4.16; `design/DESIGN.md`; ADR-041 | pinned by conformance `conf_87` (and `conf_46`, which asserts one name); not in the owner's R59 authorisation enumeration (ADR-047 §4) | **RENAMED → `vadis_*` (all 21, one set) by ADR-048 D1**, under the owner's act of 2026-10-04 (ADR-048 §1.1). `conf_87` + `conf_46` edited with the code in one change. 194 occurrences / 6 files (ADR-048 §3.1) |
+| the store filename `state/router.db` | `crates/vadis-cli/src/config_load.rs:209`; `conf_25_config_driven_serve.rs:200-201`; 29 further case fixtures; `crates/vadis-store/src/lib.rs`; `reload.rs`; `config.rs`; `health.rs`; spec §4.5/§4.12; `design/DESIGN.md`; ADR-009/025/029/040; `book/operations.md`; `book/connecting-clients.md`; `README.md` | pinned by conformance `conf_25`; renaming it forces an **install-migration** decision for existing operators | **RENAMED → `state/vadis.db` by ADR-048 D2**, with the migration statement in ADR-048 §5.2: **there is nothing to migrate** (no `vadis` install has ever been released). 79 occurrences / 44 files (ADR-048 §3.2) |
+
+> **One §D token stayed protected, not renamed, and it is recorded here so the §G gate is exact:**
+> `router_overhead_ms` (10 occurrences / 4 files: ADR-029, ADR-030, ADR-036, ADR-045) is a `router_*`
+> token that is **not** a series name and **not** a product identifier — it names the private analysis
+> loop's `result.json` field (ADR-045:85 quotes the record verbatim) and ADR-029/030's *gate quantity*.
+> ADR-048 §9.1 adds it to the **§C protected** set (same justification as `router-auto-suite/1`). It is
+> not a deferral: nothing about it awaits a future round's authorisation.
 
 ## §E — PROSE rule (documentation only) + 3 worked examples
 
@@ -236,6 +254,8 @@ path/name outright).
   `root_path`/`roster_path` samples (`:2311-2312`).
 - §4.5's fixed store path (`spec.md:510`) and §4.12's relative-path paragraph (`:1373`) name
   `state/router.db` — **§D deferred: leave the filename, change nothing** (do not "fix" it here).
+  *(R65 note: this instruction is SUPERSEDED by ADR-048 D2 — the filename becomes `state/vadis.db` and
+  both spec sentences move in `R65-1`. It is kept because it is what the R59 writer executed.)*
 
 **`book/**`** — the chapters carrying an env var, a header, the config dir, the wire field, the binary
 or the product name: `connecting-clients.md` (env var + the codex/hermes blocks + `NO_PROXY`),
@@ -274,25 +294,34 @@ rg -in 'router' \
   crates/ tests/ docs/ design/ book/ rules/ \
   README.md AGENTS.md CONTRIBUTING.md SECURITY.md NOTICE \
   Cargo.toml Cargo.lock config.example.yaml providers.example.yaml \
-  -g '!design/RENAME-MAP.md' -g '!design/decisions/ADR-047-adopt-the-vadis-name.md'
+  -g '!design/RENAME-MAP.md' -g '!design/decisions/ADR-047-adopt-the-vadis-name.md' \
+  -g '!design/decisions/ADR-048-rename-the-deferred-surfaces.md'
 ```
 
-The two excluded files are the contract itself: they quote pre-rename tokens (including the
-`https://github.com/iron/router` evidence URL and the `router`→`vadis` table) *as history*, and
-sweeping them would destroy the record. They are exempt from the sweep and from the gate. All other
-`design/**` files — including every historical ADR — ARE swept (owner authorisation §3).
+The **three** excluded files are the contract itself: `design/RENAME-MAP.md`,
+`design/decisions/ADR-047-adopt-the-vadis-name.md`, and (added by R65)
+`design/decisions/ADR-048-rename-the-deferred-surfaces.md`. They quote pre-rename tokens (including the
+`https://github.com/iron/router` evidence URL and the `router`→`vadis` table) *as history*, and sweeping
+them would destroy the record. They are exempt from the sweep and from the gate. All other `design/**`
+files — including every historical ADR — ARE swept (owner authorisation §3).
 
-Expected survivor tokens (the only legal ones):
+Expected survivor tokens (the only legal ones) — **as of ADR-048 (R65)**, which closed §D:
 
-- **§C protected:** `axum::Router`, `health_router`, `OpenRouter`, `routers`, `router-auto-suite/1`
-- **§D deferred:** any `router_<metric-name>` (the 28 in §D), and `router.db`
+- **§C protected:** `axum::Router`, `health_router`, `OpenRouter`, `routers`, `router-auto-suite/1`,
+  **`router_overhead_ms`** (added to §C by ADR-048 §9.1 — the loop's `result.json` field / ADR-029/030's
+  gate quantity)
+- **§E.1 generic-noun prose** (the ~30 standalone-`router` sites the §E.1 leave-list enumerates — the
+  word-level residual, not a token on either allowlist)
 
-Anything else — a bare `router`, a `router_*`/`router-*`/`Router*`/`ROUTER_*` token — is a straggler.
-The code-only subset (`crates/ tests/`) is the sweep R59-1 runs; expect **zero** survivors there except
-`axum::Router` and `health_router` (code) — the metrics names and `router.db` live in
-`crates/router-cli/src/metrics.rs` and `config_load.rs`, so the code sweep's justified survivors are
-exactly: `axum::Router` (6), `health_router` (2 code sites), `router.db` (store path), and the
-`metrics.rs` `router_*` series (21 names).
+**Nothing else.** Since ADR-048, a bare `router`, a `router_*`/`router-*`/`Router*`/`ROUTER_*` token **and
+the two former §D entries** — any `router_<metric-name>` (the 21) and `router.db` — are **all stragglers**:
+the deferral is over and their presence in this list was the deferral. (Before R65, the list also carried
+`router_<metric-name>` and `router.db`; a reader running §G on an R59-era tree should expect them, and a
+reader running it after R65 should treat them as defects.)
+
+The code-only subset (`crates/ tests/`) was the sweep R59-1 ran; after R65 its justified survivors are
+exactly `axum::Router` (6) and `health_router` (2 code sites) — and after ADR-048 **not** `router.db` and
+**not** the `metrics.rs` `router_*` series (both renamed by R65-1).
 
 **Line-wrapped tokens (added by R59-0b):** a line-based `rg`/sed sweep can miss a token broken
 across lines. One exists today: `crates/router-core/src/body.rs:954-955` splits

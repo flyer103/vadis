@@ -113,7 +113,7 @@ fn bound_rows(
     dir: &std::path::Path,
     session: &str,
 ) -> Vec<(String, String, i64, i64, Option<String>)> {
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -139,7 +139,7 @@ fn bound_rows(
 /// The live `sessions` row for the session, as the shipped read path
 /// sees it — `(provider, model, requests_seen, expires_at_us)`.
 fn live_binding(dir: &std::path::Path, session: &str) -> (String, String, i64, i64) {
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let row = match store.query(Query::SessionBinding {
         session_key: session,
     }) {
@@ -196,7 +196,7 @@ fn rebuild_is_a_noop_three(dir: &std::path::Path, session: &str) {
 
 fn rebuild_is_a_noop_n(dir: &std::path::Path, session: &str, expect_rows: usize) {
     let before = live_binding(dir, session);
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let stats = store
         .rebuild(Projection::Sessions)
         .expect("rebuild computes");
