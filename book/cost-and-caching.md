@@ -283,6 +283,70 @@ their fields and the rule that decides which of the two numbers a claim may rest
 provider's quota. It reacts to what the provider says and comes back when the provider allows
 it; the allowance itself stays the provider's business.
 
+## Several keys, several plans: drain them all, then spend
+
+The section above describes one plan account and one metered account. Most people hold more than
+that: several API keys, some of them **coding plans** (possibly from different vendors), some of
+them **pay-per-request** accounts. A plan is cheaper — often dramatically — but it has a quota, and
+running one dry means **waiting**, which is exactly what interrupts a working session. vadis is built
+to hold all of them at once and use them in the right order:
+
+1. **every key you configure is usable** — a provider entry may carry a *pool* of credentials
+   (`api_keys: [ENV_A, ENV_B]`, in the order you write them) instead of the single `api_key_env`.
+   A credential that comes back `401`/`429` is rotated out for the next one **of the same provider**
+   before the request moves on — a quota exhaustion is *not* a bad key, so it never rotates;
+2. **every plan is drained before anything is spent** — any `account: coding_plan` entry whose model
+   carries the family's tag is part of that family's **plan tier**, walked from `primary` and then in
+   the order your roster lists them. When one plan's quota runs out, the next plan takes over and the
+   family **stays in-plan**;
+3. **only then the metered accounts** — the family's `account: api` entries are ranked by their own
+   published prices (`overflow_selection: cheapest`) and tried in that order, cheapest first. Ranking
+   is by price alone — no invented "quality" score, and nothing vadis cannot point at a source for;
+4. **and back to a plan the moment one recovers** — the same probe described above, still only at the
+   start of a session: the next new session tries the plan tier's head again, and if it answers, the
+   family returns to the plan and the spending stops.
+
+**How you turn it on.** Give the providers that belong together the **same `family` tag** on their
+model entries — that tag *is* the set of candidates, so adding a second plan or a second metered
+account is a roster edit and nothing else. Then name the pair's anchor and the ranking mode:
+
+```yaml
+plan_policy:
+  family: <the tag your plan and metered entries carry>
+  primary: <the plan route the drain starts from>
+  overflow: <the metered route — the anchor, and the `block`/cap subject>
+  overflow_selection: cheapest    # or `declared`, today's behaviour
+```
+
+With several families (say, one plan pair per model you use), write them as a list under
+`plan_policies:` instead. One of the two keys, never both — as with the roster's own two spellings,
+a config that writes both is refused at load, naming both keys.
+
+**The order is your roster order.** Inside the plan tier every member costs the same (zero marginal
+price), so there is no price to rank them by — the order is yours, expressed by where you list the
+entries and by which one `primary` names. If you re-order the roster you re-order the drain, which is
+worth knowing before you shuffle the file.
+
+**How you read it.** `GET /health`'s plan section tells you **which route the family is on right now**
+(`route`) and, under `cheapest`, the exact order it will walk (`metered_candidates`, with the rank key
+it ordered on — check it against your roster). Each provider's pool is reported per credential name
+(`keys[]`), never by value. In the trace, a move *inside* the plan tier is `plan_switch` with
+`reason: plan_exhausted` — the family changed plan, still in-plan; leaving the tier for the metered
+accounts is the familiar `primary_exhausted`, and coming back is `primary_recovered`. The credential
+that served a request appears as `decision.key_index` — an index, never a secret.
+
+**What it will not do.** It will not re-decide per request: a session keeps the account it started
+with, and a ranking that changes mid-session (a reload, a competitor getting cheaper) moves **new**
+sessions only. That rule is what keeps the prefix cache intact, and the cache is the larger saving of
+the two — a router that "optimises" per request costs more than it saves. It will also not invent an
+allowance or a quality score: it reads what your providers publish and your roster declares, and
+nothing else.
+
+The precise rules — the tier's discovery, the state machine, the one reason word this adds, and every
+load-time refusal that goes with them — are
+[`docs/spec.md` §4.6/§4.6.1](../docs/spec.md) and
+[`design/decisions/ADR-049`](../design/decisions/ADR-049-plan-first-fan-out-key-pool-and-cheapest-metered.md).
+
 ## Payload compression: an opt-in mode, off by default
 
 In an agent loop, the tokens are not mostly the conversation — they are the **tool output** piling up
