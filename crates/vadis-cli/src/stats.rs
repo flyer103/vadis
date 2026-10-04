@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use vadis_core::config::DurationVal;
 use serde_json::Value;
+use vadis_core::config::DurationVal;
 
 /// Everything the report needs from the trace, already filtered to the
 /// window by `ts` (spec §9.2: a record is counted when its own `ts` falls

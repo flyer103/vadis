@@ -1,4 +1,4 @@
-# router v0.1 config example / config.example.yaml
+# vadis v0.1 config example / config.example.yaml
 #
 # Contract: the field set of this file = docs/spec.md §4 "config schema". Field
 #            names, hierarchy and semantics are governed by the spec; this file
@@ -51,7 +51,7 @@
 #     and notes the official /1M value at end of line for manual cross-checking.
 #     A CNY page is transcribed as CNY — never FX-converted (spec §4.0/§4.8).
 #   - provider endpoints: `urls` gives each wire the entry declares its
-#     **complete** URL, transcribed from the page the entry cites. The router
+#     **complete** URL, transcribed from the page the entry cites. The vadis
 #     appends nothing, trims nothing and normalizes nothing (spec §4.9,
 #     ADR-020) — what is written here is what goes on the wire. The key set
 #     must equal `supports` exactly; a mismatch refuses the start.
@@ -65,7 +65,7 @@
 
 server:
   addr: "127.0.0.1:8790"        # local-first; with server.auth_token_env set, bind it anywhere you can reach it — ingest is then authenticated
-  # auth_token_env: ROUTER_TOKEN # optional (spec §4.7): name of the env var whose value every inbound request
+  # auth_token_env: VADIS_TOKEN # optional (spec §4.7): name of the env var whose value every inbound request
                                  #   must present (Bearer / x-api-key); absent ⇒ no inbound auth. Left commented so the
                                  #   copied example still starts before you have chosen a token (a set name with an
                                  #   unset/empty variable refuses startup, spec §5.1).
@@ -131,7 +131,7 @@ plugins:
   # `id`/`kind` change → rebuild that entry.
   # Three more built-in plugins are always resident with no config entries of
   # their own: builtin/cost_ledger, builtin/quota_guard, builtin/sticky
-  # (DESIGN §2, router-plugins).
+  # (DESIGN §2, vadis-plugins).
 
   - id: cache-guard
     kind: builtin/cache_guard                     # tier-A: compiled into the product, no module-level HMR (ADR-002)
@@ -140,7 +140,7 @@ plugins:
   - id: tool-output-rules
     kind: builtin/transform_rules                 # rules as data (TOML + inline tests, ADR-003)
     config:
-      # `router setup` writes this file beside the config, from the rule file embedded
+      # `vadis setup` writes this file beside the config, from the rule file embedded
       # in the binary: created when it is absent, left untouched otherwise, and replaced
       # only by `--force` with the `plugins` section selected (spec §4.11's rule-file
       # lane; ADR-046). Without that, a fresh XDG install carries a named absence here.
@@ -153,7 +153,7 @@ plugins:
 
   - id: judge-experiment
     kind: process                                 # tier-B: out-of-process plugin (with module-level HMR)
-    url: unix:///tmp/router-plugins/judge.sock
+    url: unix:///tmp/vadis-plugins/judge.sock
     inject: [cache_ledger, session_table]         # dependency declaration (coeffect, spec §4.3): unmet → stays in a loading wait
                                                   #   service names are product-defined typed slot names, not arbitrary strings
     isolate: false                                # true = separate realm: another set of bindings for the same services,

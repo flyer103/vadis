@@ -71,7 +71,7 @@ const SHIPPED_ROSTER_NAME: &str = "providers.example.yaml";
 
 /// The `vadis` binary of this build, beside the test executable
 /// (`target/<profile>/deps/conf_86-…` → `target/<profile>/vadis`).
-fn router_binary() -> std::path::PathBuf {
+fn vadis_binary() -> std::path::PathBuf {
     let exe = std::env::current_exe().expect("the test executable's path");
     let bin = exe
         .parent()
@@ -133,7 +133,7 @@ fn split_pair(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
 #[test]
 fn conf_86a_inline_root_states_the_roster_fact() {
     std::env::set_var("CONF86_P_KEY", "sk-conf86");
-    let bin = router_binary();
+    let bin = vadis_binary();
     let (dir, root) = inline_root("86a");
     let line =
         format!("roster: inline in this file — a writing run moves it to {SHIPPED_ROSTER_NAME}");
@@ -183,7 +183,7 @@ fn conf_86a_inline_root_states_the_roster_fact() {
 #[test]
 fn conf_86b_split_root_states_nothing_and_the_rows_are_identical() {
     std::env::set_var("CONF86_P_KEY", "sk-conf86");
-    let bin = router_binary();
+    let bin = vadis_binary();
     let (_dir_i, root_i) = inline_root("86b-inline");
     let (_dir_s, root_s) = split_pair("86b-split");
 

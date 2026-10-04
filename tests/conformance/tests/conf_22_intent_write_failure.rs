@@ -9,9 +9,9 @@
 //! zero attempts through the real proxy) is kept `#[ignore]`d below: the fake
 //! `ProviderClient` double it needs does not exist yet.
 
+use serde_json::{json, Value};
 use vadis_core::error::{ErrorBody, ErrorCode};
 use vadis_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
-use serde_json::{json, Value};
 
 /// A store double whose append always fails — "the injected failure".
 struct FailingStore;

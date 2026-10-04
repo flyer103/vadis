@@ -153,7 +153,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
             .unwrap();
         match &seed {
             Seed::OverflowPrimaryCooling(_) => {
-                let now = router_store_now_us();
+                let now = vadis_store_now_us();
                 store
                     .project(ProjectionWrite::ProviderCooldown {
                         scope: "provider",
@@ -167,7 +167,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
                 primary_allowed = false;
             }
             Seed::OverflowWindowNotReset(_) => {
-                let now_s = (router_store_now_us().max(0) as u64) / 1_000_000;
+                let now_s = (vadis_store_now_us().max(0) as u64) / 1_000_000;
                 let window_start_us =
                     vadis_core::quota::window_start_for(now_s, 1) as i64 * 1_000_000;
                 store
@@ -243,7 +243,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
     h
 }
 
-fn router_store_now_us() -> i64 {
+fn vadis_store_now_us() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
@@ -251,7 +251,7 @@ fn router_store_now_us() -> i64 {
 }
 
 fn now_us_test() -> i64 {
-    router_store_now_us()
+    vadis_store_now_us()
 }
 
 /// Minimal blocking GET (the CONF-25/41 style).

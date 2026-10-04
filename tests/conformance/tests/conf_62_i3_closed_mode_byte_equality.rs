@@ -8,7 +8,7 @@
 //! loudly.
 //!
 //! Negative limb (the pair that distinguishes mode-off from mode-on): the
-//! same request **with** `X-Router-Transform: transform` produces the edit
+//! same request **with** `X-Vadis-Transform: transform` produces the edit
 //! — different upstream bytes — **and** one ledger entry on the trace with
 //! the edited path and its byte counts. The pair is run over the real
 //! `serve` assembly against a mock upstream recording every byte.

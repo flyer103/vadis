@@ -29,8 +29,8 @@
 
 #![forbid(unsafe_code)]
 
-use vadis_conformance::testkit::{self, CannedResponse, SseChunk};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, CannedResponse, SseChunk};
 
 /// The canned buffered 200: a chat completion with usage (100 in / 20
 /// cached / 5 out), so the miss is an ordinary measured record and the
@@ -338,7 +338,7 @@ async fn conf_89c_the_key_separates_session_mode_and_body_bytes() {
     let (s1, _) = rig.post(body_other_session.as_bytes(), &[]);
     // Same bytes, same session, the transform mode word: a MISS (the mode
     // is a key component; with no rule set mounted it is asked-not-applied).
-    let (s2, _) = rig.post(BODY_BUFFERED, &[("x-router-transform", "transform")]);
+    let (s2, _) = rig.post(BODY_BUFFERED, &[("x-vadis-transform", "transform")]);
     // Same session, one body byte changed: a MISS (the content component).
     let (s3, _) = rig.post(BODY_ONE_BYTE_OFF, &[]);
     assert_eq!(

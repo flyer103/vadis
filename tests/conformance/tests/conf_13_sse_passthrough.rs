@@ -60,7 +60,7 @@ fallback: []
 
 const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"stream me"}],"stream":true,"stream_options":{"include_usage":true}}"#;
 
-fn start_router(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
+fn start_vadis(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
     std::env::set_var("CONF13_MOCK_KEY", "sk-conf13");
     let cfg = config_path.to_string_lossy().into_owned();
     let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
@@ -85,7 +85,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -157,7 +157,7 @@ async fn conf_13_b_midstream_failure_truncates_never_retries() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -208,7 +208,7 @@ async fn conf_13_c_client_disconnect_cancels_upstream() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let first_event_len = UPSTREAM_SSE[0].len();
     let (status, body, _headers) = testkit::http_post_with_opts(
@@ -267,7 +267,7 @@ async fn conf_13_d_pre_relay_failure_is_an_error_not_a_half_relay() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),

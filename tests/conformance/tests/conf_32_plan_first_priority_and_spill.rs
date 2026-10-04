@@ -126,7 +126,7 @@ async fn conf_32_quota_exhausted_spills_records_switch_and_prices_reprefill() {
     assert_eq!(rig.api.requests().len(), 1, "one overflow attempt");
     let ff = headers2
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-failover-from"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-failover-from"))
         .map(|(_, v)| v.as_str());
     assert_eq!(ff, Some("p-plan/m1"), "the failure-class fact is recorded");
 

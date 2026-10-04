@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 /// The `vadis` binary of this build, beside the test executable
 /// (`target/<profile>/deps/<this-test>-…` → `target/<profile>/vadis`).
-fn router_binary() -> std::path::PathBuf {
+fn vadis_binary() -> std::path::PathBuf {
     let exe = std::env::current_exe().expect("the test executable's path");
     exe.parent()
         .and_then(|deps| deps.parent())
@@ -60,7 +60,7 @@ fn free_port() -> u16 {
 
 /// Run the real binary's `setup` non-interactively into `dir`.
 fn run_setup(config: &std::path::Path) {
-    let out = Command::new(router_binary())
+    let out = Command::new(vadis_binary())
         .arg("setup")
         .arg("--non-interactive")
         .arg("--config")
@@ -79,7 +79,7 @@ fn run_setup(config: &std::path::Path) {
 /// return every line the process printed (stderr has the notes; the
 /// listening line rides stderr too — `vadis listening on …`).
 fn serve_and_collect(config: &std::path::Path) -> Vec<String> {
-    let mut child = Command::new(router_binary())
+    let mut child = Command::new(vadis_binary())
         .arg("serve")
         .arg("--config")
         .arg(config)
@@ -167,7 +167,7 @@ fn retarget_addr(config: &std::path::Path, port: u16) {
 /// with the rule file deleted (the RED control) carries it.
 #[test]
 fn serve_over_a_fresh_landing_has_no_rule_file_note() {
-    let bin = router_binary();
+    let bin = vadis_binary();
     assert!(
         bin.is_file(),
         "the vadis binary of this build: {}",

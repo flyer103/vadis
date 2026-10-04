@@ -6,7 +6,7 @@
 //! `Bytes` extractor wrapped every protocol-route body in an implicit
 //! 2 MiB `Limited` whose over-limit answer was a plain-text `413`
 //! (`Failed to buffer the request body`), with **no**
-//! `X-Router-Request-Id`, **no** trace record and **no** config key —
+//! `X-Vadis-Request-Id`, **no** trace record and **no** config key —
 //! a refusal an operator could neither correlate nor count (R32-F1).
 //! The landing (§12.15) installs the vadis's own bound as a boundary
 //! layer above the transform-mode resolution and the path split,
@@ -23,7 +23,7 @@
 //! - **(b)** a body **one byte above** it is refused `413` in §8's
 //!   unified shape naming `request_too_large`, with
 //!   `details.limit_bytes` equal to the rig's own configured value,
-//!   `X-Router-Request-Id` present, **one** pre-pipeline trace record
+//!   `X-Vadis-Request-Id` present, **one** pre-pipeline trace record
 //!   (`event_id: 0`, `usage_missing: true`, nothing priced) and
 //!   **zero** requests arriving at the stand-in;
 //! - **(c)** the same refusal when the length is **not declared** (a
@@ -234,9 +234,9 @@ fn assert_refusal(
     assert!(!req_id.is_empty());
     let hdr_id = headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-request-id"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-request-id"))
         .map(|(_, v)| v.as_str())
-        .expect("X-Router-Request-Id on a 413 (§8's always)");
+        .expect("X-Vadis-Request-Id on a 413 (§8's always)");
     assert_eq!(hdr_id, req_id, "the header and the body name the same id");
     let conn = headers
         .iter()

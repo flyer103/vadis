@@ -779,7 +779,7 @@ mod tests {
     const DOC: &str = r#"# header comment
 server:
   addr: "127.0.0.1:8790"        # local-first
-  # auth_token_env: ROUTER_TOKEN # optional (spec §4.7)
+  # auth_token_env: VADIS_TOKEN # optional (spec §4.7)
   request_timeout: 10m          # budget
 session:
   key_sources: ["prompt_cache_key", "header:session-id"]
@@ -846,7 +846,7 @@ plan_policy:
     fn commented_key_resolves_disabled_with_its_value() {
         let a = resolve_typed(DOC, "server.auth_token_env").unwrap();
         assert!(!a.enabled);
-        assert_eq!(a.value, "ROUTER_TOKEN");
+        assert_eq!(a.value, "VADIS_TOKEN");
         assert!(a.marker.is_some());
         let cap = resolve_typed(DOC, "plan_policy.overflow_monthly_cap_usd").unwrap();
         assert!(!cap.enabled);

@@ -19,8 +19,8 @@
 
 #![forbid(unsafe_code)]
 
-use vadis_conformance::testkit::{self, CannedResponse};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The canned 200 the upstream repeats: a chat completion with usage, so
 /// both forwarded requests write ordinary (non-`usage_missing`) records.

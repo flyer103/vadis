@@ -422,8 +422,7 @@ impl Publisher {
         // 1. The value diff (D10). A serialization failure is a refusal,
         // not a panic: the row cannot be written honestly, so the
         // revision is not served.
-        let changes = match vadis_core::changed_keys(&serving.forwarder.config, &candidate.vadis)
-        {
+        let changes = match vadis_core::changed_keys(&serving.forwarder.config, &candidate.vadis) {
             Ok(c) => c,
             Err(e) => {
                 return Err(refuse(format!(
@@ -550,8 +549,8 @@ fn plugin_edges(
     new: &[vadis_core::config::PluginCfg],
     digest: &str,
 ) -> Vec<vadis_core::NewEvent<'static>> {
-    use vadis_core::config::PluginCfg;
     use std::collections::BTreeMap;
+    use vadis_core::config::PluginCfg;
 
     fn keyed(list: &[PluginCfg]) -> BTreeMap<&str, &PluginCfg> {
         list.iter().map(|p| (p.id.as_str(), p)).collect()
@@ -1863,9 +1862,8 @@ fallback: []
 
         // The log: exactly the two config.applied rows, nothing else (no
         // request was served, no plugin edge was crossed).
-        let store =
-            vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
-                .unwrap();
+        let store = vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
+            .unwrap();
         use vadis_core::store::{Query, QueryRow, Store as _};
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events")
@@ -1953,9 +1951,8 @@ fallback: []
         // no plugins and serves no request, so its boot writes exactly
         // the startup `config.applied` — the refusal adds nothing (RV-2,
         // RV-3, RV-9: a refused candidate writes nothing).
-        let store =
-            vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
-                .unwrap();
+        let store = vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
+            .unwrap();
         use vadis_core::store::{Query, QueryRow, Store as _};
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events")

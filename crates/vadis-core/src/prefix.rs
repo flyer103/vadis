@@ -397,7 +397,7 @@ mod tests {
     /// CONF-10's claim at block level: deleting vadis-owned fields cannot
     /// change any block hash (the domain excludes them).
     #[test]
-    fn router_field_removal_does_not_change_block_hashes() {
+    fn vadis_field_removal_does_not_change_block_hashes() {
         use crate::body::VADIS_OWNED_TOP_LEVEL_KEYS;
         let with_meta = RawBody::new(
             b"{\"router_meta\":{\"echo\":true},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"name\":\"t\"}]}"

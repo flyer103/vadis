@@ -103,7 +103,7 @@ async fn rig(tag: &str, queue_a: Vec<CannedResponse>, queue_b: Vec<CannedRespons
 
 /// 429 on the primary → classified `rate_limit` → failover to the fallback
 /// provider → 200; the switch is recorded on the response
-/// (`x-router-failover-from`), and each upstream saw exactly one request.
+/// (`x-vadis-failover-from`), and each upstream saw exactly one request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_14_rate_limit_fails_over_to_fallback() {
     let rig = rig(
@@ -132,7 +132,7 @@ async fn conf_14_rate_limit_fails_over_to_fallback() {
     );
     let from = headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-failover-from"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-failover-from"))
         .map(|(_, v)| v.as_str());
     assert_eq!(from, Some("mock-a/glm"), "failover_from is recorded");
 
@@ -191,7 +191,7 @@ async fn conf_14_quota_exhausted_demotes_whole_provider() {
     // header names the abandoned route even though nothing failed here.
     let from2 = headers2
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-failover-from"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-failover-from"))
         .map(|(_, v)| v.as_str());
     assert_eq!(
         from2,

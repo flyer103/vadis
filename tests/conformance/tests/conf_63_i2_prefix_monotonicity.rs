@@ -167,7 +167,7 @@ async fn conf_63_i2_prefix_monotonicity_ledger_and_mode_switch() {
 
     let post = |body: String, mode_header: bool| {
         let headers: Vec<(&str, &str)> = if mode_header {
-            vec![("x-router-transform", "transform")]
+            vec![("x-vadis-transform", "transform")]
         } else {
             vec![]
         };

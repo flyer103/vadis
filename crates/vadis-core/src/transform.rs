@@ -4,7 +4,7 @@
 //! the half that edits is auditable by span comparison:
 //!
 //! - [`TransformMode`] — the request fact resolved from
-//!   `X-Router-Transform` **by `vadis-proxy`** (vadis-core never reads a
+//!   `X-Vadis-Transform` **by `vadis-proxy`** (vadis-core never reads a
 //!   header, §12.5/§12.11's split). `Passthrough` is the default; absence of
 //!   the header is a byte-level guarantee (ADR-019 item 1).
 //! - [`NodePath`] / [`PayloadEdit`] — a content-level, content-addressed

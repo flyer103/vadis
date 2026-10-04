@@ -246,7 +246,7 @@ async fn conf_42_cooling_primary_is_displaced_with_the_reason_and_no_state_move(
     );
     assert_eq!(rig.api.requests().len(), 1, "the overflow answered turn 2");
     assert_eq!(
-        header(&h3, "x-router-failover-from"),
+        header(&h3, "x-vadis-failover-from"),
         Some("p-plan/m1"),
         "the skip abandoned the primary route (spec §6 row 2)"
     );
@@ -289,7 +289,7 @@ async fn conf_42_healthy_primary_produces_no_displacement_markers() {
     let (s, _b, h) = post_family(&rig.listen_addr, "S1", 1);
     assert_eq!(s, 200);
     assert_eq!(
-        header(&h, "x-router-failover-from"),
+        header(&h, "x-vadis-failover-from"),
         None,
         "nothing failed and nothing was skipped"
     );

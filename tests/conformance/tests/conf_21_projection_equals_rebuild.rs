@@ -12,8 +12,8 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vadis_core::store::{EventKind, NewEvent, Projection, ProjectionWrite, Store};
 use serde_json::json;
+use vadis_core::store::{EventKind, NewEvent, Projection, ProjectionWrite, Store};
 
 fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(

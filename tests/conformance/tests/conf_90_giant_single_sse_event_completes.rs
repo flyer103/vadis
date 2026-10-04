@@ -96,8 +96,8 @@
 //! card from editing `design/`.
 #![forbid(unsafe_code)]
 
-use vadis_conformance::testkit::{self, SseChunk};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, SseChunk};
 
 /// One event's `data:` payload: past the 64 MiB store bound and 4× the
 /// observed 16 MiB truncation point — comfortably above any machine's

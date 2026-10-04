@@ -18,7 +18,7 @@ use vadis_core::{RawBody, VADIS_OWNED_TOP_LEVEL_KEYS};
 /// output is **byte-identical** except for the deleted member and its
 /// separator comma.
 #[tokio::test]
-async fn conf_10_byte_exact_after_router_field_removal() {
+async fn conf_10_byte_exact_after_vadis_field_removal() {
     // The trailing \n stays in the literal on purpose: trailing newlines
     // must pass through verbatim.
     let input = "{\
@@ -56,7 +56,7 @@ async fn conf_10_byte_exact_after_router_field_removal() {
 /// With no matching key it is a strict no-op: output **byte-identical** to
 /// input (including all whitespace).
 #[tokio::test]
-async fn conf_10_noop_when_no_router_fields_present() {
+async fn conf_10_noop_when_no_vadis_fields_present() {
     let input = "{\n  \"model\": \"m\",\n  \"n\": [1, 2, {\"deep\": \"},\"}]\n}\r\n";
     let raw = RawBody::new(input.as_bytes().to_vec());
     let out = raw

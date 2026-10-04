@@ -253,7 +253,7 @@ async fn conf_16_transform_cache_regression() {
 
     let post = |body: String, transform: bool| {
         let headers: Vec<(&str, &str)> = if transform {
-            vec![("x-router-transform", "transform")]
+            vec![("x-vadis-transform", "transform")]
         } else {
             vec![]
         };
@@ -444,7 +444,7 @@ async fn conf_16_transform_cache_regression() {
         arms_summary.push(serde_json::json!({
             "rule": arm.rule,
             "tool": arm.tool,
-            "baseline_arm": "transform not requested (no X-Router-Transform header)",
+            "baseline_arm": "transform not requested (no X-Vadis-Transform header)",
             "baseline_prefix_continuity": baseline_c,
             "treatment_prefix_continuity": treatment_c,
             "delta": treatment_c - baseline_c,

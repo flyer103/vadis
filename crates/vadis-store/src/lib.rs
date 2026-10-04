@@ -25,12 +25,12 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rusqlite::{params, Connection, OpenFlags};
 use vadis_core::store::{
     CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, PlanStateProjRow, Projection,
     ProjectionWrite, Query, QueryRow, RebuildStats, SessionBindingRow, Store, StoreError,
     StoredEvent, EVENT_SCHEMA_VERSION,
 };
-use rusqlite::{params, Connection, OpenFlags};
 
 /// Store DDL version 1: the tables of DESIGN §12.10.4, verbatim in shape.
 /// Forward-only: appending a migration means adding a `(version, sql)` row
@@ -984,8 +984,8 @@ impl Store for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vadis_core::store::write_intent_then;
     use serde_json::json;
+    use vadis_core::store::write_intent_then;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(

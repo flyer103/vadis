@@ -1046,7 +1046,7 @@ mod tests {
     fn deletion_matrix_scales() {
         let k1 = vec!["router_meta"];
         let k2 = vec!["router_meta", "routing_preference"];
-        let k3 = vec!["router_meta", "routing_preference", "router_hint"];
+        let k3 = vec!["router_meta", "routing_preference", "vadis_hint"];
         // 3 members.
         assert_remove(r#"{"router_meta":1,"a":1,"b":2}"#, &k1, r#"{"a":1,"b":2}"#);
         assert_remove(
@@ -1056,18 +1056,18 @@ mod tests {
         );
         // 5 members.
         assert_remove(
-            r#"{"a":0,"router_meta":1,"routing_preference":2,"router_hint":3,"b":4}"#,
+            r#"{"a":0,"router_meta":1,"routing_preference":2,"vadis_hint":3,"b":4}"#,
             &k3,
             r#"{"a":0,"b":4}"#,
         );
         assert_remove(
-            r#"{"router_meta":1,"routing_preference":2,"a":0,"router_hint":3,"b":4}"#,
+            r#"{"router_meta":1,"routing_preference":2,"a":0,"vadis_hint":3,"b":4}"#,
             &k3,
             r#"{"a":0,"b":4}"#,
         );
         // 8 members.
         assert_remove(
-            r#"{"a":0,"router_meta":1,"b":2,"routing_preference":3,"c":4,"router_hint":5,"d":6,"e":7}"#,
+            r#"{"a":0,"router_meta":1,"b":2,"routing_preference":3,"c":4,"vadis_hint":5,"d":6,"e":7}"#,
             &k3,
             r#"{"a":0,"b":2,"c":4,"d":6,"e":7}"#,
         );

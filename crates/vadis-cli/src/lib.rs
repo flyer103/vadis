@@ -497,7 +497,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 let mut resp =
                     (StatusCode::from_u16(f.status).expect("400 maps"), Json(eb)).into_response();
                 if let Ok(v) = request_id.parse() {
-                    resp.headers_mut().insert("x-router-request-id", v);
+                    resp.headers_mut().insert("x-vadis-request-id", v);
                 }
                 return resp;
             }
@@ -532,7 +532,7 @@ pub async fn serve(config_path: &str) -> i32 {
                     // The three §8 headers go out with the head, before
                     // the first event byte.
                     if let Ok(v) = request_id.parse() {
-                        resp.headers_mut().insert("x-router-request-id", v);
+                        resp.headers_mut().insert("x-vadis-request-id", v);
                     }
                     resp
                 }
@@ -562,7 +562,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 }
                 if let Some(from) = s.failover_from {
                     if let Ok(v) = from.to_string().parse() {
-                        resp.headers_mut().insert("x-router-failover-from", v);
+                        resp.headers_mut().insert("x-vadis-failover-from", v);
                     }
                 }
                 resp
@@ -731,7 +731,7 @@ pub async fn serve(config_path: &str) -> i32 {
             )
                 .into_response();
             if let Ok(v) = request_id.parse() {
-                resp.headers_mut().insert("x-router-request-id", v);
+                resp.headers_mut().insert("x-vadis-request-id", v);
             }
             // §4.13: the connection is closed after the refusal — the
             // refused request's body may not have been drained.
@@ -930,7 +930,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 )
                     .into_response();
                 if let Ok(v) = record.identity.request_id.parse() {
-                    resp.headers_mut().insert("x-router-request-id", v);
+                    resp.headers_mut().insert("x-vadis-request-id", v);
                 }
                 resp
             }

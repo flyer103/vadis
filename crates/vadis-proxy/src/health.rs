@@ -1,8 +1,8 @@
+use serde_json::{json, Map, Value};
 use vadis_core::config::{PlanPolicyCfg, RecoveryMode, VadisConfig};
 use vadis_core::cost::Nano;
 use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy};
 use vadis_core::store::{Query, QueryRow, Store};
-use serde_json::{json, Map, Value};
 
 /// What `serve` actually loaded from one config file (CONF-25): built by
 /// `vadis-cli` at startup after validation, read by `/health`.
@@ -607,10 +607,10 @@ mod tests {
     /// A config with no `plan_policy` — only the fields the section reads;
     /// loader-level validation is vadis-cli's concern.
     fn no_policy_config() -> VadisConfig {
-        use vadis_core::config::{
-            BreakevenCfg, CacheCfg, PluginCfg, VadisConfig, ServerCfg, SessionCfg, TraceCfg,
-        };
         use std::collections::BTreeMap;
+        use vadis_core::config::{
+            BreakevenCfg, CacheCfg, PluginCfg, ServerCfg, SessionCfg, TraceCfg, VadisConfig,
+        };
         VadisConfig {
             server: ServerCfg {
                 addr: "127.0.0.1:0".into(),

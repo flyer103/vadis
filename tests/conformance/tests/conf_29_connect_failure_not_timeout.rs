@@ -116,7 +116,7 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<serde_json::Value> {
     records
 }
 
-async fn start_router(
+async fn start_vadis(
     config_path: &std::path::Path,
     listen_port: u16,
 ) -> tokio::task::JoinHandle<()> {
@@ -145,7 +145,7 @@ async fn conf_29_connect_failure_is_not_a_timeout() {
     )
     .unwrap();
 
-    let serve_task = start_router(&config_path, listen_port).await;
+    let serve_task = start_vadis(&config_path, listen_port).await;
     let (status, body, _h) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
         "/v1/chat/completions",
@@ -208,7 +208,7 @@ async fn conf_29_connect_failure_walks_the_fallback_chain() {
     )
     .unwrap();
 
-    let serve_task = start_router(&config_path, listen_port).await;
+    let serve_task = start_vadis(&config_path, listen_port).await;
     let (status, body, _h) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
         "/v1/chat/completions",

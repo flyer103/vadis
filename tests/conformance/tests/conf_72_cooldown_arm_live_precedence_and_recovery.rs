@@ -286,7 +286,7 @@ async fn conf_72_cooldown_arm_live_before_and_after_the_deadline() {
     // primary itself, nothing was abandoned.
     assert_eq!(
         hp.iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("x-router-failover-from")),
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-failover-from")),
         None,
         "nothing was abandoned: the probe's route is the primary itself"
     );

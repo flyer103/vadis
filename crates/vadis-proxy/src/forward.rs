@@ -18,6 +18,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http::Request as HttpRequest;
+use serde_json::{json, Value};
 use vadis_core::config::{PlanPolicyCfg, ProviderCfg, RouteSpec, VadisConfig, WireApi};
 use vadis_core::error::ErrorCode;
 use vadis_core::error_class::{
@@ -33,7 +34,6 @@ use vadis_core::trace::PlanSwitchRec;
 use vadis_core::transform::{estimate_tokens, PayloadCtx, TransformEngine, TransformMode};
 use vadis_core::{RawBody, RawEditError, Usage, VADIS_OWNED_TOP_LEVEL_KEYS};
 use vadis_providers::{AttemptOutcome, TransportKind, UpstreamPlan};
-use serde_json::{json, Value};
 
 /// The async seam the engine is monomorphized over: the real reqwest client
 /// and the test double both satisfy it (DESIGN §12.10.1: no `async-trait`).
@@ -109,7 +109,7 @@ impl ForwardFailure {
     }
 }
 
-/// The unusable-`X-Router-Transform` refusal's record (DESIGN §12.12's
+/// The unusable-`X-Vadis-Transform` refusal's record (DESIGN §12.12's
 /// failure table: "the pre-pipeline record class of spec §6"): the same
 /// field-by-field class as the auth guard's `refused_record` — decided
 /// before the body is read, so nothing was parsed, planned or attempted,
@@ -347,7 +347,7 @@ pub(crate) fn rewrite_outbound_model<'a>(
     cleaned.set_top_level_string("model", native_id)
 }
 
-/// `X-Router-Transform` (ADR-019 §2, spec §2.1), done by
+/// `X-Vadis-Transform` (ADR-019 §2, spec §2.1), done by
 /// `vadis-proxy` at the boundary — vadis-core never reads a header.
 /// Absent or `passthrough` ⇒ the byte path; `transform` ⇒ the declared-edit
 /// path; **any other value is a 400 `invalid_request` decided before the
@@ -358,7 +358,7 @@ pub fn resolve_transform_mode(
 ) -> Result<TransformMode, ForwardFailure> {
     let Some((_, v)) = headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-transform"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-transform"))
     else {
         return Ok(TransformMode::Passthrough);
     };
@@ -369,7 +369,7 @@ pub fn resolve_transform_mode(
             400,
             ErrorCode::InvalidRequest,
             format!(
-                "unusable X-Router-Transform value '{other}': expected 'passthrough' or 'transform' \
+                "unusable X-Vadis-Transform value '{other}': expected 'passthrough' or 'transform' \
                  (spec §2.1 — a client asking for a mode that does not exist is told, never \
                  silently served the other way)"
             ),
@@ -550,7 +550,7 @@ pub(crate) struct RequestFacts<'a> {
     /// the request's own row-4 write would report the write it just
     /// made (the R11-F2 defect class).
     pub(crate) sticky_hit: bool,
-    /// spec §6 `transform_mode`: resolved from `X-Router-Transform` at the
+    /// spec §6 `transform_mode`: resolved from `X-Vadis-Transform` at the
     /// boundary (ADR-019 §2). `Passthrough` is the default; a request
     /// refused before the transform chain ran keeps it (nothing claimed).
     pub(crate) transform_mode: TransformMode,
@@ -578,7 +578,7 @@ impl Forwarder {
     /// `Accountant::finish_failure`, never a second inlined copy.
     ///
     /// `transform_mode` is the boundary-resolved mode (ADR-019 §2):
-    /// `vadis-proxy` resolved `X-Router-Transform` before calling in —
+    /// `vadis-proxy` resolved `X-Vadis-Transform` before calling in —
     /// vadis-core never reads a header. `Passthrough` keeps the byte
     /// path exactly as it was.
     pub async fn forward(

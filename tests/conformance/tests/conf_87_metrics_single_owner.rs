@@ -40,8 +40,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use vadis_conformance::testkit::{self, PlanRig};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, PlanRig};
 
 const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 1h";
 
@@ -752,7 +752,7 @@ async fn conf_87_the_figures_are_the_derivations() {
     );
     assert!(body1.len() < 8192, "the body is O(series), under 8 KiB");
     assert!(
-        header(&headers, "x-router-request-id").is_none(),
+        header(&headers, "x-vadis-request-id").is_none(),
         "the admitted arm is never §8's answer"
     );
 
@@ -1075,7 +1075,7 @@ async fn conf_87_zero_is_not_absent() {
         Some("text/plain; version=0.0.4; charset=utf-8")
     );
     assert!(
-        header(&headers, "x-router-request-id").is_none(),
+        header(&headers, "x-vadis-request-id").is_none(),
         "never a §8 body on the admitted arm"
     );
     assert!(

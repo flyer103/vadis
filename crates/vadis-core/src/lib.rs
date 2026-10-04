@@ -27,7 +27,7 @@ pub use body::{RawBody, RawEditError, VADIS_OWNED_TOP_LEVEL_KEYS};
 pub use breakeven::{decide_switch, BreakevenParams, StayReason, SwitchCandidate, SwitchVerdict};
 pub use config::{
     AccountKind, CapUsdVal, ConfigError, ContextVal, DurationVal, OnPrimaryExhausted,
-    PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, VadisConfig, TokensVal, KNOWN_BUILTIN_KINDS,
+    PlanPolicyCfg, PriceCfg, RecoveryMode, RouteSpec, TokensVal, VadisConfig, KNOWN_BUILTIN_KINDS,
     KNOWN_SERVICE_SLOTS,
 };
 pub use config_diff::{changed_keys, ChangeKind, KeyChange};
