@@ -8,7 +8,7 @@
 //! loudly.
 //!
 //! Negative limb (the pair that distinguishes mode-off from mode-on): the
-//! same request **with** `X-Router-Transform: transform` produces the edit
+//! same request **with** `X-Vadis-Transform: transform` produces the edit
 //! — different upstream bytes — **and** one ledger entry on the trace with
 //! the edited path and its byte counts. The pair is run over the real
 //! `serve` assembly against a mock upstream recording every byte.
@@ -26,9 +26,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use router_core::config::WireApi;
-use router_core::transform::{PayloadCtx, TransformEngine, TransformMode, TransformOutcome};
-use router_proxy::{Forwarder, ProviderTransport};
+use vadis_core::config::WireApi;
+use vadis_core::transform::{PayloadCtx, TransformEngine, TransformMode, TransformOutcome};
+use vadis_proxy::{Forwarder, ProviderTransport};
 
 /// A rule set that WOULD match the fixture (Bash payloads with noise
 /// lines) — the adversarial configuration I3 must survive.
@@ -63,10 +63,10 @@ impl ProviderTransport for RecordingTransport {
     fn send_boxed<'a>(
         &'a self,
         req: http::Request<Bytes>,
-    ) -> Pin<Box<dyn Future<Output = router_providers::AttemptOutcome> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = vadis_providers::AttemptOutcome> + Send + 'a>> {
         self.bodies.lock().unwrap().push(req.body().to_vec());
         Box::pin(async move {
-            router_providers::AttemptOutcome::Responded(router_providers::UpstreamResponse {
+            vadis_providers::AttemptOutcome::Responded(vadis_providers::UpstreamResponse {
                 status: 200,
                 retry_after: None,
                 content_type: Some("application/json".into()),
@@ -78,7 +78,7 @@ impl ProviderTransport for RecordingTransport {
     }
 }
 
-const BODY: &str = r#"{"model":"p1/m1","prompt_cache_key":"conf62-sess","router_meta":{"echo":true},"messages":[{"role":"user","content":"run the build"},{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"Bash"}}]},{"role":"tool","tool_call_id":"c1","content":"noise warning line\ncompiled a.rs\nnoise another\nlinked binary"}]}"#;
+const BODY: &str = r#"{"model":"p1/m1","prompt_cache_key":"conf62-sess","vadis_meta":{"echo":true},"messages":[{"role":"user","content":"run the build"},{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"Bash"}}]},{"role":"tool","tool_call_id":"c1","content":"noise warning line\ncompiled a.rs\nnoise another\nlinked binary"}]}"#;
 
 fn forwarder(dir: &std::path::Path, engine: Option<Arc<dyn TransformEngine>>) -> Forwarder {
     let cfg_text = format!(
@@ -106,7 +106,7 @@ fallback: []
     );
     let cfg_path = dir.join("config.yaml");
     std::fs::write(&cfg_path, cfg_text).unwrap();
-    let rc = router_cli::config_load::load(&cfg_path).expect("config");
+    let rc = vadis_cli::config_load::load(&cfg_path).expect("config");
     let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
     transports.insert(
         "p1".into(),
@@ -115,7 +115,7 @@ fallback: []
         }),
     );
     Forwarder {
-        config: rc.router.clone(),
+        config: rc.vadis.clone(),
         transports,
         api_keys: HashMap::from([("p1".into(), "k".into())]),
         store: None,
@@ -126,17 +126,17 @@ fallback: []
     }
 }
 
-/// The two-mutation expectation for BODY: `router_meta` deleted (a),
+/// The two-mutation expectation for BODY: `vadis_meta` deleted (a),
 /// `model` replaced by the native id (b), everything else byte for byte.
 fn expected_passthrough_bytes() -> Vec<u8> {
-    let cleaned = BODY.replace(r#","router_meta":{"echo":true}"#, "");
+    let cleaned = BODY.replace(r#","vadis_meta":{"echo":true}"#, "");
     let cleaned = cleaned.replace("\"model\":\"p1/m1\"", "\"model\":\"m1\"");
     cleaned.as_bytes().to_vec()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_62_i3_closed_mode_byte_equality() {
-    let dir = router_conformance::testkit::tempdir("conf62-i3");
+    let dir = vadis_conformance::testkit::tempdir("conf62-i3");
 
     // The closed-mode run: the engine is LOADED and its rule WOULD match,
     // but the request did not ask.
@@ -151,7 +151,7 @@ async fn conf_62_i3_closed_mode_byte_equality() {
             TransformMode::Passthrough,
         )
         .await;
-    assert!(matches!(out, router_proxy::ForwardOutcome::Success(s) if s.status == 200));
+    assert!(matches!(out, vadis_proxy::ForwardOutcome::Success(s) if s.status == 200));
     let seen = bodies.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     assert_eq!(
@@ -173,7 +173,7 @@ async fn conf_62_i3_closed_mode_byte_equality() {
             TransformMode::Transform,
         )
         .await;
-    assert!(matches!(out, router_proxy::ForwardOutcome::Success(s) if s.status == 200));
+    assert!(matches!(out, vadis_proxy::ForwardOutcome::Success(s) if s.status == 200));
     let seen_on = bodies_on.lock().unwrap().clone();
     assert_eq!(seen_on.len(), 1);
     // The edit is real: the mode-on bytes differ from the mode-off bytes…

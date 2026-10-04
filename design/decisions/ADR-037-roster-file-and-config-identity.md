@@ -36,31 +36,31 @@ timeouts, session identity, trace parameters, plugins, aliases, fallback, `plan_
 classes, so provider data can later be managed on its own (dynamic management, a control plane), while
 the file a human hand-edits for the deployment stops carrying a thousand lines of roster.
 
-**What already exists, and is reused rather than invented.** `RouterConfig::providers: Vec<ProviderCfg>`
-(`crates/router-core/src/config.rs:1050`) is the single representation the serving path reads — seven
-read sites inside `router-proxy` (`accounting.rs:67`, `availability.rs:109`, `forward.rs:1641`,
+**What already exists, and is reused rather than invented.** `VadisConfig::providers: Vec<ProviderCfg>`
+(`crates/vadis-core/src/config.rs:1050`) is the single representation the serving path reads — seven
+read sites inside `vadis-proxy` (`accounting.rs:67`, `availability.rs:109`, `forward.rs:1641`,
 `forward.rs:1662`, `stream_forward.rs:574`, `stream_forward.rs:1221`, `stream_forward.rs:1256`), plus
-`router-cli/src/lib.rs:185` and `:228` and `router-cli/src/setup/report.rs:54`. There is **no
-multi-file config loading**: `config_load::load` (`crates/router-cli/src/config_load.rs:41`) reads
+`vadis-cli/src/lib.rs:185` and `:228` and `vadis-cli/src/setup/report.rs:54`. There is **no
+multi-file config loading**: `config_load::load` (`crates/vadis-cli/src/config_load.rs:41`) reads
 exactly one path, and `validate_text` (`:31`) parses one text. The exactly-one-of shape is the
 repository's own idiom — a price block that carries both the flat shape and `tiers` is refused with the
 message *"a price block is exactly one shape (spec 4.10 rule 1)"* (`config.rs:1191`) — and a known key
 whose presence must produce a **precise** refusal rather than a generic unknown-field error already has
 a type built for it (`StateKeyForbidden`, `config.rs:1026`). The hash convention is fixed: first 16 hex
-of SHA-256, *"the one hash convention … and any future digest"* (`crates/router-core/src/prefix.rs:21`,
+of SHA-256, *"the one hash convention … and any future digest"* (`crates/vadis-core/src/prefix.rs:21`,
 `body_sha16`). And the trace's vocabulary already designs a config identity: DESIGN §12.10.5 row 13
 (`design/DESIGN.md:1936`) specifies `config.applied`'s payload as *"config digest, changed keys"*, while
 the event as written today carries `{config_path, schema_version}`
-(`crates/router-cli/src/lib.rs:168-176`) and `TRACE_SCHEMA_VERSION` is **2**
-(`crates/router-core/src/trace.rs:28`).
+(`crates/vadis-cli/src/lib.rs:168-176`) and `TRACE_SCHEMA_VERSION` is **2**
+(`crates/vadis-core/src/trace.rs:28`).
 
 **Two couplings, both found by grepping the tree rather than assuming it, fix the round's shape.** (i)
-`crates/router-cli/src/setup/mod.rs:27` embeds `config.example.yaml` with `include_str!` as the wizard's
+`crates/vadis-cli/src/setup/mod.rs:27` embeds `config.example.yaml` with `include_str!` as the wizard's
 default template, and two live tests assert that the section table's anchors resolve **inside that
-file** (`crates/router-cli/src/setup/sections.rs:353-367`, `crates/router-cli/src/setup/anchor.rs:929-956`);
+file** (`crates/vadis-cli/src/setup/sections.rs:353-367`, `crates/vadis-cli/src/setup/anchor.rs:929-956`);
 so the shipped example cannot split in the parser card. (ii) `DecisionRecord` is constructed at **four**
-sites inside `router-proxy` (`body_limit.rs:68`, `accounting.rs:487`, `auth.rs:133`, `forward.rs:124` →
-the constructor at `:131`), so an additive trace field is not a `router-core`-only change.
+sites inside `vadis-proxy` (`body_limit.rs:68`, `accounting.rs:487`, `auth.rs:133`, `forward.rs:124` →
+the constructor at `:131`), so an additive trace field is not a `vadis-core`-only change.
 
 **What this ADR is not.** It is not a configuration *layer*: there is still exactly one root file, at
 most one roster, no precedence ladder and no key-by-key overlay. It is not a reload: R43's gate is *no
@@ -87,7 +87,7 @@ providers_file: ./providers.yaml      # the roster is its own file (spec §4.14)
 *Both written* is a **refusal**; *neither written* is a **refusal** too. This is not a merge and not a
 precedence rule: there is still exactly **one** place a given key can be written in any one effective
 config, and the refusal is what makes that boundary checkable. The shape is enforced where the shape is
-visible — the loader that reads the root (`config_load::load`) — not inside `RouterConfig::validate`,
+visible — the loader that reads the root (`config_load::load`) — not inside `VadisConfig::validate`,
 which sees a joined config and can no longer tell the two shapes apart.
 
 Consequences, stated because they are the reason this form was chosen over a hard cut: every existing
@@ -127,10 +127,10 @@ never defaulted and never merged.
 
 ### D4. The join is one-directional and happens once, at load
 
-`RouterConfig::providers` stays **the** representation the serving path reads. The shape that lands in
-`router-core` is: a root-file type carrying every section as today **plus** `providers: Option<Vec<ProviderCfg>>`
+`VadisConfig::providers` stays **the** representation the serving path reads. The shape that lands in
+`vadis-core` is: a root-file type carrying every section as today **plus** `providers: Option<Vec<ProviderCfg>>`
 and `providers_file: Option<String>`; a roster-block type `{ providers: Vec<ProviderCfg> }`; and a
-**pure** join producing today's `RouterConfig`, whose `providers` field is always populated. `config_load::load`
+**pure** join producing today's `VadisConfig`, whose `providers` field is always populated. `config_load::load`
 does the I/O — read the root, read the named roster when the root names one, join, then the **existing**
 `validate()` — and `validate()` stays the one validator, running *after* the join so cross-file
 references (`aliases`, `fallback`, `plan_policy.primary` / `.overflow`, `quota.models`) are checked in
@@ -138,15 +138,15 @@ one pass, in the existing message order, with the existing key paths.
 
 What that buys, and what it forbids:
 
-- **Nothing on the request path moves.** The seven `router-proxy` reads above keep reading
-  `RouterConfig.providers`; there is no second accessor, no second resolution rule and no roster service
+- **Nothing on the request path moves.** The seven `vadis-proxy` reads above keep reading
+  `VadisConfig.providers`; there is no second accessor, no second resolution rule and no roster service
   key. A `ROSTER` service slot would be an unconsumed primitive — the documented-but-unreachable defect
   ADR-036 D3 names, and the exact shape this repository just finished paying for in P9. The seam is the
   **type**, and the type already exists.
-- **`router-proxy` never learns a second file exists.** It never opens, reads, resolves or hashes a
-  config file: the two absolute paths and the digests are resolved once, in `router-cli`, and travel
+- **`vadis-proxy` never learns a second file exists.** It never opens, reads, resolves or hashes a
+  config file: the two absolute paths and the digests are resolved once, in `vadis-cli`, and travel
   exactly as `trace_dir` and `state_db` do today (DESIGN §12.10.2's `ResolvedConfig`). The only
-  `router-proxy` edits this round makes are `health.rs` (a member carrying strings it is handed) and the
+  `vadis-proxy` edits this round makes are `health.rs` (a member carrying strings it is handed) and the
   four one-line, compile-driven additions to the `DecisionRecord` constructors listed in Background.
 - **The join is not layering.** A join happens once, from two files whose keys cannot collide, into one
   document; a layer merges many files key by key with a precedence ladder. Nothing here has a
@@ -191,7 +191,7 @@ printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16
 1. `DecisionRecord.config_digest` — an additive top-level trace field (spec §6; DESIGN §12.6), so a
    decision and its money are attributable to the revision that priced them.
 2. `config.applied`'s payload — the digest lands beside the two **absolute** paths and the two file
-   digests, next to today's `config_path` and `schema_version` (`crates/router-cli/src/lib.rs:168-176`).
+   digests, next to today's `config_path` and `schema_version` (`crates/vadis-cli/src/lib.rs:168-176`).
    That is row 13's *designed* "config digest" half (`design/DESIGN.md:1936`); the "changed keys" half
    is R44's (D7), and the `schema_version` already in that payload is the **store's**, which no part of
    this round moves.
@@ -199,7 +199,7 @@ printf '%s:%s' <root_sha16> <roster_sha16> | shasum -a 256 | cut -c1-16
    "which configuration is this process serving?" is answerable from a surface rather than from argv.
    `setup --print` / `setup --check` print the same triple (spec §4.11; DESIGN §12.14).
 
-**`TRACE_SCHEMA_VERSION` stays `2`** (`crates/router-core/src/trace.rs:28`). The version exists to warn
+**`TRACE_SCHEMA_VERSION` stays `2`** (`crates/vadis-core/src/trace.rs:28`). The version exists to warn
 a consumer that a record would be **misread**; the v1→v2 move happened because `cost.currency` changes
 how the money fields must be read (DESIGN §12.6). A digest changes the reading of no existing field, and
 every consumer on the analysis-loop side already tolerates an unknown key — which is precisely the
@@ -309,7 +309,7 @@ card is forbidden to invent it.
   change and therefore a human decision, and the atomic swap is a second contract. D7 names R44.
 - **A `ROSTER` service key, or a plugin-mediated roster.** Rejected: an unconsumed primitive is the
   documented-but-unreachable defect (ADR-036 D3) this repository just finished paying for. The type
-  `RouterConfig.providers` is already the single representation, so no service slot is needed.
+  `VadisConfig.providers` is already the single representation, so no service slot is needed.
 - **A compatibility layer, a deprecation window, or dual-read.** Rejected: the inline form is a shape, not
   a legacy mode; a window would be a second read path with no owner and no end date, and it would leave
   "which shape is documented?" open for a round that does not need the question.
@@ -337,16 +337,16 @@ card is forbidden to invent it.
 
 ## Consequences
 
-- **Code and docs (the round's shape).** `router-core` config types and the trace field; the loader
-  (`config_load.rs`); the four `DecisionRecord` constructors in `router-proxy` plus the two fixtures
-  (`router-core/src/trace.rs:402`, `router-store/src/trace_sink.rs:162`); `config.applied`'s payload
-  (`router-cli/src/lib.rs:168-176`); `router-proxy/src/health.rs`; `router-cli/src/setup/**` and the two
+- **Code and docs (the round's shape).** `vadis-core` config types and the trace field; the loader
+  (`config_load.rs`); the four `DecisionRecord` constructors in `vadis-proxy` plus the two fixtures
+  (`vadis-core/src/trace.rs:402`, `vadis-store/src/trace_sink.rs:162`); `config.applied`'s payload
+  (`vadis-cli/src/lib.rs:168-176`); `vadis-proxy/src/health.rs`; `vadis-cli/src/setup/**` and the two
   example files (R43-4); `tests/conformance/tests/conf_85_roster_file.rs` (new, owner-allocated — one ID
   carrying **both** halves: the refusal ladder **and** the identity); spec §4, §4.11, §4.12, §4.14, §6,
   §9.1; DESIGN §12.5, §12.6, §12.8, §12.9, §12.14; this ADR; `book/getting-started.md`,
   `book/operations.md`, `book/cost-and-caching.md`; `README.md`.
 - **Nothing on the wire moves, and that is measured, not asserted.** The join happens at load and the
-  serving path reads the same `RouterConfig.providers` it reads today, so the round's byte-identity arm
+  serving path reads the same `VadisConfig.providers` it reads today, so the round's byte-identity arm
   is: the shipped example, split into a root and a roster, served against a recording mock upstream,
   produces request bytes **identical** to the same example served inline — with the base arm built in a
   throwaway worktree of the base commit, never by reverting inside the round's tree.
@@ -376,8 +376,8 @@ card is forbidden to invent it.
 - **The refusal ladder freezes shapes and keys only.** Which shape is refused by which key is the
   contract; the wording of each message belongs to the card that writes it.
 - **The join's typing is the implementer's choice within D4's constraints.** Whether the root file's
-  sections are carried by a dedicated root type or by a mutation of `RouterConfig` after parsing is a
-  code shape, not a contract; what D4 fixes is that `RouterConfig::providers` remains the only
+  sections are carried by a dedicated root type or by a mutation of `VadisConfig` after parsing is a
+  code shape, not a contract; what D4 fixes is that `VadisConfig::providers` remains the only
   representation the serving path reads and that exactly one function decides the shape.
 - **No price, quota, URL or cost figure is decided, quoted or changed by this ADR**, and none may be
   derived from it.

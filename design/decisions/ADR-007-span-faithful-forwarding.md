@@ -2,14 +2,14 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: AGENTS hard constraints 1/2; spec §2 (byte boundary) / §6 (prefix blocks); DESIGN §12.3/§12.3.1; implementation `crates/router-core/src/body.rs`
+- Related: AGENTS hard constraints 1/2; spec §2 (byte boundary) / §6 (prefix blocks); DESIGN §12.3/§12.3.1; implementation `crates/vadis-core/src/body.rs`
 
 ## Background
 
 The first-order lever of prefix caching is that **the bytes the upstream sees stay unchanged across turns**.
 Measurement (2026-09-19, codex → ZAI) shows the client resends the whole body every round (3 → 6 items),
 with `store:false` and `previous_response_id` absent, so the stability of the prefix is decided entirely by
-router's outbound bytes: in the second round of the same session `cached_tokens` reaches 14400/14520
+vadis's outbound bytes: in the second round of the same session `cached_tokens` reaches 14400/14520
 (99.2%), while any single "the order changed / the whitespace changed / an unknown field is gone" pushes the
 hit rate back to 0 (the whole prefix recomputed at the miss price).
 
@@ -24,8 +24,8 @@ fails and the cost actually rises.
 1. **The request body is carried as raw bytes through the pipeline**: `RawBody(Vec<u8>)` (DESIGN §12.3.1).
    It does **not** implement `DerefMut`/`AsMut`, nor does it expose a mutable reference to
    `serde_json::Value` — that blocks "just tweak it in passing" at compile time.
-2. **The only permitted rewrite = deleting top-level router-owned fields**: the whitelist constant
-   `ROUTER_OWNED_TOP_LEVEL_KEYS` (currently only `router_meta`; legitimate unknown client fields are never
+2. **The only permitted rewrite = deleting top-level vadis-owned fields**: the whitelist constant
+   `VADIS_OWNED_TOP_LEVEL_KEYS` (currently only `vadis_meta`; legitimate unknown client fields are never
    in it). Adding an owned key must change that constant; a second list scattered at call sites is not
    allowed.
 3. **The parse → reserialize round trip is forbidden**: `remove_top_level_keys` uses a **single-pass span
@@ -38,7 +38,7 @@ fails and the cost actually rises.
    upstream bytes, spec §2 / ADR-004).
 5. **The domain of prefix blocks and hashes = the bytes the upstream sees**: a block = a structural unit in
    the prefix region (one message / one tool definition / one input item), and
-   `hash = the first 16 hex chars of sha256(block raw bytes)` (spec §6). Therefore "deleting router-owned
+   `hash = the first 16 hex chars of sha256(block raw bytes)` (spec §6). Therefore "deleting vadis-owned
    fields" changes no block hash — CONF-10 asserts exactly that.
 6. **The separator semantics of deletion (pinned 2026-09-19)**: members that consecutively hit the whitelist
    form a "run"; the run is removed as a whole and swallows the comma between the **run's end** and its
@@ -55,7 +55,7 @@ fails and the cost actually rises.
      invalid UTF-8 inside a **key** → `Err(Malformed)` — a key must be decodable to be compared
      semantically with the whitelist; the asymmetry is intentional.
 8. **Container deviation recorded honestly**: the blueprint wrote `RawBody(Bytes)`, but the `bytes` crate is
-   not on `router-core`'s dependency allowlist, so `Vec<u8>` is used in practice; outbound zero-copy
+   not on `vadis-core`'s dependency allowlist, so `Vec<u8>` is used in practice; outbound zero-copy
    (`Bytes::from(vec)`) happens in the proxy layer and the byte semantics are unaffected.
 
 ## Rationale

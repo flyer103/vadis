@@ -22,18 +22,18 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::config::{
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::Nano;
-use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::cost::Nano;
+use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 
 async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts(tag, "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -46,8 +46,8 @@ async fn rig(tag: &str) -> PlanRig {
 
 /// Every stored event as (kind_raw, payload), read after the server stopped.
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };
@@ -162,7 +162,7 @@ async fn conf_44_turn3_displacement_reason_is_decided_by_destination() {
 /// primary_recovered`"; §6's `probe` field IS "this switch was the return
 /// trip of an admitted probe"). The event and the state were already
 /// written by the recovery transition; this pins that the trace — the
-/// product's only observation channel (ADR-005) and `router stats`'
+/// product's only observation channel (ADR-005) and `vadis stats`'
 /// source (§9.2) — carries it too. The old guard only recorded a
 /// displacement when `g.route != primary`, and an admitted probe moves
 /// the request TO the primary, so the return trip never landed.
@@ -261,7 +261,7 @@ async fn conf_44_probe_return_trip_is_recorded_in_the_trace() {
     // The reporting surface follows (§9.2): `switches` counts requests
     // whose `result.plan_switch` is present, so the return trip must be
     // counted — verified against the run's own trace rows.
-    let rep = router_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
+    let rep = vadis_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
         .expect("report computes");
     let recs = trace_records(&dir);
     let trace_switches = recs
@@ -362,7 +362,7 @@ async fn conf_44_guard_and_surface_judge_the_same_instant() {
     // dies immediately, so the only thing that can block the next probe
     // is the guard's own clock.
     rig.plan.queue(
-        router_conformance::testkit::CannedResponse::json(
+        vadis_conformance::testkit::CannedResponse::json(
             403,
             "Forbidden",
             br#"{"error":{"message":"You have exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,

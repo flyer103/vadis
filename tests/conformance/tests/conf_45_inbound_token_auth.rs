@@ -15,7 +15,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16, auth_line: &str) -> String {
     format!(
@@ -92,10 +92,10 @@ async fn conf_45_inbound_token_auth_guard() {
     std::env::set_var("CONF45_GUARD_TOKEN", "tok-conf45-secret");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
-    // ① no token → 401, §8's body verbatim, X-Router-Request-Id present.
+    // ① no token → 401, §8's body verbatim, X-Vadis-Request-Id present.
     let (status, body, headers) = testkit::http_post(
         &listen_addr,
         "/v1/chat/completions",
@@ -114,9 +114,9 @@ async fn conf_45_inbound_token_auth_guard() {
     assert!(!req_id.is_empty());
     let hdr_id = headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-request-id"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-request-id"))
         .map(|(_, v)| v.as_str())
-        .expect("X-Router-Request-Id on a 401 (§8's always)");
+        .expect("X-Vadis-Request-Id on a 401 (§8's always)");
     assert_eq!(hdr_id, req_id, "the header and the body name the same id");
 
     // ② a wrong token (differs only in the last byte) → 401; the body
@@ -164,7 +164,7 @@ async fn conf_45_inbound_token_auth_guard() {
         );
     }
     // The guard adds nothing to the body: the upstream saw the client's
-    // own bytes minus the router-owned member (CONF-27's class; here it
+    // own bytes minus the vadis-owned member (CONF-27's class; here it
     // is what makes "auth on" byte-faithful, DESIGN §12.11).
     let requests = upstream.requests();
     assert_eq!(
@@ -247,10 +247,10 @@ async fn conf_45_no_key_means_no_auth() {
     )
     .unwrap();
     std::env::set_var("CONF45_MOCK_KEY", "sk-conf45");
-    std::env::remove_var("CONF45_ROUTER_TOKEN");
+    std::env::remove_var("CONF45_VADIS_TOKEN");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _h) = testkit::http_post(
@@ -285,15 +285,15 @@ async fn conf_45_missing_env_refuses_startup() {
         let config_path = dir.join("config.yaml");
         std::fs::write(
             &config_path,
-            config_yaml(0, listen_port, ", auth_token_env: CONF45_ROUTER_TOKEN"),
+            config_yaml(0, listen_port, ", auth_token_env: CONF45_VADIS_TOKEN"),
         )
         .unwrap();
         match value {
-            Some(v) => std::env::set_var("CONF45_ROUTER_TOKEN", v),
-            None => std::env::remove_var("CONF45_ROUTER_TOKEN"),
+            Some(v) => std::env::set_var("CONF45_VADIS_TOKEN", v),
+            None => std::env::remove_var("CONF45_VADIS_TOKEN"),
         }
         let cfg = config_path.to_string_lossy().into_owned();
-        let code = router_cli::serve(&cfg).await;
+        let code = vadis_cli::serve(&cfg).await;
         assert_ne!(code, 0, "({tag}) a token-less start must be refused");
         // The stderr line itself is asserted by the run-evidence comment
         // (the message is frozen in DESIGN §12.11; the exit code is the

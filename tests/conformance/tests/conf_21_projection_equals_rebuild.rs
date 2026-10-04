@@ -12,8 +12,8 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use router_core::store::{EventKind, NewEvent, Projection, ProjectionWrite, Store};
 use serde_json::json;
+use vadis_core::store::{EventKind, NewEvent, Projection, ProjectionWrite, Store};
 
 fn tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -28,20 +28,20 @@ fn tempdir(tag: &str) -> PathBuf {
     dir
 }
 
-fn open(tag: &str) -> router_store::SqliteStore {
-    router_store::SqliteStore::open(&tempdir(tag).join("state/router.db")).unwrap()
+fn open(tag: &str) -> vadis_store::SqliteStore {
+    vadis_store::SqliteStore::open(&tempdir(tag).join("state/router.db")).unwrap()
 }
 
 /// The scenario's event sequence — identical for both stores. The intent
 /// carries `prefix_blocks` because the encoder computed them from exactly
 /// the outbound bytes (§12.10.6), so the log alone determines the ledger.
 fn scenario(
-    s: &router_store::SqliteStore,
+    s: &vadis_store::SqliteStore,
 ) -> (
-    router_core::EventId,
-    router_core::EventId,
-    router_core::EventId,
-    router_core::EventId,
+    vadis_core::EventId,
+    vadis_core::EventId,
+    vadis_core::EventId,
+    vadis_core::EventId,
 ) {
     s.append(NewEvent {
         kind: EventKind::RequestReceived,

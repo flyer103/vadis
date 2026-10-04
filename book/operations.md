@@ -3,15 +3,15 @@
 Status: written for v0.1. Behaviour under failure is normative in `docs/spec.md` §8 and the
 store's contract is §4.5; this chapter is the day-2 view for whoever runs the gateway.
 
-router is a single local process for a single operator. Operating it is mostly about
+vadis is a single local process for a single operator. Operating it is mostly about
 knowing what it persists, what it deliberately does not, and what it does when an upstream
 misbehaves.
 
 ## Run it
 
 ```bash
-router serve                        # finds the config by the rule below
-router serve --config config.yaml   # or name it explicitly
+vadis serve                        # finds the config by the rule below
+vadis serve --config config.yaml   # or name it explicitly
 ```
 
 Everything the process does comes from that file: the listen address, the plugin set, the
@@ -21,16 +21,16 @@ no hidden default address and no built-in plugin list to reconcile with it.
 ### Where the config comes from
 
 `serve` and `stats` find the file in one order ([`docs/spec.md` §4.12](../docs/spec.md)): an explicit `--config`,
-else `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`, else `./config.yaml` in the directory you are in.
+else `${XDG_CONFIG_HOME:-$HOME/.config}/vadis/config.yaml`, else `./config.yaml` in the directory you are in.
 When none of them is there they exit non-zero and name `--config` and the setup command — there is no silent
-fallback to a default configuration. The `router setup` command writes to the XDG location by
-default (mode `0600`, and any directory it creates at `0700`), which is why the bare `router serve` above works
+fallback to a default configuration. The `vadis setup` command writes to the XDG location by
+default (mode `0600`, and any directory it creates at `0700`), which is why the bare `vadis serve` above works
 after a first run: `--config` becomes unnecessary, not forbidden.
 
 The paths a config owns all resolve against **the config file's own directory**, never the directory you
 run from: the trace directory it names, a plugin's rule file, the state store, and the roster the config names
 ([`docs/spec.md` §4.1](../docs/spec.md) and §4.14). A config in the XDG location therefore keeps its traces,
-its store and its roster beside itself, under `~/.config/router/` — so "back up the config and its state
+its store and its roster beside itself, under `~/.config/vadis/` — so "back up the config and its state
 together" means copying that directory, roster included. To keep the traces somewhere else, write an **absolute**
 `trace.dir` (a leading `~` is not expanded), and see the startup table below for what a config that cannot be
 loaded does.
@@ -63,7 +63,7 @@ knowing:
 - **You can see a reload happen.** `GET /health`'s `config_digest` moves to the new revision; the
   state store gains one `config.applied` row naming the revision it applied, the one it replaced,
   and the keys whose values moved; and a candidate the loader refuses is reported as exactly one
-  line on the process's stderr — `router: reload refused (…, still serving revision <digest>): <reason>`
+  line on the process's stderr — `vadis: reload refused (…, still serving revision <digest>): <reason>`
   — while the gateway keeps serving the revision it already had and writes nothing to the store.
 - **Some keys still need a restart.** The keys the process builds once and holds — the listen
   address (`server.addr`), `trace.dir`, the upstream-attempt timeout, the inbound body bound — are
@@ -101,12 +101,12 @@ relative to the config file's directory, so the state can live outside the repos
   `serve` runs it holds the store exclusively, and a second process's open — a read-only one
   included — is refused. Stop `serve` first, inspect, then start it again. The read-only
   surfaces split the same way: `GET /health` answers against a live gateway because it is
-  served by the running process itself, while `router stats`' own read-only open is refused
+  served by the running process itself, while `vadis stats`' own read-only open is refused
   there too — against a live gateway its report comes out with the one store-derived figure,
   `unknown outcome requests`, **omitted** and a one-line note on stderr naming the refusal,
   every other figure printed unchanged (see
   [Observability](observability-and-accounting.md)). To read that figure, run `stats` with
-  `serve` stopped. A dedicated `router state`-style surface is a
+  `serve` stopped. A dedicated `vadis state`-style surface is a
   separate change, not part of v0.1.
 - **The store is a startup prerequisite** (see the table above). An unreadable file is a
   permissions problem to fix, not a mode to run in.
@@ -137,18 +137,18 @@ Nobody else keeps a copy of that state: clients are stateless and resend their w
 conversation every turn, so the gateway is the only place a request's lifecycle is recorded
 at all.
 
-## The outcome router cannot verify (`unknown_outcome`)
+## The outcome vadis cannot verify (`unknown_outcome`)
 
 Sometimes the gateway knows it *intended* to call the upstream and cannot know what
 happened: the process died mid-request, the client disconnected mid-stream, an upstream
 died after the request bytes were fully written, or a stall hit the attempt timeout after the
-write. The body may have been billed. Router does not guess:
+write. The body may have been billed. Vadis does not guess:
 
 - the request is **recorded and reported** as `unknown_outcome`;
 - the quota is **not charged again** (a conservative local re-charge would silently eat your
   plan, which is worse than a visible undercount), and no cost is invented for it;
 - reconciliation is **yours**, against the provider's own bill;
-- `router stats --config config.yaml --window <duration>` reports how many requests in the window
+- `vadis stats --config config.yaml --window <duration>` reports how many requests in the window
   are in this state (its `unknown outcome requests` line), so the ambiguity
   shows up as a number instead of being absorbed into a total.
 
@@ -163,7 +163,7 @@ which at least knows its own idempotency story.
 
 The gateway does not store conversations. Requests that arrive with server-side state are
 routed stickily and tagged in the trace, so the assumption is continuously auditable rather
-than assumed. No bodies are kept — only hashes and pointers — so there is no "router keeps
+than assumed. No bodies are kept — only hashes and pointers — so there is no "vadis keeps
 your conversations" surface at all.
 
 ## Failover, cooldowns and degradation
@@ -178,7 +178,7 @@ your conversations" surface at all.
   marks the whole provider unavailable for a cooldown, so requests stop being spent
   rediscovering a dead route one request at a time. A rate limit cools the route instead.
   The cooldown is state: it survives a restart, is reported by `/health` and counted by
-  `router stats`. It is **not** the plan's probe deadline: a provider cooldown is route
+  `vadis stats`. It is **not** the plan's probe deadline: a provider cooldown is route
   availability, while the probe deadline is the family's own cooldown, and `/health`'s plan
   section reports them separately — a cooling provider makes a probe wait without moving the
   family's account, and the trace records why
@@ -228,7 +228,7 @@ wrong (ADR-012, ADR-013).
 - [`docs/spec.md` §4.5](../docs/spec.md) — the local state store: the event-log / trace
   split, the join key, durability tiers and the failure behaviour.
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
-  `router stats` report, and what is not served yet.
+  `vadis stats` report, and what is not served yet.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the store's DDL, the writer lock, the

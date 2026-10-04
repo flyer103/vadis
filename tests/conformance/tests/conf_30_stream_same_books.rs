@@ -23,9 +23,9 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -81,10 +81,10 @@ fn turn_body(session: &str, first_message: &str, extra: Option<&str>) -> String 
     )
 }
 
-fn start_router(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
+fn start_vadis(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
     std::env::set_var("CONF30_MOCK_KEY", "sk-conf30");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
     serve_task
 }
@@ -104,7 +104,7 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
 }
 
 fn event_kinds(dir: &std::path::Path) -> Vec<(String, Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -126,7 +126,7 @@ async fn conf_30_a_stream_writes_the_same_books() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _h) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -203,7 +203,7 @@ async fn conf_30_b_second_streaming_turn_continuity() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     // Turn 1, then the stateless-client turn 2: same first message, one
     // message more (the captured codex/hermes shape).
@@ -252,7 +252,7 @@ async fn conf_30_b_second_streaming_turn_continuity() {
     let listen2 = testkit::free_port();
     let cfg2 = dir2.join("config.yaml");
     std::fs::write(&cfg2, config_yaml(upstream2.addr.port(), listen2)).unwrap();
-    let serve2 = start_router(&cfg2, listen2);
+    let serve2 = start_vadis(&cfg2, listen2);
     let (t1, _, _) = testkit::http_post(
         &format!("127.0.0.1:{listen2}"),
         "/v1/chat/completions",
@@ -301,7 +301,7 @@ async fn conf_30_c_no_usage_is_missing_not_invented() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let body = r#"{"model":"mock/glm","messages":[{"role":"user","content":"hi"}],"stream":true,"prompt_cache_key":"conf30-sess-d"}"#;
     let (status, out, _h) = testkit::http_post(
@@ -350,7 +350,7 @@ async fn conf_30_d_stream_connect_failure_classifies_connect() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(dead_port, listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _h) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -395,7 +395,7 @@ async fn conf_30_e_truncated_stream_records_its_truncation() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _h) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),

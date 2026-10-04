@@ -8,12 +8,12 @@
 //!
 //! - **not unauthenticated** — the route sits behind §4.7's guard: no
 //!   token → `401` with §8's body (`error.type = "unauthorized"`,
-//!   `details.header`) and `X-Router-Request-Id` **present**; a wrong
+//!   `details.header`) and `X-Vadis-Request-Id` **present**; a wrong
 //!   token → `401` naming the header it read;
 //! - **not error-bodied on the admitted arm** — a `200` carries the
 //!   exposition's own media type (`text/plain; version=0.0.4;
 //!   charset=utf-8`), no JSON `error` member, and **no**
-//!   `X-Router-Request-Id` (§8's always-on header exists only on
+//!   `X-Vadis-Request-Id` (§8's always-on header exists only on
 //!   responses that went through the error formatter);
 //! - **the status set is closed** — admitted → `200`, refused → `401`;
 //!   anything else (`404`, `501`, `500`, `503`) is a defect. The old
@@ -37,7 +37,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit;
+use vadis_conformance::testkit;
 
 fn config_yaml(listen_port: u16, auth_line: &str) -> String {
     format!(
@@ -176,7 +176,7 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
     std::env::set_var("CONF46_GUARD_TOKEN", "tok-conf46-secret");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let trace_dir = dir.join("state/traces");
 
@@ -186,7 +186,7 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
     let (status, _b, _h) = http_get(&listen_addr, "/health", &[], None);
     assert_eq!(status, 200, "control: the assembly is up (/health answers)");
 
-    // ① no token → 401: §8's body verbatim, X-Router-Request-Id present
+    // ① no token → 401: §8's body verbatim, X-Vadis-Request-Id present
     //    — the GUARD's refusal, not this surface's answer.
     let (status, body, headers) = http_get(&listen_addr, "/metrics", &[], None);
     assert_eq!(status, 401, "no token must be refused, got {status}");
@@ -194,7 +194,7 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
     assert_eq!(v["error"]["type"], "unauthorized");
     assert_eq!(v["error"]["details"]["header"], serde_json::Value::Null);
     assert!(
-        header(&headers, "x-router-request-id").is_some(),
+        header(&headers, "x-vadis-request-id").is_some(),
         "a refusal went through §8's formatter: the always-on header is present"
     );
 
@@ -252,7 +252,7 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
     );
 
     // ④ the admitted arm's two negative layers (the old case's own,
-    //    re-pointed at 200): no §8 error body, no X-Router-Request-Id.
+    //    re-pointed at 200): no §8 error body, no X-Vadis-Request-Id.
     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bearer) {
         assert!(
             v.get("error").is_none(),
@@ -260,8 +260,8 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
         );
     }
     assert!(
-        header(&headers, "x-router-request-id").is_none(),
-        "no X-Router-Request-Id on an admitted scrape (§8's header exists \
+        header(&headers, "x-vadis-request-id").is_none(),
+        "no X-Vadis-Request-Id on an admitted scrape (§8's header exists \
          only on responses that went through the error formatter)"
     );
 
@@ -332,7 +332,7 @@ async fn conf_46_metrics_keyless_admits_without_a_token() {
     std::env::set_var("CONF46_MOCK_KEY", "sk-conf46");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, headers) = http_get(&listen_addr, "/metrics", &[], None);
@@ -347,7 +347,7 @@ async fn conf_46_metrics_keyless_admits_without_a_token() {
     let text = String::from_utf8(body).expect("utf-8");
     assert!(text.contains("router_metrics_window_seconds 900"));
     assert!(
-        header(&headers, "x-router-request-id").is_none(),
+        header(&headers, "x-vadis-request-id").is_none(),
         "the admitted arm is not §8's answer here either"
     );
 

@@ -31,14 +31,14 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::config::{
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::Nano;
-use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
-use router_core::store::{EventKind, NewEvent, ProjectionWrite};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_core::cost::Nano;
+use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::store::{EventKind, NewEvent, ProjectionWrite};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// The policy every arm loads: spill + probe with `cooldown: 0s`, so the
 /// time arm of the gate is always elapsed and the word depends only on
@@ -123,7 +123,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
     let mut primary_allowed = true;
     let mut deferred_by_window = false;
     if !matches!(seed, Seed::NeverSwitched) {
-        let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+        let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
         // The transition event: its own ts_us becomes since_us (read
         // back from the projection, never assumed).
         let ev = store
@@ -153,7 +153,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
             .unwrap();
         match &seed {
             Seed::OverflowPrimaryCooling(_) => {
-                let now = router_store_now_us();
+                let now = vadis_store_now_us();
                 store
                     .project(ProjectionWrite::ProviderCooldown {
                         scope: "provider",
@@ -167,9 +167,9 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
                 primary_allowed = false;
             }
             Seed::OverflowWindowNotReset(_) => {
-                let now_s = (router_store_now_us().max(0) as u64) / 1_000_000;
+                let now_s = (vadis_store_now_us().max(0) as u64) / 1_000_000;
                 let window_start_us =
-                    router_core::quota::window_start_for(now_s, 1) as i64 * 1_000_000;
+                    vadis_core::quota::window_start_for(now_s, 1) as i64 * 1_000_000;
                 store
                     .project(ProjectionWrite::QuotaCharged {
                         provider: "p-plan",
@@ -191,7 +191,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
         drop(store);
     }
 
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -243,7 +243,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
     h
 }
 
-fn router_store_now_us() -> i64 {
+fn vadis_store_now_us() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
@@ -251,7 +251,7 @@ fn router_store_now_us() -> i64 {
 }
 
 fn now_us_test() -> i64 {
-    router_store_now_us()
+    vadis_store_now_us()
 }
 
 /// Minimal blocking GET (the CONF-25/41 style).
@@ -288,7 +288,7 @@ fn parse_ms(ts: &str) -> i64 {
         }
         f[..3].parse().unwrap()
     };
-    router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
+    vadis_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
         + h * 3_600_000
         + mi * 60_000
         + s * 1_000

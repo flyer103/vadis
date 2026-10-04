@@ -135,9 +135,9 @@ element for element — so the whole client body differs by `"stream": true` alo
 
 ## Consequences
 
-- **Code.** Only `crates/router-proxy/src/stream_forward.rs`: the walk's local `failover_from` reaches the
+- **Code.** Only `crates/vadis-proxy/src/stream_forward.rs`: the walk's local `failover_from` reaches the
   request's facts at the two refusal returns, and the walk's skip list carries the chain position so the array
-  serialises in chain order. No `router-core` / `router-store` byte; no public type; `details` is free-form per
+  serialises in chain order. No `vadis-core` / `vadis-store` byte; no public type; `details` is free-form per
   code, so §8's type table does not move; `TRACE_SCHEMA_VERSION` stays **2** (an existing field's *value* on an
   already-`502` class, and an array's order).
 - **Client-visible.** (i) The streaming arm's `skipped[]` is in the chain's own order — the only change inside

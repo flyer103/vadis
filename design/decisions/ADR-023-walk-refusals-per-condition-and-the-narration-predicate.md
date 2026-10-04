@@ -179,10 +179,10 @@ in place, no attempt-bearing ending reaches it.
 
 ## Consequences
 
-- **Code.** `router-proxy/src/forward.rs`: `next_candidate` gains the wire condition (and thereby the
+- **Code.** `vadis-proxy/src/forward.rs`: `next_candidate` gains the wire condition (and thereby the
   provider-existence check, which `provider()` resolves); the keyless skip records its provider so a second
-  model of it is narrated; comments updated. `router-proxy/src/stream_forward.rs`: the loop-end fall-through
-  emits condition E's body. `router-core` untouched; no public type changes; `details` is free-form per code,
+  model of it is narrated; comments updated. `vadis-proxy/src/stream_forward.rs`: the loop-end fall-through
+  emits condition E's body. `vadis-core` untouched; no public type changes; `details` is free-form per code,
   so no `error.type` is added and §8's table does not move.
 - **Client-visible.** (i) A mixed chain's refusal changes on the **buffered** path from the frozen shape to
   the attempt-exhausted shape (the streaming path already gave that; both now agree). (ii) A condition-N
@@ -206,7 +206,7 @@ in place, no attempt-bearing ending reaches it.
 
 - **Everything here was measured with mock/loopback upstreams, on one binary, with zero real upstream calls
   and zero spend.** No live client or live upstream exists anywhere in this round.
-- **The binary is the round's own**: `/tmp/r17-4-target/debug/router`, built at `8264f61`. The `crates/`,
+- **The binary is the round's own**: `/tmp/r17-4-target/debug/vadis`, built at `8264f61`. The `crates/`,
   `tests/`, `docs/`, `design/` and `book/` bytes at HEAD are identical to that commit's
   (`git diff --stat 8264f61..HEAD -- crates/ tests/ docs/ design/ book/ config.example.yaml` → empty), so the
   measured behaviour is HEAD's.

@@ -62,9 +62,9 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::store::{EventKind, NewEvent, ProjectionWrite};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::store::{EventKind, NewEvent, ProjectionWrite};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 fn now_us() -> i64 {
     std::time::SystemTime::now()
@@ -88,7 +88,7 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// p-plan expiring at `until_us`, before `serve` opens the store (the
 /// EXCLUSIVE writer lock forecloses any later writer).
 fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,
@@ -142,7 +142,7 @@ fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
 ///   raced against.
 fn store_word_pins() {
     let dir = testkit::tempdir("conf76-pins");
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,
@@ -212,7 +212,7 @@ fn store_word_pins() {
 /// means a live row was dropped: a product bug, red).
 fn seeded_until_us(dir: &std::path::Path, until_us: i64) {
     let tb0 = now_us();
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let row = store.query(Query::Cooldown {
         provider: "p-plan",
         model: None,
@@ -248,7 +248,7 @@ async fn conf_76_live_cooldown_boundary_is_exclusive_and_microsecond() {
     let boundary_us = now_us() + 700_000;
     seed(&dir, Some(boundary_us));
     seeded_until_us(&dir, boundary_us);
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -333,7 +333,7 @@ async fn conf_76_control_no_cooldown_row_means_no_refusal() {
         testkit::plan_rig_parts("conf76-ctrl", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
     seed(&dir, None);
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,

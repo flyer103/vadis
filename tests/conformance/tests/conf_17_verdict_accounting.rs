@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_core::trace::{verified_savings_tokens, DecisionRecord, TransformRecord};
+use vadis_core::trace::{verified_savings_tokens, DecisionRecord, TransformRecord};
 
 fn transform(
     plugin: &str,
@@ -77,11 +77,11 @@ fn conf_17_gates_read_verified_only() {
 }
 
 fn empty_record() -> DecisionRecord {
-    use router_core::trace::{
+    use vadis_core::trace::{
         CostRec, DecisionRec, IdentityRec, PrefixRec, ProtocolRec, ResultRec, StateRec,
         TRACE_SCHEMA_VERSION,
     };
-    use router_core::{Nano, Usage};
+    use vadis_core::{Nano, Usage};
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
         ts: "2026-09-19T12:00:00.000Z".into(),
@@ -117,7 +117,7 @@ fn empty_record() -> DecisionRecord {
             blocks: Vec::new(),
             continuity: None,
         },
-        transform_mode: router_core::transform::TransformMode::Passthrough,
+        transform_mode: vadis_core::transform::TransformMode::Passthrough,
         transforms: Vec::new(),
         // The additive group (spec §6): this fixture's record is no hit.
         cache: None,
@@ -130,7 +130,7 @@ fn empty_record() -> DecisionRecord {
             output: Nano(0),
             peak_applied_pct: 100,
             total: Nano(0),
-            currency: router_core::Currency::Usd,
+            currency: vadis_core::Currency::Usd,
             quota_after: None,
         },
         result: ResultRec {

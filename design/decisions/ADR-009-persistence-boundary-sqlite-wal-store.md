@@ -30,19 +30,19 @@ The usual objection — "a database adds latency to the request path" — is mea
 ## Decision
 
 1. **One embedded database, one file, one writer.** Local state is a single SQLite database in **WAL**
-   mode, hidden behind `trait Store`. The domain (`router-core`) keeps declaring the traits it already
+   mode, hidden behind `trait Store`. The domain (`vadis-core`) keeps declaring the traits it already
    declares (`CacheLedger`, `SessionTable`, `QuotaStore`, `TraceSink`, DESIGN §12.2) and stays free of
    I/O; `Store` is the **lower seam** that the state service's implementations are built on. The SQLite
-   implementation (`rusqlite`, bundled SQLite) lands in a new workspace member `crates/router-store`.
+   implementation (`rusqlite`, bundled SQLite) lands in a new workspace member `crates/vadis-store`.
 2. **Tables (v0.1).** `events` is the truth (ADR-010). `sessions` (the sticky table), `cache_ledger` and
    `quota_counters` are **projections** of it, plus `schema_version` for the store's own migrations. Only
    `events` is contractual; a projection's column set is implementation-defined because it is rebuildable.
 3. **Request and response bodies are never persisted.** Not in the event log and not in the trace: an
-   event carries `body_hash` = the **first 16 hex chars of `sha256(router-visible body bytes)`** (the same
+   event carries `body_hash` = the **first 16 hex chars of `sha256(vadis-visible body bytes)`** (the same
    convention and the same helper as the prefix-block hash of spec §6) plus a pointer (`trace_ref` = trace
    file + line) so that a body can be *checked* whenever the operator captured it out of band. Raw bytes
    live only in captures taken outside the product; the serving path never reads them back, and there is no
-   "router keeps your conversations" surface at all.
+   "vadis keeps your conversations" surface at all.
 4. **Durability is tiered, and the tier is a property of the event class:**
    - **intent / accounting events** (`upstream.submitted`, `upstream.responded`, `cost.computed`,
      `quota.charged`, `session.bound`, `failover.triggered`, `config.applied`): `synchronous=FULL`, one
@@ -101,7 +101,7 @@ page size 4096, 2026-09-19.
 What the measurement decides:
 
 - A request writes a handful of FULL events. At p99 ≈ 0.1 ms per commit the durable-write cost is roughly
-  0.3–0.5 ms per request — below the resolution of the latency gate (router's own overhead budget) and two
+  0.3–0.5 ms per request — below the resolution of the latency gate (vadis's own overhead budget) and two
   to four orders of magnitude below an upstream round trip. **Latency is not the obstacle; complexity is.**
 - Group commit at `NORMAL` amortizes to ≈ 0.008 ms/row (p99), which is why the projections may be batched
   and why the durability tier is chosen per event class rather than globally.
@@ -114,7 +114,7 @@ What the measurement decides:
 
 **Re-measurement is owed, and it is part of the data-plane latency gate.** These numbers come from a
 Python `sqlite3` harness over 410 B rows. The write path that actually ships (`rusqlite` inside
-`crates/router-store`, real event payloads, a database that grows all day) must be re-measured as
+`crates/vadis-store`, real event payloads, a database that grows all day) must be re-measured as
 part of that gate, including one case with a much longer payload and one against a larger database
 file. This ADR's decision does not depend on the outcome — a factor of ten still leaves the write
 path far below an upstream round trip — but the gate's latency budget does, and the budget must
@@ -139,10 +139,10 @@ database, 410-byte `events` rows and the per-statement timing loop described her
 - SQLite is the boring choice: atomic commit, one file, one writer, WAL readers and versioned migrations
   are solved problems, exercised on every phone on earth. The gateway's job is routing, not storage
   engineering.
-- Hiding it behind `trait Store` keeps `router-core` I/O-free (testable with an in-memory implementation)
+- Hiding it behind `trait Store` keeps `vadis-core` I/O-free (testable with an in-memory implementation)
   and keeps the hosted path an added file rather than a refactor.
 - "Bodies are never persisted" keeps the footprint at one row per event (hundreds of bytes) and keeps the
-  privacy surface at zero: router stores no conversation content, only hashes.
+  privacy surface at zero: vadis stores no conversation content, only hashes.
 - Tiered durability is derived from one question (item 4), so adding a future event is a small,
   local decision rather than a global re-tuning.
 
@@ -150,7 +150,7 @@ database, 410-byte `events` rows and the per-statement timing loop described her
 
 - DESIGN §8 stops describing "memory + JSON snapshot"; the design of record is event log + projections +
   tiered durability (this ADR and ADR-010).
-- `router-core` gains `trait Store`; `crates/router-store` joins the crate list with `rusqlite` in its
+- `vadis-core` gains `trait Store`; `crates/vadis-store` joins the crate list with `rusqlite` in its
   dependency allowlist (DESIGN §12.1). The build gains a bundled C library (libsqlite3) — accepted
   knowingly, and the reason belongs in the commit message that adds the dependency.
 - The state file becomes operator data alongside the trace directory: it must be backed up (quota counters
@@ -158,7 +158,7 @@ database, 410-byte `events` rows and the per-statement timing loop described her
   sensitive-in-aggregate. Backup is an ops duty, not a v0.1 feature.
 - Startup gains a real failure mode with an operator action (`state/router.db` unreadable → fix permissions
   or move the file aside). The trace path keeps working independently of the store.
-- Money stays on the trace path: `router replay` / `router stats` compute cost from the trace (ADR-005,
+- Money stays on the trace path: `vadis replay` / `vadis stats` compute cost from the trace (ADR-005,
   spec §7), while quota remaining, sticky bindings and the cache ledger come from the store's projections.
   The two records are joined by `request_id` + `event_id` (spec §4.5).
 - Because the DB is a new artifact in the workspace, the docs-first rule applies to it: this ADR and spec

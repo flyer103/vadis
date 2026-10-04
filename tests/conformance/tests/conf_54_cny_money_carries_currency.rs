@@ -18,7 +18,7 @@
 //! - (b) the `cost.computed` store row of the CNY-priced spill carries
 //!   `"currency": "CNY"` (the payload states its unit; read on its
 //!   own, per ADR-018 §2's store item);
-//! - (c) `router stats` over the mixed window: the figure maps hold
+//! - (c) `vadis stats` over the mixed window: the figure maps hold
 //!   exactly {USD, CNY}; the USD line equals the USD record's own
 //!   tiers; the CNY line equals the spill record's own tiers; and no
 //!   `Nano` sum of any single map key reproduces the records' joint
@@ -34,7 +34,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, MockUpstream, PlanRig};
+use vadis_conformance::testkit::{self, MockUpstream, PlanRig};
 
 const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 1h";
 
@@ -77,7 +77,7 @@ aliases: {{}}"#,
     std::fs::write(&cfg_path, patched).unwrap();
     std::env::set_var("CONF54_USD_KEY", "sk-usd");
     let cfg = cfg_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     (
         PlanRig {
@@ -202,8 +202,8 @@ async fn conf_54_cny_route_records_and_reports_in_cny() {
 
     // (b) the spill's cost.computed store row carries the unit.
     {
-        use router_core::store::{Query, QueryRow, Store as _};
-        let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db"))
+        use vadis_core::store::{Query, QueryRow, Store as _};
+        let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db"))
             .expect("store opens read-only");
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events");
@@ -223,7 +223,7 @@ async fn conf_54_cny_route_records_and_reports_in_cny() {
     }
 
     // (c) the mixed window reports per currency, no combined total.
-    let rep = router_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
+    let rep = vadis_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
         .expect("report computes on a mixed window (exit 0, not an error)");
     let figs = &rep.figures;
     let curs: Vec<&str> = figs.currencies.keys().map(|s| s.as_str()).collect();

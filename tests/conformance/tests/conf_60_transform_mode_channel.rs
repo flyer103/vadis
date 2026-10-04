@@ -1,12 +1,12 @@
 //! CONF-60 (§12.8, spec §2.1/§6, ADR-019 §2): **the opt-in transform-mode
-//! channel** — ① absence of `X-Router-Transform` ⇒ `passthrough`, the byte
+//! channel** — ① absence of `X-Vadis-Transform` ⇒ `passthrough`, the byte
 //! path (upstream-visible bytes = client's modulo mutations (a)/(b)); ②
-//! `X-Router-Transform: passthrough` ⇒ the same; ③
-//! `X-Router-Transform: transform` ⇒ transform mode with **no rule engine
+//! `X-Vadis-Transform: passthrough` ⇒ the same; ③
+//! `X-Vadis-Transform: transform` ⇒ transform mode with **no rule engine
 //! configured** ("asked, not applied": `transform_mode: "transform"` on the
 //! trace, `transforms[]` empty, upstream bytes still byte-equal); ④ any
 //! other value ⇒ `400 invalid_request` decided before the body is read,
-//! §8's body shape, `X-Router-Request-Id` present, and the pre-pipeline
+//! §8's body shape, `X-Vadis-Request-Id` present, and the pre-pipeline
 //! record class on the trace (`transform_mode: "passthrough"`, `usage_missing:
 //! true`, `errors[].kind == "transform_error"`, priced nowhere).
 //!
@@ -16,7 +16,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -53,8 +53,8 @@ fallback: []
 const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf60-sess"}"#;
 
 /// The bytes the upstream must see: the client's own bytes minus
-/// `prompt_cache_key`… no — that key is *not* router-owned; the only
-/// mutations are (a) router-owned top-level keys and (b) the model value.
+/// `prompt_cache_key`… no — that key is *not* vadis-owned; the only
+/// mutations are (a) vadis-owned top-level keys and (b) the model value.
 /// For this body the expected upstream body is therefore the client's
 /// bytes with `model` replaced by the native id `glm`.
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf60-sess"}"#;
@@ -92,7 +92,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
     std::env::set_var("CONF60_MOCK_KEY", "sk-conf60");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     // ① absence ⇒ passthrough: served, and the upstream saw the client's
@@ -110,7 +110,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
         &listen_addr,
         "/v1/chat/completions",
         CLIENT_BODY.as_bytes(),
-        &[("x-router-transform", "passthrough")],
+        &[("x-vadis-transform", "passthrough")],
     );
     assert_eq!(status, 200, "explicit passthrough must serve normally");
 
@@ -120,7 +120,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
         &listen_addr,
         "/v1/chat/completions",
         CLIENT_BODY.as_bytes(),
-        &[("x-router-transform", "transform")],
+        &[("x-vadis-transform", "transform")],
     );
     assert_eq!(
         status, 200,
@@ -134,7 +134,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
         &listen_addr,
         "/v1/chat/completions",
         CLIENT_BODY.as_bytes(),
-        &[("x-router-transform", "transfrm")], // the typo fixture
+        &[("x-vadis-transform", "transfrm")], // the typo fixture
     );
     assert_eq!(status, 400, "a typo'd mode value must be refused");
     let v: serde_json::Value = serde_json::from_slice(&body).expect("error body json");
@@ -143,7 +143,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
         v["error"]["message"]
             .as_str()
             .unwrap_or("")
-            .contains("X-Router-Transform"),
+            .contains("X-Vadis-Transform"),
         "the message names the header (got {:?})",
         v["error"]["message"]
     );
@@ -151,9 +151,9 @@ async fn conf_60_transform_mode_opt_in_channel() {
     assert!(!req_id.is_empty());
     let hdr_id = headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-router-request-id"))
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-vadis-request-id"))
         .map(|(_, v)| v.as_str())
-        .expect("X-Router-Request-Id on the 400 (§8's always)");
+        .expect("X-Vadis-Request-Id on the 400 (§8's always)");
     assert_eq!(hdr_id, req_id, "the header and the body name the same id");
 
     // The wire saw exactly the three admitted requests — the 400 never

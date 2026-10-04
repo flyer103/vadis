@@ -23,8 +23,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, MockUpstream, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse, MockUpstream, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// One leg's fixture: two plain `api` providers, `m-x` on each, **no**
 /// plan policy — the move is client-named (`p1/m-x` → `p2/m-x`), the
@@ -77,7 +77,7 @@ fallback: []
 }
 
 /// A running two-provider rig with the real `serve` assembly (the
-/// CONF-25 precedent: `router-cli` is a dev-dependency, the spawn stays
+/// CONF-25 precedent: `vadis-cli` is a dev-dependency, the spawn stays
 /// in the test file).
 struct Rig {
     p1: MockUpstream,
@@ -101,7 +101,7 @@ async fn start_rig(tag: &str, ttl: &str) -> Rig {
     std::env::set_var("CONF80_P1_KEY", "sk-conf80-p1");
     std::env::set_var("CONF80_P2_KEY", "sk-conf80-p2");
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     Rig {
         p1,
@@ -193,7 +193,7 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 /// The `session.bound` rows of one session, in event order:
 /// `(provider, model, ttl_us, ts_us)` from the store's own event log.
 fn bound_rows(dir: &std::path::Path, session: &str) -> Vec<(String, String, i64, i64)> {
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -217,8 +217,8 @@ fn bound_rows(dir: &std::path::Path, session: &str) -> Vec<(String, String, i64,
 
 /// The live binding the projection holds for the session (the store's
 /// own `Query::SessionBinding` — the shipped read path's row).
-fn binding(dir: &std::path::Path, session: &str) -> Option<router_core::store::SessionBindingRow> {
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+fn binding(dir: &std::path::Path, session: &str) -> Option<vadis_core::store::SessionBindingRow> {
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let row = match store.query(Query::SessionBinding {
         session_key: session,
     }) {

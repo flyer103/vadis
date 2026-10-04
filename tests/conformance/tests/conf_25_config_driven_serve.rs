@@ -5,7 +5,7 @@
 //! where it listens), with no hardcoded default surviving in the serving
 //! path.
 //!
-//! This case drives `router_cli::serve` — the same assembly `router serve`
+//! This case drives `vadis_cli::serve` — the same assembly `vadis serve`
 //! runs — binds two distinct addresses with two distinct configs, and talks
 //! real HTTP over the sockets. No network egress: only loopback.
 
@@ -142,7 +142,7 @@ async fn conf_25_config_driven_serve() {
     std::env::remove_var("CONF25_ONLY_KEY");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
 
     // Wait for the configured address to accept connections (max ~10s).
     let addr = "127.0.0.1:39711";

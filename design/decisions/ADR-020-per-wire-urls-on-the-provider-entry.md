@@ -1,4 +1,4 @@
-# ADR-020 — the provider entry names each wire's endpoint in full: `urls` replaces `base_url`, and the router stops composing paths
+# ADR-020 — the provider entry names each wire's endpoint in full: `urls` replaces `base_url`, and the vadis stops composing paths
 
 - Status: accepted
 - Date: 2026-09-21
@@ -15,7 +15,7 @@
 
 ### What shipped
 
-The provider entry carried one `base_url`, and `router-providers::build_request` composed the outbound URL
+The provider entry carried one `base_url`, and `vadis-providers::build_request` composed the outbound URL
 from it plus one fixed tail per protocol:
 
 ```rust
@@ -51,9 +51,9 @@ coincidence that held while one wire per entry was reachable.
 
 ### Why the failure is worse than a 404
 
-The wrong URL answers `404`, and `router-core::error_class` classifies `404` as `ErrorClass::ModelNotFound`
+The wrong URL answers `404`, and `vadis-core::error_class` classifies `404` as `ErrorClass::ModelNotFound`
 — a class whose own doc comment reads *"a roster defect. Fail over; the roster entry is surfaced."* The
-router therefore burns a second attempt (losing the prefix cache, which is the first-order cost lever),
+vadis therefore burns a second attempt (losing the prefix cache, which is the first-order cost lever),
 and the trace attributes the failure to the model rather than to the roster. A configuration defect is
 silently re-labelled as a model defect.
 
@@ -61,7 +61,7 @@ silently re-labelled as a model defect.
 
 ### 1. `urls`: one complete URL per wire protocol, and no assembly
 
-A provider entry states, for each inbound protocol it declares, the **entire** URL the router will POST to:
+A provider entry states, for each inbound protocol it declares, the **entire** URL the vadis will POST to:
 
 ```yaml
   - name: kimi
@@ -74,7 +74,7 @@ A provider entry states, for each inbound protocol it declares, the **entire** U
 
 `base_url` is **deleted**, not deprecated: two keys that can disagree about the same fact is exactly the
 defect this ADR exists to remove. The value is used verbatim — no append, no trailing-slash trimming, no
-normalization — so a reader of the config can predict the outbound request without knowing router's rules.
+normalization — so a reader of the config can predict the outbound request without knowing vadis's rules.
 
 ### 2. The declaration and the reachability cannot disagree
 
@@ -90,7 +90,7 @@ unreachable" and "reachable but undeclared" both stop the process.
 ### 3. A URL must be a URL
 
 Each value must start with `http://` or `https://` and contain no whitespace; anything else is a load
-error naming the path and the bad value. The router still does **not** check a URL against the entry's
+error naming the path and the bad value. The vadis still does **not** check a URL against the entry's
 `region` (ADR-018 §3's stance, unchanged: vendors own their host lists, and a built-in table of them rots).
 
 ### 4. The plan carries the resolved string
@@ -120,10 +120,10 @@ not a state this repository should ever be in.
 - **Keep the assembly, shrink `supports` to the reachable cells.** Zero schema change, and it was the
   temporary mitigation in the config review. Rejected as the destination: the vendored capability is real
   (all three vendors document the Anthropic form), so this would delete a true declaration to protect a
-  schema gap — the config would be describing router's limitation instead of the vendor's surface.
+  schema gap — the config would be describing vadis's limitation instead of the vendor's surface.
 - **A vendor table in code (path templates per vendor).** This is what general-purpose gateways do.
   Rejected for the reason ADR-018 already recorded for host lists: it puts a table that rots inside the
-  router, and it makes "add a provider" a code change.
+  vadis, and it makes "add a provider" a code change.
 
 ## Rationale
 
@@ -145,18 +145,18 @@ constraints (AGENTS 1, 5) are already written to make.
 - The passthrough byte promise, the prefix hash, the cache ledger and the transform modes are **untouched**
   by construction: a URL is not body bytes, and this ADR changes no code on the body path.
 - `conf_03_native_anthropic.rs`'s assertion changes meaning: it asserted "base without `/v1` + `/v1/messages`"
-  and now asserts the literal the config wrote — a strictly stronger statement (the router sends exactly
+  and now asserts the literal the config wrote — a strictly stronger statement (the vadis sends exactly
   what it was given).
 - The file gets longer by one line per declared cell. That is the whole cost.
 - Existing installs must migrate; the migration is mechanical and is part of this change (item 5).
 
 ## Honest boundaries and verification owed
 
-- **The router does not verify that a URL is the vendor's URL.** A wrong-but-absolute URL is a
+- **The vadis does not verify that a URL is the vendor's URL.** A wrong-but-absolute URL is a
   documentation error, and the only defence is the citation rule (AGENTS 5) plus the human re-read — the
   same boundary ADR-018 accepted for `region` vs host.
 - **No test can prove a vendor accepts the URL** without live traffic. What the test suite proves is
-  narrower and is the part router owns: the bytes it sends are the bytes it was configured with
+  narrower and is the part vadis owns: the bytes it sends are the bytes it was configured with
   (`conf_03`'s equality assertion, plus the load-time refusals of item 2 and item 3).
 
 ## Reversibility

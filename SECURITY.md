@@ -9,7 +9,7 @@ private vulnerability reporting: open the repository's **Security** tab and clic
 open an issue whose *only* content is "security report — please enable private vulnerability
 reporting", and wait; do not describe the problem in the issue.
 
-A report we can act on contains: the router version or the commit hash, the relevant config
+A report we can act on contains: the vadis version or the commit hash, the relevant config
 shape with every key value redacted, the smallest request that triggers the problem, and what
 you observed. This is a small project without paid support, so reports are answered on a
 best-effort basis.
@@ -26,7 +26,7 @@ backports to older tags.
 
 ## Threat model (one line)
 
-`router` is a **local process**: it listens on the port your config names, it holds your
+`vadis` is a **local process**: it listens on the port your config names, it holds your
 provider API keys (named in the config as environment variables, read from the environment at
 startup, never written to disk), and it **forwards the client's own request bytes** to the
 resolved upstream. Reaching the listening port is therefore gated by **inbound auth**: unless

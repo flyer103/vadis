@@ -38,9 +38,9 @@ headers, per-minute and per-hour, for requests and tokens), and
 `hermes-agent/agent/credential_pool.py` (2,182 lines: per-credential exhaustion with a TTL chosen by the
 status that caused it, a terminal-auth state that does not re-enter rotation, rotate-on-failure, soft
 leases). What is adopted is the **method** — centralized taxonomy, narrow per-class tables, and a
-classification whose output is an *action*. No code is copied; router's classifier is a pure Rust
+classification whose output is an *action*. No code is copied; vadis's classifier is a pure Rust
 function with its own class list (its failure surface is smaller, and its decisions are unlike hers:
-she decides what to do for one conversation, router decides what to do with the money and the cache).
+she decides what to do for one conversation, vadis decides what to do with the money and the cache).
 
 And one measurement from the previous project is the reason this ADR is a *state* decision and not a
 per-request one: in its post-round analysis (recorded as H33 in this round's card) **62% of its failures
@@ -50,7 +50,7 @@ retry policy that kept choosing the outage was not.
 
 ## Decision
 
-1. **One classifier, in one place, as a pure function.** `router-core` owns
+1. **One classifier, in one place, as a pure function.** `vadis-core` owns
 
    ```rust
    pub enum FailoverReason { Auth, AuthPermanent, Billing, RateLimit, Overloaded, ServerError,
@@ -68,7 +68,7 @@ retry policy that kept choosing the outage was not.
    ```
 
    `ErrorEvidence` is the raw material — status, headers, error-body bytes, and whether the request bytes
-   were fully written before the failure. `router-providers` **passes it up and decides nothing**
+   were fully written before the failure. `vadis-providers` **passes it up and decides nothing**
    (DESIGN §2: the provider layer makes no decisions); the proxy, the guard chain and the plugins never
    branch on an upstream error body's text. The pattern tables live in one module: **one table per reason
    class**, whose entries are **narrow verbatim strings observed from a real provider** — never a generic
@@ -76,8 +76,8 @@ retry policy that kept choosing the outage was not.
    class in the prior art, which is why its tables are deliberately phrase-level).
    - A class may not exist without a table and at least one fixture. An untested routing rule is a rule
      nobody can argue with.
-   - The v0.1 slice is 14 classes against the prior art's ~25: router has no image pipeline, no
-     multi-tenant policy layer and no per-feature entitlement zoo, so classes with no router failure to
+   - The v0.1 slice is 14 classes against the prior art's ~25: vadis has no image pipeline, no
+     multi-tenant policy layer and no per-feature entitlement zoo, so classes with no vadis failure to
      describe are not carried "for symmetry".
 
 2. **The classification is the only input to the failure path, and its priority is stated** (so two
@@ -118,7 +118,7 @@ retry policy that kept choosing the outage was not.
    fails for the same reason); `FormatError` -> abort or fall over, never retried unchanged; `Unknown` ->
    bounded retry.
 
-4. **Router-specific addition 1: the demotion unit is the provider, not the credential.** A failure whose
+4. **Vadis-specific addition 1: the demotion unit is the provider, not the credential.** A failure whose
    class is `Billing` (or a plan reaching zero) is a fact about the **account**, and every model under that
    provider shares it — spec §4.0 already says a plan may only reference models of its own provider. So a
    quota/billing-class failure **demotes the whole provider**: all of its models are unavailable until the
@@ -141,15 +141,15 @@ retry policy that kept choosing the outage was not.
      one (`Retry-After`, an `x-ratelimit-reset-*` header, or a reset epoch in the body), otherwise a
      declared default cooldown; and a successful attempt is what clears it early.
    - **A demotion nobody can see is indistinguishable from "the fallback chain is now the production
-     configuration".** It is surfaced in `/health` and counted by `router stats`.
+     configuration".** It is surfaced in `/health` and counted by `vadis stats`.
    - Honest boundary: this is per-process local state (spec §1's single-operator scope), and it reduces
      wasted work for a dead account — it does not repair a revoked key or a mispriced quota.
 
-5. **Router-specific addition 2: the provider's own clock is honored.** `Retry-After` (delta-seconds or an
+5. **Vadis-specific addition 2: the provider's own clock is honored.** `Retry-After` (delta-seconds or an
    HTTP date) is honored, and the `x-ratelimit-*` family is captured whenever a provider emits it (the
    twelve-header limit/remaining/reset schema for requests and tokens, per minute and per hour), because a
    signal that arrives *before* the 429 is cheaper than the 429.
-   - **The cap is router's own budget and has to be stated:** an inbound request has
+   - **The cap is vadis's own budget and has to be stated:** an inbound request has
      `server.request_timeout` (default 10m) and an upstream attempt has `server.upstream_attempt_timeout`
      (default 60s, spec §4). A `Retry-After` larger than what remains of the request's budget **cannot be
      honored inside that request**: the route is demoted until the reset instant (item 4) and the fallback
@@ -159,7 +159,7 @@ retry policy that kept choosing the outage was not.
    - A rate limit is not a provider death: `RateLimit` demotes the **route** (or the credential) until the
      reset, while `Billing` demotes the **provider** until the plan resets. Two TTLs, one table.
 
-6. **Router-specific addition 3: retry is allowed only with not-billed evidence.** This is ADR-010's
+6. **Vadis-specific addition 3: retry is allowed only with not-billed evidence.** This is ADR-010's
    asymmetry, applied to failover rather than to a crash:
 
    | Evidence at the failure | Retry the same route? | Fall over? |
@@ -171,7 +171,7 @@ retry policy that kept choosing the outage was not.
    After a full write the upstream may already have billed, so a gateway retry is a probable double charge
    exactly as a crash-retry is (ADR-010 item 4). That attempt becomes an `unknown_outcome`: the ambiguity
    is recorded and reported, the quota is not re-charged, and the decision belongs to the client, which at
-   least knows its own idempotency story. What router does for the *next* request is state — demote or
+   least knows its own idempotency story. What vadis does for the *next* request is state — demote or
    re-probe the route (item 4) so the client's own retry lands somewhere healthy.
    - Retry is bounded: a fixed attempt count and a capped, jittered backoff, with the attempt budget
      (`upstream_attempt_timeout` x attempts) inside `request_timeout`. A retry is never an unbounded loop —
@@ -208,7 +208,7 @@ retry policy that kept choosing the outage was not.
      and what did each switch cost" from replayable records (ADR-005's channel); a rolled-up counter cannot
      be re-interrogated after the fact, and ADR-013 makes the reason mix a rollback trigger.
 
-9. **Router-specific addition 4: a failover records the cost of the cache it broke.** Switching
+9. **Vadis-specific addition 4: a failover records the cost of the cache it broke.** Switching
    provider/model destroys the prefix cache (spec §4.2's own clause); this design turns that caveat into a
    recorded, priced number, split by the convention it can honestly claim (spec §7, AGENTS constraint 4):
    - **At decision time**, before the effect: `failover.triggered` (ADR-010's event) carries
@@ -221,7 +221,7 @@ retry policy that kept choosing the outage was not.
      their delta against what the same token count would have cost at the origin route's `input_hit` price
      (`extra_cost_nano`). The token counts are measured; only the price table is config.
    - A failover with no post-switch turn keeps the inferred figure and says so (spec §7's reporting rule:
-     convention plus sample size plus window). So `router stats` can report *the verified cost of the
+     convention plus sample size plus window). So `vadis stats` can report *the verified cost of the
      failovers in this window* — a number that today does not exist anywhere in the project.
 
 10. **Failure modes of the classifier itself (fail by design).**
@@ -286,10 +286,10 @@ retry policy that kept choosing the outage was not.
   demotes and then falls over; a 403 with an account-exhaustion keyword skips the provider without an
   attempt on the next request; a 5xx carrying request-validation text is not retried; an error body that
   is not JSON still classifies.
-- `router-core` gains the classifier and the tables — pure, I/O-free, unit-testable. They are the only
+- `vadis-core` gains the classifier and the tables — pure, I/O-free, unit-testable. They are the only
   place in the product that knows a provider's error wording, which is what makes "no scattered string
   matching" checkable rather than aspirational.
-- The store's projections gain the cooldown/roster view; `/health` and `router stats` must surface
+- The store's projections gain the cooldown/roster view; `/health` and `vadis stats` must surface
   demotions and the `Unknown` count.
 - The loop gains a cheap, replayable observable (reason mix, failed-switch count) that ADR-013 uses as an
   automatic-rollback trigger.

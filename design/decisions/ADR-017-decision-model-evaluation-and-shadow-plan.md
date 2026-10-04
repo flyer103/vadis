@@ -16,7 +16,7 @@
   decision-provider seam DP-1 with its mode M6)**; spec §1 (non-goals), §3 (selection semantics and the
   reserved `auto` slot), §4.6 (plan-first), §6 (observation), §7 (the accounting convention), §8 (error
   semantics), §9.1/§9.2/§9.3 (the reporting surfaces and the ones deliberately not served);
-  DESIGN §5, §6, §9 (`router replay`), §10, §12.3, §12.4, §12.6, §12.8 (the CONF rule), §13 (the
+  DESIGN §5, §6, §9 (`vadis replay`), §10, §12.3, §12.4, §12.6, §12.8 (the CONF rule), §13 (the
   register, the leaks, the seam's placement); the loop charter (the gate table, direction D10, the
   cost discipline); `book/roadmap.md`.
 
@@ -83,7 +83,7 @@ Two facts, verified mechanically:
 
 - The 11 misses are `q3 q4 r4 a3 m3 m5 c2 c3 c5 o4 o5`. **Seven of them flip a recovery action** —
   i.e. the class the table chose and the true class differ in `fails_over()` or `demotes_provider()`
-  (`crates/router-core/src/error_class.rs:71-83`): `q3` (`auth`→`quota_exhausted`: misses the demotion
+  (`crates/vadis-core/src/error_class.rs:71-83`): `q3` (`auth`→`quota_exhausted`: misses the demotion
   and the plan-first spill), `q4`, `a3`, `m3`, `m5` (`format_error`→something that *does* fail over: no
   failover where one was due) and `c3`, `c5` (`auth`→`content_policy_blocked`: a **paid failover for a
   deterministic refusal**, which ADR-011 item 3 exists to forbid). The other four (`r4`, `c2`, `o4`,
@@ -142,7 +142,7 @@ general*.
 | **Language** | vendor does not state a language restriction in the material read * | **English only** (model card) | a boundary to state, not a blocker: our state for classification is provider error text (mostly English); a **Chinese-prompt state would degrade** |
 | **Deployment shape** | nothing resident; per-call network dependency | **resident sidecar only**: load 21.9–26.2 s cold, **3.7 GB peak RSS**, `mps` device on Apple silicon, no CUDA needed | Laya is affordable *only* as a long-lived process — never load-per-request |
 | **Calibration (reported)** | ECE(p_correct) **0.05**, mean probability on chosen 0.95, n=40 | ECE(p_correct) **0.132** (and 0.309 on p(truth)) | **Jev**, on this task — with the caveat that 40 samples make ECE coarse (§7.4) |
-| **Determinism / reproducibility** | a closed model over a network: pinning "the same answer twice" is not ours to guarantee | local, versioned, but still stochastic in principle | **neither, as-is**: reproducibility is a *seam requirement* (DP-1.5), so it must be recorded, not assumed — and `router replay` is **not served** (spec §9.3) |
+| **Determinism / reproducibility** | a closed model over a network: pinning "the same answer twice" is not ours to guarantee | local, versioned, but still stochastic in principle | **neither, as-is**: reproducibility is a *seam requirement* (DP-1.5), so it must be recorded, not assumed — and `vadis replay` is **not served** (spec §9.3) |
 | **Scope fit (measured)** | 40/40 classes, **but 4/40 wrong on the consequence axis, systematically** | 30/40 classes — and **9 of its 10 class errors are one collapse**: it answers `server_error` 14 times where the truth holds 5 — and 16/40 wrong on the consequence axis | **Jev, for the class question only** — see §5's class/consequence rule |
 
 \* not verified here; recorded as "not stated in the material read", never as "no restriction".
@@ -164,11 +164,11 @@ First, the honest provenance of that budget, because it is load-bearing:
   budget must name *measured* numbers, and "Re-measurement is owed"). ADR-016's DP-1.4 registered this as
   a finding and required the envelope be given a contract home by a human decision. **This ADR therefore
   does not cite it as an existing contract.** It writes the envelope as **"declared value + measured
-  value"**: declared `p50 15 ms / p99 50 ms`; measured at R4, router's own overhead `p50 1 ms / p99 6 ms /
+  value"**: declared `p50 15 ms / p99 50 ms`; measured at R4, vadis's own overhead `p50 1 ms / p99 6 ms /
   max 6 ms` over 61 requests (`result.overhead_ms`, the loop state record; spec §9.2 fixes that this
   figure *excludes* `upstream_ms`).
 - That exclusion matters: an advisor's wait is **not** an upstream forward. Under spec §9.2's own
-  convention it is **router's own work**, so it lands inside the envelope rather than beside it.
+  convention it is **vadis's own work**, so it lands inside the envelope rather than beside it.
 
 Now the arithmetic. `p50` for a path that consults an advisor is at least `1 ms + the advisor's p50`:
 
@@ -246,7 +246,7 @@ Therefore:
 
 > **The class (what happened) may come from a model. The consequence (what to do) is derived by code
 > from the class.** `ErrorClass::fails_over()` and `ErrorClass::demotes_provider()`
-> (`crates/router-core/src/error_class.rs:71-83`) are the consequence function, they are `const fn`s,
+> (`crates/vadis-core/src/error_class.rs:71-83`) are the consequence function, they are `const fn`s,
 > and a calibrated boolean from any model is **evidence about a class, never an authorization to act.**
 
 This rule is what makes candidate ② usable at all: the model's 4/40 consequence errors are *discarded by
@@ -303,7 +303,7 @@ it as such is precisely the failure ADR-012 item 5 warns about ("the verifier is
 *Verdict:* **suitable, loop-side, warning-grade.** The cheapest useful thing in this ADR.
 
 #### ④ Transform admission (P6) — refused inline, useful as a rule proposal
-*Where it lands:* P6 `transform-chain`, which is **contract-only** (`router-plugins/src/lib.rs:1-4` is a
+*Where it lands:* P6 `transform-chain`, which is **contract-only** (`vadis-plugins/src/lib.rs:1-4` is a
 stub; every record carries `transforms: Vec::new()`). A shadow of a candidate transform needs P9
 (`ctx.isolate`/`ctx.intercept`), also contract-only — M3's own dependency (ADR-016 item 5).
 *Why inline fails, on three axes at once:* (a) it sits on **every** request, so §3's arithmetic applies
@@ -333,7 +333,7 @@ does not already own.
 #### 7.0 What exists, and what is missing — the honest inventory
 - **the loop's captured-trace tree does not exist in this worktree**, and neither does the corpus — `.gitignore`
   names them (the loop's captured-trace tree, the loop's results tree, the corpus's raw records) and no capture round's output
-  is in the tree. `router replay` — the same-code-path replay DESIGN §9 specifies — is **not served** in
+  is in the tree. `vadis replay` — the same-code-path replay DESIGN §9 specifies — is **not served** in
   v0.1 (spec §9.3: the CLI accepts `serve` and `stats` only). DP-1.5's reproducibility test therefore has a
   prerequisite that does not exist yet, and this plan must not assume it.
 - **M3 `shadow` is contract-only** (it composes P9, ADR-016 item 5). So the "shadow" this plan uses is
@@ -342,7 +342,7 @@ does not already own.
   offline form is the only truthful one.
 - The bench corpus lives **outside the repository** (`<home>/bench/decide-bench/`, mirrored to the scratch
   dir `/tmp/decide_bench/`) with no manifest and no digest, and the Rust baseline is included by an
-  **absolute machine path** (`#[path = "<home>/…/crates/router-core/src/error_class.rs"]`) —
+  **absolute machine path** (`#[path = "<home>/…/crates/vadis-core/src/error_class.rs"]`) —
   re-checked by this card: that file and this branch's copy differ in **one comment line only** (R6's
   vocabulary sweep), so the baseline *is* HEAD-equivalent in behaviour, but nothing in the artifact
   proves that. Both facts must be fixed before any of it can be evidence (ADR-012 item 2: a frozen
@@ -466,7 +466,7 @@ Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
 | Move the gate, the corpus, the conformance assertions or the envelope | AGENTS 9; ADR-012 item 2 |
 | Allocate a CONF id, a new trace field, a new event kind, a new `error.type`, or a new pipeline stage for an advisor | ADR-016 item 4's refuse-list; DESIGN §12.8 (IDs are a human decision) |
 | Quote Laya's model-card numbers as *our* measurements, or the blog price as a *bill* | AGENTS 5; §7.3's cost convention |
-| Claim M3 `shadow` exists, or that the product can replay an advisor today | ADR-016 item 5 (P9 contract-only); spec §9.3 (`router replay` not served) |
+| Claim M3 `shadow` exists, or that the product can replay an advisor today | ADR-016 item 5 (P9 contract-only); spec §9.3 (`vadis replay` not served) |
 | Present the offline comparison's money numbers as `verified` | no upstream `usage` exists; ADR-013 item 1's reasoning |
 
 ## Alternatives considered
@@ -519,7 +519,7 @@ Nothing in `crates/`, `docs/spec.md` or `design/` moves; no CONF id is taken.
   with the manifest, digest, scope note and labelling rule of §7.1 — after which it is on the
   never-mutable list and only a human round may move it.
 - **Two prerequisites for any future inline conversation** are now named in one place: the `auto`/L4
-  human decision (candidate ①), and `router replay` (spec §9.3) plus P9 (ADR-016 item 5) for DP-1.5's
+  human decision (candidate ①), and `vadis replay` (spec §9.3) plus P9 (ADR-016 item 5) for DP-1.5's
   reproducibility and M3/M4's rails.
 - If a later round installs an advisor, the admission checklist it must satisfy is DP-1.1…DP-1.5 — and
   nothing in this ADR authorizes landing it.

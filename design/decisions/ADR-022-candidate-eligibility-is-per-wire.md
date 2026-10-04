@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-22
-- Related: AGENTS hard constraints 1 (the byte boundary — the router may not re-encode the client's body, so it
+- Related: AGENTS hard constraints 1 (the byte boundary — the vadis may not re-encode the client's body, so it
   may not put a chat body on a responses wire either), 4 (no unverified savings — this ADR adds no figure),
   6 (tests assert relations, not snapshots), 9 (the measurement is not in the search space: no gate, corpus or
   existing conformance assertion moves here — CONF-57 is **new**); ADR-004 (passthrough vs safe translation),
@@ -16,17 +16,17 @@
 
 ### What shipped, and the one place it is not one rule
 
-The router resolves the client's `model` string to a route, then forwards. Failover (spec §4.2) is a **walk**:
+The vadis resolves the client's `model` string to a route, then forwards. Failover (spec §4.2) is a **walk**:
 a candidate chain — the resolved route first, the plan family's `overflow` route next when the request is
 inside a family (spec §4.6 / ADR-014 item 5), then the global `fallback` list — is tried in order, and a route
 that cannot take the request is **skipped**, not refused. Both forwarding paths own such a walk:
 
-- **buffered** (`crates/router-proxy/src/forward.rs`): the candidate vector is built at `:939-949` and walked at
+- **buffered** (`crates/vadis-proxy/src/forward.rs`): the candidate vector is built at `:939-949` and walked at
   `:961-988`. The walk skips a candidate for exactly three reasons today — its provider was already attempted
   in this request (`:962`), its provider is inside ADR-011's cooldown projection (`:965`), or it has **no
   transport** because no key for it exists in this process (`:982-988`; an unknown provider, `:979-981`, is
   skipped by the same shape);
-- **streaming** (`crates/router-proxy/src/stream_forward.rs`): a candidate **enters** the chain only if
+- **streaming** (`crates/vadis-proxy/src/stream_forward.rs`): a candidate **enters** the chain only if
   `cfg.wire_api == proto_in && self.api_keys.contains_key(&cfg.name)` (`:530`) — i.e. the same "no key" skip
   **plus a wire check the buffered path does not make**.
 
@@ -41,10 +41,10 @@ message *"translation {in} -> {out} is not implemented in v0.1; only native rout
 With the shipped example roster's own `fallback` list and a **chat** request whose resolved route is unkeyed,
 the buffered walk skipped the unkeyed route and forwarded to the next candidate — a **responses**-wire entry.
 A mock upstream received at `/responses` the body `{"model": "deepseek-v4-pro", "messages": [{"role": "user",
-"content": "x"}]}` — the client's **chat** bytes, which the router is forbidden to re-encode and never
+"content": "x"}]}` — the client's **chat** bytes, which the vadis is forbidden to re-encode and never
 translated — and the client received a **responses-wire SSE body with HTTP 200**. The record said
 `protocol_in chat / protocol_out responses / translated true` although **no translation code exists in the
-tree**: `translated` is derived as `proto_out != proto_in` (`crates/router-proxy/src/accounting.rs:501`), a
+tree**: `translated` is derived as `proto_out != proto_in` (`crates/vadis-proxy/src/accounting.rs:501`), a
 comparison of two words rather than the report of a step that ran. `usage_missing true`, cost 0.
 
 That is a protocol-fidelity violation on a **blocking** gate (the round's own matrix), served to a client that
@@ -66,7 +66,7 @@ of the following hold: its provider entry exists in the roster; the process hold
 and **its provider's `wire_api` equals the inbound protocol**. The walk-order rules are unchanged (a provider
 already attempted in this request is not re-attempted; a provider inside the cooldown projection is skipped and
 `failover_from` names it, CONF-42). Because config validation already requires `wire_api ∈ supports`
-(`crates/router-core/src/config.rs:1551`), the wire condition subsumes "the inbound protocol is declared in
+(`crates/vadis-core/src/config.rs:1551`), the wire condition subsumes "the inbound protocol is declared in
 `supports`": the rule is stated once, as `wire_api == proto_in`, on both paths.
 
 **2. A wire-incompatible candidate is skipped — never refused — and it is skipped in the keyless class.** It is
@@ -132,7 +132,7 @@ config load on account of it.
   frozen record this round must not quietly retire.
 - **Implement the mapper now.** Rejected as scope, not as value: a translator is a lossy, determinism-critical
   content step (ADR-004, ADR-019) with its own contract, its own lossy register and its own conformance cases.
-  This ADR only stops the router from *pretending* one ran.
+  This ADR only stops the vadis from *pretending* one ran.
 - **Refuse such a roster at config load.** Rejected: see Decision 6 — the condition is a property of the
   request, and refusing legal rosters would be a new load-time rule with no defect behind it.
 - **Leave the walk as it is and fix only the trace marker (`translated`).** Rejected: the record would stop
@@ -161,7 +161,7 @@ config load on account of it.
 ## Consequences
 
 - **Code (the implementing round's write set).** One predicate added to the buffered walk
-  (`crates/router-proxy/src/forward.rs:961-988`), the streaming chain's refusal arms extended from a bare
+  (`crates/vadis-proxy/src/forward.rs:961-988`), the streaming chain's refusal arms extended from a bare
   "keyless or unavailable" shape to the frozen one (`stream_forward.rs:553-561` and `:1001-1013`), the same
   shape built at the buffered walk end (`forward.rs:1430-1441`), and `translated`'s producer restated
   (`accounting.rs:501`). No public type changes; `details` is free-form per code, so no `error.type` is added.

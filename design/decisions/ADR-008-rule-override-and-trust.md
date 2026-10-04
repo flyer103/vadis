@@ -18,7 +18,7 @@ rewriting outbound bytes (a direct break of the prefix cache).
 
 ## Decision
 
-1. **Lookup order (three levels)**: `.router/rules.toml` (project) → `~/.config/router/rules.toml` (user) →
+1. **Lookup order (three levels)**: `.vadis/rules.toml` (project) → `~/.config/vadis/rules.toml` (user) →
    builtin (compiled in). **The first hit takes effect** (first match wins).
 2. **No merging, no per-rule override**: the selected file is the whole rule set; a missing rule must either
    be provided explicitly at an earlier position or be added to that earlier file by a PR. Deep merge /
@@ -55,7 +55,7 @@ rewriting outbound bytes (a direct break of the prefix cache).
 
 ## Consequences
 
-- `router rules verify` becomes an executable gate before loading: inline tests are a rule's **only** spec
+- `vadis rules verify` becomes an executable gate before loading: inline tests are a rule's **only** spec
   (same content → same output) and a failure means no load; this makes "the rule was written wrong" show up
   as "the rule did not take effect + an explicit log" instead of "the bytes were changed quietly".
 - The three-level order means a project-level file **completely shadows** user-level and builtin rules; a

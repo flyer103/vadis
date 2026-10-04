@@ -1,6 +1,6 @@
 //! CONF-02 (DESIGN §10 conformance · fidelity): responses inbound →
 //! `wire_api: responses` native passthrough; the upstream-visible body is
-//! byte-identical to the client body minus router-owned top-level keys, with
+//! byte-identical to the client body minus vadis-owned top-level keys, with
 //! the value of the top-level `model` member replaced by the resolved
 //! provider-native id — spec §2 permits exactly those two mutations.
 //! Proven over real HTTP against a loopback mock upstream (the same form
@@ -8,9 +8,9 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
-const CLIENT_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","router_meta":{"echo":true},"stream":false}
+const CLIENT_BODY: &str = r#"{"model":"mock/rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","vadis_meta":{"echo":true},"stream":false}
 "#;
 
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"rsp","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"héllo 😀"}]}],"instructions":"be {exact}","tools":[],"store":false,"prompt_cache_key":"sess-42","stream":false}
@@ -64,13 +64,13 @@ async fn conf_02_native_responses_passthrough() {
     std::env::set_var("CONF02_MOCK_KEY", "sk-conf02");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _headers) =
         testkit::http_post(&listen_addr, "/v1/responses", CLIENT_BODY.as_bytes(), &[]);
 
-    assert_eq!(status, 200, "router status");
+    assert_eq!(status, 200, "vadis status");
     assert_eq!(
         body,
         UPSTREAM_OK.as_bytes(),
@@ -86,9 +86,9 @@ async fn conf_02_native_responses_passthrough() {
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
+        "upstream-visible body must be byte-identical to the client body minus vadis_meta, with the native model id"
     );
-    assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
+    assert!(!String::from_utf8_lossy(&req.body).contains("vadis_meta"));
     // The session identity (prompt_cache_key) survives verbatim upstream.
     assert!(String::from_utf8_lossy(&req.body).contains("\"prompt_cache_key\":\"sess-42\""));
 

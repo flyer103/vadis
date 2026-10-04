@@ -14,7 +14,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -82,7 +82,7 @@ async fn conf_28_upstream_400_writes_one_failure_line() {
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
     std::env::set_var("CONF28_MOCK_KEY", "sk-conf28");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     let (status, _body, _headers) = testkit::http_post(
@@ -136,7 +136,7 @@ async fn conf_28_upstream_400_writes_one_failure_line() {
     // is per request, not per success).
     assert!(rec["identity"]["request_id"].is_string());
     assert!(rec["identity"]["event_id"].is_i64());
-    // The facts the router knew before the failure are not lost.
+    // The facts the vadis knew before the failure are not lost.
     assert_eq!(rec["identity"]["session"], "conf28-sess");
     assert_eq!(rec["decision"]["requested_model"], "mock/glm");
 }
@@ -159,7 +159,7 @@ async fn conf_28_connect_failure_writes_one_line() {
     std::fs::write(&config_path, config_yaml(dead_port, listen_port)).unwrap();
     std::env::set_var("CONF28_MOCK_KEY", "sk-conf28b");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     let (status, _body, _headers) = testkit::http_post(
@@ -193,7 +193,7 @@ async fn conf_28_pre_route_rejection_writes_one_line() {
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
     std::env::set_var("CONF28_MOCK_KEY", "sk-conf28c");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     let (status, _body, _headers) = testkit::http_post(

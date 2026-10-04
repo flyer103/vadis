@@ -41,7 +41,7 @@
 //! The assertion pair — an appended turn keeps continuity / a mid-history
 //! edit breaks it — must discriminate. The forced run must FAIL and its
 //! failure line is the evidence:
-//! `CONF16_FORCE_RED=1 cargo test -p router-conformance --test conf_16_transform_cache_regression`
+//! `CONF16_FORCE_RED=1 cargo test -p vadis-conformance --test conf_16_transform_cache_regression`
 //!
 //! Evidence export (opt-in; unset in the gate run): `CONF16_EVIDENCE_DIR`
 //! names a directory that receives each arm's raw DecisionRecords (JSONL),
@@ -50,7 +50,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The repo's landed rule file — the engine's acceptance-tested data,
 /// loaded verbatim (CONF-63's mechanism; no test-local trimmer exists).
@@ -248,12 +248,12 @@ async fn conf_16_transform_cache_regression() {
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
     std::env::set_var("CONF16_MOCK_KEY", "sk-conf16");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let post = |body: String, transform: bool| {
         let headers: Vec<(&str, &str)> = if transform {
-            vec![("x-router-transform", "transform")]
+            vec![("x-vadis-transform", "transform")]
         } else {
             vec![]
         };
@@ -444,7 +444,7 @@ async fn conf_16_transform_cache_regression() {
         arms_summary.push(serde_json::json!({
             "rule": arm.rule,
             "tool": arm.tool,
-            "baseline_arm": "transform not requested (no X-Router-Transform header)",
+            "baseline_arm": "transform not requested (no X-Vadis-Transform header)",
             "baseline_prefix_continuity": baseline_c,
             "treatment_prefix_continuity": treatment_c,
             "delta": treatment_c - baseline_c,

@@ -8,7 +8,7 @@
   (English only; the one Chinese string below is a verbatim quote of the owner's ruling, given with an English
   gloss), **9** / **ADR-012 item 2** (the measurement is not part of the search space: the fixed corpus, every
   threshold, `tests/conformance/` and the L1 envelope are **untouched** by this ADR) ; **ADR-009 item 3** (the
-  router persists no body — the fact that makes a peer the only route to `O`), **ADR-015** (the two permitted
+  vadis persists no body — the fact that makes a peer the only route to `O`), **ADR-015** (the two permitted
   mutations), **ADR-020** (`urls` names each wire's endpoint in full, so a forward target is a declared value and
   not a composed one); the harness contract's **ARM-3.11** (the new clause), **ARM-3.2**, **ARM-3.3.1/3.3.2/3.3.7**,
   **ARM-3.4**, **ARM-3.8.3/3.8.4**, **PROV-8 §9.1 / §9.1.2 / §9.2 / §9.3 / §9.4 / §9.5**, **REAL-9 §10.1**,
@@ -20,9 +20,9 @@
 ## Background
 
 AGENTS constraint 1's conformance rule is a *byte* assertion: the upstream-visible request must equal the
-client's modulo router-owned top-level fields and the resolved model value. The harness audits it in two ways
+client's modulo vadis-owned top-level fields and the resolved model value. The harness audits it in two ways
 (ARM-3.8) — the client-visible pair and the **upstream-visible outbound body** — and the second one needs a body
-`O` that the router actually sent.
+`O` that the vadis actually sent.
 
 On a **mock** run `O` comes from the mock's own record (`<arm dir>/upstream/NNNNN.req`, ARM-3.4.1 item 2). On a
 **live** run there is no mock, and there cannot be: a mock cannot answer a real request without fabricating the
@@ -32,7 +32,7 @@ let the absence read as a pass: **condition 3 fails on the live path**, and `ver
 there. That is finding **L4**, recorded by the first real-upstream run (the loop live-run findings)
 and confirmed clause by clause in the loop's verdict record.
 
-The product cannot be asked to help. ADR-009 item 3 means the router persists no body; making it persist one, or
+The product cannot be asked to help. ADR-009 item 3 means the vadis persists no body; making it persist one, or
 log its peer's ciphertext, or accept an injected CA, would put an **observation surface inside the serving path**
 whose only purpose is to make its own measurement easier — the exact inversion AGENTS constraint 3 exists to
 prevent, and it would ship in `crates/` for every user.
@@ -42,7 +42,7 @@ stands and *what* it may do there.
 
 ## Decision
 
-**A harness-owned HTTP peer — the wire recorder — stands at the router's immediate neighbour on a live run. It
+**A harness-owned HTTP peer — the wire recorder — stands at the vadis's immediate neighbour on a live run. It
 answers nothing: it records the bytes it receives, forwards them to a declared forward target (the real
 upstream), and relays that target's own response back. The counterparty of record becomes the forward target.**
 
@@ -71,7 +71,7 @@ What that fixes, and how this ADR disposes of each part:
    mock while a fixture-answering listener stays forbidden (ARM-3.4 rev 6, the rev-3 sentence quoted verbatim).
 2. **The two guards the ruling makes part of the freeze** are ARM-3.11.4: byte preservation is **asserted by
    construction** (one buffer: the bytes written to the record are the bytes handed to the socket; the response is
-   relayed streaming with both stored files recomputable by a stranger) **and cross-checked** (the router's own
+   relayed streaming with both stored files recomputable by a stranger) **and cross-checked** (the vadis's own
    `usage` against the usage parsed from the recorded response bytes — the independent half); and the
    **declaration and the digest are printed on every row** (VER-4.1.1's `wire_recorder` field: listen, forward map,
    record count, per-request digests, one set digest, and the target's TLS peer certificate).
@@ -101,7 +101,7 @@ What that fixes, and how this ADR disposes of each part:
 **Gained.**
 
 - The live path's byte audit becomes **runnable**: condition 3 can carry a real verdict on a live wire, from the
-  bytes the router actually sent, instead of `not_run` forever.
+  bytes the vadis actually sent, instead of `not_run` forever.
 - `O` gains a **defensible provenance**: it is what a declared target received, recorded by the process that read
   it off the socket, with a digest pair printed on the row.
 - One witness in the chain is **not harness-authored**: the forward target's TLS peer certificate

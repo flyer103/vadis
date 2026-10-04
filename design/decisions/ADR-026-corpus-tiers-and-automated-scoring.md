@@ -179,7 +179,7 @@ and `6`.
   different sentences — the same distinction FAIL-6.2 draws between exit `4` and exit `2`. Coverage that can
   never reject anything is a report; coverage that can reject everything is a gate; this is neither.
 - **Byte reach is honest where a token delta is not.** The auto layer is money-free, so the strongest evidence
-  it can hold is a property of the bytes the router wrote and the arms it wrote them in. `discriminability`
+  it can hold is a property of the bytes the vadis wrote and the arms it wrote them in. `discriminability`
   makes that the *named* proxy, and `screen_claim` is a sentence about bytes — which is exactly what "spend
   real money here" needs, and exactly what it must not overstate.
 - **One builder per suite is a write-set rule, not housekeeping.** A suite's digest is cited by a screen
@@ -208,7 +208,7 @@ and `6`.
   `.gitignore` gains exactly one line for the auto-corpus's raw captures — measured not-yet-ignored at this round's
   base, and one card's to land.
 - **The instrument.** The score card is a *second* artifact with a *second* determinism allowlist; DET-5.1/5.2
-  keep theirs. The card records the harness commit and the router binary it ran against, and the loop committed records
+  keep theirs. The card records the harness commit and the vadis binary it ran against, and the loop committed records
   is deliberately **not** on its allowlist, so a card cannot be read as covering a different instrument.
 - **Money and quota.** Nothing here spends. Every suite run is loopback `mock`; the auto layer has no live path
   at all. The live layer's budget discipline (REAL-9 §10, the loop execution model) is untouched.
@@ -226,7 +226,7 @@ and `6`.
   crafted `synthetic` item inside a *signed* corpus could satisfy its letter. This ADR does not rest on that
   condition — §14.2's wall is a type boundary — and a human who freezes a corpus containing `synthetic` items
   makes their own call (COR-2.2.3 already blesses them).
-- **The rubric measures a set, not the world.** `loadable` says the router accepted an item, never that the
+- **The rubric measures a set, not the world.** `loadable` says the vadis accepted an item, never that the
   item is realistic; `near_dup` is a frozen heuristic with a stated false-negative direction; `canary` is a
   scanner, so its zero is evidence *for the pattern set it knows* and never a proof that no secret is present;
   `discriminability` is byte reach, and `est_tokens` is a local estimate labelled `inferred` wherever it

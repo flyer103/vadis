@@ -11,7 +11,7 @@ the plan the marginal price is 0 (spec §4 `quota`, DESIGN §5); on the metered 
 the model's real price. When both are configured, the economically correct behaviour is not in doubt — use the
 plan while it lasts, and only then spend money. What the design of record has to say about it is nothing:
 
-- `quota` exists **per provider** (spec §4) and the local counter may already reject on it, but the router has
+- `quota` exists **per provider** (spec §4) and the local counter may already reject on it, but the vadis has
   no notion of an *account*: nothing distinguishes "this provider is a subscription" from "this provider is
   metered", so nothing can express a preference between two providers that serve one model;
 - the only mechanism that can move a request from one provider to another today is the global `fallback` chain
@@ -61,7 +61,7 @@ key:
      denominator (`quota.tokens`) may be a placeholder, and a placeholder that refuses work is a fabricated
      gate. It keeps exactly two honest uses:
      - **it is recorded and visible:** `cost.quota_after.verdict` (`inside` / `spill` / `blocked`) already
-       carries it in the trace (spec §6), and `/health` plus `router stats` surface it, so the exhaustion is
+       carries it in the trace (spec §6), and `/health` plus `vadis stats` surface it, so the exhaustion is
        visible *before* the upstream says so;
      - **it may defer the probe** (item 3): when the local counter says the allowance is exhausted and the
        plan's own window boundary (`quota.window`, `reset_day`) has not passed yet, the probe is not worth
@@ -265,7 +265,7 @@ key:
   provider declares a plan; `overflow_monthly_cap_usd` ≥ 0 (and absent = no cap); at most one policy per
   family and one `plan_policy` section in v0.1 (a second family is an additive new key, the `state:`/`retention`
   precedent, never a reshaped one).
-- `/health` reports the family's account state and its probe deadline, and `router stats` counts the switches
+- `/health` reports the family's account state and its probe deadline, and `vadis stats` counts the switches
   with their verified cost — for ADR-011 item 4's reason, restated: a state nobody can see is
   indistinguishable from "the metered account is now the configuration".
 - The implementing round allocates the conformance cases; **this ADR allocates none** (ADR-010/ADR-011's
@@ -276,7 +276,7 @@ key:
   presence/absence against `failover_from` (item 5's table).
 - The book gains the user-facing section (what to configure, when it spills, that a spill really spends money,
   and that a switch loses the upstream prefix cache) — `book/cost-and-caching.md`.
-- `router-core` gains the policy's pure predicate (probe admission + the rule order of item 9) and its config
+- `vadis-core` gains the policy's pure predicate (probe admission + the rule order of item 9) and its config
   types; the routing decision itself stays where every guard decision lives. The `plan_state` projection is the
   same shape as the existing ones (ADR-009 item 5) and obeys the same rebuild rule.
 - Honest boundaries: this is per-process local state in a single-operator gateway (spec §1) and it coordinates

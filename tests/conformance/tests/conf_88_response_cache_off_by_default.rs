@@ -19,8 +19,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The canned 200 the upstream repeats: a chat completion with usage, so
 /// both forwarded requests write ordinary (non-`usage_missing`) records.
@@ -100,7 +100,7 @@ async fn run_arm(tag: &str, plugins_yaml: &str) {
     .unwrap();
     std::env::set_var("CONF88_MOCK_KEY", "sk-conf88");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     // A byte-identical repeat inside one session.

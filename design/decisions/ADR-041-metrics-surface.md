@@ -73,13 +73,13 @@ their raw output are in the loop's anchors record.
 
 | Artifact | What it says, verbatim or closely | Superseded? |
 |---|---|---|
-| `<an out-of-tree kanban attachment: the W1 reconciled dossier, w1-dossier.md>` (**the W1 reconciled dossier**, an attachment outside the repo), "Candidates considered and dropped (named, with the reason)": *"**Serve `router replay` / `GET /metrics` (gap probe G2) — DROPPED from this wave's pool.** ADR-sized (simulation seam + plugin-config surface), the axis (A5 observability) is crowded and sold by everyone …, and cheap-to-prove fails: the one number it would mint is obtainable via the existing harness for ≤ $0.01 (Candidate 2) without the ADR. It stays the right answer to *"who owns the product-side verified path"* — **an owner direction decision, registered as open human row, not a D-pool item this wave can justify.**" | **Yes — and the dossier said so itself.** The entry drops the surface *from one wave's pool* on **budget** grounds (ADR-sized, crowded axis, no number to mint), and in the same breath refers it to the owner. The owner's ruling is that referral being taken. Nothing in the entry measured the surface's *value*; nothing here is contradicted. |
+| `<an out-of-tree kanban attachment: the W1 reconciled dossier, w1-dossier.md>` (**the W1 reconciled dossier**, an attachment outside the repo), "Candidates considered and dropped (named, with the reason)": *"**Serve `vadis replay` / `GET /metrics` (gap probe G2) — DROPPED from this wave's pool.** ADR-sized (simulation seam + plugin-config surface), the axis (A5 observability) is crowded and sold by everyone …, and cheap-to-prove fails: the one number it would mint is obtainable via the existing harness for ≤ $0.01 (Candidate 2) without the ADR. It stays the right answer to *"who owns the product-side verified path"* — **an owner direction decision, registered as open human row, not a D-pool item this wave can justify.**" | **Yes — and the dossier said so itself.** The entry drops the surface *from one wave's pool* on **budget** grounds (ADR-sized, crowded axis, no number to mint), and in the same breath refers it to the owner. The owner's ruling is that referral being taken. Nothing in the entry measured the surface's *value*; nothing here is contradicted. |
 | `<an out-of-tree plan document, line 134>` | *"Semantic cache · MCP / A2A / gRPC ingress · dashboards / `/metrics` before v0.2 · SDKs · …"* — under the heading at `:132`, **"## Not doing (write it down so the loop does not drift into it)"** | **Yes, for the `/metrics` clause only.** It is a *filing* — a "so the loop does not drift" list, not a measurement and not a contract. The other entries in that line stay filed and untouched (MCP/A2A/gRPC were separately declined by ADR-043; the semantic cache is R51's question; SDKs and provider breadth are not this ADR's business). |
-| the cut-spec card's reopening rule (card body), verbatim: *"不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**"* — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | The rule is scoped to **the dossier's own four dropped items** (`ADR-043:29-31` names them: "`router replay`/`/metrics`", cache-breakpoint auto-injection, multi-tenancy/per-key identity, "Be Rust"/benchmark-chasing) | **The rule *does* govern this item — `/metrics` is one of the four — and the owner's ruling supersedes it for this item.** The rule is the owner's own standing instruction to the *loop*; an owner act is not bound by it. This is the honest reading and it is written down here so no reader later mistakes the event for a loop reopening a rejected item: **no round reopened anything**; the owner did, and this round carries it. Note also what the rule's *purpose* was — do not spend a round on a filing with no measurement behind it — which is exactly why the act had to be the owner's. |
+| the cut-spec card's reopening rule (card body), verbatim: *"不重开被否决项（档案 §3 末尾四条…）；要重开必须给出档案里没有的**测量**"* — *do not reopen a rejected item; a reopening must supply a **measurement** the dossier does not have* | The rule is scoped to **the dossier's own four dropped items** (`ADR-043:29-31` names them: "`vadis replay`/`/metrics`", cache-breakpoint auto-injection, multi-tenancy/per-key identity, "Be Rust"/benchmark-chasing) | **The rule *does* govern this item — `/metrics` is one of the four — and the owner's ruling supersedes it for this item.** The rule is the owner's own standing instruction to the *loop*; an owner act is not bound by it. This is the honest reading and it is written down here so no reader later mistakes the event for a loop reopening a rejected item: **no round reopened anything**; the owner did, and this round carries it. Note also what the rule's *purpose* was — do not spend a round on a filing with no measurement behind it — which is exactly why the act had to be the owner's. |
 | `docs/spec.md:2304-2314` at the base `ac44181` (§9.3's "not served" entry, the clause **this round removes**; at this HEAD the entry no longer exists and §9.3's heading is `:2414`) | *"…and `GET /metrics` (Prometheus) are **planned, not served**"*, with the sub-bullet at `:2310-2314` (*"not registered: the route answers a bare `404` … its metric names, labels and units are frozen by the change that implements it"*) | **Yes, the list entry moves** — that is half the authorisation. The sub-bullet's *expectation* ("frozen by the change that implements it") is precisely what §3 discharges. |
 | `docs/spec.md:2433-2434` (§9.3's rule) | *"a surface's shape is frozen by the change that implements it, and a documented-but-unreachable surface is a defect"* | **No.** The ruling *is* that rule being obeyed: the surface stops being documented-but-unreachable because a change implements it and freezes its shape in the same round. |
-| `tests/conformance/tests/conf_46_metrics_is_bare_404.rs` (its assertion, `:104-122`) | a bare `404`, no §8 body, no `X-Router-Request-Id`, with a `/health` 200 liveness control | **Yes, the assertion is replaced** (§2.2) — a frozen assertion, hence an owner act, hence this ADR. |
-| the loop state record (R6-G2's row) | spec §9.3's two claims were *"witnessed by hand but **not** in the suite"*: `GET /metrics` → **404** with an empty body and no `content-type`; the parser's refusals → rc=2 | **Historic.** R6-G2 turned the hand-witness into `CONF-46`/`CONF-47`; this ADR re-points one of the two at its new truth. `CONF-47` (the parser's refusals) is **not touched** — `router replay` / `router trace tail` still do not exist. |
+| `tests/conformance/tests/conf_46_metrics_is_bare_404.rs` (its assertion, `:104-122`) | a bare `404`, no §8 body, no `X-Vadis-Request-Id`, with a `/health` 200 liveness control | **Yes, the assertion is replaced** (§2.2) — a frozen assertion, hence an owner act, hence this ADR. |
+| the loop state record (R6-G2's row) | spec §9.3's two claims were *"witnessed by hand but **not** in the suite"*: `GET /metrics` → **404** with an empty body and no `content-type`; the parser's refusals → rc=2 | **Historic.** R6-G2 turned the hand-witness into `CONF-46`/`CONF-47`; this ADR re-points one of the two at its new truth. `CONF-47` (the parser's refusals) is **not touched** — `vadis replay` / `vadis trace tail` still do not exist. |
 
 **One more delta the ruling does not close, stated here because it was registered as "the next round's
 decision"**: the loop's tree (`R49-2-F6`) records that the bare
@@ -99,11 +99,11 @@ The sentence authorises **one surface** and the two documents that describe it. 
 reach:
 
 - **any other route.** Not `/mcp` (the loop state record row 20's question, still the owner's), not a dashboard, not
-  `router replay`, not `router trace tail`, not a second metrics path (`/metrics/v1`, a query-parameterised
+  `vadis replay`, not `vadis trace tail`, not a second metrics path (`/metrics/v1`, a query-parameterised
   variant, a per-window endpoint). What is registered today is exactly what `serve` assembles at
-  `crates/router-cli/src/lib.rs:891-910` — `health_router`'s `/health` (`:584-591`) plus the three
+  `crates/vadis-cli/src/lib.rs:891-910` — `health_router`'s `/health` (`:584-591`) plus the three
   `.merge(guarded_protocol_route(…))` sites (`:892`, `:898`, `:904`) — i.e. four path literals, which one
-  grep counts: ``grep -c '"/health"\|"/v1/chat/completions"\|"/v1/responses"\|"/v1/messages"' crates/router-cli/src/lib.rs``
+  grep counts: ``grep -c '"/health"\|"/v1/chat/completions"\|"/v1/responses"\|"/v1/messages"' crates/vadis-cli/src/lib.rs``
   → **4** at HEAD (measured; the same file through `grep -c 'route('` reads **8** and measures nothing —
   two `fn` definitions, two `.route(` builders and `route_layer`). R50-1 adds `/metrics`' own literal, so
   the pattern's count reads **5** after it: one new path, not a category.
@@ -116,7 +116,7 @@ reach:
 - **any config key.** No key is added to `config.example.yaml`, the loader or the parser — which is also why
   the window is a constant (§3.3) and why "a configurable window" is registered as a widening with a trigger
   rather than smuggled in.
-- **anything about §9.1 or §9.2's figures.** `/health`'s members, `router stats`' lines, the provenance
+- **anything about §9.1 or §9.2's figures.** `/health`'s members, `vadis stats`' lines, the provenance
   table and the omission rule are the surface's *input contract*, not its output; none of them changes here.
 - **the measurement**: no gate definition, no threshold, no corpus, no L1 envelope, and no *other* case's
   assertion. `CONF-43`'s docs ↔ CLI relation is untouched (this surface is a route, not a subcommand).
@@ -129,8 +129,8 @@ reach:
 
 §9.3's list entry for `GET /metrics` leaves the "not served" list — the opening enumeration and the
 sub-bullet that carried it are **gone** (base `ac44181`: `:2304`, `:2310-2314`; at this HEAD §9.3's heading is
-`:2414`) — and becomes a **served** statement pointing at the new §4.16. `router replay --trace … --config …`
-and `router trace tail`
+`:2414`) — and becomes a **served** statement pointing at the new §4.16. `vadis replay --trace … --config …`
+and `vadis trace tail`
 **stay** in the list, and the section's closing paragraph (`:2433-2439`) stays — its rule (*"a surface's
 shape is frozen by the change that implements it"*) is the sentence this whole round is obeying, and its
 *"until they land, the trace record of §6 **is** the interface"* remains true of the two subcommands that
@@ -152,7 +152,7 @@ The frozen obligations the old case carried are **conserved limb for limb** — 
 - The liveness control (`/health` → 200 on the same run) is kept.
 - The `404`/`501` exclusion becomes the **status-set** assertion: the admitted arm is `200` and *nothing
   else*; the refused arm is `401` and *nothing else*; a `501` or any other status is a defect.
-- The "no §8 error body, no `X-Router-Request-Id`" assertion is kept **on the admitted arm** and is
+- The "no §8 error body, no `X-Vadis-Request-Id`" assertion is kept **on the admitted arm** and is
   *sharpened*: the 401 arm **does** carry §8's body and header — because it is §4.7's guard refusing, which
   is §8's contract, not this surface's answer (spec §4.7's refusal table, `docs/spec.md:726-727`).
 - It **lands with the implementation**, in one card (R50-1). At *this* card the old assertion is still true
@@ -165,7 +165,7 @@ The frozen obligations the old case carried are **conserved limb for limb** — 
 | Step | Measurement at this card's HEAD (`ac44181`) |
 |---|---|
 | the tree's case files | `ls tests/conformance/tests/*.rs \| wc -l` → **76**; the ids present are `01–47, 53–66, 71–78, 80–86` |
-| the register's occupancy (DESIGN §12.8's allocation paragraphs) | the last of them (**R43/CONF-85**) closes with *"the spent ID set is `01–47, 53–70, 71–85`; `48–51` stay reserved exactly as the paragraphs above leave them; the next free ID is **`CONF-86`**"* (`design/DESIGN.md:1466-1468`; `:1448-1465` at the base `ac44181`). Its `53–70` is a **stale slip the paragraphs above contradict** — `CONF-52` **is** spent, with its witness deliberately a `compile_fail` doctest in `router-core` rather than a case file (`design/DESIGN.md:1142`, `:1208`) — so the register's own accumulated spent set at this HEAD is `01–47`, `52–70` (67–70 file-less, R22), `71–85`; reserved `48–51` |
+| the register's occupancy (DESIGN §12.8's allocation paragraphs) | the last of them (**R43/CONF-85**) closes with *"the spent ID set is `01–47, 53–70, 71–85`; `48–51` stay reserved exactly as the paragraphs above leave them; the next free ID is **`CONF-86`**"* (`design/DESIGN.md:1466-1468`; `:1448-1465` at the base `ac44181`). Its `53–70` is a **stale slip the paragraphs above contradict** — `CONF-52` **is** spent, with its witness deliberately a `compile_fail` doctest in `vadis-core` rather than a case file (`design/DESIGN.md:1142`, `:1208`) — so the register's own accumulated spent set at this HEAD is `01–47`, `52–70` (67–70 file-less, R22), `71–85`; reserved `48–51` |
 | the tree's maximum | **86** — a file for it exists (`conf_86_setup_check_roster_fact.rs`) although §12.8 has no row for it (**`R46-4-F2`**, the round record; open, "next docs round") |
 | therefore the lowest free id | **`CONF-87`** — the first id above both the tree's maximum and the register's own (stale) next-free claim. Taken by this card, on the file `tests/conformance/tests/conf_87_metrics_single_owner.rs`. |
 
@@ -185,7 +185,7 @@ no case file and no assertion touched.
 - **§12.11** (the auth landing): one sentence recording that the guard's refusal record takes the endpoint's
   own protocol word as a string, so a non-protocol guarded route can name itself (§3.7).
 - **§12.6** is **not** changed: `ProtocolRec.protocol_in` is a `String` in the landed type
-  (`crates/router-core/src/trace.rs:87`); the *value* vocabulary gains one word (§3.8).
+  (`crates/vadis-core/src/trace.rs:87`); the *value* vocabulary gains one word (§3.8).
 
 ### 2.5 The amended assertion + the code land in one card — stated explicitly
 
@@ -208,7 +208,7 @@ The card that lands the implementation (R50-1) is the card that writes the new `
 ### 3.1 The surface
 
 `GET /metrics`, served by the same axum assembly that serves `/health` and the three protocol routes
-(`crates/router-cli/src/lib.rs:891-910`), from the **same listener** and the same process. It is a
+(`crates/vadis-cli/src/lib.rs:891-910`), from the **same listener** and the same process. It is a
 **guarded** route: §3.7 decides that, and `docs/spec.md:718-720` is why it cannot be otherwise (§4.7's
 exemption is `/health`'s alone — *"Nothing else is exempt"*).
 
@@ -226,7 +226,7 @@ exemption is `/health`'s alone — *"Nothing else is exempt"*).
 ### 3.3 The window is a frozen constant, stated in-band
 
 The exposition reports **the last 900 seconds** (15 minutes) of the configured `trace.dir`. The value is a
-**process constant** — `router_cli::metrics::WINDOW_MS: i64 = 900_000` — not a config key, not a query
+**process constant** — `vadis_cli::metrics::WINDOW_MS: i64 = 900_000` — not a config key, not a query
 parameter, not a header:
 
 - **Not a query parameter**: an unauthenticated-adjacent knob that widens a read is exactly the unbounded
@@ -303,13 +303,13 @@ and the surface's own bookkeeping series counts what fired:
 
 | arm | when | comment (frozen wording) | `router_metrics_omitted_figures` |
 |---|---|---|---|
-| `unknown_outcome_requests` | **always** (§3.10) | `# router: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not scan it` — **this string is normative in spec §4.16 and is repeated here verbatim**; a case asserts the substring `unknown_outcome_requests omitted` | 1 |
-| the trace read | `trace.dir` cannot be read/listed (a live dir removed under a running process) | `# router: trace unreadable — <the reason the read gave>; every trace-derived figure is omitted` | 1 + the arms below that therefore fire |
-| `router_cache_hit_rate` | the window holds no input tokens (`input_total_tokens == 0`) | `# router: cache_hit_rate omitted — no input tokens in the window` | +1 |
-| `router_prefix_continuity_p50` | no record in the window carries a non-null `prefix.continuity` | `# router: prefix_continuity_p50 omitted — no continuity sample in the window` | +1 |
-| `router_overhead_ms_p99` | no record in the window carries `result.upstream_ms` | `# router: overhead_ms_p99 omitted — no upstream-measured record in the window` | +1 |
-| `router_stateful_inbound_rate` | the window holds no records (`requests == 0`) | `# router: stateful_inbound_rate omitted — the window holds no records` | +1 |
-| the money series | the window holds no currency | `# router: no currency in the window — no money series` | +1 |
+| `unknown_outcome_requests` | **always** (§3.10) | `# vadis: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not scan it` — **this string is normative in spec §4.16 and is repeated here verbatim**; a case asserts the substring `unknown_outcome_requests omitted` | 1 |
+| the trace read | `trace.dir` cannot be read/listed (a live dir removed under a running process) | `# vadis: trace unreadable — <the reason the read gave>; every trace-derived figure is omitted` | 1 + the arms below that therefore fire |
+| `router_cache_hit_rate` | the window holds no input tokens (`input_total_tokens == 0`) | `# vadis: cache_hit_rate omitted — no input tokens in the window` | +1 |
+| `router_prefix_continuity_p50` | no record in the window carries a non-null `prefix.continuity` | `# vadis: prefix_continuity_p50 omitted — no continuity sample in the window` | +1 |
+| `router_overhead_ms_p99` | no record in the window carries `result.upstream_ms` | `# vadis: overhead_ms_p99 omitted — no upstream-measured record in the window` | +1 |
+| `router_stateful_inbound_rate` | the window holds no records (`requests == 0`) | `# vadis: stateful_inbound_rate omitted — the window holds no records` | +1 |
+| the money series | the window holds no currency | `# vadis: no currency in the window — no money series` | +1 |
 
 An empty window is **not** a failure: `200`, the counts present as `0`, the money/ratio/quantile series
 absent by the rules above, the window series present. A **partially** readable window is never presented as
@@ -334,7 +334,7 @@ Every series is a **`gauge`**, and no name ends in `_total`. Reasons, in order o
 ### 3.7 The route sits **behind the token guard** — decided here
 
 **Decision: `/metrics` is registered in the guarded set** (the same guard layer as the three protocol
-routes, `crates/router-cli/src/lib.rs:785-794`, `:818-880`), not outside it like `/health`.
+routes, `crates/vadis-cli/src/lib.rs:785-794`, `:818-880`), not outside it like `/health`.
 
 - **Spec §4.7 forbids the alternative in words.** `docs/spec.md:718-720`: *"**Nothing else is exempt**, and
   the exemption is **structural** — the guard is applied to the three protocol endpoints' routes only, never
@@ -347,7 +347,7 @@ routes, `crates/router-cli/src/lib.rs:785-794`, `:818-880`), not outside it like
   because it reports *what was loaded* and names no secret (`docs/spec.md:2208-2224`). `/metrics` reports
   what the operator's traffic **spent** and **did** — spend, volumes, cache behaviour — and if the operator
   has turned auth on, that is exactly the data the token exists to protect.
-- **The guard's own invariants** (`crates/router-cli/src/lib.rs:576-583`): the guard layer is *always*
+- **The guard's own invariants** (`crates/vadis-cli/src/lib.rs:576-583`): the guard layer is *always*
   installed because the gate lives on the **revision** — a reload may introduce, rename or drop
   `server.auth_token_env` (ADR-040 D5) — and *"a route with no layer could never engage it"*, while *"a
   fourth route added later cannot silently inherit a wrong one"*. A `/metrics` outside the guarded set would
@@ -367,29 +367,29 @@ routes, `crates/router-cli/src/lib.rs:785-794`, `:818-880`), not outside it like
 ### 3.8 What a refusal spends: one word in an existing string field
 
 A refused `/metrics` scrape is **§4.7's ordinary refusal**: `401`, §8's unified body
-`error.type = "unauthorized"`, `details.header` naming the header the guard read, `X-Router-Request-Id`
+`error.type = "unauthorized"`, `details.header` naming the header the guard read, `X-Vadis-Request-Id`
 present (`docs/spec.md:726-727`), **no** store row (`:730`), and **one trace record** — §6's pre-pipeline
 class, whose `protocol.protocol_in` is `"metrics"`: *the endpoint's own protocol*, which is literally what
 `docs/spec.md:1869` prescribes for that field.
 
 The landed type already permits it: `ProtocolRec.protocol_in` is a `String`
-(`crates/router-core/src/trace.rs:87`), and **no consumer branches on its value** — measured: a grep of
+(`crates/vadis-core/src/trace.rs:87`), and **no consumer branches on its value** — measured: a grep of
 `crates/**` and `tests/conformance/tests/**` for `protocol_in` finds writes and per-case literal assertions,
 never a match on the three wire words (the loop's anchors record, section "protocol_in
 consumers"). So the vocabulary gains one word and no code path gains an arm. Consequences, stated:
 
-- `router stats` counts a refused scrape in `requests`/`failed` and splits it out as `unauthorized`
+- `vadis stats` counts a refused scrape in `requests`/`failed` and splits it out as `unauthorized`
   (§9.2's provenance rows already say a refusal lands there — `docs/spec.md:2371` is the `succeeded`/`failed`
   row, *"split by `errors[].kind`"*, and `:2370` the `requests` row); a metrics scan is
   therefore visible in the report beside a protocol-endpoint scan. That is deliberate: §4.7's own table says
   the trace is how *"am I being scanned?"* is answered (`docs/spec.md:731`), and a scan of the metrics port
   is the scan an operator most wants to see.
-- What the **guard seam** must be, exactly: `router_proxy::refused_record`'s protocol parameter
-  (`crates/router-proxy/src/auth.rs:126-133`) takes the endpoint's word as a **`&str`**, and
-  `GuardState.proto_in` (`crates/router-cli/src/lib.rs:802-806`) with it; the three protocol routes pass
+- What the **guard seam** must be, exactly: `vadis_proxy::refused_record`'s protocol parameter
+  (`crates/vadis-proxy/src/auth.rs:126-133`) takes the endpoint's word as a **`&str`**, and
+  `GuardState.proto_in` (`crates/vadis-cli/src/lib.rs:802-806`) with it; the three protocol routes pass
   `WireApi::Chat|Responses|Anthropic.as_str()` — **byte-identical on the wire, so `CONF-45` and every
   pre-pipeline case are unaffected** — and the metrics route passes `"metrics"`.
-- **Rejected alternative 1 — a fourth `WireApi` variant** (`crates/router-core/src/config.rs:526-529`):
+- **Rejected alternative 1 — a fourth `WireApi` variant** (`crates/vadis-core/src/config.rs:526-529`):
   `WireApi` is the *wire* enum; it is what a provider declares in `supports:`, what the 3×3 matrix indexes
   and what `urls` is keyed by. A `Metrics` variant would let a roster entry write `supports: [metrics]` — a
   configuration-contract contamination for a trace-vocabulary need.
@@ -419,7 +419,7 @@ observation channel?":
   scrapes this port — the reverse of ADR-005's boundary.
 - **The per-provider / per-model cost split — a rejected widening, named so nobody adds it "helpfully".**
   It is the most tempting figure this surface could carry and it is forbidden for a hard reason: §9.2's
-  derivation does **not** produce it (`crates/router-cli/src/stats.rs:34-37` group by currency only), so
+  derivation does **not** produce it (`crates/vadis-cli/src/stats.rs:34-37` group by currency only), so
   exposing it would be **a second, parallel derivation** — the defect §4 exists to prevent. Trigger for
   revisiting: *a round that first puts the split into §9.2's provenance table* (one owner, two readers),
   which is a reporting-contract change with its own case.
@@ -437,12 +437,12 @@ frozen constant of the response (§3.5's first row), not a runtime arm:
 
 - `Query::AllEvents` is documented in the store contract as **bounded use**: *"The full event log in
   `event_id` order (bounded use: conformance and rebuild; **the serving path never scans the log**)"*
-  (`crates/router-core/src/store.rs:303-305`). A per-scrape full-log read from inside the serving process is
+  (`crates/vadis-core/src/store.rs:303-305`). A per-scrape full-log read from inside the serving process is
   exactly what that sentence forbids, and at a 15s scrape interval it would be the most expensive thing the
   process does.
 - Adding a windowed event query (a new `Query` variant + an index) is a **store-contract change** the
   owner's sentence does not authorise, and it would put a log scan on the serving path.
-- So the figure stays where §9.2 puts it: `router stats` (an offline command, which may scan the log) and
+- So the figure stays where §9.2 puts it: `vadis stats` (an offline command, which may scan the log) and
   the trace. The exposition names the omission in-band every time, so a consumer cannot read its absence as
   a zero.
 - Trigger for revisiting: *a round that owns the store contract and can show a windowed read that does not
@@ -457,11 +457,11 @@ surface may format; it may not compute a figure.**
 
 | layer | the owner | at HEAD |
 |---|---|---|
-| the window's records | `router_cli::stats::read_window_records(dir, start_ms, now_ms) -> Result<(Vec<Value>, usize), String>` | `crates/router-cli/src/stats.rs:409-454` |
-| the figures | `router_cli::stats::aggregate(records: &[Value]) -> TraceFigures` | `crates/router-cli/src/stats.rs:77` |
-| the quantiles | `stats::median` (p50) and `stats::p99` | `crates/router-cli/src/stats.rs:488-509` |
-| the ratios | `stats::cache_hit_rate(&TraceFigures) -> Option<f64>` and `stats::stateful_inbound_rate(&TraceFigures) -> Option<f64>` — **hoisted** from the two inline copies in `print_text` and `report_json` | inline today: `crates/router-cli/src/stats.rs:756-758` (`--json`), and the printer's own division in `print_text` (`:545`) |
-| the rendering of the figures for §9.2's readers | `stats::print_text` (stdout) and `stats::report_json` (`--json`, exposed for `CONF-56`) | `crates/router-cli/src/stats.rs:545`, `:726` |
+| the window's records | `vadis_cli::stats::read_window_records(dir, start_ms, now_ms) -> Result<(Vec<Value>, usize), String>` | `crates/vadis-cli/src/stats.rs:409-454` |
+| the figures | `vadis_cli::stats::aggregate(records: &[Value]) -> TraceFigures` | `crates/vadis-cli/src/stats.rs:77` |
+| the quantiles | `stats::median` (p50) and `stats::p99` | `crates/vadis-cli/src/stats.rs:488-509` |
+| the ratios | `stats::cache_hit_rate(&TraceFigures) -> Option<f64>` and `stats::stateful_inbound_rate(&TraceFigures) -> Option<f64>` — **hoisted** from the two inline copies in `print_text` and `report_json` | inline today: `crates/vadis-cli/src/stats.rs:756-758` (`--json`), and the printer's own division in `print_text` (`:545`) |
+| the rendering of the figures for §9.2's readers | `stats::print_text` (stdout) and `stats::report_json` (`--json`, exposed for `CONF-56`) | `crates/vadis-cli/src/stats.rs:545`, `:726` |
 
 **The required extraction list, closed** (this is the whole of the refactor the implementation card owes;
 each item is mechanical and changes no value):
@@ -477,7 +477,7 @@ each item is mechanical and changes no value):
 **no records**:
 
 ```rust
-// crates/router-cli/src/metrics.rs
+// crates/vadis-cli/src/metrics.rs
 pub const WINDOW_MS: i64 = 900_000;                       // §3.3
 pub fn exposition(
     figures: &crate::stats::TraceFigures,                 // the derivation's output, nothing else
@@ -494,9 +494,9 @@ no `Query`, and §3.10 removes the only figure that would need one — `AppState
 **it may not read anything under the loop's tree** (§6).
 
 **A shared-read change the live surface forces — the torn tail.** `read_window_records` today **errors** on
-any line that is not a parseable trace record (`crates/router-cli/src/stats.rs:439-440`, *"not a trace
-record"*). That is correct for `router stats` (an offline reader) and **wrong for this surface**: the
-serving process appends to the file the scrape is reading (`crates/router-store/src/trace_sink.rs:73-106`
+any line that is not a parseable trace record (`crates/vadis-cli/src/stats.rs:439-440`, *"not a trace
+record"*). That is correct for `vadis stats` (an offline reader) and **wrong for this surface**: the
+serving process appends to the file the scrape is reading (`crates/vadis-store/src/trace_sink.rs:73-106`
 writes one `write_all` + `flush` under a mutex; a large record, or a reader between the write and the
 flush, can be observed mid-line), so a scrape would intermittently find the whole window "unreadable" —
 the one behaviour that would make this surface useless.
@@ -505,8 +505,8 @@ the one behaviour that would make this surface useless.
   is not valid JSON, is skipped and never fabricated; every other malformed line stays an error, exactly as
   today.
 - **It lives in the shared read**, not in the metrics path — one owner for a window, both callers — so
-  `router stats` gains the same tolerance for the same input class.
-- **The change of behaviour is named**: for exactly one input class (a torn tail) `router stats` goes from
+  `vadis stats` gains the same tolerance for the same input class.
+- **The change of behaviour is named**: for exactly one input class (a torn tail) `vadis stats` goes from
   "error, exit 2" to "skip the partial record". No conformance case asserts the old behaviour (measured:
   the string `not a trace record` appears in `crates/` only, in `stats.rs:440`; no case fixture in
   `tests/conformance/tests/**` feeds a malformed line to the reader — `anchors.txt`, section
@@ -521,7 +521,7 @@ the one behaviour that would make this surface useless.
 
 | # | invariant | case | the limb |
 |---|---|---|---|
-| 1 | **The answer is never §8's error body.** The admitted arm's media type is the exposition's, its body carries no JSON `error` member, and it carries **no** `X-Router-Request-Id` (the §8 formatter's always-on header, `docs/spec.md:2055-2057`). | `CONF-46` | the same two negative layers the old case carried, re-pointed at `200` |
+| 1 | **The answer is never §8's error body.** The admitted arm's media type is the exposition's, its body carries no JSON `error` member, and it carries **no** `X-Vadis-Request-Id` (the §8 formatter's always-on header, `docs/spec.md:2055-2057`). | `CONF-46` | the same two negative layers the old case carried, re-pointed at `200` |
 | 2 | **The status set is closed**: admitted → `200`; refused → `401` (§8's body, header present per §4.7); **anything else — `404`, `501`, `500`, `503` — is a defect**. The old case's exclusion of `501` becomes this. | `CONF-46` | status assertions + the `error.type == "unauthorized"` body read |
 | 3 | **No request byte is read and nothing of the request is carried.** A `GET /metrics` carrying a canary body answers **byte-identically** to the body-less one, and the canary appears in no response byte, no trace file and no store row. | `CONF-46` | the canary limb (CONF-70's precedent) + the byte-equality limb |
 | 4 | **An admitted scrape writes nothing.** The trace dir's bytes and the store's event count are unchanged by the admitted arms; the *refused* arms each add exactly **one** record (the guard's, `protocol_in: "metrics"`, `errors[].kind: "unauthorized"`). | `CONF-46` | byte-compare of the trace dir before/after + a record count/kind read |
@@ -548,8 +548,8 @@ one of the four: the surface is now served, and the owner said so.
 ## 6. The observation boundary (AGENTS constraint 3)
 
 - **What the surface reads**: `serve`'s resolved `trace.dir` — the directory `TraceSink::open` took at
-  startup (`crates/router-cli/src/lib.rs:401-408`, exit `4` when it cannot be opened) and which
-  `AppState.trace_dir` carries (`crates/router-proxy/src/health.rs:20-22`). `trace.dir` is in ADR-040 D5's
+  startup (`crates/vadis-cli/src/lib.rs:401-408`, exit `4` when it cannot be opened) and which
+  `AppState.trace_dir` carries (`crates/vadis-proxy/src/health.rs:20-22`). `trace.dir` is in ADR-040 D5's
   **refused set** (a reload may not move it, spec §4.15's `:1507-1512`), so the surface needs no revision
   coupling and cannot be pointed at a second directory by a config change. **Nothing else is read**: not the
   store (§3.10), not the config beyond the plan family, not any path under the loop's tree.
@@ -578,7 +578,7 @@ one of the four: the surface is now served, and the owner said so.
 | **No `tier="total"` series** (§3.4) | a total series beside the four tiers | Gain: `sum()` cannot double-count. Sacrifice: one `sum()` in a query, and a reader comparing against §9.2's total must add. | Yes (but it would be a footgun to add) |
 | **The unknown-outcome figure is omitted, always** (§3.10) | a windowed store query (store-contract change + a log scan on the serving path); exposing it from a cached value (a second derivation) | Gain: the surface obeys `store.rs:303-305`'s own rule and stays cheap. Sacrifice: one §9.2 figure is not on this surface (named in-band, never a 0). | Yes, with a store-contract change |
 | **Text exposition 0.0.4** (§3.2) | OpenMetrics 1.0 | Gain: universal consumer support. Sacrifice: no exemplars/`# EOF`. | Yes (a media-type change, both formats are scraper-side negotiable only by the server) |
-| **The surface's home: `router-cli::metrics`** (§4) | `router-proxy` beside `health_json` | Gain: the derivation it must call lives in `router-cli` (`stats.rs`), and the dependency direction (`router-cli` → `router-proxy`, DESIGN §2 `:31-53`) forbids the reverse. Sacrifice: one more module in the crate that is already the assembly's crate. | Yes |
+| **The surface's home: `vadis-cli::metrics`** (§4) | `vadis-proxy` beside `health_json` | Gain: the derivation it must call lives in `vadis-cli` (`stats.rs`), and the dependency direction (`vadis-cli` → `vadis-proxy`, DESIGN §2 `:31-53`) forbids the reverse. Sacrifice: one more module in the crate that is already the assembly's crate. | Yes |
 | **The id: `CONF-87`** (§2.3) | `CONF-86` (taken by a file, no row); `48–51` (reserved with no obligation) | Gain: the id is above the tree's maximum and above the register's own (stale) claim. Sacrifice: none. | No — ids are spent, never reused |
 
 ---
@@ -587,9 +587,9 @@ one of the four: the surface is now served, and the owner said so.
 
 **Consequences that follow from this contract** (each one a thing a reader should not have to discover):
 
-1. `router stats` gains a **torn-tail tolerance** (§4) — one input class, a behaviour *widening*, no
+1. `vadis stats` gains a **torn-tail tolerance** (§4) — one input class, a behaviour *widening*, no
    assertion touched.
-2. A refused metrics scrape is **counted** by `router stats` (`failed`, split as `unauthorized`), so a scan
+2. A refused metrics scrape is **counted** by `vadis stats` (`failed`, split as `unauthorized`), so a scan
    of the metrics port is visible in the operator's own report.
 3. `conf_46` is **renamed**, and its id now describes a served surface; the id is unchanged.
 4. `CONF-87` is spent, and `DESIGN` §12.8's heading range moves to `CONF-01…CONF-87` because a row for 87
@@ -605,7 +605,7 @@ one of the four: the surface is now served, and the owner said so.
 | `R50-0-F2` | the unknown-outcome figure is absent from `/metrics` by design (§3.10); the widening (a windowed, non-scanning store read) needs a store-contract owner | backend-coder + the store contract's owner | open — with a trigger |
 | `R50-0-F3` | the metrics window is a constant (§3.3); a configurable window is the registered widening, with its own key, read site, reload answer and case | the next round that owns `config.example.yaml` | open — with a trigger |
 | `R50-0-F4` | the `conf_46` **rename** moves a case file name. Re-measured at HEAD with `git grep --untracked -n`, because the sentence this row first carried (`grep -rn 'conf_46_metrics_is_bare_404' .`, "finds `DESIGN §12.8`'s row only") is **false and was not a measurement**: a recursive filesystem grep over this repo also walks `target/`, and what it returns is not the tree. The real set is **74 files / 85 lines outside this card's own evidence** (the command in `measurements.txt` carries the `':!The loop's records for that decision'` exclusion, because the receipt that prints this number is a file in that directory and a count taken while it is being written is a self-reference rather than a measurement; the excluded half is measured on its own below). It splits: **must move** — `design/DESIGN.md:1005`, §12.8's `CONF-46` row, which §2.4 rewrites to carry both names, and *nothing else* (R50-1's rename owes no other document an edit). **Must not move**, each because it quotes or seals an event in which the file really carried that name: `.github/workflows/ci.yml:65` — a **live** file: the free-disk comment quotes the targets run 36299293578 died on, and rewriting the quotation would make the workflow assert an event that did not happen (`ci.yml` is R53's file, outside every R50 write set); this ADR's own lines (a record that authorises a rename must name both names); R49's fourteen, including the two audit rigs that `grep` the case **by path** (the loop's anchors script, the loop's anchors script) and the loop's claim-sources record; three round records; fifty-four sealed `gates*.log`/`*.out` receipts under the loop's records; and this card's **9** evidence files, which the same command reports separately (`git grep --untracked -l … -- the loop's records for that decision` → `9`) because they seal the pre-rename state and must outlive the rename as they are. What is **not** in the set, and is the part that would have bitten: no `book/` page, no manifest (`tests/conformance/Cargo.toml` names no case) and no live harness entry point | R50-1 — nothing owed beyond the rename itself (one re-scoped verdict, no edit) | due R50-1 |
-| `R50-0-F5` | **`DESIGN §12.11` contradicts `router-cli/src/lib.rs:579-583` on the key-absent case** — the section still reads *"When `server.auth_token_env` is absent, **no layer is installed** and the assembled router is byte-for-byte the assembly v0.1 had before this key existed"*, while the landed wiring (R47-2) installs the layer **always** and gives the key-absent revision a gate that admits everything, precisely so the two revisions have one code path. `R50-0` noticed it while adding this round's bullet directly above that sentence and **did not edit it** (the sentence is not this card's subject and the fix is a sentence in a file another round owns); the evidence is `crates/router-cli/src/lib.rs:579-583` against `design/DESIGN.md` §12.11's bullet list | the next round that owns `design/DESIGN.md` §12.11 (the auth landing; `R47-2`/`R48`'s truth-repair class) | next §12.11-touching card |
+| `R50-0-F5` | **`DESIGN §12.11` contradicts `vadis-cli/src/lib.rs:579-583` on the key-absent case** — the section still reads *"When `server.auth_token_env` is absent, **no layer is installed** and the assembled vadis is byte-for-byte the assembly v0.1 had before this key existed"*, while the landed wiring (R47-2) installs the layer **always** and gives the key-absent revision a gate that admits everything, precisely so the two revisions have one code path. `R50-0` noticed it while adding this round's bullet directly above that sentence and **did not edit it** (the sentence is not this card's subject and the fix is a sentence in a file another round owns); the evidence is `crates/vadis-cli/src/lib.rs:579-583` against `design/DESIGN.md` §12.11's bullet list | the next round that owns `design/DESIGN.md` §12.11 (the auth landing; `R47-2`/`R48`'s truth-repair class) | next §12.11-touching card |
 | `R50-0-N1` | `AGENTS.md` constraint 2's discipline is what forbids the timestamp/uptime in the body (§3.2); a future "add `router_uptime_seconds`" idea must be recorded as a *new* contract, not a convenience | — (note) | n/a |
 | `R50-0-N2` | cost: this card is docs-only, offline, `$0.00` — no provider dialled, no credential read | — (note) | n/a |
 
@@ -621,7 +621,7 @@ Written down here, **not edited** by this card (`README.md` is the writer's, and
 excludes it). The writer's touch, four edits, all in `README.md`:
 
 1. **`README.md:279-287`'s `## API` table** — a served endpoint must appear as a row beside `/health`:
-   `| GET | `/metrics` | the trailing-window figures `router stats` reports, in the Prometheus text format
+   `| GET | `/metrics` | the trailing-window figures `vadis stats` reports, in the Prometheus text format
    (spec §4.16) |`. Anchors: `docs/spec.md` §4.16 (new), §9.2 (`:2285`, the figures' provenance), and the
    guard row below.
 2. **`README.md:286`** — the sentence *"`GET /metrics` (Prometheus) is not registered in v0.1: the route
@@ -646,7 +646,7 @@ Two further README facts the writer should not have to re-derive: `README.md:5`'
 `R49-1c` (`d2641ad`) and is **already** the narrowed form (*"…for every request it **completes**"*), and
 `README.md:395`'s §Ops bullet (*"`docs/spec.md` §9.3 lists the reporting surfaces that are not served
 yet"* — the bullet that also carries `R49-2-F2`'s sentence, one line below the §Ops heading at `:389`)
-stays **true** — `router replay` and `router trace tail` are still not served, so only its wording,
+stays **true** — `vadis replay` and `vadis trace tail` are still not served, so only its wording,
 not its truth, is at issue.
 
 ---
@@ -674,7 +674,7 @@ defects sat in the text's own pointers**. All four are repaired here, in the car
 |---|---|---|
 | 1 | `design/DESIGN.md:2798`'s §12.11 bullet cited `docs/spec.md:1757` for *the endpoint's own protocol*; the phrase occurs at `:1869`. The pair was stale in one carrier — this card's remap fixed it in this ADR and missed the DESIGN bullet | `1757` → `1869` in DESIGN. Asserted by tier B of `citecheck.py` |
 | 2 | §9's second note anchored the §Ops bullet at `README.md:389-393`; the sentence is at `README.md:395` (the bullet `R49-2-F2` also lives in). The writer card would have hunted three lines early | anchored at `:395`, with the §Ops heading's own line (`:389`) named so the reader can see both |
-| 3 | §1.3's *any other route* bullet named `grep -c 'route('` as the measurement of "4 routes at HEAD"; that command reads **8** — it counts `fn` definitions, `.route(` builders and `route_layer`, not routes. The number was right, the command was not a measurement of it | the bullet now anchors the assembly (`crates/router-cli/src/lib.rs:891-910`, `/health` `:584-591`, three `.merge(guarded_protocol_route(…))` sites `:892`/`:898`/`:904`) and names a pattern that reads **4**, with the old pattern's **8** stated beside it |
+| 3 | §1.3's *any other route* bullet named `grep -c 'route('` as the measurement of "4 routes at HEAD"; that command reads **8** — it counts `fn` definitions, `.route(` builders and `route_layer`, not routes. The number was right, the command was not a measurement of it | the bullet now anchors the assembly (`crates/vadis-cli/src/lib.rs:891-910`, `/health` `:584-591`, three `.merge(guarded_protocol_route(…))` sites `:892`/`:898`/`:904`) and names a pattern that reads **4**, with the old pattern's **8** stated beside it |
 | 4 | §8's `R50-0-F4` asserted that `grep -rn 'conf_46_metrics_is_bare_404' .` "finds `DESIGN §12.8`'s row only". The command never terminates over `target/`, and the real carrier set is **74 files / 85 lines outside this card's own evidence** — including one **live** file the sentence did not mention, `.github/workflows/ci.yml:65`, which quotes the failing targets of CI run 36299293578 | the row is re-measured with `git grep --untracked -n` and split into what must move (one row) and what must **not** (a quotation of an observed run, sealed receipts, a past round's tables), with the failed command named as failed |
 
 **Two more of the same class were found by the new assertion rig**, not by the audit, and are repaired here

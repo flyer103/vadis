@@ -7,11 +7,11 @@
 ## Background
 
 v0.1's byte boundary (ADR-004 line 16, ADR-007 item 2) permitted **one** mutation: deleting top-level
-router-owned fields (`router_meta` echo, routing hints). The client's `model` string travelled upstream
+vadis-owned fields (`vadis_meta` echo, routing hints). The client's `model` string travelled upstream
 verbatim.
 
 That is not a boundary a real provider can be served through. A client's `model` is a **route name** —
-`provider/model` or an alias (spec §3) — and the alias space is the router's own vocabulary: the routing
+`provider/model` or an alias (spec §3) — and the alias space is the vadis's own vocabulary: the routing
 abstraction, the per-provider roster and the alias indirection all exist so that the *client* does not
 have to know which provider id a route resolves to (ADR-004). Sending the route name upstream asks the
 provider to resolve a name only this process understands; DESIGN §12.10.7 records the resulting provider
@@ -24,13 +24,13 @@ constraint 1, commit `3074957`): routing resolves first, the upstream is called 
 model id alone, and the client's own string is kept as `decision.requested_model`. spec §2 (`52ecb5f`)
 wrote the two-mutation table; DESIGN §12.10.7 stated where the rewrite is applied and carries the
 supersession pointer for ADR-007. The decision log itself had no entry for it: appended history still
-said "the only permitted rewrite = deleting top-level router-owned fields", which is now false. This ADR
+said "the only permitted rewrite = deleting top-level vadis-owned fields", which is now false. This ADR
 closes that hole without editing either historical ADR.
 
 ## Decision
 
 1. **The byte boundary permits exactly two mutations**, both byte-level, both scoped, both auditable:
-   **(a)** deleting router-owned top-level members (whole members with their separators; invariant: the
+   **(a)** deleting vadis-owned top-level members (whole members with their separators; invariant: the
    output is valid JSON and every retained member is byte-for-byte its input span); **(b)** replacing the
    **value** of the top-level `model` member with the resolved route's provider-native model id — the
    member's *value span only*: its key, its position, the separators and whitespace around it, and every
@@ -87,7 +87,7 @@ closes that hole without editing either historical ADR.
 ## Rationale
 
 - **Two mutations is the smallest change that makes real providers usable.** One mutation cannot serve a
-  provider whose model vocabulary differs from the router's routing vocabulary; more than two stops being
+  provider whose model vocabulary differs from the vadis's routing vocabulary; more than two stops being
   auditable by span comparison.
 - **Auditability is the constraint that ranks the options.** Mutation (b) keeps the editing discipline
   ADR-007 established (a single-pass span scan, no parse → reserialize, no mutable view of the body) and
@@ -101,8 +101,8 @@ closes that hole without editing either historical ADR.
 ## Consequences
 
 - The passthrough path's review checklist, conformance expectation and audit are all "exactly two
-  mutations"; the boundary constant lives in one place (`ROUTER_OWNED_TOP_LEVEL_KEYS` for (a)) plus one
-  primitive (`set_top_level_string` in `crates/router-core/src/body.rs` for (b)), both covered by
+  mutations"; the boundary constant lives in one place (`VADIS_OWNED_TOP_LEVEL_KEYS` for (a)) plus one
+  primitive (`set_top_level_string` in `crates/vadis-core/src/body.rs` for (b)), both covered by
   adversarial tests.
 - ADR-004 line 16 and ADR-007 item 2 read as history from here on. The current boundary is AGENTS
   constraint 1 + spec §2 + DESIGN §6/§12.10.7 + this ADR; the historical files are not edited

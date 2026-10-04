@@ -19,7 +19,7 @@ prompt_tokens 6× the competitor's and directly distorted the cost convention).
    never enters the serving path.
 2. **The analysis loop's language = Python (uv) orchestration**: data collection, judging, statistics and reports
    use the most mature tools in the ecosystem; **no second implementation of the policy logic**.
-3. **Policy simulation always calls the product itself**: `router replay --trace ... --config ...` uses the
+3. **Policy simulation always calls the product itself**: `vadis replay --trace ... --config ...` uses the
    same binary, the same decision pipeline and the same encoding path as production, replacing only the
    outbound HTTP with a local simulation. Offline replay is therefore skew-free by construction and
    reproducible.

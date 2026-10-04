@@ -9,7 +9,7 @@
 //!
 //! Asserted through the real `config_load::load` (YAML bytes →
 //! validated config) and, for the illegal-currency half, through the
-//! real `router_cli::serve` exit code:
+//! real `vadis_cli::serve` exit code:
 //!
 //! - (a) an entry that omits `currency` loads as USD and one that omits
 //!   `region` loads as intl — the defaults are per-entry, never global;
@@ -21,7 +21,7 @@
 //!   spellings — and `serve` exits 2, nothing serves;
 //! - (d) an illegal `region` is a load error the same way.
 //!
-//! The unit-level twins of these rules live in `router-core`'s config
+//! The unit-level twins of these rules live in `vadis-core`'s config
 //! tests; this case proves them through the file-and-YAML boundary the
 //! operator actually writes.
 
@@ -79,36 +79,36 @@ fn tempdir(tag: &str) -> PathBuf {
     dir
 }
 
-fn load_with(tag: &str, patch: &str) -> Result<router_core::config::RouterConfig, String> {
+fn load_with(tag: &str, patch: &str) -> Result<vadis_core::config::VadisConfig, String> {
     let dir = tempdir(tag);
     let path = dir.join("config.yaml");
     std::fs::write(&path, config_with(patch)).unwrap();
-    router_cli::config_load::load(&path).map(|rc| rc.router)
+    vadis_cli::config_load::load(&path).map(|rc| rc.vadis)
 }
 
 // (a) absent ⇒ USD / intl, per entry.
 #[test]
 fn conf_53a_absent_keys_default_to_usd_and_intl() {
     let rc = load_with("default", "").expect("an entry with neither key loads");
-    assert_eq!(rc.providers[0].currency, router_core::Currency::Usd);
-    assert_eq!(rc.providers[0].region, router_core::config::Region::Intl);
+    assert_eq!(rc.providers[0].currency, vadis_core::Currency::Usd);
+    assert_eq!(rc.providers[0].region, vadis_core::config::Region::Intl);
 }
 
 // (b) written values load; cn + USD is legal (no derivation either way).
 #[test]
 fn conf_53b_written_values_load_and_cn_usd_is_legal() {
     let rc = load_with("cny", "currency: CNY").expect("currency: CNY loads");
-    assert_eq!(rc.providers[0].currency, router_core::Currency::Cny);
+    assert_eq!(rc.providers[0].currency, vadis_core::Currency::Cny);
 
     let rc = load_with("cn", "region: cn").expect("region: cn loads");
-    assert_eq!(rc.providers[0].region, router_core::config::Region::Cn);
+    assert_eq!(rc.providers[0].region, vadis_core::config::Region::Cn);
     // The load succeeded with no currency key: a CN-region entry billed
     // in USD (the default) is a legal configuration (ADR-018 §1).
-    assert_eq!(rc.providers[0].currency, router_core::Currency::Usd);
+    assert_eq!(rc.providers[0].currency, vadis_core::Currency::Usd);
 
     let rc = load_with("both", "region: cn\n    currency: CNY").expect("cn + CNY loads");
-    assert_eq!(rc.providers[0].region, router_core::config::Region::Cn);
-    assert_eq!(rc.providers[0].currency, router_core::Currency::Cny);
+    assert_eq!(rc.providers[0].region, vadis_core::config::Region::Cn);
+    assert_eq!(rc.providers[0].currency, vadis_core::Currency::Cny);
 }
 
 // (c) an illegal currency is a load error naming the key and the legal
@@ -140,7 +140,7 @@ async fn conf_53c_illegal_currency_exits_2_nothing_serves() {
     let path = dir.join("config.yaml");
     std::fs::write(&path, config_with("currency: \"usd\"")).unwrap();
     let cfg = path.to_string_lossy().into_owned();
-    let code = router_cli::serve(&cfg).await;
+    let code = vadis_cli::serve(&cfg).await;
     assert_eq!(
         code, 2,
         "an illegal currency must exit 2 (2=config, 3=bind, 4=env), got {code}"

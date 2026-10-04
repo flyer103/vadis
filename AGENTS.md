@@ -1,4 +1,4 @@
-# AGENTS.md — router
+# AGENTS.md — vadis
 
 Multi-protocol LLM gateway. One local process speaks the chat-completions, Responses and Anthropic
 wire shapes, decides which configured provider entry serves each request, forwards the **client's own
@@ -11,8 +11,8 @@ this file are the product. `CONTRIBUTING.md` is the human-facing overview; `docs
 ## Hard constraints (bind every change)
 
 1. **Byte boundary.** The proxy forwards the original request bytes. Exactly two mutations are
-   permitted, both byte-level, both scoped, both auditable: **(a)** removing router-owned
-   top-level fields (e.g. `router_meta` echo, routing hints); **(b)** replacing the *value* of the
+   permitted, both byte-level, both scoped, both auditable: **(a)** removing vadis-owned
+   top-level fields (e.g. `vadis_meta` echo, routing hints); **(b)** replacing the *value* of the
    top-level `model` field with the resolved route's provider-native model id — routing is
    resolved first, and the upstream is called with the native model id alone, while the client's
    own string is recorded in the trace as `decision.requested_model`. Never touch message content,
@@ -85,17 +85,17 @@ cases are each their own target.
 
 ## Repo layout
 
-- `crates/` — the product. `router-core` holds the domain (decision pipeline, cost engine, cache
-  ledger, plugin traits); `router-runtime` holds the Cordis-style runtime; nothing outside
-  `router-cli` wires them together; `router-protocol` the three wire codecs, `router-providers` the
-  upstream adapters, `router-proxy` the axum data plane, `router-plugins` the tier-A built-ins,
-  `router-store` the one SQLite/WAL store, `router-plugin-sdk` the tier-B protocol types.
+- `crates/` — the product. `vadis-core` holds the domain (decision pipeline, cost engine, cache
+  ledger, plugin traits); `vadis-runtime` holds the Cordis-style runtime; nothing outside
+  `vadis-cli` wires them together; `vadis-protocol` the three wire codecs, `vadis-providers` the
+  upstream adapters, `vadis-proxy` the axum data plane, `vadis-plugins` the tier-A built-ins,
+  `vadis-store` the one SQLite/WAL store, `vadis-plugin-sdk` the tier-B protocol types.
 - `tests/conformance/` — the 3×3 protocol matrix and the byte/cache invariants. A change that
   breaks these is not landed regardless of downstream wins.
 - `rules/tool_output.toml` — the shipped rule file of the `builtin/transform_rules` engine; the
-  example plugin entry names it, and `router setup` lands it beside the config it writes.
+  example plugin entry names it, and `vadis setup` lands it beside the config it writes.
 - `config.example.yaml` + `providers.example.yaml` — the shipped pair a first configuration starts
-  from; `router setup` writes both (and the rule file) from the copies embedded in the binary.
+  from; `vadis setup` writes both (and the rule file) from the copies embedded in the binary.
 
 ## Version control
 
@@ -106,11 +106,11 @@ documentation only — never broken code.
 
 ## Docs map
 
-- `book/` — user-facing guide (what router is, how to connect a client, the cost levers, how to
+- `book/` — user-facing guide (what vadis is, how to connect a client, the cost levers, how to
   read the reports). Written for users, not implementers: it links to the contracts and never copies
   their price numbers or type sketches.
 - `docs/spec.md` — WHAT: protocol contracts, config schema, observation + accounting.
 - `design/DESIGN.md` — HOW: crates, plugin runtime, cost engine, cache policy.
 - `design/decisions/ADR-NNN-*.md` — WHY, append-only.
 - `CONTRIBUTING.md` — how to build, test and send a change; the review checklist.
-- `README.md` — what it is, the quick start (`router setup` first), the API at a glance.
+- `README.md` — what it is, the quick start (`vadis setup` first), the API at a glance.

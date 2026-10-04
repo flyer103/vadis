@@ -9,7 +9,7 @@
   ADR-003 (rules as data) and ADR-008 (the trust gate); ADR-012 (the gate definitions, the corpus, the
   conformance assertions and the L1 envelope are outside the loop's mutable scope); ADR-016 DP-1.4 (the
   envelope has no contract home); ADR-017 §3 (declared vs measured); ADR-009 (the store's one writer and
-  the latency budget as the router's own work); spec §2.1 (the mode channel), §4.4 (rule files, `tee`),
+  the latency budget as the vadis's own work); spec §2.1 (the mode channel), §4.4 (rule files, `tee`),
   §4.13 (the body bound), §6 (the trace contract), §7 (the labels), §8 (the refusal contract),
   §9.2/§9.3 (the report); DESIGN §12.1 (the dependency allowlist), §12.12 (the pipeline and its
   ledger), §12.15 (the body bound), §12.16 (the baseline's quantity); the loop charter (the
@@ -35,13 +35,13 @@ measured, not assumed, at R33's base by the harness-side probe
 the loop's freeze probe script (its relations are the evidence; the numbers live in that
 file and are not restated here):
 
-1. **The payload locator returns tool-output nodes only.** `router-core::transform::payload_nodes`
+1. **The payload locator returns tool-output nodes only.** `vadis-core::transform::payload_nodes`
    yields a chat body's `messages[n].content` where `role == "tool"` (paired to an earlier assistant
    `tool_calls` naming the tool), a responses body's `input[n].output` where the item is a
    `function_call_output`, and an anthropic body's `tool_result` block. A body whose payload sits in a
    **user or assistant message** — which is exactly R32's own synthetic payload shape, one
    `role: user` message carrying the pad — has **zero payload nodes**, so loading the engine and asking
-   for `X-Router-Transform: transform` on it changes **no byte** and fires **no rule**. R32's shape is
+   for `X-Vadis-Transform: transform` on it changes **no byte** and fires **no rule**. R32's shape is
    therefore the right *reference* and the wrong *carrier*.
 2. **Rule selection is by declaration, and the landed declaration table cannot reach every rule.**
    `CompiledRule::selects` matches the tool name carried by the wire's own pairing and the kinds the
@@ -132,13 +132,13 @@ its byte arithmetic, and the model's coefficients with the confound stated.
 `server.max_body_bytes` (spec §4.13, ADR-029's landing) sits at the boundary **above** the
 transform-mode resolution, so an over-bound request must be refused **before** any plan is computed.
 The method includes two legs: a body one byte above the bound with the mode asked (the refusal must be
-the router's own `413 request_too_large`, carry `details.limit_bytes`/`content_length` and
-`X-Router-Request-Id`, leave exactly **one pre-pipeline record** whose `transform_mode` is
+the vadis's own `413 request_too_large`, carry `details.limit_bytes`/`content_length` and
+`X-Vadis-Request-Id`, leave exactly **one pre-pipeline record** whose `transform_mode` is
 **`passthrough` despite the header**, and reach the stand-in **zero** times), and the same body under a
 raised bound (served **and** transformed, with a ledger row). The refused request's **latency** is not a
 rung: a record with `upstream_ms: null` is excluded from the gate's quantity by ADR-029 D1, so a
 distribution over refusals could not carry a gate figure. **The refusal is read with a raw-socket
-client**: the router refuses a declared over-length body without reading it and closes the connection
+client**: the vadis refuses a declared over-length body without reading it and closes the connection
 after the response, so a library client can lose the race and report a reset where the frozen clause
 promises a complete `413` with a closed connection.
 

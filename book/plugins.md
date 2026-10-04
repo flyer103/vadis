@@ -29,13 +29,13 @@ fashion.
   [`rules/tool_output.toml`](../rules/tool_output.toml) is a real one. The rule file a plugin entry
   names is read at start-up (`plugins[].config.rules_file`), and a rule that cannot load, compile or
   pass its own inline tests does not apply: the payload travels verbatim and the record says why.
-  `router setup` writes that file — beside the config, from the rule file embedded in the binary — so the
+  `vadis setup` writes that file — beside the config, from the rule file embedded in the binary — so the
   configuration a fresh install lands is not left with a dangling reference: created when it is absent,
   untouched when it is not, and replaced only by `--force` with the `plugins` section selected, the previous
   bytes kept at `<file>.bak` ([ADR-046](../design/decisions/ADR-046-setup-lands-the-rule-file.md);
   [`docs/spec.md` §4.11](../docs/spec.md)).
 - **Your request decides, not the config file.** A content transform happens only when the request
-  itself asks for it (the `X-Router-Transform` header, `docs/spec.md` §2.1). There is no config key
+  itself asks for it (the `X-Vadis-Transform` header, `docs/spec.md` §2.1). There is no config key
   that enables transforming a request that did not ask, and that absence is what the passthrough
   promise rests on.
 - **Three plugins are always resident** with no config entry of their own: the cost ledger, the quota
@@ -70,7 +70,7 @@ Named here so that no reader has to discover it from the config file itself:
 
 This is the part worth reading, because it is the reason to trust a number this gateway reports:
 
-- **touch your bytes** — the only two byte-level edits the router makes to a request are the two it
+- **touch your bytes** — the only two byte-level edits the vadis makes to a request are the two it
   declares: dropping its own top-level fields, and substituting the resolved provider-native model id.
   A plugin may propose an edit to a *tool output payload* and nothing else; your messages, system
   instruction, tool schemas and whitespace are not a plugin's business.
@@ -116,7 +116,7 @@ any of them is a reviewed change to the product, not an experiment result.
 - [`docs/spec.md` §4](../docs/spec.md) — the configuration schema, including the `plugins:` list and
   §4.3/§4.4 (dependency declarations, rule files, and what is not implemented).
 - [`rules/tool_output.toml`](../rules/tool_output.toml) — a real rule file with its inline tests, and the file
-  `router setup` writes beside a fresh config
+  `vadis setup` writes beside a fresh config
   ([ADR-046](../design/decisions/ADR-046-setup-lands-the-rule-file.md)).
 - [`config.example.yaml`](../config.example.yaml) — how plugins are declared, including a disabled
   tier-B entry.

@@ -19,8 +19,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// A streamed 200 whose final data event carries usage (CONF-30's
 /// carrier shape) — so the relay's accounting closes normally.
@@ -99,7 +99,7 @@ async fn conf_66_streaming_first_request_of_a_fresh_session_reads_false() {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf66-stream", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -132,7 +132,7 @@ async fn conf_66_streaming_first_request_of_a_fresh_session_reads_false() {
     // (spec §6 / §4.5 row 4) — turn 1 (sticky_hit false) wrote exactly
     // one session.bound; turn 2 (sticky_hit true, route unchanged)
     // wrote none (bind_session's early return).
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -157,7 +157,7 @@ async fn conf_66_media_equality_the_same_history_agrees_element_for_element() {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf66-buf", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -180,7 +180,7 @@ async fn conf_66_media_equality_the_same_history_agrees_element_for_element() {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf66-str", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -222,7 +222,7 @@ async fn conf_66_session_null_is_false_and_writes_no_binding_event() {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf66-null", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -246,7 +246,7 @@ async fn conf_66_session_null_is_false_and_writes_no_binding_event() {
         "session: null is always false (spec §6)"
     );
 
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

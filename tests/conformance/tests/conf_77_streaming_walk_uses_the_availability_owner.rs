@@ -49,8 +49,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 fn now_us() -> i64 {
     std::time::SystemTime::now()
@@ -88,7 +88,7 @@ fn http_get_health(addr: &str) -> serde_json::Value {
 /// Every stored event as (kind_raw, payload), read after the server
 /// stopped (CONF-44's reader).
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };
@@ -115,7 +115,7 @@ async fn conf_77_streaming_walk_skips_a_cooling_primary_like_the_buffered_one() 
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf77", "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,

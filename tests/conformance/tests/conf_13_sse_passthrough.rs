@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, ReadOpts, SseChunk};
+use vadis_conformance::testkit::{self, ReadOpts, SseChunk};
 
 /// The exact byte sequence the mock upstream emits, with awkward content:
 /// braces, quotes, multi-byte UTF-8, an id/retry pair, and the chat
@@ -60,10 +60,10 @@ fallback: []
 
 const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"stream me"}],"stream":true,"stream_options":{"include_usage":true}}"#;
 
-fn start_router(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
+fn start_vadis(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
     std::env::set_var("CONF13_MOCK_KEY", "sk-conf13");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
     serve_task
 }
@@ -85,7 +85,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -94,7 +94,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
         &[],
     );
 
-    assert_eq!(status, 200, "router status");
+    assert_eq!(status, 200, "vadis status");
     let ct = headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
@@ -103,7 +103,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
     assert!(ct.starts_with("text/event-stream"), "content-type: {ct}");
 
     // Dechunk the transport framing, then compare the *event byte
-    // sequence* — not chunk framing, which the router may legitimately
+    // sequence* — not chunk framing, which the vadis may legitimately
     // re-frame at the HTTP layer, but never the SSE event bytes.
     let events = testkit::dechunk(&body);
 
@@ -129,7 +129,7 @@ async fn conf_13_a_event_by_event_byte_equivalence() {
     assert_eq!(events.len(), expected_bytes().len());
 
     // The upstream saw exactly one request with the byte-faithful body
-    // (stream: true travels verbatim; router_meta removal is CONF-10's
+    // (stream: true travels verbatim; vadis_meta removal is CONF-10's
     // concern, asserted there).
     let requests = upstream.requests();
     assert_eq!(requests.len(), 1, "exactly one upstream attempt");
@@ -157,7 +157,7 @@ async fn conf_13_b_midstream_failure_truncates_never_retries() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),
@@ -208,7 +208,7 @@ async fn conf_13_c_client_disconnect_cancels_upstream() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let first_event_len = UPSTREAM_SSE[0].len();
     let (status, body, _headers) = testkit::http_post_with_opts(
@@ -228,7 +228,7 @@ async fn conf_13_c_client_disconnect_cancels_upstream() {
         "the client read the first event's bytes then dropped"
     );
     // The upstream's write side saw the cancellation: its peer (the
-    // router) closed within the stream window, so fewer chunks were
+    // vadis) closed within the stream window, so fewer chunks were
     // written than queued. Give the propagation a bounded wait.
     let disconnected = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
@@ -250,7 +250,7 @@ async fn conf_13_c_client_disconnect_cancels_upstream() {
 }
 
 /// (d) The zero-byte branch of R6: the upstream fails before the first
-/// body byte. Nothing observable left the router, so a fallback route may
+/// body byte. Nothing observable left the vadis, so a fallback route may
 /// answer; here the chain is empty, so the client gets the §8 error body
 /// (not a half-relay) — and still exactly one upstream attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -267,7 +267,7 @@ async fn conf_13_d_pre_relay_failure_is_an_error_not_a_half_relay() {
     let listen_port = testkit::free_port();
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
-    let serve_task = start_router(&config_path, listen_port);
+    let serve_task = start_vadis(&config_path, listen_port);
 
     let (status, body, _headers) = testkit::http_post(
         &format!("127.0.0.1:{listen_port}"),

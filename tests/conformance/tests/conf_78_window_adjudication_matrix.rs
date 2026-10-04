@@ -28,9 +28,9 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit;
-use router_core::store::{EventKind, NewEvent, ProjectionWrite};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit;
+use vadis_core::store::{EventKind, NewEvent, ProjectionWrite};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// Two plans on p-plan, both covering the family: a 1000-token plan
 /// (idx 0) and a 100-token plan (idx 1). The read must answer per plan:
@@ -68,8 +68,8 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// previous window's start (31 days earlier lands in the prior window).
 fn window_starts() -> (u64, u64) {
     let now_s = (now_us().max(0) as u64) / 1_000_000;
-    let cur = router_core::quota::window_start_for(now_s, 1);
-    let prev = router_core::quota::window_start_for(now_s.saturating_sub(31 * 86_400), 1);
+    let cur = vadis_core::quota::window_start_for(now_s, 1);
+    let prev = vadis_core::quota::window_start_for(now_s.saturating_sub(31 * 86_400), 1);
     (cur, prev)
 }
 
@@ -83,7 +83,7 @@ fn seed_and_read_used(
     tokens: i64,
     window_start_s: u64,
 ) -> u64 {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,
@@ -148,7 +148,7 @@ async fn arm(
         testkit::plan_rig_parts(tag, quota_yaml, testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
     let used = seed_and_read_used(&dir, plan_idx, tokens, window_start_s);
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let h = http_get(&listen_addr, "/health");
     serve_task.abort();

@@ -62,11 +62,11 @@ Read it in this order; each group answers a different question.
 7. **Usage and cost** — the normalized usage (total input, cached input, cache write,
    output, reasoning) and the five-tier cost breakdown with the total, plus the plan state
    after the charge where a plan applies. Cost is computed by the code path the product's
-   cost engine uses everywhere — the same one `router replay` will use when it lands
+   cost engine uses everywhere — the same one `vadis replay` will use when it lands
    ([`docs/spec.md` §9.3](../docs/spec.md)) — so any figure here can be recomputed from the
    record.
 8. **Result** — the status returned to the client, the upstream status, the failover origin
-   if the route was switched, router's own overhead, the upstream latency, and whether the
+   if the route was switched, vadis's own overhead, the upstream latency, and whether the
    upstream reported usage at all.
 9. **Failures** — `errors[]`, an array that is always present. No failure is an **empty
    array**, never a missing field; a failed transform, a failed trace write, an upstream
@@ -143,9 +143,9 @@ truth, and neither prices anything you cannot already find in a record:
 - **`GET /metrics`** (spec §4.16) renders §9.2's own figures over the last 900 seconds in the
   Prometheus text exposition format, behind the same token guard as the three protocol
   endpoints, with each labelled figure carried as a machine-readable `provenance` value.
-- **`router stats --config config.yaml --window 24h`** reads the traces in that window and prints
+- **`vadis stats --config config.yaml --window 24h`** reads the traces in that window and prints
   the cost and cache report, the measured savings per transform, the plan family's switches and
-  what they cost, and how many requests in the window have an outcome router cannot verify (see
+  what they cost, and how many requests in the window have an outcome vadis cannot verify (see
   [Operations](operations.md)). The window is **required** — a saving that does not state its
   window cannot be checked — and `--json` prints the same figures for a script.
 
@@ -154,15 +154,15 @@ conventions are the table above): you can tell a measured number from an estimat
 the report, not afterwards. The field-by-field shape, each figure's provenance and which record
 it comes from are [`docs/spec.md` §9](../docs/spec.md).
 
-Two things are deliberately **not** served in v0.1: **`router replay`** (recompute cost and
-cache over a fixed trace through the same code path that served it) and **`router trace tail`**
+Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and
+cache over a fixed trace through the same code path that served it) and **`vadis trace tail`**
 (follow the live decision stream). They are planned; the report above does not
 depend on them. Until they land, the trace file itself is the interface — one decision record
 per request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
 reason a surface's shape is frozen only by the change that implements it is the rule in
 [`docs/spec.md` §9.3](../docs/spec.md).
 
-`router stats` reads the trace files directly and opens the local store read-only, so it runs
+`vadis stats` reads the trace files directly and opens the local store read-only, so it runs
 while `serve` holds that state directory (see [Operations](operations.md)).
 
 ## How to read a stream's own numbers
@@ -239,7 +239,7 @@ figures are not savings figures: `verified` and `inferred` (the table above) are
 - [`docs/spec.md` §6](../docs/spec.md) — the observation contract: field groups, the
   definition of prefix blocks and their hashes, and the metric definitions.
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
-  `router stats` report with each figure's provenance and label, and what is not served yet.
+  `vadis stats` report with each figure's provenance and label, and what is not served yet.
 - [`docs/spec.md` §7](../docs/spec.md) — accounting: `verified` versus `inferred`.
 - [`docs/spec.md` §2.1](../docs/spec.md) — the transform mode: the exact byte promise when a content
   transform is enabled, and why a saving measured there is an estimate until a pair exists

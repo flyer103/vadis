@@ -5,7 +5,7 @@
 //! reason.
 //!
 //! (b) and (a)'s migration half are asserted against the real `SqliteStore`
-//! directly; (a)'s exit-code half drives the real `router_cli::serve`
+//! directly; (a)'s exit-code half drives the real `vadis_cli::serve`
 //! assembly with a store-unopenable config (the `state/` path blocked by a
 //! regular file), asserting exit code 4 and the reason on stderr.
 
@@ -71,7 +71,7 @@ async fn conf_23a_unopenable_store_exits_nonzero() {
     std::fs::write(dir.join("state"), b"not a directory").unwrap();
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let code = router_cli::serve(&cfg).await;
+    let code = vadis_cli::serve(&cfg).await;
     assert_eq!(
         code, 4,
         "store-unopenable must exit 4 (2=config, 3=bind), got {code}"
@@ -84,9 +84,9 @@ async fn conf_23a_unopenable_store_exits_nonzero() {
 fn conf_23b_second_writer_refused_with_locked_reason() {
     let dir = tempdir("lock");
     let db = dir.join("state/router.db");
-    let _first = router_store::SqliteStore::open(&db).unwrap();
-    match router_store::SqliteStore::open(&db) {
-        Err(router_core::StoreError::Locked) => {
+    let _first = vadis_store::SqliteStore::open(&db).unwrap();
+    match vadis_store::SqliteStore::open(&db) {
+        Err(vadis_core::StoreError::Locked) => {
             // The distinguishable reason, as designed.
         }
         other => panic!("expected StoreError::Locked, got {other:?}"),
@@ -100,7 +100,7 @@ fn conf_23a_schema_too_new_is_refused() {
     let dir = tempdir("future");
     let db = dir.join("state/router.db");
     {
-        let s = router_store::SqliteStore::open(&db).unwrap();
+        let s = vadis_store::SqliteStore::open(&db).unwrap();
         let conn = s.raw_connection();
         conn.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (99, '2999-01-01T00:00:00Z')",
@@ -108,11 +108,11 @@ fn conf_23a_schema_too_new_is_refused() {
         )
         .unwrap();
     }
-    match router_store::SqliteStore::open(&db) {
+    match vadis_store::SqliteStore::open(&db) {
         // `supported` is the binary's max DDL version (2 since the
         // `plan_state` migration, DESIGN §12.10.8) — asserted as a
         // relation, not a snapshot (AGENTS constraint 6).
-        Err(router_core::StoreError::SchemaTooNew {
+        Err(vadis_core::StoreError::SchemaTooNew {
             found: 99,
             supported,
         }) => {
@@ -125,8 +125,8 @@ fn conf_23a_schema_too_new_is_refused() {
 /// The binary's own maximum DDL version, read from a fresh store rather
 /// than hardcoded.
 fn s_max_supported() -> u32 {
-    use router_core::store::Store as _;
-    let dir = router_conformance::testkit::tempdir("conf23-max");
-    let s = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::Store as _;
+    let dir = vadis_conformance::testkit::tempdir("conf23-max");
+    let s = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     s.schema_version().unwrap()
 }

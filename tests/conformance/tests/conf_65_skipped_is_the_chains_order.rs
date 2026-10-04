@@ -20,7 +20,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The frozen condition-N sentence, verbatim (spec §8).
 const NO_ROUTE_SENTENCE: &str =
@@ -132,7 +132,7 @@ async fn rig(tag: &str, swap_fallback: bool) -> Rig {
     std::env::set_var("CONF65_D_KEY", "sk-d");
     std::env::set_var("CONF65_W_KEY", "sk-w");
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     Rig {
         d,

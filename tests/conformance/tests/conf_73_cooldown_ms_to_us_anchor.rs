@@ -46,13 +46,13 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::config::{
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::Nano;
-use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_core::cost::Nano;
+use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 const POLICY_700MS: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 700ms";
 
@@ -107,7 +107,7 @@ fn guard_word(
 async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) = testkit::plan_rig_parts(tag, "", POLICY_700MS).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -168,7 +168,7 @@ fn parse_ms(ts: &str) -> i64 {
         }
         f[..3].parse().unwrap()
     };
-    router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
+    vadis_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
         + h * 3_600_000
         + mi * 60_000
         + s * 1_000
@@ -287,7 +287,7 @@ async fn conf_73_projection_until_us_is_since_plus_700ms() {
     spill(&rig).await;
     let dir = rig.stop();
 
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let QueryRow::PlanState(Some(row)) = store.query(Query::PlanState { family: "m1" }).unwrap()
     else {
         panic!("plan_state row after the spill");

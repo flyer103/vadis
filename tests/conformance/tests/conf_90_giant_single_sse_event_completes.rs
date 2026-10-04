@@ -96,8 +96,8 @@
 //! card from editing `design/`.
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, SseChunk};
 use serde_json::Value;
+use vadis_conformance::testkit::{self, SseChunk};
 
 /// One event's `data:` payload: past the 64 MiB store bound and 4× the
 /// observed 16 MiB truncation point — comfortably above any machine's
@@ -205,8 +205,8 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
 /// Every stored event as (kind_raw, payload), read after the server
 /// stopped (CONF-44's reader).
 fn read_events(dir: &std::path::Path) -> Vec<(String, Value)> {
-    use router_core::store::{Query, QueryRow, Store as _};
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };
@@ -237,7 +237,7 @@ async fn run_arm(
     std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
     std::env::set_var("CONF90_MOCK_KEY", "sk-conf90");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     let listen_addr = format!("127.0.0.1:{listen_port}");
     testkit::wait_listening(&listen_addr);
 
@@ -249,7 +249,7 @@ async fn run_arm(
         &[],
     );
     let elapsed = t0.elapsed();
-    assert_eq!(status, 200, "router status");
+    assert_eq!(status, 200, "vadis status");
 
     let requests = upstream.requests();
     assert_eq!(requests.len(), 1, "exactly one upstream attempt");

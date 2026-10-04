@@ -66,14 +66,14 @@ the **string** `'2.2e-05'`. Measured at this HEAD: `yaml_scalar(2.2e-05) → '2.
 `_yaml_scalar_parse('2.2e-05') → '2.2e-05'` (type `str`), and the two are not equal. The audit then reported
 `[fail] config.live_providers_verbatim: arm a: providers differ from the base: deepseek: changed ['models']`
 on providers that had not changed at all. Because the audit's failure sets the same lumped flag the ladder
-reads, this single asymmetry also marked condition 3 as failed on both R23 rows. The real router accepts
+reads, this single asymmetry also marked condition 3 as failed on both R23 rows. The real vadis accepts
 `2.2e-05` (the arms ran), so this was purely the harness comparing two things it had rendered differently.
 
 **L3 — a flow collection nested in a flow mapping was read as a string.** `parse_simple_yaml`'s flow-mapping
 branch reads each member with `_yaml_scalar_parse` (`replay.py:675-707`), which never re-enters
 `_yaml_value`, so `- { days: [Mon, Tue, Wed, Thu, Fri], from: "01:00", to: "04:00", tz: UTC }` yields
 `days` = the **string** `'[Mon, Tue, Wed, Thu, Fri]'` while the block spelling yields a real list (both
-measured at this HEAD). The generated arm config then carried a string where the router requires
+measured at this HEAD). The generated arm config then carried a string where the vadis requires
 `expected a list of three-letter weekdays`, the arm never became ready, and the run ended at exit 3 with zero
 spend. The consequence is wider than the one line the findings named: **every** `peak: { multiplier: …,
 windows: [] }` in the shipped `config.example.yaml` also comes back with `windows` as the string `'[]'` — a
@@ -146,7 +146,7 @@ Rejected.
 
 **Keep text comparison and force the emitter to write literals the base would have written (L2).** Rejected
 as the primary rule: it makes the audit a self-consistency test of the harness's own renderer rather than a
-statement about the value the router will load, and it still fails a base whose (perfectly legal) spelling
+statement about the value the vadis will load, and it still fails a base whose (perfectly legal) spelling
 differs from the emitter's — which is precisely L2's false failure. The emitter half is kept, but as an
 *invariant* (parse(emit(v)) == v), not as the comparison's premise.
 
@@ -218,7 +218,7 @@ consequence (condition 3 fails until a live byte audit exists) is the *honest* s
   of *this* corpus would report a delta of zero (AGENTS constraint 4: no figure is presented as a saving).
 - **L4 is not closed here.** The live byte audits still do not run (there is no recording of what a real
   upstream received); Decision 4 only stops their absence from counting as a pass. Whether a live byte audit
-  is possible at all — from the router's own trace plus an `upstream/` equivalent — is R26's question.
+  is possible at all — from the vadis's own trace plus an `upstream/` equivalent — is R26's question.
 - **The per-arm plan is frozen for one pair.** A `paired-sessions` corpus declares exactly one `[[pair]]`;
   the generalisation (several pairs folded per arm) is deliberately not taken, and a corpus that declares
   more is refused rather than measured approximately.

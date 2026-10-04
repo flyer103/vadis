@@ -4,7 +4,7 @@
 - Date: 2026-09-23
 - Related: AGENTS constraints 1, 2, 4, 5 and 9; ADR-005 (the trace is the only product → analysis-loop channel);
   ADR-006/ADR-007 (integer NanoUsd; span-faithful forwarding); ADR-009 (one local store; **"Re-measurement is
-  owed"**, and the latency budget as *router's own work*); ADR-012 (the gate definitions, the corpus, the
+  owed"**, and the latency budget as *vadis's own work*); ADR-012 (the gate definitions, the corpus, the
   conformance assertions and the L1 envelope are outside the loop's mutable scope); ADR-016 **DP-1.4**'s
   registered finding (the operative envelope has no contract home); ADR-017 §3 (declared value vs measured
   value); ADR-019/ADR-028 (the transform contract and the recorder); spec §6 (the metric definitions), §7 (the
@@ -24,18 +24,18 @@ quote as "ADR-009's" (`p50 < 15 ms / p99 < 50 ms`) has no contract home at all �
 that, and the loop state record's waiting-on-human row 1 still carries it as open.
 
 **The quantity the gate names is not the quantity the shipped field reports.** `result.overhead_ms` is measured
-from the request's own start to the record's commit — `crates/router-proxy/src/forward.rs:593` sets `started`,
-`crates/router-proxy/src/accounting.rs:410` reads `ctx.started.elapsed()` — so it **includes the upstream
-attempt**. The report's own contract says otherwise: spec §6 defines `overhead_ms_p99` as *"router's own
+from the request's own start to the record's commit — `crates/vadis-proxy/src/forward.rs:593` sets `started`,
+`crates/vadis-proxy/src/accounting.rs:410` reads `ctx.started.elapsed()` — so it **includes the upstream
+attempt**. The report's own contract says otherwise: spec §6 defines `overhead_ms_p99` as *"vadis's own
 overhead (excluding upstream)"* and spec §9.2's provenance row excludes `upstream_ms`, while
-`router stats` printed the p99 of the **raw field** (`crates/router-cli/src/stats.rs:692`, `:764`). On any run
+`vadis stats` printed the p99 of the **raw field** (`crates/vadis-cli/src/stats.rs:692`, `:764`). On any run
 whose upstream would carry a delay, the figure the operator reads would be the upstream's number — which is
 exactly the run this ADR's baseline is. That contradiction is `R32-F5`, classified **blocking**.
 
 **The two serialization points a scale baseline is expected to find are known before it is run.** The store is
 one `Mutex<Connection>` with `PRAGMA locking_mode = EXCLUSIVE` and `synchronous=FULL` for the intent/accounting
-event classes (`crates/router-store/src/lib.rs:7-15`, `:117`, `:205`, `:218`), and the trace sink is one
-`Mutex<Inner>` appending one line per request (`crates/router-store/src/trace_sink.rs:39-42`). A concurrency
+event classes (`crates/vadis-store/src/lib.rs:7-15`, `:117`, `:205`, `:218`), and the trace sink is one
+`Mutex<Inner>` appending one line per request (`crates/vadis-store/src/trace_sink.rs:39-42`). A concurrency
 curve that rises and then bends is therefore the expected shape; what is not known is *where* it bends, and
 until R32 no number said so.
 
@@ -45,7 +45,7 @@ until R32 no number said so.
 
 **`router_overhead_ms` = `result.overhead_ms` − `result.upstream_ms`**, per record, in integer milliseconds.
 `overhead_ms` spans the whole request (start → commit, upstream included), `upstream_ms` is the answering
-attempt's own latency (`forward.rs:1194-1198`), so their difference is the router's own work. A record whose
+attempt's own latency (`forward.rs:1194-1198`), so their difference is the vadis's own work. A record whose
 `upstream_ms` is **`null`** (a boundary refusal, a pre-route rejection, a connect failure) is **excluded from
 the sample** — spec §6's definition, and §7's rule that an absent measurement is never read as a value. This
 quantity is the one the loop charter means, and it is the only latency quantity R32's numbers may be reported
@@ -53,7 +53,7 @@ for.
 
 Two consequences are part of the decision rather than footnotes:
 
-- **The product's own surface must agree.** `router stats`'s `overhead p99` line and its `--json`
+- **The product's own surface must agree.** `vadis stats`'s `overhead p99` line and its `--json`
   `overhead_ms_p99` member are that quantity's product-side surface; the report's derivation is corrected to
   the subtraction (`R32-F5`, witnessed by `CONF-84`, DESIGN §12.16), in step with spec §6/§9.2 as already
   written. Until that lands, the printed figure measures the upstream and is not the gate's number.
@@ -72,7 +72,7 @@ Two consequences are part of the decision rather than footnotes:
 | `throughput_tokens_per_s` | tokens/s | Σ the rung's measured usage (`input_total + output`, per spec §6's normalization) over the same window | trace `usage`, records with `usage_missing: false` only |
 | `error_rate` | ratio | non-2xx **as the client saw them** / requests attempted — reported beside, never merged with, the trace's `usage_missing` share (two different facts) | the client's own responses **and** the trace |
 | `write_pressure_delta` | ms | p99(`router_overhead_ms`) on the fresh-session arm **minus** the same on the sticky arm at one payload and concurrency. A **delta**, not a store write time: the product records no store-write timing, and this is the honest substitute that needs no new field | trace, two rungs |
-| `rss_max` | KiB | the `router serve` process's peak resident size during the rung, read by the harness from the process table | the operating system |
+| `rss_max` | KiB | the `vadis serve` process's peak resident size during the rung, read by the harness from the process table | the operating system |
 | `client_elapsed_ms` | ms | the client's own per-request elapsed **less the stand-in's declared injected delay**; p50 / p99 | the harness, **corroboration only** — never a gate input, and never presented as the trace's measurement |
 
 **Explicitly not measured in R32, with the reason:** *store write latency*. No field records it, adding one is a
@@ -103,7 +103,7 @@ to a **declared and measured** size before `serve` starts and reports the file's
 (`tests/conformance/src/lib.rs`'s loopback HTTP/1.1 mock: canned response, byte-recording) — a loopback HTTP/1.1
 server that records the bytes it received, answers a canned body, keeps the connection alive, and carries a
 **declared per-request delay**. The delay is declared because it is what makes D1's quantity legible: the
-router's own work must be visibly separable from the stand-in's, and the mechanism that separates them is the
+vadis's own work must be visibly separable from the stand-in's, and the mechanism that separates them is the
 run's own control (ladder E).
 
 **The machine is part of the report.** CPU model and core count, RAM, OS and the exact binary commit are stated
@@ -117,7 +117,7 @@ which one did:
 1. **the curve bends**: p99(`router_overhead_ms`) > 5 × that ladder's concurrency-1 p99, where the reference is
    `max(p99_derived, 1 ms)` — the guard exists because a sub-millisecond p99 reads `0` and `5 × 0` would make
    the criterion fire on every rung;
-2. **throughput saturates**: `throughput_rps` at rung *i* < 1.10 × rung *i−1* while the router process's CPU
+2. **throughput saturates**: `throughput_rps` at rung *i* < 1.10 × rung *i−1* while the vadis process's CPU
    stays ≥ 90 % of the machine's core count;
 3. **errors**: `error_rate` > 0 — a rung that answered errors is not a throughput rung, whatever its p99 says.
 
@@ -134,7 +134,7 @@ sense the waiting-on-human row means, and it deliberately does not become one:
   the loop state record's row 1, still open). R32 reports measured numbers against the **declared** reference
   the loop charter already names (rtk's <10 ms shape) and asserts no budget of its own.
 - **R32's numbers are the non-transform baseline.** The run's transform plugin configuration is declared with
-  its numbers (ladder A–E: **no rule engine loaded and no `X-Router-Transform` header**, i.e. the v0.1 assembly
+  its numbers (ladder A–E: **no rule engine loaded and no `X-Vadis-Transform` header**, i.e. the v0.1 assembly
   with `plugins:` absent), and R33 re-runs **the same shape** with the plugin enabled so the two are comparable
   field for field. The transform path's contribution is `to be measured by R33`; R32 measures nothing about it.
 - **The declared/measured pair ADR-017 §3 established still governs.** A record may restate the declared
@@ -162,10 +162,10 @@ decision, and the harness must drive the real `serve` binary as a black box rath
 
 | Alternative | Why rejected |
 |---|---|
-| report `client_elapsed_ms` as the gate's quantity | it measures the client, the socket and the stand-in as well as the router, and it cannot separate them; the trace already carries the router's own two fields, so the client-side number is demoted to corroboration (D2) rather than used as the measurement |
+| report `client_elapsed_ms` as the gate's quantity | it measures the client, the socket and the stand-in as well as the vadis, and it cannot separate them; the trace already carries the vadis's own two fields, so the client-side number is demoted to corroboration (D2) rather than used as the measurement |
 | change `overhead_ms` itself to exclude the upstream | it moves the meaning of a field that has shipped (R2G6 records its inclusive reading, the loop state record), and every past record's value would need re-reading; the report-side derivation reaches the same number while leaving the trace's field and every historical record unchanged |
 | add µs-resolution trace fields (`overhead_us` / `upstream_us`) | additive and schema-preserving in principle, but it is a spec §6 field-group change and a product change; this round's constraints keep both schema versions at 2 and spend the round's contract budget on the body bound. It is the right change if a future round needs sub-millisecond claims |
-| a real provider as the upstream | the round's cap is $0.00, a real upstream's latency is not the router's, and an unmeasured cross-machine delay would make D1's quantity unreadable |
+| a real provider as the upstream | the round's cap is $0.00, a real upstream's latency is not the vadis's, and an unmeasured cross-machine delay would make D1's quantity unreadable |
 | `criterion` / a Rust benchmark binary | a new dependency is a decision, not an import (DESIGN §12.1), and an in-process benchmark bypasses the listener, the store and the trace — i.e. exactly the layers whose capacity is unknown |
 | a single concurrency rung (e.g. 32) | a throughput number with no curve cannot show where it breaks, and the gate's p99 is a different figure at C = 1 than at C = 128 |
 | freeze a budget from R32's own numbers | the gate's threshold is outside the loop's mutable scope (ADR-012) and the envelope's contract home is an open human row; the loop would be setting the bar it is judged by |
@@ -175,7 +175,7 @@ decision, and the harness must drive the real `serve` binary as a black box rath
 ## Rationale
 
 - **The quantity follows the gate's own words.** The loop charter says *the decision + transform overhead* —
-  the router's work, not the provider's. The subtraction is not a convenience; it is the only reading under
+  the vadis's work, not the provider's. The subtraction is not a convenience; it is the only reading under
   which the gate is about this repository at all.
 - **A declared injected delay is what makes a nonzero measurement meaningful.** With a zero-delay stand-in the
   inclusive and the exclusive quantities coincide, which is precisely why the R4 figure (mock, no transform
@@ -203,7 +203,7 @@ decision, and the harness must drive the real `serve` binary as a black box rath
   decision with a measured quantity attached.
 - Honest boundaries: the baseline is **one machine at one commit**; the quantity is integer-millisecond
   coarse; `write_pressure_delta` is a delta and is not a store-write latency; the store's own write latency
-  stays unmeasured for want of a field; and nothing here says anything about how the router behaves above the
+  stays unmeasured for want of a field; and nothing here says anything about how the vadis behaves above the
   ceiling, because D4 defines the ceiling and stops there.
 
 ## Publication note (2026-10-03, R62-2)

@@ -21,7 +21,7 @@
 
 **The repository has run four rounds of measurement and holds no `verified` figure.** R30 made the live
 byte audits runnable, R31 fixed the recorder and ran the first post-R24 live pair, R32 measured the
-router's own latency under scale, R33 measured the transform path's latency, and R34 built the money
+vadis's own latency under scale, R33 measured the transform path's latency, and R34 built the money
 arithmetic and ranked the six levers by $ — every row `inferred`. The loop charter's **Cost gate** reads
 *"the `verified` $ and token ledger of a fixed-trace replay"*, and among the four numeric directions D3 is
 the only one that is a router transform with a landed mechanism and a defined acceptance test.
@@ -46,9 +46,9 @@ the only one that is a router transform with a landed mechanism and a defined ac
 
 ### D1. The lever: the tier-A rule engine, in the request's own `Transform` mode, and the rule that realises it is named
 
-L2 is realised by the landed mechanism and by nothing new: `crates/router-plugins/src/transform_rules.rs`
+L2 is realised by the landed mechanism and by nothing new: `crates/vadis-plugins/src/transform_rules.rs`
 (the engine over `rules/tool_output.toml`), the `Transform` mode and its header resolution, the
-composition step `compose_transform_stage` (`crates/router-proxy/src/forward.rs:382-417`) and the per-rule
+composition step `compose_transform_stage` (`crates/vadis-proxy/src/forward.rs:382-417`) and the per-rule
 ledger.
 
 **The rule that realises it for the clients this repository configures is the shell-log rule
@@ -63,7 +63,7 @@ is named `exec_command` (36 payload nodes, the loop's corpus-shape record).
 - **the transform's own byte delta** — the treatment arm's ledger (`TransformRecord{plugin, edited_paths,
   saved_input_tokens, added_input_tokens, cache_impact}`), per rule per request, cross-checked against the
   recorded wire by `ledger.edit_counts_match_wire`; exact in bytes, **`inferred`** in tokens
-  (`estimate_tokens` = `bytes/4`, `crates/router-core/src/transform.rs:189-191`);
+  (`estimate_tokens` = `bytes/4`, `crates/vadis-core/src/transform.rs:189-191`);
 - **the pair's measured usage delta** — `delta.input_total` read from the **upstream's own `usage`** on
   both arms. This is the only figure that may carry `verified`.
 
@@ -88,7 +88,7 @@ A `verified` label requires, conjunctively (the loop replay contract): (0) disti
 session identities **and** a live path in REAL-9 §10.1's sense; (1) **both arms `external`**, on ADR-028's
 recorder route only when that route's own conditions hold; (2) the upstream's own `usage`, both arms;
 (3) the three byte audits **passing** on every paired item (never an absence — `VER-4.4.1`); (4) a clean
-harness tree at a named commit with the router binary hashed. Any failure ⇒ `inferred`,
+harness tree at a named commit with the vadis binary hashed. Any failure ⇒ `inferred`,
 `verified_eligible: false`, and the **first failing condition named**. **This ADR adds nothing to the
 ladder** — it is outside the loop's mutable scope (ADR-012 item 2) — and adds one reporting obligation:
 limb 3 of D2 must be published beside the figure.
@@ -144,7 +144,7 @@ with ≥ 1 ledger-attested edit on the treatment side — and the figure, with i
 count, basis, producing commit and window rate, is recomputable from committed bytes.
 
 **May not claim:** that the figure is the transform's alone (limb 3's bound is published beside it); that
-it generalises beyond the corpus's own shape; that it is a product claim (`router stats` serves no
+it generalises beyond the corpus's own shape; that it is a product claim (`vadis stats` serves no
 `$`-ranked table, ADR-031 D6); that it carries a threshold (the L1 envelope is the loop state record's
 waiting-on-human row 1); that a `tee`'d original is retrievable (the retrieve channel is unimplemented,
 spec §4.4); or — where the corpus's bytes were composed rather than captured — that they are client
@@ -181,7 +181,7 @@ observed client vocabulary cannot fail for the right reason.
   requests`, a named base, the window rule, the label rule) and adds no row.
 - **It does not amend the label ladder, the gates, the corpus, the conformance assertions or the L1
   envelope** (ADR-012 item 2; AGENTS 9).
-- **It does not decide whether `crates/router-core`'s `TOOL_KINDS` table should name configured clients**:
+- **It does not decide whether `crates/vadis-core`'s `TOOL_KINDS` table should name configured clients**:
   that is a human's wording decision, registered in the loop's freeze note §PREREQUISITE.
 - **It does not choose between the capture route and the nomination route** — that was the human's answer
   to the round's `needs_input`, and it is given: **route (ii)**, the nomination route, 2026-09-24 (D4's
@@ -196,8 +196,8 @@ the corpus score, the probe's method, the readings) · the loop's probe corpus s
 the loop replay contract §5/§9/§10/§11/§14 and the same file (the five conditions) ·
 the loop's result records (the committed live row: `delta.input_total = 79`, `0
 edited path(s)`) · the recorded codex-pair manifest (the corpus's own
-`exclusion_note`) · `rules/tool_output.toml` · `crates/router-core/src/transform.rs:154-191` ·
-`crates/router-plugins/src/transform_rules.rs:178-337` · `crates/router-proxy/src/forward.rs:382-417` ·
+`exclusion_note`) · `rules/tool_output.toml` · `crates/vadis-core/src/transform.rs:154-191` ·
+`crates/vadis-plugins/src/transform_rules.rs:178-337` · `crates/vadis-proxy/src/forward.rs:382-417` ·
 the loop charter · `design/DESIGN.md` §12.12 (the transform pipeline) and §12.18 (this method's
 product-side pointer) · `design/decisions/ADR-031-cost-model-and-lever-ranking.md`.
 

@@ -1,9 +1,9 @@
 //! CONF-43 (spec §9.3): **docs ↔ CLI consistency guard**. The verdict on
-//! `router replay` / `router trace tail` is **out** — spec §9.3 freezes them
+//! `vadis replay` / `vadis trace tail` is **out** — spec §9.3 freezes them
 //! as "planned, not served" ("not subcommands of this binary"), and the
 //! version-control record agrees (`serve` and `stats` are the only landed
 //! commands). So this case delivers the guard instead of the commands: every
-//! `router <subcommand>` mention in `book/` and `README.md` must resolve in
+//! `vadis <subcommand>` mention in `book/` and `README.md` must resolve in
 //! the real CLI parser — either as a served subcommand, or as a *whitelisted
 //! deferral* — so that a **future** false promise in the docs necessarily
 //! turns this case red (AGENTS constraint 6: relations, not snapshots).
@@ -12,7 +12,7 @@
 //!
 //! - Direction 1 (docs → CLI) is computed per *file position*: an entry is
 //!   whitelisted only when the mention sits inside a paragraph that carries a
-//!   deferral marker. A new doc paragraph that promises `router replay` as
+//!   deferral marker. A new doc paragraph that promises `vadis replay` as
 //!   served — or any mention of a subcommand that does not exist at all —
 //!   produces no whitelist entry and fails direction 1.
 //! - The whitelist vocabulary is itself derived from the live parser (the
@@ -45,15 +45,15 @@ fn repo_root() -> PathBuf {
 }
 
 /// The subcommand names the real parser accepts, enumerated from
-/// `router_cli::Cli` (the derived `Command` enum) — never a hardcoded list.
+/// `vadis_cli::Cli` (the derived `Command` enum) — never a hardcoded list.
 fn parser_subcommands() -> Vec<String> {
-    router_cli::Cli::command()
+    vadis_cli::Cli::command()
         .get_subcommands()
         .map(|sc| sc.get_name().to_string())
         .collect()
 }
 
-/// A `router <word>` mention found in the docs, with its provenance.
+/// A `vadis <word>` mention found in the docs, with its provenance.
 #[derive(Debug, Clone)]
 struct Mention {
     word: String,
@@ -94,10 +94,10 @@ fn paragraph_of(line_no: usize, lines: &[&str]) -> String {
     lines[start - 1..end].join(" ")
 }
 
-/// Extract every `router <word>` mention from one markdown file. Outside
+/// Extract every `vadis <word>` mention from one markdown file. Outside
 /// code fences only inline code spans (`` `…` ``) count, so prose like
-/// "the router serves requests" never produces a mention; inside a fence,
-/// a line that begins `router <word>` (optionally after `$ `) is a command.
+/// "the vadis serves requests" never produces a mention; inside a fence,
+/// a line that begins `vadis <word>` (optionally after `$ `) is a command.
 fn mentions_in_file(path: &Path) -> Vec<Mention> {
     let text = std::fs::read_to_string(path).expect("doc file is readable UTF-8");
     let lines: Vec<&str> = text.lines().collect();
@@ -112,8 +112,8 @@ fn mentions_in_file(path: &Path) -> Vec<Mention> {
         if in_fence {
             if let Some(rest) = line
                 .trim_start()
-                .strip_prefix("router ")
-                .or_else(|| line.trim_start().strip_prefix("$ router "))
+                .strip_prefix("vadis ")
+                .or_else(|| line.trim_start().strip_prefix("$ vadis "))
             {
                 let word: String = rest
                     .chars()
@@ -138,8 +138,8 @@ fn mentions_in_file(path: &Path) -> Vec<Mention> {
                     if let Some(close) = line[i + 1..].find('`') {
                         let span = &line[i + 1..i + 1 + close];
                         let mut rest = span;
-                        if rest.starts_with("router ") {
-                            rest = &rest["router ".len()..];
+                        if rest.starts_with("vadis ") {
+                            rest = &rest["vadis ".len()..];
                             let word: String = rest
                                 .chars()
                                 .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
@@ -268,7 +268,7 @@ fn conf_43_docs_and_cli_agree_on_the_subcommand_set() {
     }
     assert!(
         !mentions.is_empty(),
-        "the docs must mention at least one `router <subcommand>`"
+        "the docs must mention at least one `vadis <subcommand>`"
     );
 
     let classified = classify(&mentions, &served);

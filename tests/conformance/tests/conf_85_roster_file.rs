@@ -4,8 +4,8 @@
 //! cards are serial because one path has one writer at a time (§12.8's
 //! CONF-85 allocation).
 //!
-//! Against the real `serve` loader (`router_cli::config_load::load` — the
-//! one entry point `serve` itself uses, `router-cli/src/lib.rs`), each
+//! Against the real `serve` loader (`vadis_cli::config_load::load` — the
+//! one entry point `serve` itself uses, `vadis-cli/src/lib.rs`), each
 //! shape of spec §4.14's ladder is refused naming **its own key**, with
 //! the inline control green on the same rig:
 //!
@@ -36,7 +36,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit;
+use vadis_conformance::testkit;
 
 /// The server-section head every root below shares (the CONF-53 shape).
 const ROOT_HEAD: &str = r#"
@@ -92,7 +92,7 @@ fn load_err(root_text: &str, roster: Option<&str>) -> String {
     if let Some(body) = roster {
         std::fs::write(dir.join("providers.yaml"), body).unwrap();
     }
-    router_cli::config_load::load(&root).unwrap_err()
+    vadis_cli::config_load::load(&root).unwrap_err()
 }
 
 // (a) both keys written → refused naming both keys and the root — with
@@ -111,7 +111,7 @@ fn conf_85a_both_written_is_refused_naming_both_keys() {
                 (root, dir.join("providers.yaml"))
             }
         };
-        let err = router_cli::config_load::load(&root).unwrap_err();
+        let err = vadis_cli::config_load::load(&root).unwrap_err();
         assert!(err.contains("both"), "{tag}: got: {err}");
         assert!(err.contains("providers:"), "{tag}: got: {err}");
         assert!(err.contains("providers_file"), "{tag}: got: {err}");
@@ -130,7 +130,7 @@ fn conf_85b_neither_written_is_refused_naming_both_keys() {
     let dir = testkit::tempdir("85b");
     let root = dir.join("config.yaml");
     std::fs::write(&root, rosterless_root()).unwrap();
-    let err = router_cli::config_load::load(&root).unwrap_err();
+    let err = vadis_cli::config_load::load(&root).unwrap_err();
     assert!(err.contains("neither"), "got: {err}");
     assert!(err.contains("providers:"), "got: {err}");
     assert!(err.contains("providers_file"), "got: {err}");
@@ -141,8 +141,8 @@ fn conf_85b_neither_written_is_refused_naming_both_keys() {
     let dir = testkit::tempdir("85b-empty");
     let root = dir.join("config.yaml");
     std::fs::write(&root, decided).unwrap();
-    let rc = router_cli::config_load::load(&root).expect("providers: [] loads");
-    assert!(rc.router.providers.is_empty());
+    let rc = vadis_cli::config_load::load(&root).expect("providers: [] loads");
+    assert!(rc.vadis.providers.is_empty());
 
     // providers: null — present and wrong, refused by `providers:`.
     let null_inline = rosterless_root().replace("aliases:", "providers: null\naliases:");
@@ -167,7 +167,7 @@ fn conf_85c_missing_roster_names_key_value_and_resolved_path() {
     let dir = testkit::tempdir("85c");
     let root = dir.join("config.yaml");
     std::fs::write(&root, split_root()).unwrap();
-    let err = router_cli::config_load::load(&root).unwrap_err();
+    let err = vadis_cli::config_load::load(&root).unwrap_err();
     assert!(err.contains("providers_file"), "got: {err}");
     assert!(err.contains("'./providers.yaml'"), "got: {err}");
     let resolved = dir.join("providers.yaml");
@@ -222,8 +222,8 @@ fn conf_85d_not_the_roster_block_names_the_rosters_own_path() {
     // carries the empty list is the same legal decision as `providers: []`.
     let dir = testkit::tempdir("85d-empty");
     let (root, _) = testkit::write_config_pair(&dir, &split_root(), "providers: []\n");
-    let rc = router_cli::config_load::load(&root).expect("a roster of providers: [] loads");
-    assert!(rc.router.providers.is_empty());
+    let rc = vadis_cli::config_load::load(&root).expect("a roster of providers: [] loads");
+    assert!(rc.vadis.providers.is_empty());
 }
 
 // (e) a root key that references the roster and does not resolve there →
@@ -255,7 +255,7 @@ fn conf_85e_unresolved_reference_names_the_key_and_the_roster_file() {
         let root_text = format!("{ROOT_HEAD}providers_file: ./providers.yaml\n\n{tail}");
         let dir = testkit::tempdir("85e");
         let (root, roster) = testkit::write_config_pair(&dir, &root_text, ROSTER);
-        let err = router_cli::config_load::load(&root).unwrap_err();
+        let err = vadis_cli::config_load::load(&root).unwrap_err();
         assert!(err.contains(key), "{tag}: the key path is named, got: {err}");
         assert!(err.contains(value), "{tag}: the value found is named, got: {err}");
         assert!(
@@ -276,32 +276,32 @@ fn conf_85f_named_not_discovered_and_the_pair_joins_deep_equal() {
     let dir = testkit::tempdir("85f-inline");
     let root = dir.join("config.yaml");
     std::fs::write(&root, inline_config()).unwrap();
-    let inline = router_cli::config_load::load(&root).expect("the inline form loads");
-    assert_eq!(inline.router.providers.len(), 1);
-    assert_eq!(inline.router.providers[0].name, "p");
+    let inline = vadis_cli::config_load::load(&root).expect("the inline form loads");
+    assert_eq!(inline.vadis.providers.len(), 1);
+    assert_eq!(inline.vadis.providers[0].name, "p");
 
     // A stray providers.yaml beside the inline root — carrying a provider
     // the inline roster does not have — is never read: §4.12's four
     // candidates find *the config file*; the roster is named, not found.
     let stray = "providers:\n  - name: stray\n    urls: { chat: https://stray.example/v1 }\n    api_key_env: CONF85_STRAY_KEY\n    wire_api: chat\n    supports: [chat]\n    models:\n      - id: s1\n        context: 8k\n        price: { input_miss: 0.001, input_hit: 0.0001, cache_write: 0.0, output: 0.002, peak: { multiplier: 1.0, windows: [] } }\n        source: \"stray (never read)\"\n";
     std::fs::write(dir.join("providers.yaml"), stray).unwrap();
-    let reloaded = router_cli::config_load::load(&root).expect("the inline form still loads");
+    let reloaded = vadis_cli::config_load::load(&root).expect("the inline form still loads");
     assert_eq!(
-        reloaded.router.providers.len(),
+        reloaded.vadis.providers.len(),
         1,
         "the stray providers.yaml beside the root was read"
     );
-    assert_eq!(reloaded.router.providers[0].name, "p");
+    assert_eq!(reloaded.vadis.providers[0].name, "p");
 
     // The pair, written into the case's own temp dir by the helper, joins
     // to exactly the inline form's roster (deep-equal over the Debug
     // form — the config types carry Debug, not PartialEq).
     let dir = testkit::tempdir("85f-pair");
     let (root, _) = testkit::write_config_pair(&dir, &split_root(), ROSTER);
-    let pair = router_cli::config_load::load(&root).expect("the pair loads");
+    let pair = vadis_cli::config_load::load(&root).expect("the pair loads");
     assert_eq!(
-        format!("{:?}", pair.router.providers),
-        format!("{:?}", inline.router.providers),
+        format!("{:?}", pair.vadis.providers),
+        format!("{:?}", inline.vadis.providers),
         "the joined roster is the inline roster, entry for entry"
     );
 }
@@ -330,7 +330,7 @@ fn conf_85b2_nullish_providers_file_is_refused_by_key_never_searched() {
     // read and the config would LOAD — the refusal below is the proof
     // it is never touched.
     std::fs::write(dir.join("null"), ROSTER).unwrap();
-    let err = router_cli::config_load::load(&root).unwrap_err();
+    let err = vadis_cli::config_load::load(&root).unwrap_err();
     assert!(
         err.contains("providers_file"),
         "the key is named, got: {err}"
@@ -365,9 +365,9 @@ fn conf_85b2_nullish_providers_file_is_refused_by_key_never_searched() {
         rosterless_root().replace("aliases:", "providers_file: ./null\naliases:"),
     )
     .unwrap();
-    let rc = router_cli::config_load::load(&named).expect("an explicit './null' names the file");
-    assert_eq!(rc.router.providers.len(), 1);
-    assert_eq!(rc.router.providers[0].name, "p");
+    let rc = vadis_cli::config_load::load(&named).expect("an explicit './null' names the file");
+    assert_eq!(rc.vadis.providers.len(), 1);
+    assert_eq!(rc.vadis.providers[0].name, "p");
 }
 
 // =========================================================================
@@ -448,7 +448,7 @@ async fn identity_rig(tag: &str) -> Rig {
     .unwrap();
     std::env::set_var("CONF85_P_KEY", "sk-conf85");
     let cfg = root.to_string_lossy().into_owned();
-    let serve = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&addr);
     Rig {
         addr,
@@ -580,8 +580,8 @@ fn decision_content(rec: &serde_json::Value) -> serde_json::Value {
 /// from the store after serve has stopped (the writer lock is the
 /// process's own while it runs, CONF-23).
 fn config_applied_payload(dir: &std::path::Path) -> serde_json::Value {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -671,7 +671,7 @@ async fn identity_rig_with_roster(tag: &str, input_miss: &str) -> Rig {
     let (root, roster) = testkit::write_config_pair(&dir, &root_text, &roster_body);
     std::env::set_var("CONF85_P_KEY", "sk-conf85");
     let cfg = root.to_string_lossy().into_owned();
-    let serve = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&addr);
     Rig {
         addr,
@@ -723,7 +723,7 @@ async fn conf_85h_comment_moves_only_the_digest_and_price_moves_cost() {
     // The comment edit moves NOTHING else: same decision, same bytes on
     // the wire, same Nano figures. `decision_ms` is excluded before the
     // comparison: it is a wall-clock measurement (DecisionRec,
-    // router-core/src/trace.rs), not decision content — a measurement is
+    // vadis-core/src/trace.rs), not decision content — a measurement is
     // not content (content determinism, AGENTS.md constraint 2), so two
     // identical decisions may legitimately carry different durations.
     // Every other subfield is still compared as a whole.
@@ -795,7 +795,7 @@ async fn identity_rig_with_roster_edited(tag: &str, edit: RosterEdit) -> Rig {
     let (root, roster) = testkit::write_config_pair(&dir, &root_text, &roster_body);
     std::env::set_var("CONF85_P_KEY", "sk-conf85");
     let cfg = root.to_string_lossy().into_owned();
-    let serve = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&addr);
     Rig {
         addr,

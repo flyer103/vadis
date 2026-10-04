@@ -376,7 +376,7 @@ gate says so in its own vocabulary.
 - the loop corpus tool (`draft`/`verify`/`score`), the loop auto-corpus tool,
   the same file (`size_bucket`, `_metric`), the loop route check (the gate's shape).
 - `rules/tool_output.toml:163-197` (`[filters.bash-log-noise]`, its stages and parameters);
-  `crates/router-core/src/transform.rs:154-183` (the selection paths).
+  `crates/vadis-core/src/transform.rs:154-183` (the selection paths).
 - `config.example.yaml:147-160` (`deepseek-flash`, off-peak, source-named); the loop execution model
   (the promotion path, where this ADR's step lands).
 

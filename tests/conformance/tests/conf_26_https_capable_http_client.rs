@@ -28,7 +28,7 @@ fn conf_26_reqwest_has_a_tls_backend() {
         ]
         .iter()
         .any(|f| line.contains(f)),
-        "reqwest is declared without a TLS feature, so the router cannot reach any real \
+        "reqwest is declared without a TLS feature, so the vadis cannot reach any real \
          (https) provider: {line}"
     );
     assert!(

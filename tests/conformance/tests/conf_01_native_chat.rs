@@ -1,6 +1,6 @@
 //! CONF-01 (DESIGN §10 conformance · fidelity): chat inbound → `wire_api:
 //! chat` native passthrough; the upstream-visible body is byte-identical to
-//! the client body minus the router-owned top-level keys, with the value of
+//! the client body minus the vadis-owned top-level keys, with the value of
 //! the top-level `model` member replaced by the resolved provider-native id —
 //! spec §2 permits exactly those two mutations. Proven over real HTTP
 //! against a loopback mock upstream that records exactly the bytes it received
@@ -8,19 +8,19 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 const CLIENT_BODY: &str = r#"{
   "model": "mock/glm",
   "messages": [{"role": "system", "content": "a{b}, \"quoted\" \\ backslash"}, {"role": "user", "content": "héllo 😀"}],
   "tools": [{"type": "function", "function": {"name": "f", "parameters": {"x": [1, 2, {"y": "brace } comma ,"}]}}}],
   "temperature": 1e-9,
-  "router_meta": {"echo": true, "nested": [{"k": "v"}]},
+  "vadis_meta": {"echo": true, "nested": [{"k": "v"}]},
   "stream": false
 }
 "#;
 
-/// The same bytes minus the `router_meta` member and its leading comma, and
+/// The same bytes minus the `vadis_meta` member and its leading comma, and
 /// with the `model` value replaced by the route's native id (`mock/glm` → the
 /// roster entry `glm`) — the two permitted rewrites (AGENTS constraint 1).
 const EXPECTED_UPSTREAM_BODY: &str = r#"{
@@ -82,7 +82,7 @@ async fn conf_01_native_chat_passthrough() {
     std::env::set_var("CONF01_MOCK_KEY", "sk-conf01");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _headers) = testkit::http_post(
@@ -93,7 +93,7 @@ async fn conf_01_native_chat_passthrough() {
     );
 
     // (a) 200 and the upstream's response bytes relayed verbatim.
-    assert_eq!(status, 200, "router status");
+    assert_eq!(status, 200, "vadis status");
     assert_eq!(
         body,
         UPSTREAM_OK.as_bytes(),
@@ -108,14 +108,14 @@ async fn conf_01_native_chat_passthrough() {
     assert_eq!(req.path, "/v1/chat/completions");
 
     // (c) BYTE FIDELITY: what the upstream received equals the client's
-    // bytes minus the router-owned member — not a reserialization.
+    // bytes minus the vadis-owned member — not a reserialization.
     assert_eq!(
         req.body,
         EXPECTED_UPSTREAM_BODY.as_bytes(),
-        "upstream-visible body must be byte-identical to the client body minus router_meta, with the native model id"
+        "upstream-visible body must be byte-identical to the client body minus vadis_meta, with the native model id"
     );
-    // The router_meta substring really is absent upstream.
-    assert!(!String::from_utf8_lossy(&req.body).contains("router_meta"));
+    // The vadis_meta substring really is absent upstream.
+    assert!(!String::from_utf8_lossy(&req.body).contains("vadis_meta"));
 
     // (d) auth traveled as the provider's bearer, not the client's anything.
     assert_eq!(req.header("authorization"), Some("Bearer sk-conf01"));

@@ -18,54 +18,54 @@ That omission already has a price at `HEAD` (`76afd81`, i.e. the commit this ADR
 not hypothetical:
 
 1. **One policy predicate has four re-derivations.** The plan policy's probe gate is implemented once in the
-   decision core (`crates/router-core/src/plan.rs:151-178`, `PlanFirstRule::probe_admitted`) and re-derived, arm
-   by arm, in the reporting surface (`crates/router-proxy/src/health.rs:182-199`, the `blocked_by` chain).
+   decision core (`crates/vadis-core/src/plan.rs:151-178`, `PlanFirstRule::probe_admitted`) and re-derived, arm
+   by arm, in the reporting surface (`crates/vadis-proxy/src/health.rs:182-199`, the `blocked_by` chain).
    Beside it: the cooldown's ms→µs conversion (`plan.rs:232-235` vs `health.rs:228-230`), ADR-011's
    route-availability read (`forward.rs:1308-1318` vs `health.rs:262-273`) and the local counter's window
    verdict (`forward.rs:1201-1243` vs `health.rs:279-320`). The copies are not equal: two of them take a
    different clock unit, and two read the store through a different owner (`Forwarder::store` vs
-   `AppState::store`, `crates/router-proxy/src/health.rs:24-28`). R5 found one of the four and ledgered it as
+   `AppState::store`, `crates/vadis-proxy/src/health.rs:24-28`). R5 found one of the four and ledgered it as
    R5-G5; the class is four, and no register says so.
 2. **One resolution rule has two implementations.** `Forwarder::resolve_route`
-   (`crates/router-proxy/src/forward.rs:1270-1306`) and the free `resolve_route`
-   (`crates/router-proxy/src/stream_forward.rs:981-1017`) resolve an alias/explicit route with the same 404
+   (`crates/vadis-proxy/src/forward.rs:1270-1306`) and the free `resolve_route`
+   (`crates/vadis-proxy/src/stream_forward.rs:981-1017`) resolve an alias/explicit route with the same 404
    codes and the same message strings, written twice. The capability check beside them is duplicated the same
    way (`forward.rs:491-507` vs `stream_forward.rs:332-345`), each rendering its own error body.
 3. **Interfaces the documents name and the type system does not have.** DESIGN §12.3 sketches `trait Selector`
    and `trait Guard` + `GuardOutcome` (`design/DESIGN.md:367,368-369`); neither exists in `crates/`
    (`grep -rn "trait Selector\|trait Guard\|trait Transform" crates/` returns nothing). The comment in the code
    that means to use the second one refers to it as existing vocabulary
-   (`crates/router-core/src/plan.rs:3-5`) while the type it actually answers with is plan-specific
+   (`crates/vadis-core/src/plan.rs:3-5`) while the type it actually answers with is plan-specific
    (`PlanMove`, `plan.rs:52-69`), and the caller is a hand-written method on the forwarder
    (`forward.rs:1121-1200`). Meanwhile `auto` is refused by a literal string comparison
    (`forward.rs:403-407`) even though spec §3 says the slot is "reserved structurally"
-   (`docs/spec.md:78-79`) and `decision.selection_source` is a bare `String` (`crates/router-core/src/trace.rs:88`)
+   (`docs/spec.md:78-79`) and `decision.selection_source` is a bare `String` (`crates/vadis-core/src/trace.rs:88`)
    whose third value (`Plugin`, DESIGN §12.3) has no producer and no entry in spec §3's own list.
 4. **Capabilities that exist in prose and not in code.** The transform chain (ADR-003, spec §4.4, DESIGN
-   §12.3) has no implementation: `crates/router-plugins/src/lib.rs:1-4` is a four-line stub and every record
-   built today carries `transforms: Vec::new()` (`crates/router-proxy/src/accounting.rs:483`,
-   `crates/router-proxy/src/auth.rs:170`). The plugin runtime (ADR-002, DESIGN §4/§12.2) is the same:
-   `crates/router-runtime/src/lib.rs:1-4` is a stub, `inject`/`isolate`/`intercept` are parsed
-   (`crates/router-core/src/config.rs:825-840`) and validated (`config.rs:1232-1261`) but never consumed —
+   §12.3) has no implementation: `crates/vadis-plugins/src/lib.rs:1-4` is a four-line stub and every record
+   built today carries `transforms: Vec::new()` (`crates/vadis-proxy/src/accounting.rs:483`,
+   `crates/vadis-proxy/src/auth.rs:170`). The plugin runtime (ADR-002, DESIGN §4/§12.2) is the same:
+   `crates/vadis-runtime/src/lib.rs:1-4` is a stub, `inject`/`isolate`/`intercept` are parsed
+   (`crates/vadis-core/src/config.rs:825-840`) and validated (`config.rs:1232-1261`) but never consumed —
    the only reader of `config.plugins` outside validation is `/health`'s listing
-   (`crates/router-proxy/src/health.rs:34`) — while ADR-013's shadow and canary rails are built on
+   (`crates/vadis-proxy/src/health.rs:34`) — while ADR-013's shadow and canary rails are built on
    `ctx.isolate`/`ctx.intercept`.
 5. **The converse: an implemented capability with no name.** Inbound admission (spec §4.7) landed in R6 as a
    guard above the path split that reads headers, writes no bytes and leaves one pre-pipeline record
-   (`crates/router-proxy/src/auth.rs:25,34,49,121`; wiring `crates/router-cli/src/lib.rs:344-375`). It is a
+   (`crates/vadis-proxy/src/auth.rs:25,34,49,121`; wiring `crates/vadis-cli/src/lib.rs:344-375`). It is a
    boundary of the same rank as the byte boundary, and nothing in the vocabulary says so.
 
 Two failure modes follow, and the vocabulary exists to make both visible rather than remembered:
 
 - **Silent drift.** A capability implemented twice does not fail; it disagrees, later, in a way that looks like
   a bug in one place. The `/health` chains are the worked example: they are unit-tested per arm
-  (`crates/router-proxy/src/health.rs:437-466`) so they agree *today*, and nothing binds them to the guard's
+  (`crates/vadis-proxy/src/health.rs:437-466`) so they agree *today*, and nothing binds them to the guard's
   order tomorrow.
 - **No seam where a seam is wanted.** The upstream-error classifier's pattern tables are constants inside
-  `crates/router-core/src/error_class.rs` (`161`, `172`, `180`, `185`, `193`, consumed by
+  `crates/vadis-core/src/error_class.rs` (`161`, `172`, `180`, `185`, `193`, consumed by
   `classify_upstream_error`, `error_class.rs:226`). This is deliberate — ADR-011 item 11 rules the tables *code,
   not an auto-adoptable artifact*, and ADR-012's L3 covers a change to `crates/` — but the consequence is
-  specific: an external decision provider that wants a different taxonomy must edit `router-core` and get a
+  specific: an external decision provider that wants a different taxonomy must edit `vadis-core` and get a
   human merge. There is no seam *at* the classifier, so a seam has to be placed **above** it: a provider may
   consume classes, never contribute patterns.
 
@@ -105,20 +105,20 @@ frozen, the code is not written).
 
 | id | primitive | what it guarantees (the invariant) | contract home | code home | who may change it | a violation causes |
 |---|---|---|---|---|---|---|
-| **P1** | `byte-fidelity` | For every request, the bytes the upstream sees are the client's bytes **modulo exactly two mutations** (ADR-015): removing router-owned top-level fields, and replacing the *value* of the top-level `model` member. Both are span edits over `RawBody`; a parse → reserialize round trip is forbidden anywhere on the path. | AGENTS 1; ADR-007; ADR-015; spec §2; DESIGN §12.3.1, §12.10.7 | `crates/router-core/src/body.rs:29,56,90,197`; call sites `forward.rs:223,528`, `stream_forward.rs:365`, `prefix.rs:397` | the contract files only: a third mutation or a new whitelist key is a human contract change (ADR-015), never a local decision | **silent** cache loss (a re-prefill is charged and never explained) and a protocol-fidelity gate failure; state: wired |
-| **P2** | `inbound-admission` | Exactly one guard, above the path split and above the pipeline, decides whether a request enters: it reads headers only, touches no byte of the request, and a refusal leaves exactly one pre-pipeline record (`event_id: 0`) and no store row. | spec §4.7, §9.1; DESIGN §12.11 | `crates/router-proxy/src/auth.rs:25,34,49,121`; wiring `crates/router-cli/src/lib.rs:314,344-375` | spec §4.7 (human); a second admission rule (rate limiting, lockout) is a different capability with its own contract | an unauthenticated request entering the pipeline, or an admitted request whose bytes changed; state: wired |
-| **P3** | `resolution` | Exactly one route per request, derived from the roster by explicit `provider/model` or by an alias; the resolved provider-native id is what the outbound body carries (P1's mutation (b)); anything else is a 404, `auto` is a 400, and an inbound protocol outside the route's `supports` is a 400 (no best-effort translation). | spec §3, §4, §8; DESIGN §3, §7, §12.3 | `crates/router-core/src/config.rs:226` (`RouteSpec`), `:746` (`supports`), `:872` (aliases); `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | spec §3/§4 (human): a new selection form (including `auto` becoming real) is a contract change | two transports resolving the same request differently, so `decision.model` depends on which path served it; state: wired, **with the leak L2/L3/L4** |
-| **P4** | `policy-guard` | Every route choice or refusal is decided by a **pure** predicate over (the resolved route, the projections, stable config, one clock read), whose evaluation order is normative, whose vocabulary names a route or a refusal and nothing else, and where a state transition may only follow upstream evidence (ADR-014 item 2). | spec §4.2, §4.6, §8; ADR-011; ADR-014; DESIGN §12.3, §12.4, §12.10.8 | `crates/router-core/src/plan.rs:109,151,183` (`PlanFirstRule`), `error_class.rs:226,288,359` (the classifier), `quota.rs` (`charge`), `breakeven.rs` (`decide_switch`); consumers `forward.rs:1121-1200` | spec §4.6/§8 + ADR-011/ADR-014 (human); the pattern tables are code by ADR-011 item 11 and may not become a config surface | two evaluations disagreeing about *why* — the operator reads a different system from the one running; or a refusal the local counter was never allowed to make (ADR-014 item 2); state: wired, **with the leak L1** |
-| **P5** | `decision-record` | Every request leaves exactly one record on the trace: additive fields keep `schema_version` (present-and-null, never omitted), the record joins the state truth on `request_id` + `identity.event_id`, a write failure degrades the observation and never the request, and the record is the **only** product → analysis-loop channel. | ADR-005; spec §6, §7; DESIGN §8, §12.6 | `crates/router-core/src/trace.rs:22,27,88,311`; the record's single writer `crates/router-proxy/src/accounting.rs:358`; the sink `crates/router-store/src/trace_sink.rs:40,73` | spec §6 (human): a field group is a contract change; ADR-005's boundary has no code-local exception | an unreplayable decision, or two writers disagreeing about one request; state: wired |
-| **P6** | `transform-chain` | (contract) Every content change is a pure function of (content, stable config) — never of turn number, clock or RNG — individually accounted with its cache impact and its `verified`/`inferred` label, with an inverse, and with a prefix that stays a prefix. | ADR-003; ADR-008; spec §4.4, §6, §7; DESIGN §6, §12.3 | **none** — `crates/router-plugins/src/lib.rs:1-4` is a stub; every record carries `transforms: Vec::new()` (`accounting.rs:483`, `auth.rs:170`) | ADR-003 + AGENTS 1 and 2 (human) | an unaccounted saving, a prefix break attributed to nobody, or a transform that cannot be rolled back; state: **contract-only** |
-| **P7** | `state-truth` | The event log is the truth and the only writer of it is the serving process; every projection is rebuildable and is never the truth; an intent commit precedes the effect it authorizes; the store is a startup prerequisite (no in-memory degraded mode); one state directory has one writer. | ADR-009; ADR-010; spec §4.5; DESIGN §8, §12.10.4 | `crates/router-core/src/store.rs:26,180,361,412,442`; implementation `crates/router-store/src/lib.rs:218` (`PRAGMA locking_mode = EXCLUSIVE`) | ADR-009/ADR-010 (human): a schema or migration decision is not a code-local choice | a projection believed, a charge with no intent row, or a second writer interleaving; state: wired |
-| **P8** | `accounting` | Money is integer NanoUsd on the five tiers plus the peak multiplier; every figure carries `verified` or `inferred`; only `verified` may enter a gate or an external report; an absent measurement is never read as 0; no price or quota enters config without its source. | ADR-006; spec §7, §4.0; DESIGN §5, §12.4 | `crates/router-core/src/cost.rs:11,44,55`, `peak.rs`, `quota.rs`, `trace.rs:297` | spec §7 + ADR-006 (human); a price enters config only with its source URL and date | an inferred number in a gate, or a fabricated price presented as measured; state: wired |
-| **P9** | `plugin-runtime` | (contract) Every registration carries its own inverse (accumulated LIFO; unloading a fiber runs them in reverse); a provider going away deactivates its dependents first; a realm gives the same key two independent binding sets; an intercept changes *how* a key is used without rebinding it; a config change applies as a keyed diff. | ADR-002; DESIGN §4, §12.2 | **none** — `crates/router-runtime/src/lib.rs:1-4` is a stub, `crates/router-plugin-sdk/src/lib.rs:1-4` is a stub; `inject`/`isolate`/`intercept` are parsed (`config.rs:825-840`) and validated (`config.rs:1232-1261`) but never consumed | ADR-002 + DESIGN §4 (human) | an unload that leaves half a registration; a realm leak that lets an experiment touch production traffic; state: **contract-only** |
+| **P1** | `byte-fidelity` | For every request, the bytes the upstream sees are the client's bytes **modulo exactly two mutations** (ADR-015): removing vadis-owned top-level fields, and replacing the *value* of the top-level `model` member. Both are span edits over `RawBody`; a parse → reserialize round trip is forbidden anywhere on the path. | AGENTS 1; ADR-007; ADR-015; spec §2; DESIGN §12.3.1, §12.10.7 | `crates/vadis-core/src/body.rs:29,56,90,197`; call sites `forward.rs:223,528`, `stream_forward.rs:365`, `prefix.rs:397` | the contract files only: a third mutation or a new whitelist key is a human contract change (ADR-015), never a local decision | **silent** cache loss (a re-prefill is charged and never explained) and a protocol-fidelity gate failure; state: wired |
+| **P2** | `inbound-admission` | Exactly one guard, above the path split and above the pipeline, decides whether a request enters: it reads headers only, touches no byte of the request, and a refusal leaves exactly one pre-pipeline record (`event_id: 0`) and no store row. | spec §4.7, §9.1; DESIGN §12.11 | `crates/vadis-proxy/src/auth.rs:25,34,49,121`; wiring `crates/vadis-cli/src/lib.rs:314,344-375` | spec §4.7 (human); a second admission rule (rate limiting, lockout) is a different capability with its own contract | an unauthenticated request entering the pipeline, or an admitted request whose bytes changed; state: wired |
+| **P3** | `resolution` | Exactly one route per request, derived from the roster by explicit `provider/model` or by an alias; the resolved provider-native id is what the outbound body carries (P1's mutation (b)); anything else is a 404, `auto` is a 400, and an inbound protocol outside the route's `supports` is a 400 (no best-effort translation). | spec §3, §4, §8; DESIGN §3, §7, §12.3 | `crates/vadis-core/src/config.rs:226` (`RouteSpec`), `:746` (`supports`), `:872` (aliases); `forward.rs:403-407,491-507,1270-1306`; `stream_forward.rs:332-345,981-1017` | spec §3/§4 (human): a new selection form (including `auto` becoming real) is a contract change | two transports resolving the same request differently, so `decision.model` depends on which path served it; state: wired, **with the leak L2/L3/L4** |
+| **P4** | `policy-guard` | Every route choice or refusal is decided by a **pure** predicate over (the resolved route, the projections, stable config, one clock read), whose evaluation order is normative, whose vocabulary names a route or a refusal and nothing else, and where a state transition may only follow upstream evidence (ADR-014 item 2). | spec §4.2, §4.6, §8; ADR-011; ADR-014; DESIGN §12.3, §12.4, §12.10.8 | `crates/vadis-core/src/plan.rs:109,151,183` (`PlanFirstRule`), `error_class.rs:226,288,359` (the classifier), `quota.rs` (`charge`), `breakeven.rs` (`decide_switch`); consumers `forward.rs:1121-1200` | spec §4.6/§8 + ADR-011/ADR-014 (human); the pattern tables are code by ADR-011 item 11 and may not become a config surface | two evaluations disagreeing about *why* — the operator reads a different system from the one running; or a refusal the local counter was never allowed to make (ADR-014 item 2); state: wired, **with the leak L1** |
+| **P5** | `decision-record` | Every request leaves exactly one record on the trace: additive fields keep `schema_version` (present-and-null, never omitted), the record joins the state truth on `request_id` + `identity.event_id`, a write failure degrades the observation and never the request, and the record is the **only** product → analysis-loop channel. | ADR-005; spec §6, §7; DESIGN §8, §12.6 | `crates/vadis-core/src/trace.rs:22,27,88,311`; the record's single writer `crates/vadis-proxy/src/accounting.rs:358`; the sink `crates/vadis-store/src/trace_sink.rs:40,73` | spec §6 (human): a field group is a contract change; ADR-005's boundary has no code-local exception | an unreplayable decision, or two writers disagreeing about one request; state: wired |
+| **P6** | `transform-chain` | (contract) Every content change is a pure function of (content, stable config) — never of turn number, clock or RNG — individually accounted with its cache impact and its `verified`/`inferred` label, with an inverse, and with a prefix that stays a prefix. | ADR-003; ADR-008; spec §4.4, §6, §7; DESIGN §6, §12.3 | **none** — `crates/vadis-plugins/src/lib.rs:1-4` is a stub; every record carries `transforms: Vec::new()` (`accounting.rs:483`, `auth.rs:170`) | ADR-003 + AGENTS 1 and 2 (human) | an unaccounted saving, a prefix break attributed to nobody, or a transform that cannot be rolled back; state: **contract-only** |
+| **P7** | `state-truth` | The event log is the truth and the only writer of it is the serving process; every projection is rebuildable and is never the truth; an intent commit precedes the effect it authorizes; the store is a startup prerequisite (no in-memory degraded mode); one state directory has one writer. | ADR-009; ADR-010; spec §4.5; DESIGN §8, §12.10.4 | `crates/vadis-core/src/store.rs:26,180,361,412,442`; implementation `crates/vadis-store/src/lib.rs:218` (`PRAGMA locking_mode = EXCLUSIVE`) | ADR-009/ADR-010 (human): a schema or migration decision is not a code-local choice | a projection believed, a charge with no intent row, or a second writer interleaving; state: wired |
+| **P8** | `accounting` | Money is integer NanoUsd on the five tiers plus the peak multiplier; every figure carries `verified` or `inferred`; only `verified` may enter a gate or an external report; an absent measurement is never read as 0; no price or quota enters config without its source. | ADR-006; spec §7, §4.0; DESIGN §5, §12.4 | `crates/vadis-core/src/cost.rs:11,44,55`, `peak.rs`, `quota.rs`, `trace.rs:297` | spec §7 + ADR-006 (human); a price enters config only with its source URL and date | an inferred number in a gate, or a fabricated price presented as measured; state: wired |
+| **P9** | `plugin-runtime` | (contract) Every registration carries its own inverse (accumulated LIFO; unloading a fiber runs them in reverse); a provider going away deactivates its dependents first; a realm gives the same key two independent binding sets; an intercept changes *how* a key is used without rebinding it; a config change applies as a keyed diff. | ADR-002; DESIGN §4, §12.2 | **none** — `crates/vadis-runtime/src/lib.rs:1-4` is a stub, `crates/vadis-plugin-sdk/src/lib.rs:1-4` is a stub; `inject`/`isolate`/`intercept` are parsed (`config.rs:825-840`) and validated (`config.rs:1232-1261`) but never consumed | ADR-002 + DESIGN §4 (human) | an unload that leaves half a registration; a realm leak that lets an experiment touch production traffic; state: **contract-only** |
 
 Three facts the register makes explicit because each one changes what may be built today:
 
 - **P6 and P9 are contract-only, and the modes that need them are named in item 5.** ADR-013's shadow and canary
-  rails compose `ctx.isolate`/`ctx.intercept` (`crates/router-core/src/config.rs:816-840`); with P9 unwritten they
+  rails compose `ctx.isolate`/`ctx.intercept` (`crates/vadis-core/src/config.rs:816-840`); with P9 unwritten they
   cannot be built. This is not a defect of the register, but it *is* the reason the register must mark
   `state`: a mode whose primitives are contract-only is a plan, not a capability.
 - **A primitive's contract home is not always its code home.** P4 is the case that matters: the classifier's
@@ -140,7 +140,7 @@ The leak *classes*, named here because they are the reason this layer exists (th
 §13.3): **L1** the probe predicate and its inputs re-derived in the reporting surface (four sites; R5-G5
 generalised); **L2** route resolution written twice (the buffered and the streaming path); **L3** the two
 reporting consumers reading state through two different mechanisms (`/health` on the writer's own connection,
-`router stats` on a separate read-only open, `crates/router-cli/src/stats.rs:221`); **L4** the reserved
+`vadis stats` on a separate read-only open, `crates/vadis-cli/src/stats.rs:221`); **L4** the reserved
 `auto`/`Selector` slot described as structural but absent from the type system; **L5** the two contract-only
 primitives whose absence is load-bearing for two accepted modes; **L6** the guard's vocabulary (`GuardOutcome`)
 named in DESIGN §12.3 and absent from code, so a second rule would invent its own move type.
@@ -242,7 +242,7 @@ pub enum ProviderError { Timeout, Unavailable, Invalid(&'static str) }
   ADR-013 item 1 took when it refused a dedicated shadow field).
   - **The reproducibility rule, stated as a test:** the provider must be a pure function of `DecisionRequest`.
     A provider whose answer depends on state the trace does not carry is **inadmissible**, because
-    `router replay` (DESIGN §9) could not reproduce the decision and the report would be a re-roll rather than a
+    `vadis replay` (DESIGN §9) could not reproduce the decision and the report would be a re-roll rather than a
     measurement. A provider that is *stochastic* is admissible only when its randomness is derived from a
     recorded input — the reproducible form is a seed computed from `request_id` and the advisor's identity, so a
     replay recomputes the same draw without a new field. "No unrecorded influence on outbound bytes" is therefore
@@ -357,7 +357,7 @@ point of the table.
   this ADR recommends the split rather than doing it: (a) extract the probe predicate and its three inputs to one
   owner and let both the guard and `/health` call it, preserving spec §9.1's exact `blocked_by` vocabulary; (b) one
   resolution implementation, shared by both forwarding paths; (c) one read seam for the two report consumers (the
-  store's read-only open fails while `serve` holds `PRAGMA locking_mode = EXCLUSIVE`, `router-store/src/lib.rs:218`
+  store's read-only open fails while `serve` holds `PRAGMA locking_mode = EXCLUSIVE`, `vadis-store/src/lib.rs:218`
   — R6-G3 — so the seam must state which facts each consumer can honestly obtain); (d) decide the fate of the
   reserved `Plugin` selection value (keep the word and define it, or remove it) — a human decision, because
   spec §3's list does not contain it; (e) the `GuardOutcome` vocabulary, when a second rule arrives, becomes the

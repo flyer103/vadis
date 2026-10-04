@@ -34,7 +34,7 @@ whose composer writes the model string that matches **that layer's own mock-only
 The **signed** tier's live run declares a different namespace by contract: the loop live-base config
 (a dedicated declaration of what is being measured, not the deployed onboarding config — ARM-3.3.2 rev 3)
 declares **provider `deepseek`** (one entry, three wires) and the alias **`coding-fast`**, and nothing
-else. The router's route resolution (`crates/router-proxy/src/forward.rs`'s `resolve_route`, the single
+else. The vadis's route resolution (`crates/vadis-proxy/src/forward.rs`'s `resolve_route`, the single
 owner on both media) consults the alias map, then the literal `provider/model` split — **there is no
 wire-suffixed provider form**.
 
@@ -77,10 +77,10 @@ R23-F6; receipts in the loop's evidence for that decision). This ADR is (b)'s WH
 ### D1. The gate, its command, and the rules it mirrors
 
 the loop route check refuses a corpus whose item bodies name a route the declared base config
-cannot serve. It mirrors the router's own two rules **and no others** — `aliases[model]` (whose target's
+cannot serve. It mirrors the vadis's own two rules **and no others** — `aliases[model]` (whose target's
 provider and model must themselves be declared, the load-time rule), then the literal `provider/model`
-form — and it reports the refusal in the router's own words (`unknown provider '…'`, `unknown model '…'
-on provider '…'`), so a reader can compare the gate's verdict with the answer the router would give.
+form — and it reports the refusal in the vadis's own words (`unknown provider '…'`, `unknown model '…'
+on provider '…'`), so a reader can compare the gate's verdict with the answer the vadis would give.
 
 - **It refuses; it never repairs.** A failing corpus is not frozen as it is. No body is rewritten by the
   tool, and nothing is written under the corpus (COR-2.4).
@@ -117,7 +117,7 @@ When the gate refuses, exactly two acts are legitimate, and both are visible:
    measured; it is not the default, for the reason in Alternatives (b).
 
 **A routing scalar is not content.** Mutation (b) of the byte boundary (ADR-015) replaces the top-level
-`model` value with the resolved route's native id before the request leaves the router, and the L2 rule's
+`model` value with the resolved route's native id before the request leaves the vadis, and the L2 rule's
 target lives under `input`. So a byte-level rewrite of that one scalar does not move what the corpus
 measures — and the freeze must **assert** that mechanically rather than assume it: the rewrite receipt
 records, per item, that the prefix and suffix are byte-identical and that the two bodies' JSON is identical

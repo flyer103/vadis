@@ -13,7 +13,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, PlanRig};
+use vadis_conformance::testkit::{self, PlanRig};
 
 /// Cap set to one served response's cost: 184000 nano = 0.000184 USD.
 const POLICY_CAP_ONE_RESPONSE: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: none\n  cooldown: 0s\n  overflow_monthly_cap_usd: 0.000184";
@@ -24,7 +24,7 @@ const POLICY_CAP_WITH_PROBE: &str = "  family: m1\n  primary: p-plan/m1\n  overf
 async fn rig(tag: &str, policy: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) = testkit::plan_rig_parts(tag, "", policy).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,

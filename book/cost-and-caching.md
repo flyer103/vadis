@@ -8,7 +8,7 @@ numbers or type sketches: prices live in the **roster** — `providers.example.y
 config names with `providers_file:` ([`docs/spec.md` §4](../docs/spec.md), §4.14) — each entry with its
 `source` URL and capture date; the accounting definitions live in [`docs/spec.md` §7](../docs/spec.md).
 
-router's cost model is built on one measured observation: on a real agent session the
+vadis's cost model is built on one measured observation: on a real agent session the
 prefix cache is fast and near-total, so the first-order lever is **keeping the prefix
 stable**, and choosing a cheaper model is second-order.
 
@@ -35,7 +35,7 @@ stable**, and choosing a cheaper model is second-order.
 - **The transform pipeline** and its priority order: cache fidelity, then input-side
   payload reduction, then output-side discipline, then provider arbitrage (ADR-003). The
   **input-side tier is wired in v0.1 as an opt-in mode**: with a rule file configured and a
-  request that asks for the mode, router trims tool-output payloads (build logs, search hits,
+  request that asks for the mode, vadis trims tool-output payloads (build logs, search hits,
   diffs) by declared rules, records every edit in the trace and keeps the tee marker so nothing
   is silently lost. Output-side discipline and provider arbitrage beyond route choice remain
   future work. Anything that rewrites history in place — summarising, trimming by position,
@@ -45,26 +45,26 @@ stable**, and choosing a cheaper model is second-order.
   *difference between two worlds* — the request that ran and the one that did not. A local estimate is
   labelled `inferred` and can never be reported as measured; where no comparison happened, the honest
   figure is none at all ([`docs/spec.md` §7](../docs/spec.md)).
-- **Response caching**: an exact-match, session-scoped *replay* of a response router recorded — **off by
+- **Response caching**: an exact-match, session-scoped *replay* of a response vadis recorded — **off by
   default**, and the one lever whose saving can never be measured (so it is excluded from every gate). The
   `verified`/`inferred` rule above is what makes that exclusion checkable; see *Response caching* below.
-- **How to check the claim**: `router stats --config config.yaml --window 24h` to read the
+- **How to check the claim**: `vadis stats --config config.yaml --window 24h` to read the
   cost and cache report (the window is required, because a saving that does not state its window
-  cannot be checked), and its `plan family` section for what the switches cost. `router replay`,
+  cannot be checked), and its `plan family` section for what the switches cost. `vadis replay`,
   which will recompute money over a fixed trace with the same code path, is planned and **not
   served** in v0.1 ([`docs/spec.md` §9.3](../docs/spec.md)).
 
 ## Two cache numbers: a predictor and a fact
 
-When you look at a trace (or a `router stats` report) you will see two numbers that both talk
+When you look at a trace (or a `vadis stats` report) you will see two numbers that both talk
 about the prefix cache. They are not rivals and they are not interchangeable:
 
-- **`prefix.continuity` is a predictor.** Router computes it locally, from the shape of this
+- **`prefix.continuity` is a predictor.** Vadis computes it locally, from the shape of this
   request's conversation blocks against the previous request of the same session. It answers
   *"should* the upstream's prefix cache hit?" — 1.0 means "nothing at the front of your
   conversation changed, the cache should hold". It is a **local prediction**, computed before
   and independently of what the provider actually did, so it can be wrong: a provider may evict
-  a cache for reasons router cannot see. A value below 1.0 on traffic you did not expect to
+  a cache for reasons vadis cannot see. A value below 1.0 on traffic you did not expect to
   change is a *trigger to go look*, not a verdict that money was lost.
 - **The cache hit rate the provider reports is the fact.** Every response carries the
   provider's own usage accounting — how many of the input tokens were served from cache.
@@ -89,7 +89,7 @@ when you write nothing, or `CNY` for a deployment whose official page prices in 
 entry's whole price table — every tier of every model — because those prices are one invoice from one
 account.
 
-- **Nothing is ever converted.** Router has no exchange rate, stores none, and does not translate a price, a
+- **Nothing is ever converted.** Vadis has no exchange rate, stores none, and does not translate a price, a
   cost, or a report total from one currency to another. A CNY table is transcribed as CNY from the CNY page;
   the accounting for a request served by that entry is in CNY. An "equivalent" figure computed from a rate
   would be a number no vendor published — and it would make the report depend on when someone looked up the
@@ -100,9 +100,9 @@ account.
 - **A tier the page prices in two tiers.** Some providers publish a cache-write price per cache lifetime
   tier. Your config records the one your requests fall into — the page's own default when a request states
   no lifetime — and the entry's comment names the other, so the number has a reason you can read.
-- **Reports are per currency, never mixed.** The cost lines of `router stats` are printed once per currency
+- **Reports are per currency, never mixed.** The cost lines of `vadis stats` are printed once per currency
   present in the window, each labelled, and a window that holds two currencies shows **no** combined total:
-  adding them is the one thing router will not do, and it will not guess which unit you meant. The counts
+  adding them is the one thing vadis will not do, and it will not guess which unit you meant. The counts
   (how many requests, how many switches) stay single, because a request is a request whichever account served
   it. If you want a single-currency report, route only through entries of that currency — that is a
   configuration choice, not a conversion.
@@ -117,7 +117,7 @@ The precise rules live in [`docs/spec.md` §4.8](../docs/spec.md) (what each key
 ## When a price depends on how much you send
 
 Some vendors do not publish one price per model. They publish one price per **band of input length**: the same
-model costs one rate while your request stays under a threshold, and another rate once it crosses it. Router
+model costs one rate while your request stays under a threshold, and another rate once it crosses it. Vadis
 records that as the page publishes it — band for band — and prices each request at the band that request falls
 into.
 
@@ -126,7 +126,7 @@ What that means for you as a client:
 - **One band prices the whole request, not part by part.** Crossing a threshold does not add a surcharge to the
   part that went over: it changes the rate the *entire* request is billed at, which is what the vendor's own
   table does. A prompt that grows past a threshold can therefore cost noticeably more per token from that
-  request on — that is the vendor's published step, and router reproduces it rather than hiding it.
+  request on — that is the vendor's published step, and vadis reproduces it rather than hiding it.
 - **The band follows the prompt you sent, as the provider counted it** — the whole input, cached or not. It
   never depends on how much of your conversation the cache happened to serve, so the same conversation is
   priced the same way whether the cache was warm or cold. (The *rate* does not move with the cache; the cache
@@ -143,7 +143,7 @@ input, a band priced at zero, a multiplier written inside a band) and the bounda
 [`docs/spec.md` §4.10](../docs/spec.md); the figures themselves, each with the citation of the band it came
 from, are in [`providers.example.yaml`](../providers.example.yaml). One limitation worth knowing: if a page prices
 its bands in a unit that cannot be compared with your prompt's token count, the entry stays **flat** rather
-than guessing — a flat price you can check beats a band the router inferred.
+than guessing — a flat price you can check beats a band the vadis inferred.
 
 ### Where the price table and its citations live
 
@@ -160,7 +160,7 @@ being precise about:
   ([`docs/spec.md` §4.14](../docs/spec.md)).
 - **The roster may also stay inline (equally legal).** The same block can be written straight into the config as
   `providers:`; exactly one of the two keys is written, and both written or neither is a refusal at load.
-  `router setup` writes the pair for a new configuration and edits whichever of the two files holds the entry.
+  `vadis setup` writes the pair for a new configuration and edits whichever of the two files holds the entry.
 
 Either way the money is unchanged: the same prices, the same per-model citations, the same refusals at load,
 and this chapter still carries no numbers — the figures and their sources are in the roster, one block in one
@@ -203,11 +203,11 @@ plan whose allowance nobody can read is still a plan.
 **When the two accounts do not use the same model id.** Vendors frequently serve the same model under
 different ids on the coding endpoint and on the metered platform — a plan endpoint's `k3-256k` and the
 platform's `kimi-k2.7-code` are one model to you and two strings to the vendors. Give both model entries the
-same `family` tag and write that tag in `plan_policy.family`: the router then treats the two routes as one
+same `family` tag and write that tag in `plan_policy.family`: the vadis then treats the two routes as one
 family, while each route still sends the id **its own** provider expects, and the trace still records the
 string your client asked for. When the ids already agree you write nothing and the tag is the id — which is
 what a config written before tags existed keeps doing. Two things the tag is not: it is not a route (a client
-still writes `provider/model`, and a bare tag resolves to nothing), and it is not inferred (the router never
+still writes `provider/model`, and a bare tag resolves to nothing), and it is not inferred (the vadis never
 guesses that `k3` and `kimi-k3` are the same model — you state it or it is not true)
 ([`docs/spec.md` §4.8](../docs/spec.md)).
 
@@ -228,12 +228,12 @@ plan_policy:
 names is a legal roster entry — it is simply not routed specially yet.
 
 **When it spills.** Only when the provider itself says the plan is exhausted — an upstream
-`403`. The verdict is read off the provider's own answer, which router reads before it decides —
+`403`. The verdict is read off the provider's own answer, which vadis reads before it decides —
 including on a streaming request, where the answer's error body is read before the classification
 runs, so the same `403` moves you whether or not you stream. Everything else about the design is about *not*
 spilling early: the plan's token
 allowance may not be published at all (a plan page often publishes a monthly price and no
-token count), so the local allowance counter that router keeps is a **warning**, not a verdict.
+token count), so the local allowance counter that vadis keeps is a **warning**, not a verdict.
 You will see it in the trace (`cost.quota_after`), and the state it describes is visible in
 `GET /health`'s plan section ([`docs/spec.md` §9.1](../docs/spec.md)): the account the family is on,
 its probe deadline, and why a probe would not be admitted yet. It can hold a probe back until the
@@ -245,7 +245,7 @@ is gone); coming back is a *probe*, and a probe only ever happens at the **start
 — a new session, or a session's first request. A session that is already running on the metered
 account is never re-tried mid-way: it is moved back only once the provider has shown, elsewhere,
 that the plan works again. After the cooldown (15 minutes by default, and never before the
-plan's own reset point when router knows it) the next new session probes the plan; a success is
+plan's own reset point when vadis knows it) the next new session probes the plan; a success is
 recorded and the following sessions go back to it.
 
 **A spill really spends money.** While the family is on the metered account, every request is
@@ -275,11 +275,11 @@ switched request's own measured usage. When the route you moved to publishes its
 input-length bands, that decision-time figure is computed from the model's lowest band — it is an
 estimate made before the next request exists, and the band that request actually falls in is what
 its own cost line shows. `GET /health` shows the current account and the probe
-deadline, and `router stats` counts the switches and their verified cost — the two surfaces,
+deadline, and `vadis stats` counts the switches and their verified cost — the two surfaces,
 their fields and the rule that decides which of the two numbers a claim may rest on are
 [`docs/spec.md` §9](../docs/spec.md).
 
-**What router will not do.** It will not guess your plan's allowance, and it will not "fix" a
+**What vadis will not do.** It will not guess your plan's allowance, and it will not "fix" a
 provider's quota. It reacts to what the provider says and comes back when the provider allows
 it; the allowance itself stays the provider's business.
 
@@ -288,7 +288,7 @@ it; the allowance itself stays the provider's business.
 In an agent loop, the tokens are not mostly the conversation — they are the **tool output** piling up
 inside it: build logs, `grep` results, diffs, JSON returned by MCP servers. The client resends the whole
 history on every turn, so those bytes are paid for again and again. Trimming them is the obvious lever,
-and router already has the rule *data* for it ([`rules/tool_output.toml`](../rules/tool_output.toml):
+and vadis already has the rule *data* for it ([`rules/tool_output.toml`](../rules/tool_output.toml):
 strip noise and progress lines, truncate over-long lines, cap the total, and leave a marker line saying
 what was dropped).
 
@@ -300,13 +300,13 @@ bytes the client sent, apart from two documented substitutions), so the contract
 the code. What it settles:
 
 - **It is a mode the client asks for, per request** — a request header, not a setting. A request that
-  does not ask is byte-identical to what the client sent, modulo those two substitutions (router-owned
+  does not ask is byte-identical to what the client sent, modulo those two substitutions (vadis-owned
   fields removed, the provider's own model id written into `model`). That guarantee does **not** depend
   on your configuration: a config full of rules cannot weaken it, and no key in the file can turn the
   mode on for a request that did not ask (ADR-019).
 - **Edits are declared, and only tool/environment payloads are touched** — never your words, never the
   system instruction, never the tool schemas. Every edit is recorded with the path it touched and the
-  bytes before and after, so "what did router change" is a list you can read, not an investigation.
+  bytes before and after, so "what did vadis change" is a list you can read, not an investigation.
 - **Three invariants hold**: the same content always produces the same bytes (no dependence on the turn
   number, the clock or randomness); a growing conversation *extends* the previous turn's bytes instead
   of rewriting them, which is what keeps the prefix cache alive; and a request that did not ask for the
@@ -315,13 +315,13 @@ the code. What it settles:
   something the provider had already cached is paid for once at the miss price — and that is why a rule
   is admitted only with its inline tests green, the cache regression measured, and its net gain
   measured rather than estimated (the D3 gate). Until such a pair of measurements exists, every
-  per-transform figure in `router stats` is an estimate and must be read as one: nothing here is a
+  per-transform figure in `vadis stats` is an estimate and must be read as one: nothing here is a
   reported saving yet.
 
 To turn the mode on: declare the rule file in your config under `plugins:` (an entry of kind
 `builtin/transform_rules` with `config.rules_file` pointing at it — see
 [`config.example.yaml`](../config.example.yaml)), and have the **client** send
-`X-Router-Transform: transform` on the requests that want it. Both halves are required: the
+`X-Vadis-Transform: transform` on the requests that want it. Both halves are required: the
 config decides which rules exist, the request decides whether they run, and a request without
 the header is byte-for-byte your own bytes no matter what is configured. Every figure a rule
 reports is an estimate until a paired on/off measurement exists, so the report gains its
@@ -332,13 +332,13 @@ numbers are shapes, not savings.
 
 A different kind of cache, and the smallest useful one. When a request is **byte-identical** to one this
 session has already sent — the same request bytes, in the same session, on the same protocol, under the same
-configuration and with the same transform mode — router can return the response bytes it recorded then instead
+configuration and with the same transform mode — vadis can return the response bytes it recorded then instead
 of calling the provider again. Change one byte, or ask from another session, and it is an ordinary request.
 It is **off by default**, and turning it on takes both halves: a `plugins:` entry of kind
 `builtin/response_cache` **and** `config.enabled: true` inside it — listing the plugin without that switch does
 nothing, and no later config edit can turn it on behind your back. What it will **not** claim is the interesting
 half: a served repeat is a **replay, not a prediction** — those bytes are what the provider returned earlier, so
-router asserts nothing about what it would answer now — and because no call happens, nothing is measured: the
+vadis asserts nothing about what it would answer now — and because no call happens, nothing is measured: the
 figure is labelled `inferred`, it is kept out of every rate and every sum, and no gate counts it
 ([`docs/spec.md` §4.17](../docs/spec.md) and §7; `design/decisions/ADR-042-exact-match-cache.md`). It pays when
 a client re-sends an identical request inside one session — a retry after a timeout, a re-run of an unchanged
@@ -359,7 +359,7 @@ not in this repository yet, and this chapter will not invent them.
   `inferred`, and the reporting requirements for any savings claim.
 - [`docs/spec.md` §6](../docs/spec.md) — cache metrics exposed to the user
   (`cache_hit_rate`, `prefix_continuity` percentiles).
-- [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `router stats`' report, each
+- [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `vadis stats`' report, each
   figure's provenance and its `verified` / `inferred` label, and what is not served yet.
 - [`design/DESIGN.md` §5](../design/DESIGN.md) and [§6](../design/DESIGN.md) — the cost
   engine and the cache policy.

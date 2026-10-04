@@ -67,7 +67,7 @@ choice. Measured 2026-09-26 against crates.io and against a scratch consumer cra
 | resolved tree, macOS | **8 packages** (notify + bitflags, fsevent-sys, libc, log, notify-types, walkdir, same-file) | the platform backend on the development machine is FSEvents, via `fsevent-sys` |
 | resolved tree, `x86_64-unknown-linux-gnu` | **10 packages** (that set with `inotify`, `inotify-sys` and `mio` in place of `fsevent-sys`) | the CI/container side is inotify; the two backends are the crate's, not a second code path of ours |
 | default feature | **`macos_fsevent`** (on macOS); the Linux arm needs no feature | taking the crate with its defaults is the choice; `macos_kqueue` is the crate's own alternative backend and is **not** taken |
-| `unsafe` in the resolved sources | `notify` **26** occurrences (2 of 9 files), `fsevent-sys` **1** (1 of 3), `libc` **676** (66 of 389), `notify-types` / `walkdir` **0**; on Linux `inotify` 24, `mio` 176, `inotify-sys` 0 | the unsafe is the platform-call boundary, and `libc` is **already in this workspace's tree** (measured: `cargo tree -p router-cli --locked -i libc`), so the marginal unsafe is the binding crate plus `notify`'s own FFI calls |
+| `unsafe` in the resolved sources | `notify` **26** occurrences (2 of 9 files), `fsevent-sys` **1** (1 of 3), `libc` **676** (66 of 389), `notify-types` / `walkdir` **0**; on Linux `inotify` 24, `mio` 176, `inotify-sys` 0 | the unsafe is the platform-call boundary, and `libc` is **already in this workspace's tree** (measured: `cargo tree -p vadis-cli --locked -i libc`), so the marginal unsafe is the binding crate plus `notify`'s own FFI calls |
 | crate_size / edition | 39 067 B / edition 2021 | the crate is small and does not move the workspace's edition |
 
 **What `#![forbid(unsafe_code)]` does and does not mean here.** Every crate root in this workspace forbids
@@ -104,10 +104,10 @@ owner's ruling paid it.
 
 ### D3 — The allowlist row is the contract; the dependency lands with the reload round's code
 
-**The row.** DESIGN §12.1's table gains `notify` in **`router-cli`**'s *Permitted third-party
+**The row.** DESIGN §12.1's table gains `notify` in **`vadis-cli`**'s *Permitted third-party
 dependencies* cell — the crate that owns `serve`'s assembly and the config loader, and therefore the crate
-that may hold a watcher. It is added to `router-core`'s cell **not at all**: `router-core` is the I/O-free
-domain, `cargo tree -p router-core` must stay ⊆ its allowlist (§12.1's own spot-check), and a watcher is I/O
+that may hold a watcher. It is added to `vadis-core`'s cell **not at all**: `vadis-core` is the I/O-free
+domain, `cargo tree -p vadis-core` must stay ⊆ its allowlist (§12.1's own spot-check), and a watcher is I/O
 by definition. The row carries this ADR's number as its reason, as the `rusqlite` and `reqwest` rows carry
 ADR-009 and §12.1's older rows.
 
@@ -115,7 +115,7 @@ ADR-009 and §12.1's older rows.
 use (`Cargo.toml`), written here so the reload round does not have to invent prose:
 
 ```toml
-# notify (the file-watch mechanism): DESIGN §12.1's allowlist row for router-cli,
+# notify (the file-watch mechanism): DESIGN §12.1's allowlist row for vadis-cli,
 # added by ADR-039 — the watcher decision ADR-037 D7 left to the owner's ruling
 # (2026-09-26). The reload re-reads the pair spec §4.14 names and decides by the
 # byte digest (ADR-037 D6); this crate decides only when to look.
@@ -167,7 +167,7 @@ own cards own each of them:
 
 ## Consequences
 
-- **One more dependency, permanently.** `router-cli`'s allowlist gains a row; the workspace's floor may
+- **One more dependency, permanently.** `vadis-cli`'s allowlist gains a row; the workspace's floor may
   move when the crate's own minor versions move (1.85 today against a 1.88 floor), and the reload round's
   gate re-measures it rather than inheriting this ADR's reading.
 - **Two platform backends become ours to test.** FSEvents on macOS and inotify on Linux are the crate's
@@ -204,7 +204,7 @@ cargo tree -e normal --target x86_64-unknown-linux-gnu -> 10 packages (inotify/i
 # libc 676, inotify 24, mio 176, inotify-sys 0, notify-types 0, walkdir 0 (script: unsafe_count.py)
 
 # libc is already in the workspace's tree, so it is not a marginal addition
-cargo tree -p router-cli --locked -i libc          -> libc v0.2.189 (via sha2/cpufeatures, ...)
+cargo tree -p vadis-cli --locked -i libc          -> libc v0.2.189 (via sha2/cpufeatures, ...)
 
 # the dependency is NOT in any manifest at this commit
 git grep -n notify Cargo.toml crates/*/Cargo.toml  -> (no output)
