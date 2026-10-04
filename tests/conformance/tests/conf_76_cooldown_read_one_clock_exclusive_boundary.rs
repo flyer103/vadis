@@ -88,7 +88,7 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// p-plan expiring at `until_us`, before `serve` opens the store (the
 /// EXCLUSIVE writer lock forecloses any later writer).
 fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,
@@ -142,7 +142,7 @@ fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
 ///   raced against.
 fn store_word_pins() {
     let dir = testkit::tempdir("conf76-pins");
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,
@@ -212,7 +212,7 @@ fn store_word_pins() {
 /// means a live row was dropped: a product bug, red).
 fn seeded_until_us(dir: &std::path::Path, until_us: i64) {
     let tb0 = now_us();
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let row = store.query(Query::Cooldown {
         provider: "p-plan",
         model: None,

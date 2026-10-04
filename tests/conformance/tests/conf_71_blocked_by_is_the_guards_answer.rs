@@ -123,7 +123,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
     let mut primary_allowed = true;
     let mut deferred_by_window = false;
     if !matches!(seed, Seed::NeverSwitched) {
-        let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+        let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
         // The transition event: its own ts_us becomes since_us (read
         // back from the projection, never assumed).
         let ev = store

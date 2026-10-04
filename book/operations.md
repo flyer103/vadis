@@ -83,7 +83,7 @@ the contract is [`docs/spec.md` §4.15](../docs/spec.md).)
 | Artifact | Where | Lifecycle |
 |---|---|---|
 | trace files | `<config dir>/<trace.dir>/YYYY-MM-DDTHH.jsonl` | append-only, rolled hourly; v0.1 has **no** automatic retention or cleanup, so archiving is a manual operations job |
-| the state store | `<config dir>/state/router.db` | one SQLite file in WAL mode, holding the event log and the projections built from it |
+| the state store | `<config dir>/state/vadis.db` | one SQLite file in WAL mode, holding the event log and the projections built from it |
 | request and response bodies | **nowhere** | never written to either artifact; the log keeps a body hash plus a pointer to the trace line |
 
 The parts of the book that matter here: the trace is the only analysis channel, and the
@@ -120,8 +120,17 @@ Back up the store **and** the traces, together, and treat both as operator data:
 - a trace is not reconstructible from the store either, and it is the only record of what
   each request cost;
 - for a consistent copy, **stop `serve` and copy the database together with its `-wal` and
-  `-shm` sidecar files** (copying only `router.db` while a WAL is pending loses the tail of
+  `-shm` sidecar files** (copying only `vadis.db` while a WAL is pending loses the tail of
   the log). A SQLite-aware backup taken while stopped is equally fine.
+
+**Why there is no migration for the store's name.** No install of vadis has ever been released,
+so no state store exists outside a working tree, and the migration is empty. A fresh start
+creates `state/vadis.db`; nothing reads, converts or deletes a store under a pre-rename leaf
+name. If such a file exists beside your config (only possible from an unreleased in-tree build),
+the gateway simply does not read it — a fresh store is created at next startup. You may delete
+the old file, or move it to the new leaf name **together with its `-wal` and `-shm` sidecars**
+(the sidecar mistake above applies to the move exactly as it does to a copy). This is optional;
+it is not an upgrade path.
 
 **What "the config" is, and why the count can be three files.** The config file and the roster may be two
 files: the shipped example is that shape, and the roster is named by the config with `providers_file:`

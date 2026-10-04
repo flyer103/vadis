@@ -188,7 +188,7 @@ async fn serve(dir: &std::path::PathBuf, listen_addr: &str) -> tokio::task::Join
 
 /// Every stored event as (kind_raw, payload), read after the server stopped.
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");

@@ -287,7 +287,7 @@ async fn conf_73_projection_until_us_is_since_plus_700ms() {
     spill(&rig).await;
     let dir = rig.stop();
 
-    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::PlanState(Some(row)) = store.query(Query::PlanState { family: "m1" }).unwrap()
     else {
         panic!("plan_state row after the spill");

@@ -235,7 +235,7 @@ parameter, not a header:
 - **Not a config key**: the owner's sentence authorises *this surface*, and adding a key means the loader,
   `config.example.yaml`, the parser, the reload's refused-set question (ADR-040 D5 — is a window change
   live?) and a conformance case — a configuration-contract change, not a metrics one.
-- **Stated in-band, always**: `router_metrics_window_seconds` is a series of every response, and it is the
+- **Stated in-band, always**: `vadis_metrics_window_seconds` is a series of every response, and it is the
   metrics surface's answer to spec §9.2's rule that a windowed report must say which window it covers
   (`docs/spec.md:2297-2299`: *"A default would let a report be printed without stating the window it
   covers, which is exactly what §7's reporting requirement forbids"*). A reader never has to guess the
@@ -247,33 +247,33 @@ parameter, not a header:
 
 ### 3.4 The series — names, labels, units, sources
 
-Every name is `router_<quantity>[_<unit>]`; `provenance` carries **spec §9.2's own label column** as a
+Every name is `vadis_<quantity>[_<unit>]`; `provenance` carries **spec §9.2's own label column** as a
 Prometheus label, so the §7 labelling rule travels machine-readably (a consumer may filter
 `provenance="verified"` and cannot accidentally average an inferred figure into a measured one).
 
 | # | metric | labels | unit | the figure it renders | §9.2 label |
 |---|---|---|---|---|---|
-| 1 | `router_metrics_window_seconds` | — | seconds | the surface's own constant (§3.3) | — |
-| 2 | `router_metrics_omitted_figures` | — | count | **the response's own bookkeeping**: how many of §3.5's omission arms fired (never a figure over records) | — |
-| 3 | `router_trace_files_read` | — | count | `Report.files_read` — the rollover files this read opened | count |
-| 4 | `router_requests` | — | count | `TraceFigures.requests` (`requests`) | count |
-| 5 | `router_requests_succeeded` | — | count | `.succeeded` (`succeeded`) | count |
-| 6 | `router_requests_failed` | — | count | `.failed` (`failed`) | count |
-| 7 | `router_failures_by_kind` | `kind` | count | `.failure_kinds[kind]` — the report's `(upstream_error 2, upstream_timeout 1)` split; `kind` ∈ §8's closed vocabulary (`docs/spec.md:2039-2053`, incl. `unauthorized` and `request_too_large`) | count |
-| 8 | `router_requests_usage_missing` | — | count | `.usage_missing` | count |
-| 9 | `router_cost_nano` | `tier`, `currency`, `provenance` | integer nano **of `currency`** | `.input_miss_nano[c]` / `.input_hit_nano[c]` / `.cache_write_nano[c]` / `.output_nano[c]`, `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output` | **verified** |
-| 10 | `router_cache_input_cached_tokens` | `provenance` | tokens | `.input_cached_tokens` — the hit rate's numerator, as a measurement | **verified** |
-| 11 | `router_cache_input_tokens` | `provenance` | tokens | `.input_total_tokens` — its denominator | **verified** |
-| 12 | `router_cache_hit_rate` | `provenance` | ratio (0..1) | §9.2's `hit rate` (`cache_hit_rate(figures)`) | **verified** |
-| 13 | `router_prefix_continuity_p50` | `provenance` | ratio | §9.2's `continuity p50` (`median(figures.continuity)`) | **inferred** |
-| 14 | `router_transform_savings_tokens` | `provenance` | tokens | `.verified_savings_tokens` / `.inferred_savings_tokens` — one series per label present | verified / **inferred** |
-| 15 | `router_plan_switches` | `family` | count | `.switches` | count |
-| 16 | `router_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `.switch_cost_verified_nano[c]` | **verified** |
-| 17 | `router_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `.reprefill_tokens` | **inferred** |
-| 18 | `router_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | `.reprefill_cost_nano[c]` | **inferred** |
-| 19 | `router_plan_switches_without_usage` | `family` | count | `.switches_without_usage` | count |
-| 20 | `router_stateful_inbound_rate` | `provenance` | ratio | §9.2's `stateful inbound rate` (`stateful_inbound_rate(figures)`) | count |
-| 21 | `router_overhead_ms_p99` | `provenance` | milliseconds | §9.2's `overhead p99` (`p99(figures.overhead_ms)`) | **measured** |
+| 1 | `vadis_metrics_window_seconds` | — | seconds | the surface's own constant (§3.3) | — |
+| 2 | `vadis_metrics_omitted_figures` | — | count | **the response's own bookkeeping**: how many of §3.5's omission arms fired (never a figure over records) | — |
+| 3 | `vadis_trace_files_read` | — | count | `Report.files_read` — the rollover files this read opened | count |
+| 4 | `vadis_requests` | — | count | `TraceFigures.requests` (`requests`) | count |
+| 5 | `vadis_requests_succeeded` | — | count | `.succeeded` (`succeeded`) | count |
+| 6 | `vadis_requests_failed` | — | count | `.failed` (`failed`) | count |
+| 7 | `vadis_failures_by_kind` | `kind` | count | `.failure_kinds[kind]` — the report's `(upstream_error 2, upstream_timeout 1)` split; `kind` ∈ §8's closed vocabulary (`docs/spec.md:2039-2053`, incl. `unauthorized` and `request_too_large`) | count |
+| 8 | `vadis_requests_usage_missing` | — | count | `.usage_missing` | count |
+| 9 | `vadis_cost_nano` | `tier`, `currency`, `provenance` | integer nano **of `currency`** | `.input_miss_nano[c]` / `.input_hit_nano[c]` / `.cache_write_nano[c]` / `.output_nano[c]`, `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output` | **verified** |
+| 10 | `vadis_cache_input_cached_tokens` | `provenance` | tokens | `.input_cached_tokens` — the hit rate's numerator, as a measurement | **verified** |
+| 11 | `vadis_cache_input_tokens` | `provenance` | tokens | `.input_total_tokens` — its denominator | **verified** |
+| 12 | `vadis_cache_hit_rate` | `provenance` | ratio (0..1) | §9.2's `hit rate` (`cache_hit_rate(figures)`) | **verified** |
+| 13 | `vadis_prefix_continuity_p50` | `provenance` | ratio | §9.2's `continuity p50` (`median(figures.continuity)`) | **inferred** |
+| 14 | `vadis_transform_savings_tokens` | `provenance` | tokens | `.verified_savings_tokens` / `.inferred_savings_tokens` — one series per label present | verified / **inferred** |
+| 15 | `vadis_plan_switches` | `family` | count | `.switches` | count |
+| 16 | `vadis_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `.switch_cost_verified_nano[c]` | **verified** |
+| 17 | `vadis_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `.reprefill_tokens` | **inferred** |
+| 18 | `vadis_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | `.reprefill_cost_nano[c]` | **inferred** |
+| 19 | `vadis_plan_switches_without_usage` | `family` | count | `.switches_without_usage` | count |
+| 20 | `vadis_stateful_inbound_rate` | `provenance` | ratio | §9.2's `stateful inbound rate` (`stateful_inbound_rate(figures)`) | count |
+| 21 | `vadis_overhead_ms_p99` | `provenance` | milliseconds | §9.2's `overhead p99` (`p99(figures.overhead_ms)`) | **measured** |
 
 `family` is the loaded `plan_policy.family` verbatim (`docs/spec.md:2260`); series 15–19 exist **only when
 the loaded config declares a `plan_policy`** — §9.1's no-fabricated-plan-section rule (`docs/spec.md:2259`)
@@ -301,14 +301,14 @@ The exposition has no stderr, so §9.2's "with a one-line note" becomes an **in-
 (Prometheus ignores comment lines, so the comment is free and cannot confuse a parser). One frozen family,
 and the surface's own bookkeeping series counts what fired:
 
-| arm | when | comment (frozen wording) | `router_metrics_omitted_figures` |
+| arm | when | comment (frozen wording) | `vadis_metrics_omitted_figures` |
 |---|---|---|---|
 | `unknown_outcome_requests` | **always** (§3.10) | `# vadis: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not scan it` — **this string is normative in spec §4.16 and is repeated here verbatim**; a case asserts the substring `unknown_outcome_requests omitted` | 1 |
 | the trace read | `trace.dir` cannot be read/listed (a live dir removed under a running process) | `# vadis: trace unreadable — <the reason the read gave>; every trace-derived figure is omitted` | 1 + the arms below that therefore fire |
-| `router_cache_hit_rate` | the window holds no input tokens (`input_total_tokens == 0`) | `# vadis: cache_hit_rate omitted — no input tokens in the window` | +1 |
-| `router_prefix_continuity_p50` | no record in the window carries a non-null `prefix.continuity` | `# vadis: prefix_continuity_p50 omitted — no continuity sample in the window` | +1 |
-| `router_overhead_ms_p99` | no record in the window carries `result.upstream_ms` | `# vadis: overhead_ms_p99 omitted — no upstream-measured record in the window` | +1 |
-| `router_stateful_inbound_rate` | the window holds no records (`requests == 0`) | `# vadis: stateful_inbound_rate omitted — the window holds no records` | +1 |
+| `vadis_cache_hit_rate` | the window holds no input tokens (`input_total_tokens == 0`) | `# vadis: cache_hit_rate omitted — no input tokens in the window` | +1 |
+| `vadis_prefix_continuity_p50` | no record in the window carries a non-null `prefix.continuity` | `# vadis: prefix_continuity_p50 omitted — no continuity sample in the window` | +1 |
+| `vadis_overhead_ms_p99` | no record in the window carries `result.upstream_ms` | `# vadis: overhead_ms_p99 omitted — no upstream-measured record in the window` | +1 |
+| `vadis_stateful_inbound_rate` | the window holds no records (`requests == 0`) | `# vadis: stateful_inbound_rate omitted — the window holds no records` | +1 |
 | the money series | the window holds no currency | `# vadis: no currency in the window — no money series` | +1 |
 
 An empty window is **not** a failure: `200`, the counts present as `0`, the money/ratio/quantile series
@@ -512,7 +512,7 @@ the one behaviour that would make this surface useless.
   `tests/conformance/tests/**` feeds a malformed line to the reader — `anchors.txt`, section
   "torn-tail sweep"), and §9.2's exit-code list (`docs/spec.md:2309-2311`) names no malformed-line case.
 - **A named behaviour, kept in one place**: skipping a partial record is not "an absent measurement read as
-  0" — nothing is counted for it, and the *record* does not exist yet. `router_metrics_omitted_figures`
+  0" — nothing is counted for it, and the *record* does not exist yet. `vadis_metrics_omitted_figures`
   does **not** count it (it is not a figure arm); the next scrape sees the completed line.
 
 ---
@@ -528,9 +528,9 @@ the one behaviour that would make this surface useless.
 | 5 | **The guard applies.** With `server.auth_token_env` set: no token → `401`; `Authorization: Bearer` → `200`; `x-api-key` → `200` **byte-equal** to the Bearer arm. With no key configured: `200` with no token (§4.7's key-absent control, `CONF-45` ⑤'s shape). | `CONF-46` | four arms, one rig + one keyless rig |
 | 6 | **The figures are the derivation's.** Every value in the served exposition equals (a) the case's **own** independently computed sum/count/quantile/ratio over its own fixture records (the `CONF-41` method) and (b) the value `stats::report_json` renders for the same window (the `CONF-56` method). No series exists that the derivation does not produce. | **`CONF-87`** | the equality table, figure by figure |
 | 7 | **The series set is a function of the config, not of traffic.** Two rigs, N and 10N records in the same window: identical metric-name+label sets and identical line counts (only digits differ). The body stays under 8 KiB. | `CONF-87` | the N/10N pair |
-| 8 | **The read is bounded and sourced correctly.** `router_trace_files_read` equals the number of §4.1 rollover files the window actually intersects (`≤ 2`), and a **decoy** trace dir holding records outside the config's `trace.dir` contributes nothing. | `CONF-87` | the file count + the decoy dir |
+| 8 | **The read is bounded and sourced correctly.** `vadis_trace_files_read` equals the number of §4.1 rollover files the window actually intersects (`≤ 2`), and a **decoy** trace dir holding records outside the config's `trace.dir` contributes nothing. | `CONF-87` | the file count + the decoy dir |
 | 9 | **Determinism.** Two admitted scrapes with no intervening traffic are **byte-identical** (no timestamp, no uptime, no counter — §3.2). | `CONF-87` | two sequential GETs, `cmp` |
-| 10 | **Zero vs absent, and the partial-report rule.** A window with records but no input tokens: the token series are present as `0`, the ratio series is **absent**, and its comment names why. A window whose dir is removed after boot: `200`, every trace-derived figure absent, each with its comment, `router_metrics_omitted_figures ≥ 1`, and **never** a §8 body. | `CONF-87` | the two shapes + the comment substrings |
+| 10 | **Zero vs absent, and the partial-report rule.** A window with records but no input tokens: the token series are present as `0`, the ratio series is **absent**, and its comment names why. A window whose dir is removed after boot: `200`, every trace-derived figure absent, each with its comment, `vadis_metrics_omitted_figures ≥ 1`, and **never** a §8 body. | `CONF-87` | the two shapes + the comment substrings |
 | 11 | **The formatter cannot see a record** — the single-owner rule's structural half: `metrics::exposition` is called directly with a hand-built `TraceFigures` and renders exactly the series the values imply (so a figure computed from records is not expressible). | `CONF-87` | the direct call, `CONF-41`/`CONF-56`'s precedent |
 | 12 | **The `provenance` label is §9.2's own**, per series, and never re-labelled: an `inferred` figure is not emitted as `verified` (AGENTS constraint 4). | `CONF-87` | the label assertion per series |
 | 13 | **`CONF-46`'s control survives**: the `/health` 200 liveness control on the same run, unchanged from the old case. | `CONF-46` | kept verbatim |
@@ -606,7 +606,7 @@ one of the four: the surface is now served, and the owner said so.
 | `R50-0-F3` | the metrics window is a constant (§3.3); a configurable window is the registered widening, with its own key, read site, reload answer and case | the next round that owns `config.example.yaml` | open — with a trigger |
 | `R50-0-F4` | the `conf_46` **rename** moves a case file name. Re-measured at HEAD with `git grep --untracked -n`, because the sentence this row first carried (`grep -rn 'conf_46_metrics_is_bare_404' .`, "finds `DESIGN §12.8`'s row only") is **false and was not a measurement**: a recursive filesystem grep over this repo also walks `target/`, and what it returns is not the tree. The real set is **74 files / 85 lines outside this card's own evidence** (the command in `measurements.txt` carries the `':!The loop's records for that decision'` exclusion, because the receipt that prints this number is a file in that directory and a count taken while it is being written is a self-reference rather than a measurement; the excluded half is measured on its own below). It splits: **must move** — `design/DESIGN.md:1005`, §12.8's `CONF-46` row, which §2.4 rewrites to carry both names, and *nothing else* (R50-1's rename owes no other document an edit). **Must not move**, each because it quotes or seals an event in which the file really carried that name: `.github/workflows/ci.yml:65` — a **live** file: the free-disk comment quotes the targets run 36299293578 died on, and rewriting the quotation would make the workflow assert an event that did not happen (`ci.yml` is R53's file, outside every R50 write set); this ADR's own lines (a record that authorises a rename must name both names); R49's fourteen, including the two audit rigs that `grep` the case **by path** (the loop's anchors script, the loop's anchors script) and the loop's claim-sources record; three round records; fifty-four sealed `gates*.log`/`*.out` receipts under the loop's records; and this card's **9** evidence files, which the same command reports separately (`git grep --untracked -l … -- the loop's records for that decision` → `9`) because they seal the pre-rename state and must outlive the rename as they are. What is **not** in the set, and is the part that would have bitten: no `book/` page, no manifest (`tests/conformance/Cargo.toml` names no case) and no live harness entry point | R50-1 — nothing owed beyond the rename itself (one re-scoped verdict, no edit) | due R50-1 |
 | `R50-0-F5` | **`DESIGN §12.11` contradicts `vadis-cli/src/lib.rs:579-583` on the key-absent case** — the section still reads *"When `server.auth_token_env` is absent, **no layer is installed** and the assembled vadis is byte-for-byte the assembly v0.1 had before this key existed"*, while the landed wiring (R47-2) installs the layer **always** and gives the key-absent revision a gate that admits everything, precisely so the two revisions have one code path. `R50-0` noticed it while adding this round's bullet directly above that sentence and **did not edit it** (the sentence is not this card's subject and the fix is a sentence in a file another round owns); the evidence is `crates/vadis-cli/src/lib.rs:579-583` against `design/DESIGN.md` §12.11's bullet list | the next round that owns `design/DESIGN.md` §12.11 (the auth landing; `R47-2`/`R48`'s truth-repair class) | next §12.11-touching card |
-| `R50-0-N1` | `AGENTS.md` constraint 2's discipline is what forbids the timestamp/uptime in the body (§3.2); a future "add `router_uptime_seconds`" idea must be recorded as a *new* contract, not a convenience | — (note) | n/a |
+| `R50-0-N1` | `AGENTS.md` constraint 2's discipline is what forbids the timestamp/uptime in the body (§3.2); a future "add `vadis_uptime_seconds`" idea must be recorded as a *new* contract, not a convenience | — (note) | n/a |
 | `R50-0-N2` | cost: this card is docs-only, offline, `$0.00` — no provider dialled, no credential read | — (note) | n/a |
 
 **What is left undecided, and by whom**: nothing in this surface's contract is left to a loop's judgement;

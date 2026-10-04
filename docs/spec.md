@@ -507,7 +507,7 @@ pipeline of ADR-003: filter stage, `match_output`, line keep/drop, truncation, `
 ### 4.5 `state` (local persistence) — contract
 
 The gateway keeps **one local store**: a SQLite database in WAL mode, by default
-`<directory containing this config file>/state/router.db` (`state/` is gitignored). v0.1 has **no `state:`
+`<directory containing this config file>/state/vadis.db` (`state/` is gitignored). v0.1 has **no `state:`
 config key** — the path is fixed; a section that moves it (the way `trace.dir` does) is an additive future
 key (§4.1's precedent, ADR-009).
 
@@ -1370,7 +1370,7 @@ applies wins.
 
 **What the file's own relative paths mean** (§4.1's rule, unchanged, restated where a user meets it): every
 relative path in the file — `trace.dir`, `providers_file` (§4.14), every
-`plugins[*].config.rules_file`, and the fixed `state/router.db` —
+`plugins[*].config.rules_file`, and the fixed `state/vadis.db` —
 resolves against **the directory containing the config file**, never the CWD; an absolute value wins
 (CONF-25 asserts both halves). So a config at the XDG location keeps its traces and its store beside itself,
 under `~/.config/vadis/`. That is deliberate — one anchor, and one backup story: the config and its state
@@ -1634,7 +1634,7 @@ figure of its own — its numbers are §9.2's, rendered.
 | Success | `200`, `content-type: text/plain; version=0.0.4; charset=utf-8` — `# HELP` / `# TYPE` / `name{labels} value` lines |
 | Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"metrics"`**, and no store row — §4.7's refusal table, unchanged |
 | Any other status | **a defect.** The status set is exactly `{200, 401}`: never `404` (the surface is served), never `501`, never `503`, and never §8's error body on the `200` arm |
-| Window | **`900` seconds, a process constant** (`WINDOW_MS`), not a key, not a flag, not a query parameter; stated in every response by the `router_metrics_window_seconds` series, because §9.2's rule (*"a report must state the window it covers"*) has no other way to be kept in-band |
+| Window | **`900` seconds, a process constant** (`WINDOW_MS`), not a key, not a flag, not a query parameter; stated in every response by the `vadis_metrics_window_seconds` series, because §9.2's rule (*"a report must state the window it covers"*) has no other way to be kept in-band |
 | Timestamps | **none.** The scrape's own instant is the scraper's; the body carries no wall-clock value and no uptime, so two scrapes over an unchanged window are **byte-identical** |
 | Reads | the resolved `trace.dir` (`AppState`, §4.1's resolution; a key the reload **refuses**, §4.15). **Not** the store, **not** the config beyond the plan family below, and no path outside the product tree (constraint 3) |
 | Writes | nothing: no trace record, no event row, no state — on the admitted arm (a refusal writes the one record named above) |
@@ -1646,27 +1646,27 @@ ratios carry the report's own four decimal places, `overhead_ms_p99` is integer 
 
 | metric | labels | unit | the figure (all of them §9.2's, none of them new) |
 |---|---|---|---|
-| `router_metrics_window_seconds` | — | seconds | the constant `900` |
-| `router_metrics_omitted_figures` | — | count | how many omissions the rules below produced in *this* response (the response's own bookkeeping, never a figure over records) |
-| `router_trace_files_read` | — | count | the rollover files this read opened (≤ 2 for a 900s window, §4.1) |
-| `router_requests` | — | count | `requests` |
-| `router_requests_succeeded` | — | count | `succeeded` |
-| `router_requests_failed` | — | count | `failed` |
-| `router_failures_by_kind` | `kind` | count | the `failed` split — `kind` ∈ §8's `errors[].kind` vocabulary |
-| `router_requests_usage_missing` | — | count | `usage missing` |
-| `router_cost_nano` | `tier`, `currency`, `provenance` | integer nano | the four cost tiers, **per currency**; `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output`. **No total series exists** — the printed total is their sum, and a `tier="total"` would double-count under a `sum()` |
-| `router_cache_input_cached_tokens` | `provenance` | tokens | the hit rate's numerator (the measured quantity) |
-| `router_cache_input_tokens` | `provenance` | tokens | its denominator |
-| `router_cache_hit_rate` | `provenance` | ratio (0..1) | `hit rate` |
-| `router_prefix_continuity_p50` | `provenance` | ratio | `continuity p50` |
-| `router_transform_savings_tokens` | `provenance` | tokens | the two savings lines, one series per label present |
-| `router_plan_switches` | `family` | count | `switches` |
-| `router_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `switch cost (verified, <currency>)` |
-| `router_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `switch re-prefill (inferred)` — the token sum |
-| `router_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | the same line's cost sum |
-| `router_plan_switches_without_usage` | `family` | count | `switches without usage` |
-| `router_stateful_inbound_rate` | `provenance` | ratio | `stateful inbound rate` |
-| `router_overhead_ms_p99` | `provenance` | milliseconds | `overhead p99` — the derivation §9.2 defines (`overhead_ms − upstream_ms`), not the raw field |
+| `vadis_metrics_window_seconds` | — | seconds | the constant `900` |
+| `vadis_metrics_omitted_figures` | — | count | how many omissions the rules below produced in *this* response (the response's own bookkeeping, never a figure over records) |
+| `vadis_trace_files_read` | — | count | the rollover files this read opened (≤ 2 for a 900s window, §4.1) |
+| `vadis_requests` | — | count | `requests` |
+| `vadis_requests_succeeded` | — | count | `succeeded` |
+| `vadis_requests_failed` | — | count | `failed` |
+| `vadis_failures_by_kind` | `kind` | count | the `failed` split — `kind` ∈ §8's `errors[].kind` vocabulary |
+| `vadis_requests_usage_missing` | — | count | `usage missing` |
+| `vadis_cost_nano` | `tier`, `currency`, `provenance` | integer nano | the four cost tiers, **per currency**; `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output`. **No total series exists** — the printed total is their sum, and a `tier="total"` would double-count under a `sum()` |
+| `vadis_cache_input_cached_tokens` | `provenance` | tokens | the hit rate's numerator (the measured quantity) |
+| `vadis_cache_input_tokens` | `provenance` | tokens | its denominator |
+| `vadis_cache_hit_rate` | `provenance` | ratio (0..1) | `hit rate` |
+| `vadis_prefix_continuity_p50` | `provenance` | ratio | `continuity p50` |
+| `vadis_transform_savings_tokens` | `provenance` | tokens | the two savings lines, one series per label present |
+| `vadis_plan_switches` | `family` | count | `switches` |
+| `vadis_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `switch cost (verified, <currency>)` |
+| `vadis_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `switch re-prefill (inferred)` — the token sum |
+| `vadis_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | the same line's cost sum |
+| `vadis_plan_switches_without_usage` | `family` | count | `switches without usage` |
+| `vadis_stateful_inbound_rate` | `provenance` | ratio | `stateful inbound rate` |
+| `vadis_overhead_ms_p99` | `provenance` | milliseconds | `overhead p99` — the derivation §9.2 defines (`overhead_ms − upstream_ms`), not the raw field |
 
 The five plan series exist **only when the loaded config declares a `plan_policy`** (§9.1's
 no-fabricated-plan-section rule); `family` is that policy's `family` verbatim.
@@ -1684,7 +1684,7 @@ summed together.
   the window actually holds — never a zero series for an absent one — and the `# HELP` line says so.
 - **A figure that cannot be computed is omitted, with a named reason — never a `0`** (§9.2's own rule). Zero
   is a *read*; the absence is a *hole*, and every hole is named by a `#` comment line in the body (the
-  exposition has no stderr): `# vadis: <figure> omitted — <reason>`. `router_metrics_omitted_figures`
+  exposition has no stderr): `# vadis: <figure> omitted — <reason>`. `vadis_metrics_omitted_figures`
   counts what fired.
 - **Only labels the window produced are emitted** — never a synthetic zero for a failure kind or a savings
   verdict nothing carried.

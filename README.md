@@ -149,7 +149,7 @@ Report a vulnerability **privately** through GitHub's private vulnerability repo
 ## Ops
 
 - **No server-side session state.** Session identity is the client's own key (`prompt_cache_key`, then the configured headers) — `store` / `previous_response_id` are never inspected, so `state.stateful_inbound` in the trace is `false` on every request.
-- **One local store.** Local state is one SQLite/WAL file (`state/router.db`, spec §4.5, [ADR-009](design/decisions/ADR-009-persistence-boundary-sqlite-wal-store.md)) holding the event log and its projections; the trace stays the only analysis channel, and **no request or response body is stored**.
+- **One local store.** Local state is one SQLite/WAL file (`state/vadis.db`, spec §4.5, [ADR-009](design/decisions/ADR-009-persistence-boundary-sqlite-wal-store.md)) holding the event log and its projections; the trace stays the only analysis channel, and **no request or response body is stored**.
 - **Back up the pair and the store together.** The config is a pair — the file plus the roster it names; back both up with the store, and see [Operations §Backup](book/operations.md#backup).
 
 ## License

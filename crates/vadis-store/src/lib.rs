@@ -1015,7 +1015,7 @@ mod tests {
     #[test]
     fn empty_db_migrates_and_reopens() {
         let dir = tempdir("migrate");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         {
             let s = SqliteStore::open(&db).unwrap();
             assert_eq!(s.schema_version().unwrap(), MIGRATIONS.last().unwrap().0);
@@ -1128,7 +1128,7 @@ mod tests {
         ];
 
         let inc_dir = tempdir("inc");
-        let a = SqliteStore::open(&inc_dir.join("state/router.db")).unwrap();
+        let a = SqliteStore::open(&inc_dir.join("state/vadis.db")).unwrap();
         let (e2, e3, e5, e6) = scenario(&a);
         a.project(ProjectionWrite::SessionBound {
             session_key: "sess-1",
@@ -1163,7 +1163,7 @@ mod tests {
         .unwrap();
 
         let reb_dir = tempdir("reb");
-        let b = SqliteStore::open(&reb_dir.join("state/router.db")).unwrap();
+        let b = SqliteStore::open(&reb_dir.join("state/vadis.db")).unwrap();
         let _ = scenario(&b);
         let stats = b.rebuild(Projection::All).unwrap();
         assert_eq!(stats.events_scanned, 6);
@@ -1237,7 +1237,7 @@ mod tests {
     #[test]
     fn second_writer_is_locked() {
         let dir = tempdir("lock");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         let _first = SqliteStore::open(&db).unwrap();
         let second = SqliteStore::open(&db);
         match second {
@@ -1251,7 +1251,7 @@ mod tests {
     #[test]
     fn events_ordered_and_durable() {
         let dir = tempdir("order");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         {
             let s = SqliteStore::open(&db).unwrap();
             let ids: Vec<i64> = [
@@ -1309,7 +1309,7 @@ mod tests {
     #[test]
     fn plan_state_projection_and_rebuild() {
         let dir = tempdir("plan-state");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         let s = SqliteStore::open(&db).unwrap();
         assert_eq!(s.schema_version().unwrap(), 2, "DDL version 2");
 
@@ -1382,7 +1382,7 @@ mod tests {
     #[test]
     fn v1_db_migrates_to_v2() {
         let dir = tempdir("v1-to-v2");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         {
             let s = SqliteStore::open(&db).unwrap();
             s.append(NewEvent {
@@ -1408,7 +1408,7 @@ mod tests {
         let dir = tempdir("unopen");
         let blocker = dir.join("state");
         std::fs::write(&blocker, b"not a directory").unwrap();
-        let err = SqliteStore::open(&dir.join("state/router.db")).unwrap_err();
+        let err = SqliteStore::open(&dir.join("state/vadis.db")).unwrap_err();
         assert!(matches!(err, StoreError::Unopenable(_)), "got {err:?}");
     }
 
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn every_query_variant_executes_without_sql_error() {
         let dir = tempdir("query-exec");
-        let db = dir.join("state/router.db");
+        let db = dir.join("state/vadis.db");
         let s = SqliteStore::open(&db).unwrap();
 
         // Seed one row per projection so the reads have data to find.

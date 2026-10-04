@@ -1019,7 +1019,7 @@ pub struct PluginCfg {
 }
 
 /// `state:` is **not** a config key in v0.1 (spec §4.5): the store path is
-/// fixed at `<config dir>/state/router.db`. The key is "known" to serde only
+/// fixed at `<config dir>/state/vadis.db`. The key is "known" to serde only
 /// so that its presence produces this precise refusal instead of a generic
 /// unknown-field message (DESIGN §12.10.2 load-time table).
 #[derive(Debug, Clone, Copy)]
@@ -1032,7 +1032,7 @@ impl<'de> Deserialize<'de> for StateKeyForbidden {
     {
         Err(de::Error::custom(
             "the `state:` section is not a config key in v0.1: the store path is fixed at \
-             <config dir>/state/router.db (spec §4.5, ADR-009 item 6); a section that moves it \
+             <config dir>/state/vadis.db (spec §4.5, ADR-009 item 6); a section that moves it \
              (the way trace.dir does) is an additive future key",
         ))
     }

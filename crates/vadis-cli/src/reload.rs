@@ -21,7 +21,7 @@
 //! a registration bound to the target's inode could go silent; a
 //! directory's inode is not the thing being replaced. The filter is
 //! required, not cosmetic: the pair's own directory is *hot* (the store is
-//! `<config dir>/state/router.db`, the shipped `trace.dir` is
+//! `<config dir>/state/vadis.db`, the shipped `trace.dir` is
 //! `./state/traces`, and the macOS backend delivers sub-directory events),
 //! so without exact-path equality the reload would re-read the pair once
 //! per request — the per-request check ADR-039 refused outright.
@@ -1627,7 +1627,7 @@ fallback: []
         );
 
         // The noise, in the real shapes: the state store (with its WAL)
-        // at <dir>/state/router.db, trace files under <dir>/state/
+        // at <dir>/state/vadis.db, trace files under <dir>/state/
         // traces/, and a stray temp file directly in the watched
         // directory (the landing's own first half, filtered by name).
         // The store write goes through the publisher's own connection —
@@ -1862,8 +1862,8 @@ fallback: []
 
         // The log: exactly the two config.applied rows, nothing else (no
         // request was served, no plugin edge was crossed).
-        let store = vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
-            .unwrap();
+        let store =
+            vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/vadis.db")).unwrap();
         use vadis_core::store::{Query, QueryRow, Store as _};
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events")
@@ -1951,8 +1951,8 @@ fallback: []
         // no plugins and serves no request, so its boot writes exactly
         // the startup `config.applied` — the refusal adds nothing (RV-2,
         // RV-3, RV-9: a refused candidate writes nothing).
-        let store = vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/router.db"))
-            .unwrap();
+        let store =
+            vadis_store::SqliteStore::open(&root.parent().unwrap().join("state/vadis.db")).unwrap();
         use vadis_core::store::{Query, QueryRow, Store as _};
         let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
             panic!("events")

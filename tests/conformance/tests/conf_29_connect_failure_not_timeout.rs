@@ -90,7 +90,7 @@ const UPSTREAM_OK: &str = r#"{"id":"r1","choices":[{"index":0,"message":{"role":
 
 /// The `error.classified` event rows a request wrote, from the store.
 fn classified_events(dir: &std::path::Path) -> Vec<serde_json::Value> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -235,7 +235,7 @@ async fn conf_29_connect_failure_walks_the_fallback_chain() {
 
     // The failover event ties the switch to the class, and the trace
     // names the origin route (spec §6 result.failover_from).
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

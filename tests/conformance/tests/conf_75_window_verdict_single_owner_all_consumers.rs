@@ -84,7 +84,7 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// the single owner's steps drift, one of the agreement assertions
 /// below fires.
 fn deferral_from_projection(dir: &std::path::Path) -> bool {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let now_s = (now_us().max(0) as u64) / 1_000_000;
     let window_start_s = vadis_core::quota::window_start_for(now_s, 1);
     let next_boundary_s = vadis_core::quota::next_reset(window_start_s, 1);

@@ -67,7 +67,7 @@ async fn conf_23a_unopenable_store_exits_nonzero() {
     let dir = tempdir("unopen");
     let config_path = dir.join("config.yaml");
     std::fs::write(&config_path, CONFIG).unwrap();
-    // `state` is a regular file → router.db cannot be created under it.
+    // `state` is a regular file → vadis.db cannot be created under it.
     std::fs::write(dir.join("state"), b"not a directory").unwrap();
 
     let cfg = config_path.to_string_lossy().into_owned();
@@ -83,7 +83,7 @@ async fn conf_23a_unopenable_store_exits_nonzero() {
 #[test]
 fn conf_23b_second_writer_refused_with_locked_reason() {
     let dir = tempdir("lock");
-    let db = dir.join("state/router.db");
+    let db = dir.join("state/vadis.db");
     let _first = vadis_store::SqliteStore::open(&db).unwrap();
     match vadis_store::SqliteStore::open(&db) {
         Err(vadis_core::StoreError::Locked) => {
@@ -98,7 +98,7 @@ fn conf_23b_second_writer_refused_with_locked_reason() {
 #[test]
 fn conf_23a_schema_too_new_is_refused() {
     let dir = tempdir("future");
-    let db = dir.join("state/router.db");
+    let db = dir.join("state/vadis.db");
     {
         let s = vadis_store::SqliteStore::open(&db).unwrap();
         let conn = s.raw_connection();
@@ -127,6 +127,6 @@ fn conf_23a_schema_too_new_is_refused() {
 fn s_max_supported() -> u32 {
     use vadis_core::store::Store as _;
     let dir = vadis_conformance::testkit::tempdir("conf23-max");
-    let s = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let s = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     s.schema_version().unwrap()
 }

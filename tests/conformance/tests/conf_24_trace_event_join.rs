@@ -127,7 +127,7 @@ async fn conf_24_trace_event_join() {
         by_request.insert(req, (ptr.clone(), v.clone()));
     }
 
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");

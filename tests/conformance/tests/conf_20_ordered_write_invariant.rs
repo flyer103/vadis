@@ -31,7 +31,7 @@ fn tempdir(tag: &str) -> PathBuf {
 
 #[test]
 fn conf_20_ordered_write_invariant() {
-    let store = vadis_store::SqliteStore::open(&tempdir("main").join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&tempdir("main").join("state/vadis.db")).unwrap();
 
     // The pipeline prefix, exactly DESIGN §12.10.5's rows 1–4.
     store
@@ -114,7 +114,7 @@ async fn conf_20_pipeline_ordered_write() {
     use vadis_proxy::{ForwardOutcome, Forwarder, ProviderTransport};
 
     let dir = tempdir("pipeline");
-    let store = Arc::new(vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap());
+    let store = Arc::new(vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap());
 
     /// The fake provider: at wire hand-off, the last event row must be
     /// this attempt's `upstream.submitted` intent.

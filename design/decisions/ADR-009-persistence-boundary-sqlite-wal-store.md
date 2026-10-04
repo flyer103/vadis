@@ -55,7 +55,7 @@ The usual objection — "a database adds latency to the request path" — is mea
    `events` by a single scan; the rebuild is a startup/maintenance path, never a request path. Any
    projection that cannot be rebuilt is by definition not a projection.
 6. **The store is a startup prerequisite, and the path is fixed in v0.1.** The database defaults to
-   `<directory containing the config file>/state/router.db` (`state/` is already gitignored). If it cannot
+   `<directory containing the config file>/state/vadis.db` (`state/` is already gitignored). If it cannot
    be opened or migrated, `serve` exits non-zero with the reason instead of running with a silent
    in-memory fallback; there is no "state off" switch in v0.1. A `state:` config section (so the file can
    live elsewhere, exactly as `trace.dir` does) is an **additive future key** that would not break
@@ -156,7 +156,7 @@ database, 410-byte `events` rows and the per-statement timing loop described her
 - The state file becomes operator data alongside the trace directory: it must be backed up (quota counters
   and the sticky table cannot be reconstructed from a log that was not backed up) and treated as
   sensitive-in-aggregate. Backup is an ops duty, not a v0.1 feature.
-- Startup gains a real failure mode with an operator action (`state/router.db` unreadable → fix permissions
+- Startup gains a real failure mode with an operator action (`state/vadis.db` unreadable → fix permissions
   or move the file aside). The trace path keeps working independently of the store.
 - Money stays on the trace path: `vadis replay` / `vadis stats` compute cost from the trace (ADR-005,
   spec §7), while quota remaining, sticky bindings and the cache ledger come from the store's projections.

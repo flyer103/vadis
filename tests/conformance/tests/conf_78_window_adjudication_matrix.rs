@@ -83,7 +83,7 @@ fn seed_and_read_used(
     tokens: i64,
     window_start_s: u64,
 ) -> u64 {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let ev = store
         .append(NewEvent {
             kind: EventKind::PlanSwitched,

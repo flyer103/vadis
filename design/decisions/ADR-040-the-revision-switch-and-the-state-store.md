@@ -202,7 +202,7 @@ and the refusal names the key.
 **Refused — the named set, and it is the process's own resources.** `server.addr` (the listener is bound
 once, `crates/vadis-cli/src/lib.rs:853-854` names the bind failure), the resolved `trace.dir` (resolved at
 load and held by the trace writer, which is also why `trace.rollover` is the unit that may move, not the
-directory) and the state store's path (fixed at `<config dir>/state/router.db`, spec §4.5). Measured, and
+directory) and the state store's path (fixed at `<config dir>/state/vadis.db`, spec §4.5). Measured, and
 in the same class though less obviously so: **`server.upstream_attempt_timeout`** is read to build each
 provider transport at startup (`crates/vadis-cli/src/lib.rs:299-304` — `ReqwestProviderClient::new(timeout)`),
 so it is not a per-request read today; **`server.max_body_bytes`** is consumed by the inbound-body layer
@@ -788,7 +788,7 @@ inode is not the thing being replaced, so survival is structural rather than a p
 backend.
 
 **And the filter is required, not cosmetic — this is measured.** The pair's own directory is **hot**: the
-state store is `<config dir>/state/router.db` (spec §4.5, `docs/spec.md:509`) and the shipped `trace.dir` is
+state store is `<config dir>/state/vadis.db` (spec §4.5, `docs/spec.md:509`) and the shipped `trace.dir` is
 `./state/traces`, resolved against the config file's directory (`config.example.yaml:96`), with `state/`
 gitignored (`.gitignore:29`). A directory registration without a path filter would receive an event for
 **every request's** trace line and store write — i.e. it would re-read and re-hash the pair once per request,

@@ -181,7 +181,7 @@ async fn conf_15_prefix_continuity() {
     // The measurement chain behind the number: the cache_ledger holds
     // turn 2's block set (what a hypothetical turn 3 would be measured
     // against), and both turns left a request.received event row.
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     use vadis_core::store::{Query, QueryRow, Store as _};
     match store
         .query(Query::CacheLedgerBlocks {

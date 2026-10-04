@@ -244,10 +244,10 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
         "the Prometheus text exposition format, exactly"
     );
     let text = String::from_utf8(body_bearer.clone()).expect("the exposition is utf-8");
-    assert!(text.contains("# HELP router_metrics_window_seconds"));
-    assert!(text.contains("# TYPE router_metrics_window_seconds gauge"));
+    assert!(text.contains("# HELP vadis_metrics_window_seconds"));
+    assert!(text.contains("# TYPE vadis_metrics_window_seconds gauge"));
     assert!(
-        text.contains("router_metrics_window_seconds 900"),
+        text.contains("vadis_metrics_window_seconds 900"),
         "the window is stated in-band, always"
     );
 
@@ -345,7 +345,7 @@ async fn conf_46_metrics_keyless_admits_without_a_token() {
         Some("text/plain; version=0.0.4; charset=utf-8")
     );
     let text = String::from_utf8(body).expect("utf-8");
-    assert!(text.contains("router_metrics_window_seconds 900"));
+    assert!(text.contains("vadis_metrics_window_seconds 900"));
     assert!(
         header(&headers, "x-vadis-request-id").is_none(),
         "the admitted arm is not §8's answer here either"

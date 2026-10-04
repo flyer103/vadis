@@ -104,7 +104,7 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
 }
 
 fn event_kinds(dir: &std::path::Path) -> Vec<(String, Value)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
