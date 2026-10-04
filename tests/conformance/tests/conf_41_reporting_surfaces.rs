@@ -1,5 +1,5 @@
 //! CONF-41 (spec §9, the reporting surfaces): **`/health`'s `plan` section
-//! and `router stats` report what is recorded — nothing else.**
+//! and `vadis stats` report what is recorded — nothing else.**
 //!
 //! Both directions, decisive against each other:
 //!
@@ -11,7 +11,7 @@
 //!   informational `until_us`);
 //! - (b) a run with **no** `plan_policy` serves exactly
 //!   `{"configured": false}` — no fabricated family, account, or deadline;
-//! - (c) `router stats`' figures equal the sums computed independently in
+//! - (c) `vadis stats`' figures equal the sums computed independently in
 //!   this case from the trace rows and the event log the run itself
 //!   produced (the same tempdir, read back line by line).
 //!
@@ -24,7 +24,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
+use vadis_conformance::testkit::{self, PlanRig};
 
 /// `cooldown: 1h` — long enough that `now < deadline` holds for the whole
 /// test, so `blocked_by` must read `"cooldown"` and the deadline is
@@ -34,7 +34,7 @@ const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m
 async fn rig_with(tag: &str, policy: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) = testkit::plan_rig_parts(tag, "", policy).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -93,7 +93,7 @@ fn parse_ms(ts: &str) -> i64 {
         }
         f[..3].parse().unwrap()
     };
-    router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
+    vadis_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
         + h * 3_600_000
         + mi * 60_000
         + s * 1_000
@@ -151,7 +151,7 @@ async fn conf_41_health_plan_section_and_stats_match_the_records() {
     let dir = rig.stop();
 
     // (c) stats == the independent sums over the run's own trace rows.
-    let rep = router_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
+    let rep = vadis_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
         .expect("report computes");
     let recs = trace_records(&dir);
     assert!(!recs.is_empty(), "the run produced trace rows");
@@ -258,7 +258,7 @@ async fn conf_41_no_policy_is_not_fabricated() {
         .to_string();
     std::fs::write(&cfg_path, stripped).unwrap();
     let cfg = cfg_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -281,7 +281,7 @@ async fn conf_41_no_policy_is_not_fabricated() {
     assert_eq!(s, 200);
 
     let dir = rig.stop();
-    let rep = router_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
+    let rep = vadis_cli::stats::report(&dir.join("config.yaml").to_string_lossy(), "24h")
         .expect("report computes");
     assert_eq!(rep.figures.requests, 1);
     assert_eq!(

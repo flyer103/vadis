@@ -30,11 +30,11 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::config::{CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg};
-use router_core::cost::Nano;
-use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::config::{CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg};
+use vadis_core::cost::Nano;
+use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// A plan whose allowance is exactly one request (105 chargeable
 /// tokens), so one served in-plan request exhausts it (CONF-35/74's
@@ -44,16 +44,16 @@ const QUOTA_ONE_REQUEST: &str = "\n    quota:\n      - models: [m1]\n        win
 fn policy() -> PlanPolicyCfg {
     PlanPolicyCfg {
         family: "m1".into(),
-        primary: router_core::config::RouteSpec {
+        primary: vadis_core::config::RouteSpec {
             provider: "p-plan".into(),
             model: "m1".into(),
         },
-        overflow: router_core::config::RouteSpec {
+        overflow: vadis_core::config::RouteSpec {
             provider: "p-api".into(),
             model: "m1".into(),
         },
         on_primary_exhausted: OnPrimaryExhausted::Spill,
-        recover: router_core::config::RecoveryMode::Probe,
+        recover: vadis_core::config::RecoveryMode::Probe,
         cooldown: DurationVal(0),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
     }
@@ -84,10 +84,10 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// the single owner's steps drift, one of the agreement assertions
 /// below fires.
 fn deferral_from_projection(dir: &std::path::Path) -> bool {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let now_s = (now_us().max(0) as u64) / 1_000_000;
-    let window_start_s = router_core::quota::window_start_for(now_s, 1);
-    let next_boundary_s = router_core::quota::next_reset(window_start_s, 1);
+    let window_start_s = vadis_core::quota::window_start_for(now_s, 1);
+    let next_boundary_s = vadis_core::quota::next_reset(window_start_s, 1);
     assert!(
         now_s < next_boundary_s,
         "fixture invariant: the test runs inside the window"
@@ -107,7 +107,7 @@ async fn conf_75_window_verdict_agreed_by_projection_report_and_request_path() {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts("conf75", QUOTA_ONE_REQUEST, testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -184,7 +184,7 @@ async fn conf_75_window_verdict_agreed_by_projection_report_and_request_path() {
     };
     assert_eq!(
         rule.probe_admitted(&req),
-        Err(router_core::plan::ProbeBlockedBy::DeferredByWindow),
+        Err(vadis_core::plan::ProbeBlockedBy::DeferredByWindow),
         "the guard, fed the test-derived deferral, refuses the probe"
     );
 }

@@ -23,8 +23,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 use serde_json::Value;
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
@@ -84,7 +84,7 @@ fn turn_body(session: &str, first_message: &str, extra: Option<&str>) -> String 
 fn start_router(config_path: &std::path::Path, listen_port: u16) -> tokio::task::JoinHandle<i32> {
     std::env::set_var("CONF30_MOCK_KEY", "sk-conf30");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
     serve_task
 }
@@ -104,7 +104,7 @@ fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
 }
 
 fn event_kinds(dir: &std::path::Path) -> Vec<(String, Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

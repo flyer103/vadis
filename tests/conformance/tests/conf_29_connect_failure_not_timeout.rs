@@ -20,8 +20,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// A port with no listener: bind then drop, so it is genuinely closed.
 fn dead_port() -> u16 {
@@ -90,7 +90,7 @@ const UPSTREAM_OK: &str = r#"{"id":"r1","choices":[{"index":0,"message":{"role":
 
 /// The `error.classified` event rows a request wrote, from the store.
 fn classified_events(dir: &std::path::Path) -> Vec<serde_json::Value> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -124,7 +124,7 @@ async fn start_router(
     std::env::set_var("CONF29_LIVE_KEY", "sk-conf29-live");
     let cfg = config_path.to_string_lossy().into_owned();
     let serve_task = tokio::task::spawn(async move {
-        let _ = router_cli::serve(&cfg).await;
+        let _ = vadis_cli::serve(&cfg).await;
     });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
     serve_task
@@ -235,7 +235,7 @@ async fn conf_29_connect_failure_walks_the_fallback_chain() {
 
     // The failover event ties the switch to the class, and the trace
     // names the origin route (spec §6 result.failover_from).
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };

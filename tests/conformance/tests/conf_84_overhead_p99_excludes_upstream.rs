@@ -1,12 +1,12 @@
 //! CONF-84 (spec §6 · `overhead_ms_p99` + §9.2 · the `overhead p99`
 //! line; DESIGN §12.16 / §12.8's row): **the printed figure is the
-//! router's own overhead, not the upstream's.**
+//! vadis's own overhead, not the upstream's.**
 //!
 //! Until R32 the collector read the **raw** `overhead_ms` field
 //! (`stats.rs`'s `aggregate`), which spans the whole request — it
-//! includes the upstream attempt — so `router stats`'s `overhead p99`
+//! includes the upstream attempt — so `vadis stats`'s `overhead p99`
 //! line (and `overhead_ms_p99` in `--json`) printed the upstream's own
-//! latency as the router's. On any run with a declared upstream delay
+//! latency as the vadis's. On any run with a declared upstream delay
 //! (the R32 ladder's stand-in), the operator's figure would have been
 //! the stand-in's (`R32-F5`, blocking).
 //!
@@ -117,7 +117,7 @@ fn now_rfc3339() -> String {
 /// One rigged config + trace dir holding the given records; returns
 /// the config path (the same shape the rigs write, minimal sections).
 fn rig(tag: &str, records: &[serde_json::Value]) -> std::path::PathBuf {
-    let dir = router_conformance::testkit::tempdir(tag);
+    let dir = vadis_conformance::testkit::tempdir(tag);
     let trace_dir = dir.join("state/traces");
     std::fs::create_dir_all(&trace_dir).unwrap();
     let mut line = String::new();
@@ -163,9 +163,9 @@ fallback: []
 /// `report_json`'s `overhead_ms_p99` for the rig.
 fn json_p99(config: &std::path::Path) -> serde_json::Value {
     let cfg = config.to_string_lossy().into_owned();
-    let rep = router_cli::stats::report(&cfg, "24h").expect("report computes");
-    let rc = router_cli::config_load::load(config).expect("config reloads");
-    router_cli::stats::report_json(&rc, "24h", &rep, &None)["overhead_ms_p99"].clone()
+    let rep = vadis_cli::stats::report(&cfg, "24h").expect("report computes");
+    let rc = vadis_cli::config_load::load(config).expect("config reloads");
+    vadis_cli::stats::report_json(&rc, "24h", &rep, &None)["overhead_ms_p99"].clone()
 }
 
 #[test]
@@ -231,12 +231,12 @@ fn conf_84_both_print_paths_agree() {
     let records: Vec<serde_json::Value> = (0..10).map(|_| record(320, Some(300))).collect();
     let cfg = rig("conf84-agree", &records);
     let path = cfg.to_string_lossy().into_owned();
-    let rep = router_cli::stats::report(&path, "24h").expect("report computes");
+    let rep = vadis_cli::stats::report(&path, "24h").expect("report computes");
     // The figures' sample IS what both printers print; its p99 is the
     // json figure (asserted above) and the text line (print_text's
     // `overhead p99` reads the same `p99(&mut f.overhead_ms.clone())`).
-    let rc = router_cli::config_load::load(std::path::Path::new(&path)).unwrap();
-    let j = router_cli::stats::report_json(&rc, "24h", &rep, &None)["overhead_ms_p99"]
+    let rc = vadis_cli::config_load::load(std::path::Path::new(&path)).unwrap();
+    let j = vadis_cli::stats::report_json(&rc, "24h", &rep, &None)["overhead_ms_p99"]
         .as_u64()
         .expect("json figure");
     // The text figure is printed from the same vector; recompute the

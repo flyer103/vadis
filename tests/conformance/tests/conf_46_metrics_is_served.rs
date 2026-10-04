@@ -37,7 +37,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit;
+use vadis_conformance::testkit;
 
 fn config_yaml(listen_port: u16, auth_line: &str) -> String {
     format!(
@@ -176,7 +176,7 @@ async fn conf_46_metrics_is_served_behind_the_guard() {
     std::env::set_var("CONF46_GUARD_TOKEN", "tok-conf46-secret");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let trace_dir = dir.join("state/traces");
 
@@ -332,7 +332,7 @@ async fn conf_46_metrics_keyless_admits_without_a_token() {
     std::env::set_var("CONF46_MOCK_KEY", "sk-conf46");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, headers) = http_get(&listen_addr, "/metrics", &[], None);

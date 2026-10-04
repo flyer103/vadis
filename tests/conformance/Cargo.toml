@@ -1,5 +1,5 @@
 [package]
-name = "router-conformance"
+name = "vadis-conformance"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 # The CONF case table = DESIGN §12.8. Unimplemented paths always carry #[ignore = "CONF-NN: depends on <item>"] (explicitly visible, not simply absent).
 
 [dependencies]
-router-core = { path = "../../crates/router-core" }
+vadis-core = { path = "../../crates/vadis-core" }
 # The testkit's mock upstream needs an async runtime (CONF-01…CONF-14);
 # declared as a normal dependency because it lives in the lib target.
 tokio = { workspace = true }
@@ -20,15 +20,15 @@ serde_json = { workspace = true }
 # CONF-25 drives the real `serve` assembly (lib target) in-process;
 # CONF-20..23 drive the real SQLite store; CONF-20's pipeline twin drives
 # the real Forwarder with a fake transport.
-router-cli = { path = "../../crates/router-cli" }
-router-store = { path = "../../crates/router-store" }
-router-proxy = { path = "../../crates/router-proxy" }
+vadis-cli = { path = "../../crates/vadis-cli" }
+vadis-store = { path = "../../crates/vadis-store" }
+vadis-proxy = { path = "../../crates/vadis-proxy" }
 # CONF-63 loads the real builtin/transform_rules engine indirectly through
 # `serve` (the plugin config names the repo rule file); no direct dep needed.
-router-providers = { path = "../../crates/router-providers" }
+vadis-providers = { path = "../../crates/vadis-providers" }
 bytes = { workspace = true }
 http = { workspace = true }
 # CONF-43 enumerates the real parser's subcommand set via
-# `router_cli::Cli::command()` (clap::CommandFactory) — deriving the set
+# `vadis_cli::Cli::command()` (clap::CommandFactory) — deriving the set
 # from the `Command` enum instead of hardcoding it requires clap in scope.
 clap = { workspace = true }

@@ -1,5 +1,5 @@
 //! CONF-47 (spec §9.3): **unserved subcommands exit non-zero with a
-//! usage error** — `router replay` and `router trace tail` are planned,
+//! usage error** — `vadis replay` and `vadis trace tail` are planned,
 //! not served; the parser refuses them with clap's usage error and its
 //! exit code 2, never a silently ignored flag.
 //!
@@ -20,7 +20,7 @@
 #![forbid(unsafe_code)]
 
 use clap::Parser;
-use router_cli::Cli;
+use vadis_cli::Cli;
 
 /// One refusal verdict: the error text and the exit code clap's default
 /// `Error::exit` would produce for it.
@@ -40,12 +40,12 @@ fn conf_47_unserved_subcommands_exit_nonzero_with_usage_error() {
     // Every planned-but-unserved invocation named in spec §9.3 / the docs.
     let cases: Vec<Vec<&str>> = vec![
         vec![
-            "router", "replay", "--trace", "t.jsonl", "--config", "c.yaml",
+            "vadis", "replay", "--trace", "t.jsonl", "--config", "c.yaml",
         ],
-        vec!["router", "trace", "tail"],
+        vec!["vadis", "trace", "tail"],
         // The bare forms refuse too (an unknown subcommand with no args).
-        vec!["router", "replay"],
-        vec!["router", "trace"],
+        vec!["vadis", "replay"],
+        vec!["vadis", "trace"],
     ];
     let mut seen_refusals = 0;
     for argv in &cases {
@@ -83,10 +83,10 @@ fn conf_47_unserved_subcommands_exit_nonzero_with_usage_error() {
     // Liveness control: the same argv prefix with a served subcommand
     // parses — the refusal above is the subcommand, not the surrounding
     // flag grammar.
-    let ok = Cli::try_parse_from(["router", "serve", "--config", "c.yaml"])
+    let ok = Cli::try_parse_from(["vadis", "serve", "--config", "c.yaml"])
         .expect("a served subcommand parses");
     assert!(
-        matches!(ok.command, router_cli::Command::Serve { .. }),
+        matches!(ok.command, vadis_cli::Command::Serve { .. }),
         "control parsed the serve variant"
     );
 }

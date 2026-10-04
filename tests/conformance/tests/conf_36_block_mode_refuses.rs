@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, PlanRig};
+use vadis_conformance::testkit::{self, PlanRig};
 
 /// The identical exchange as CONF-32's spill case, but the policy refuses:
 /// `on_primary_exhausted: block`, `recover: none` (so nothing probes the
@@ -22,7 +22,7 @@ const POLICY_BLOCK: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-ap
 async fn rig(tag: &str, policy: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) = testkit::plan_rig_parts(tag, "", policy).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,

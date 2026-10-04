@@ -6,10 +6,10 @@
 //! 2's prefix blocks are turn 1's blocks plus new ones — a strict
 //! superset. Continuity (spec §6: the longest common block ratio
 //! **relative to the previous request of the session**) must stay 1.0
-//! through the router's own pipeline (receive → remove router-owned
+//! through the vadis's own pipeline (receive → remove vadis-owned
 //! keys → forward → ledger → trace).
 //!
-//! Drives the real `router_cli::serve` assembly over loopback HTTP
+//! Drives the real `vadis_cli::serve` assembly over loopback HTTP
 //! against the testkit mock upstream; the measurement is read back from
 //! the hourly JSONL trace and cross-checked against the `cache_ledger`
 //! projection and the `request.received` event rows (the join CONF-24
@@ -24,7 +24,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -108,7 +108,7 @@ async fn conf_15_prefix_continuity() {
 
     std::env::set_var("CONF15_MOCK_KEY", "sk-conf15");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     // Two turns of the same session, sequential (adjacent requests).
@@ -157,7 +157,7 @@ async fn conf_15_prefix_continuity() {
     );
 
     // The object under test: turn 2's blocks are turn 1's plus new ones,
-    // and the router preserved every block hash — continuity == 1.0.
+    // and the vadis preserved every block hash — continuity == 1.0.
     let blocks1 = turn1["prefix"]["blocks"].as_array().expect("blocks");
     let blocks2 = turn2["prefix"]["blocks"].as_array().expect("blocks");
     assert!(
@@ -181,8 +181,8 @@ async fn conf_15_prefix_continuity() {
     // The measurement chain behind the number: the cache_ledger holds
     // turn 2's block set (what a hypothetical turn 3 would be measured
     // against), and both turns left a request.received event row.
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     match store
         .query(Query::CacheLedgerBlocks {
             session_key: "sess-conf15",

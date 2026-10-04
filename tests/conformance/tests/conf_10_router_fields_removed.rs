@@ -1,17 +1,17 @@
-//! CONF-10: after removing router-owned fields, all remaining bytes are
+//! CONF-10: after removing vadis-owned fields, all remaining bytes are
 //! byte-identical to the client's; the `router_meta` echo never reaches the
 //! upstream.
 //!
 //! Two levels, both really executed here: the byte-level removal semantics
-//! driving `router_core::RawBody::remove_top_level_keys` (ADR-007 single-pass
+//! driving `vadis_core::RawBody::remove_top_level_keys` (ADR-007 single-pass
 //! span scan; DESIGN §12.3.1), and the **proxy-chain-level** case below, which
 //! proves over real HTTP that the removal is enforced end to end on every turn
 //! of a session.
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
-use router_core::{RawBody, ROUTER_OWNED_TOP_LEVEL_KEYS};
+use vadis_conformance::testkit::{self, CannedResponse};
+use vadis_core::{RawBody, VADIS_OWNED_TOP_LEVEL_KEYS};
 
 /// Main case: a realistic client request (escapes, multi-byte UTF-8, nested
 /// structure, trailing newline); after deleting the whitelisted key, the
@@ -32,7 +32,7 @@ async fn conf_10_byte_exact_after_router_field_removal() {
     let raw = RawBody::new(input.as_bytes().to_vec());
 
     let out = raw
-        .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+        .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
         .expect("well-formed body must succeed");
 
     // Expected = the same input minus the router_meta member + its leading
@@ -60,7 +60,7 @@ async fn conf_10_noop_when_no_router_fields_present() {
     let input = "{\n  \"model\": \"m\",\n  \"n\": [1, 2, {\"deep\": \"},\"}]\n}\r\n";
     let raw = RawBody::new(input.as_bytes().to_vec());
     let out = raw
-        .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+        .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
         .expect("well-formed body must succeed");
     assert_eq!(out.as_bytes(), input.as_bytes());
 }
@@ -72,17 +72,17 @@ async fn conf_10_removal_is_idempotent() {
     let input = "{\"a\":1,\"router_meta\":{\"b\":[2,{\"c\":\"},\"}],\"d\":null},\"e\":true}";
     let raw = RawBody::new(input.as_bytes().to_vec());
     let once = raw
-        .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+        .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
         .unwrap();
     let twice = once
-        .remove_top_level_keys(ROUTER_OWNED_TOP_LEVEL_KEYS)
+        .remove_top_level_keys(VADIS_OWNED_TOP_LEVEL_KEYS)
         .unwrap();
     assert_eq!(once.as_bytes(), twice.as_bytes());
     assert_eq!(once.as_bytes(), b"{\"a\":1,\"e\":true}");
 }
 
 /// The proxy-chain-level case: a client that keeps sending a `router_meta`
-/// member — which is what a client does once the router has echoed one back to
+/// member — which is what a client does once the vadis has echoed one back to
 /// it — must still have **every** turn's bytes reach the upstream without that
 /// member: the removal is enforced on the chain, not only inside `RawBody`.
 ///
@@ -94,7 +94,7 @@ async fn conf_10_removal_is_idempotent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_10_router_meta_echo_never_reaches_upstream() {
     // Turn 1 and turn 2 of one session: an agent resends the conversation and
-    // keeps carrying the router-owned echo field. The key of the session is
+    // keeps carrying the vadis-owned echo field. The key of the session is
     // `prompt_cache_key`, which must itself pass through byte-identically.
     const TURN_1: &str = r#"{
   "model": "mock/glm",
@@ -170,13 +170,13 @@ fallback: []
     std::env::set_var("CONF10_MOCK_KEY", "sk-conf10");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     for (turn, body) in [(1, TURN_1), (2, TURN_2)] {
         let (status, _, _) =
             testkit::http_post(&listen_addr, "/v1/chat/completions", body.as_bytes(), &[]);
-        assert_eq!(status, 200, "turn {turn}: router status");
+        assert_eq!(status, 200, "turn {turn}: vadis status");
     }
 
     let requests = upstream.requests();
@@ -188,7 +188,7 @@ fallback: []
         .enumerate()
     {
         let turn = i + 1;
-        // The router-owned member is absent, in bytes and as a substring.
+        // The vadis-owned member is absent, in bytes and as a substring.
         assert!(
             !String::from_utf8_lossy(&req.body).contains("router_meta"),
             "turn {turn}: router_meta must never reach the upstream"

@@ -34,7 +34,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
+use vadis_conformance::testkit::{self, PlanRig};
 
 /// The policy names the tag, not either id (the whole point of §4.8).
 const POLICY: &str = "  family: fam\n  primary: p-plan/k3\n  overflow: p-api/kimi-k3\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 1h";
@@ -60,7 +60,7 @@ async fn tagged_rig(tag: &str) -> PlanRig {
         );
     std::fs::write(&cfg_path, patched).unwrap();
     let cfg = cfg_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,

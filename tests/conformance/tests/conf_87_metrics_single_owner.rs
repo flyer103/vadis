@@ -21,7 +21,7 @@
 //!   traffic are byte-identical (no timestamp, no uptime).
 //! - (e) **zero is not absent**: a window with records but no input
 //!   tokens keeps the token series at `0` and OMITS the ratio series,
-//!   the `# router:` comment naming why; a window whose `trace.dir` is
+//!   the `# vadis:` comment naming why; a window whose `trace.dir` is
 //!   removed after boot answers `200` with every trace-derived figure
 //!   absent, each hole named, `router_metrics_omitted_figures` counting
 //!   them, and never a §8 body.
@@ -40,7 +40,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use router_conformance::testkit::{self, PlanRig};
+use vadis_conformance::testkit::{self, PlanRig};
 use serde_json::Value;
 
 const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 1h";
@@ -102,13 +102,13 @@ struct Sample {
     value: String,
 }
 
-/// (samples, `# router:` comments) — comment lines are the omission
+/// (samples, `# vadis:` comments) — comment lines are the omission
 /// arms' names; HELP/TYPE lines are skipped.
 fn parse_exposition(body: &str) -> (Vec<Sample>, Vec<String>) {
     let mut samples = Vec::new();
     let mut comments = Vec::new();
     for line in body.lines() {
-        if let Some(c) = line.strip_prefix("# router: ") {
+        if let Some(c) = line.strip_prefix("# vadis: ") {
             comments.push(c.to_string());
             continue;
         }
@@ -257,12 +257,12 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Epoch ms → RFC3339 UTC with millis (test-side, over router-core's own
+/// Epoch ms → RFC3339 UTC with millis (test-side, over vadis-core's own
 /// civil-from-days helper).
 fn rfc3339(ms: i64) -> String {
     let s = (ms.div_euclid(1_000)).max(0) as u64;
     let milli = ms.rem_euclid(1_000) as u64;
-    let (y, mo, d, minute, _) = router_core::peak::timestamp_parts(s, router_core::peak::Tz::Utc);
+    let (y, mo, d, minute, _) = vadis_core::peak::timestamp_parts(s, vadis_core::peak::Tz::Utc);
     format!(
         "{y:04}-{mo:02}-{d:02}T{:02}:{:02}:{:02}.{milli:03}Z",
         minute / 60,
@@ -274,7 +274,7 @@ fn rfc3339(ms: i64) -> String {
 /// Epoch ms → the §4.1 rollover file name of its UTC hour.
 fn hour_file_name(ms: i64) -> String {
     let s = (ms.div_euclid(1_000)).max(0) as u64;
-    let (y, mo, d, minute, _) = router_core::peak::timestamp_parts(s, router_core::peak::Tz::Utc);
+    let (y, mo, d, minute, _) = vadis_core::peak::timestamp_parts(s, vadis_core::peak::Tz::Utc);
     format!("{y:04}-{mo:02}-{d:02}T{:02}.jsonl", minute / 60)
 }
 
@@ -286,7 +286,7 @@ fn hour_stem_ms(stem: &str) -> Option<i64> {
     let mo: u32 = d.next()?.parse().ok()?;
     let day: u32 = d.next()?.parse().ok()?;
     let h: i64 = hour.parse().ok()?;
-    Some(router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000 + h * 3_600_000)
+    Some(vadis_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000 + h * 3_600_000)
 }
 
 /// How many §4.1 files the 900s window ending at `now` intersects —
@@ -312,7 +312,7 @@ fn expected_files_read(trace_dir: &Path, now: i64) -> usize {
 
 // ---------------------------------------------------------------------------
 // The independent derivation (CONF-41's method): every figure the case
-// asserts is computed HERE from the raw records, never read off a router
+// asserts is computed HERE from the raw records, never read off a vadis
 // type. It mirrors spec §9.2's provenance table row by row.
 // ---------------------------------------------------------------------------
 
@@ -699,7 +699,7 @@ async fn conf_87_the_figures_are_the_derivations() {
     ));
 
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     let rig = PlanRig {
         plan,
@@ -788,9 +788,9 @@ async fn conf_87_the_figures_are_the_derivations() {
     // (a), the second method (CONF-56's): the figures both surfaces
     // carry also equal `stats::report_json`'s for the same window.
     let cfg_path = dir.join("config.yaml");
-    let rep = router_cli::stats::report(&cfg_path.to_string_lossy(), "15m").expect("report");
-    let rc = router_cli::config_load::load(&cfg_path).expect("config reloads");
-    let json = router_cli::stats::report_json(&rc, "15m", &rep, &None);
+    let rep = vadis_cli::stats::report(&cfg_path.to_string_lossy(), "15m").expect("report");
+    let rc = vadis_cli::config_load::load(&cfg_path).expect("config reloads");
+    let json = vadis_cli::stats::report_json(&rc, "15m", &rep, &None);
     assert_eq!(
         json["trace"]["files_read"].as_u64().unwrap() as usize,
         files_read,
@@ -892,7 +892,7 @@ async fn scrape_after_n_requests(tag: &str, n: u32) -> Vec<u8> {
     .unwrap();
     std::env::set_var("CONF87_MOCK_KEY", "sk-conf87");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     for i in 0..n {
@@ -1008,7 +1008,7 @@ async fn conf_87_zero_is_not_absent() {
     .unwrap();
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _h) = http_get_metrics(&listen_addr);
@@ -1064,7 +1064,7 @@ async fn conf_87_zero_is_not_absent() {
     )
     .unwrap();
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     std::fs::remove_dir_all(dir.join("state/traces")).expect("the live dir removes");
 
@@ -1145,7 +1145,7 @@ async fn conf_87_zero_is_not_absent() {
 
 #[test]
 fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
-    let mut f = router_cli::stats::TraceFigures::default();
+    let mut f = vadis_cli::stats::TraceFigures::default();
     f.requests = 5;
     f.succeeded = 4;
     f.failed = 1;
@@ -1169,7 +1169,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     f.reprefill_tokens = 11;
     f.reprefill_cost_nano.insert("USD".to_string(), 12);
 
-    let text = router_cli::metrics::exposition(&f, 2, Some("fam-x"), None);
+    let text = vadis_cli::metrics::exposition(&f, 2, Some("fam-x"), None);
     let (samples, comments) = parse_exposition(&text);
 
     let at = |name: &str, labels: &[(&str, &str)]| value_of(&samples, name, labels);
@@ -1285,7 +1285,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     // No policy ⇒ no plan series at all, even with switch figures in the
     // input: the series set is the CONFIG's, and the formatter is handed
     // the family, never the config.
-    let text = router_cli::metrics::exposition(&f, 2, None, None);
+    let text = vadis_cli::metrics::exposition(&f, 2, None, None);
     let (samples, _c) = parse_exposition(&text);
     for plan_series in [
         "router_plan_switches",
@@ -1302,8 +1302,8 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
 
     // The read-error arm, directly: every trace-derived figure is a
     // named hole and nothing else is emitted.
-    let text = router_cli::metrics::exposition(
-        &router_cli::stats::TraceFigures::default(),
+    let text = vadis_cli::metrics::exposition(
+        &vadis_cli::stats::TraceFigures::default(),
         0,
         None,
         Some("a test-given reason"),

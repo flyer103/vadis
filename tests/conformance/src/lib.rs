@@ -125,13 +125,13 @@ pub mod testkit {
     }
 
     /// A loopback HTTP upstream. One connection per request is fine: the
-    /// router's reqwest client honors `Connection: close`.
+    /// vadis's reqwest client honors `Connection: close`.
     pub struct MockUpstream {
         pub addr: SocketAddr,
         seen: Arc<Mutex<Vec<RecordedRequest>>>,
         queue: Arc<Mutex<VecDeque<CannedResponse>>>,
         /// How many streaming connections ended with a write failure (the
-        /// peer — the router — closed first): the cancellation signal (DESIGN §12.10.3 R5).
+        /// peer — the vadis — closed first): the cancellation signal (DESIGN §12.10.3 R5).
         peer_aborts: Arc<Mutex<u64>>,
     }
 
@@ -252,7 +252,7 @@ pub mod testkit {
                         || stream.write_all(&ch.bytes).await.is_err()
                         || stream.write_all(b"\r\n").await.is_err()
                     {
-                        // The peer (the router) closed first: the §12.10.3 R5
+                        // The peer (the vadis) closed first: the §12.10.3 R5
                         // cancellation reached the upstream.
                         *peer_aborts.lock().unwrap() += 1;
                         return Ok(());
@@ -562,7 +562,7 @@ pub mod testkit {
     ///   port this process has handed out before;
     /// - cross-process (R46-3 — the 2/600 residual R43-7's stress loop
     ///   left open): a per-port lock directory under
-    ///   `$TMPDIR/router-conf-port-locks/<port>`, claimed with
+    ///   `$TMPDIR/vadis-conf-port-locks/<port>`, claimed with
     ///   `create_dir` (atomic across OS processes) and holding the
     ///   owner's pid. A second process probing the same port finds the
     ///   lock held by a live peer and probes again, so two rig processes
@@ -589,7 +589,7 @@ pub mod testkit {
     pub fn free_port() -> u16 {
         static HANDED_OUT: std::sync::OnceLock<Mutex<std::collections::HashSet<u16>>> =
             std::sync::OnceLock::new();
-        let lock_root = std::env::temp_dir().join("router-conf-port-locks");
+        let lock_root = std::env::temp_dir().join("vadis-conf-port-locks");
         std::fs::create_dir_all(&lock_root).unwrap();
         let mut missed = 0u32;
         loop {
@@ -818,7 +818,7 @@ plan_policy:
     /// assertions decisive rather than incidental.
     pub const PLAN_POLICY_DEFAULT: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 0s";
 
-    /// A running plan-first rig. `router_cli` is a dev-dependency (the
+    /// A running plan-first rig. `vadis_cli` is a dev-dependency (the
     /// serve spawn stays in the test files, the CONF-25 precedent), so
     /// this is assembled from [`plan_rig_parts`] there.
     pub struct PlanRig {

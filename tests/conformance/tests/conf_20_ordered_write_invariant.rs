@@ -5,15 +5,15 @@
 //! is written between the intent commit and the attempt.
 //!
 //! This file drives the invariant at the seam it is enforced on:
-//! `write_intent_then` (router-core) over the real SQLite store
-//! (router-store), with the "fake provider" as the effect closure that
+//! `write_intent_then` (vadis-core) over the real SQLite store
+//! (vadis-store), with the "fake provider" as the effect closure that
 //! inspects the store at hand-off time. The pipeline case's `#[ignore]`d twin
 //! is kept below.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use router_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
+use vadis_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
 use serde_json::json;
 
 fn tempdir(tag: &str) -> PathBuf {
@@ -31,7 +31,7 @@ fn tempdir(tag: &str) -> PathBuf {
 
 #[test]
 fn conf_20_ordered_write_invariant() {
-    let store = router_store::SqliteStore::open(&tempdir("main").join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&tempdir("main").join("state/router.db")).unwrap();
 
     // The pipeline prefix, exactly DESIGN §12.10.5's rows 1–4.
     store
@@ -109,24 +109,24 @@ async fn conf_20_pipeline_ordered_write() {
     use std::sync::{Arc, Mutex};
 
     use bytes::Bytes;
-    use router_core::config::WireApi;
-    use router_core::store::{EventKind, Query, QueryRow, Store as _};
-    use router_proxy::{ForwardOutcome, Forwarder, ProviderTransport};
+    use vadis_core::config::WireApi;
+    use vadis_core::store::{EventKind, Query, QueryRow, Store as _};
+    use vadis_proxy::{ForwardOutcome, Forwarder, ProviderTransport};
 
     let dir = tempdir("pipeline");
-    let store = Arc::new(router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap());
+    let store = Arc::new(vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap());
 
     /// The fake provider: at wire hand-off, the last event row must be
     /// this attempt's `upstream.submitted` intent.
     struct InspectingTransport {
-        store: Arc<router_store::SqliteStore>,
+        store: Arc<vadis_store::SqliteStore>,
         observed: Arc<Mutex<Vec<(i64, String)>>>,
     }
     impl ProviderTransport for InspectingTransport {
         fn send_boxed<'a>(
             &'a self,
             _req: http::Request<Bytes>,
-        ) -> Pin<Box<dyn Future<Output = router_providers::AttemptOutcome> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = vadis_providers::AttemptOutcome> + Send + 'a>> {
             // The instant the bytes would hit the wire: inspect now.
             let QueryRow::Events(events) = self.store.query(Query::AllEvents).expect("events")
             else {
@@ -138,8 +138,8 @@ async fn conf_20_pipeline_ordered_write() {
                 .unwrap()
                 .push((last.event_id.0, last.kind_raw.clone()));
             Box::pin(async move {
-                router_providers::AttemptOutcome::Responded(
-                    router_providers::UpstreamResponse {
+                vadis_providers::AttemptOutcome::Responded(
+                    vadis_providers::UpstreamResponse {
                         status: 200,
                         retry_after: None,
                         content_type: Some("application/json".into()),
@@ -183,15 +183,15 @@ fallback: []
     );
     let cfg_path = dir.join("config.yaml");
     std::fs::write(&cfg_path, cfg_text).unwrap();
-    let rc = router_cli::config_load::load(&cfg_path).expect("config");
+    let rc = vadis_cli::config_load::load(&cfg_path).expect("config");
 
     let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
     transports.insert("p1".into(), Arc::new(transport));
     let forwarder = Forwarder {
-        config: rc.router.clone(),
+        config: rc.vadis.clone(),
         transports,
         api_keys: HashMap::from([("p1".into(), "k".into())]),
-        store: Some(store as Arc<dyn router_core::store::Store>),
+        store: Some(store as Arc<dyn vadis_core::store::Store>),
         trace: None,
         transform_engine: None,
         response_cache: None,
@@ -205,7 +205,7 @@ fallback: []
             body,
             "req-conf20",
             &[],
-            router_core::transform::TransformMode::Passthrough,
+            vadis_core::transform::TransformMode::Passthrough,
         )
         .await;
     assert!(

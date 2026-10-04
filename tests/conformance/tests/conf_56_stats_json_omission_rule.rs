@@ -1,4 +1,4 @@
-//! CONF-56 (§12.8; spec §9.2 + ADR-018 §6): **`router stats --json`
+//! CONF-56 (§12.8; spec §9.2 + ADR-018 §6): **`vadis stats --json`
 //! keeps its scalar keys with one currency present and omits them when
 //! two are present** — the per-currency map is what remains, so a
 //! consumer that assumes one total fails loudly instead of adding
@@ -32,7 +32,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, MockUpstream, PlanRig};
+use vadis_conformance::testkit::{self, MockUpstream, PlanRig};
 
 const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 1h";
 
@@ -73,7 +73,7 @@ aliases: {{}}"#,
     std::fs::write(&cfg_path, patched).unwrap();
     std::env::set_var("CONF56_USD_KEY", "sk-usd");
     let cfg = cfg_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     (
         PlanRig {
@@ -104,14 +104,14 @@ fn http_post_json(addr: &str, path: &str, body: &str) -> u16 {
         .unwrap()
 }
 
-/// `router stats --json`'s document, built through the same public
+/// `vadis stats --json`'s document, built through the same public
 /// surface the CLI's own print path calls (`stats` → `report` +
 /// `report_json`).
 fn stats_json(config: &std::path::Path) -> serde_json::Value {
     let cfg = config.to_string_lossy().into_owned();
-    let rep = router_cli::stats::report(&cfg, "24h").expect("report computes");
-    let rc = router_cli::config_load::load(config).expect("config reloads");
-    router_cli::stats::report_json(&rc, "24h", &rep, &None)
+    let rep = vadis_cli::stats::report(&cfg, "24h").expect("report computes");
+    let rc = vadis_cli::config_load::load(config).expect("config reloads");
+    vadis_cli::stats::report_json(&rc, "24h", &rep, &None)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

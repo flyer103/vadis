@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(a_port: u16, b_port: u16, listen_port: u16) -> String {
     format!(
@@ -91,7 +91,7 @@ async fn rig(tag: &str, queue_a: Vec<CannedResponse>, queue_b: Vec<CannedRespons
     std::env::set_var("CONF14_A_KEY", "sk-a");
     std::env::set_var("CONF14_B_KEY", "sk-b");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     Rig {
         a,

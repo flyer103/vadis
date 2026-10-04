@@ -21,9 +21,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use router_core::config::WireApi;
-use router_core::transform::{PayloadCtx, TransformEngine, TransformMode, TransformOutcome};
-use router_proxy::{Forwarder, ProviderTransport};
+use vadis_core::config::WireApi;
+use vadis_core::transform::{PayloadCtx, TransformEngine, TransformMode, TransformOutcome};
+use vadis_proxy::{Forwarder, ProviderTransport};
 
 /// The test engine: a deterministic tool-payload trimmer — drop lines
 /// starting with `noise ` (the `bash-log-noise` class), keep everything
@@ -63,10 +63,10 @@ impl ProviderTransport for RecordingTransport {
     fn send_boxed<'a>(
         &'a self,
         req: http::Request<Bytes>,
-    ) -> Pin<Box<dyn Future<Output = router_providers::AttemptOutcome> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = vadis_providers::AttemptOutcome> + Send + 'a>> {
         self.bodies.lock().unwrap().push(req.body().to_vec());
         Box::pin(async move {
-            router_providers::AttemptOutcome::Responded(router_providers::UpstreamResponse {
+            vadis_providers::AttemptOutcome::Responded(vadis_providers::UpstreamResponse {
                 status: 200,
                 retry_after: None,
                 content_type: Some("application/json".into()),
@@ -116,7 +116,7 @@ fn forwarder(
 ) -> Forwarder {
     let cfg_path = dir.join("config.yaml");
     std::fs::write(&cfg_path, config_text(dir, upstream_port)).unwrap();
-    let rc = router_cli::config_load::load(&cfg_path).expect("config");
+    let rc = vadis_cli::config_load::load(&cfg_path).expect("config");
     let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
     if let Some(t) = transport {
         transports.insert("p1".into(), t);
@@ -131,7 +131,7 @@ fn forwarder(
         );
     }
     Forwarder {
-        config: rc.router.clone(),
+        config: rc.vadis.clone(),
         transports,
         api_keys: HashMap::from([("p1".into(), "k".into())]),
         store: None,
@@ -146,7 +146,7 @@ const EXPECTED_EDITED: &str = r#"{"model":"p1/m1","prompt_cache_key":"conf61-ses
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_61_i1_content_determinism_buffered() {
-    let dir = router_conformance::testkit::tempdir("conf61-buf");
+    let dir = vadis_conformance::testkit::tempdir("conf61-buf");
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let f = forwarder(
         &dir,
@@ -166,7 +166,7 @@ async fn conf_61_i1_content_determinism_buffered() {
                 TransformMode::Transform,
             )
             .await;
-        assert!(matches!(out, router_proxy::ForwardOutcome::Success(s) if s.status == 200));
+        assert!(matches!(out, vadis_proxy::ForwardOutcome::Success(s) if s.status == 200));
     }
     // A third run with a DIFFERENT session key: the same content must
     // still produce the same outbound bytes (the plan reads no session).
@@ -180,12 +180,12 @@ async fn conf_61_i1_content_determinism_buffered() {
             TransformMode::Transform,
         )
         .await;
-    assert!(matches!(out, router_proxy::ForwardOutcome::Success(s) if s.status == 200));
+    assert!(matches!(out, vadis_proxy::ForwardOutcome::Success(s) if s.status == 200));
 
     let seen = bodies.lock().unwrap().clone();
     assert_eq!(seen.len(), 3);
     // NOTE: the upstream body carries the native model id (mutation (b))
-    // and no router-owned keys — the trim happened on top of that.
+    // and no vadis-owned keys — the trim happened on top of that.
     let expected_native = EXPECTED_EDITED.replace("\"model\":\"p1/m1\"", "\"model\":\"m1\"");
     assert_eq!(
         seen[0], seen[1],
@@ -211,19 +211,19 @@ async fn conf_61_i1_content_determinism_buffered() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_61_i1_content_determinism_stream() {
-    let dir = router_conformance::testkit::tempdir("conf61-stream");
+    let dir = vadis_conformance::testkit::tempdir("conf61-stream");
     // The stream path opens its own HTTP client to the provider's
     // urls, so the "wire" is a real mock upstream (CONF-30's rig).
-    let upstream = router_conformance::testkit::MockUpstream::start()
+    let upstream = vadis_conformance::testkit::MockUpstream::start()
         .await
         .unwrap();
-    upstream.queue(router_conformance::testkit::CannedResponse::sse(vec![
-        router_conformance::testkit::SseChunk::event(b"data: {\"ok\":true}\n\n"),
-        router_conformance::testkit::SseChunk::event(b"data: [DONE]\n\n"),
+    upstream.queue(vadis_conformance::testkit::CannedResponse::sse(vec![
+        vadis_conformance::testkit::SseChunk::event(b"data: {\"ok\":true}\n\n"),
+        vadis_conformance::testkit::SseChunk::event(b"data: [DONE]\n\n"),
     ]));
-    upstream.queue(router_conformance::testkit::CannedResponse::sse(vec![
-        router_conformance::testkit::SseChunk::event(b"data: {\"ok\":true}\n\n"),
-        router_conformance::testkit::SseChunk::event(b"data: [DONE]\n\n"),
+    upstream.queue(vadis_conformance::testkit::CannedResponse::sse(vec![
+        vadis_conformance::testkit::SseChunk::event(b"data: {\"ok\":true}\n\n"),
+        vadis_conformance::testkit::SseChunk::event(b"data: [DONE]\n\n"),
     ]));
 
     let f = forwarder(&dir, upstream.addr.port(), None);
@@ -243,7 +243,7 @@ async fn conf_61_i1_content_determinism_stream() {
             )
             .await;
         assert!(
-            matches!(out, router_proxy::StreamOutcome::Success(s) if s.status == 200),
+            matches!(out, vadis_proxy::StreamOutcome::Success(s) if s.status == 200),
             "the stream path must relay"
         );
     }

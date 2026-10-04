@@ -16,13 +16,13 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// A 200 chat completion body the byte assertions can compare against.
 const CHAT_OK: &str = r#"{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"served"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}"#;
 
 /// The client's chat bytes, deliberately odd enough that a reserialization
-/// would show: nested braces, unicode, a float, a router-owned key.
+/// would show: nested braces, unicode, a float, a vadis-owned key.
 const CLIENT_BODY: &str = r#"{"model":"keyless-chat/m","messages":[{"role":"user","content":"héllo 😀 {b}"}],"temperature":1e-9,"router_meta":{"echo":true},"stream":false}"#;
 /// The same bytes after exactly the two permitted mutations: `router_meta`
 /// removed and the `model` value rewritten to the native route's id.
@@ -149,15 +149,15 @@ fallback:
 async fn serve(dir: &std::path::PathBuf, listen_addr: &str) -> tokio::task::JoinHandle<i32> {
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
     let addr = listen_addr.to_string();
-    let task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&addr);
     task
 }
 
 /// Every stored event as (kind_raw, payload), read after the server stopped.
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

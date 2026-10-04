@@ -16,7 +16,7 @@
 //! evidence are recorded with the 2026-09-20 date in the loop's own
 //! history, which does not ship with the product.
 //!
-//! Assertions, over the real `router_cli::serve` assembly on loopback
+//! Assertions, over the real `vadis_cli::serve` assembly on loopback
 //! HTTP with a mock upstream speaking the responses wire shape:
 //!
 //! 1. the trace's `prefix.blocks[]` kinds run `tool…, input_item…` for a
@@ -30,7 +30,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -110,7 +110,7 @@ async fn run_two_turns(dir: &std::path::Path, first_body: String, second_body: S
 
     std::env::set_var("CONF31_MOCK_KEY", "sk-conf31");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     for body in [first_body, second_body] {
@@ -120,7 +120,7 @@ async fn run_two_turns(dir: &std::path::Path, first_body: String, second_body: S
             body.as_bytes(),
             &[],
         );
-        assert_eq!(status, 200, "router status; body: {:?}", resp);
+        assert_eq!(status, 200, "vadis status; body: {:?}", resp);
     }
 
     serve_task.abort();

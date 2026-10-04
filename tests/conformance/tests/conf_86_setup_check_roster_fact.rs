@@ -1,9 +1,9 @@
 //! CONF-86 (spec §4.11's `--check` row + the D9 paragraph at
-//! `docs/spec.md:1079-1083`; ADR-038 D9; **R45-1-F2**): **`router setup
+//! `docs/spec.md:1079-1083`; ADR-038 D9; **R45-1-F2**): **`vadis setup
 //! --check` states the roster fact for an inline root, and only for an
 //! inline root — pinned on the binary's wire output.**
 //!
-//! Over a root whose roster is inline, `router setup --check` prints one
+//! Over a root whose roster is inline, `vadis setup --check` prints one
 //! `roster: inline in this file — a writing run moves it to <name>` line
 //! above the key rows and carries a `roster` member in `--json`; over an
 //! already-split root it prints NEITHER, and the key rows, the export
@@ -21,14 +21,14 @@
 //! are built in the case's own temp dirs.
 //!
 //! The surface is the binary's stdout, so the case drives the real
-//! `router` binary of THIS build (found beside the test executable — the
+//! `vadis` binary of THIS build (found beside the test executable — the
 //! same `cargo test --workspace` run builds it) as a subprocess, the one
 //! way to assert on the wire output. Green at the round's base by
 //! construction: the behavior it pins shipped with R45.
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit;
+use vadis_conformance::testkit;
 
 /// The server-section head every root below shares (the CONF-85 shape).
 const ROOT_HEAD: &str = r#"
@@ -69,25 +69,25 @@ const ROOT_TAIL: &str = "aliases: {}\nplugins: []\nfallback: []\n";
 /// fact's own word).
 const SHIPPED_ROSTER_NAME: &str = "providers.example.yaml";
 
-/// The `router` binary of this build, beside the test executable
-/// (`target/<profile>/deps/conf_86-…` → `target/<profile>/router`).
+/// The `vadis` binary of this build, beside the test executable
+/// (`target/<profile>/deps/conf_86-…` → `target/<profile>/vadis`).
 fn router_binary() -> std::path::PathBuf {
     let exe = std::env::current_exe().expect("the test executable's path");
     let bin = exe
         .parent()
         .and_then(|deps| deps.parent())
-        .map(|profile| profile.join(format!("router{}", std::env::consts::EXE_SUFFIX)))
+        .map(|profile| profile.join(format!("vadis{}", std::env::consts::EXE_SUFFIX)))
         .expect("the test executable lives under target/<profile>/deps");
     assert!(
         bin.is_file(),
-        "the router binary of THIS build must exist at {} — it is built by the same \
+        "the vadis binary of THIS build must exist at {} — it is built by the same \
          `cargo build --workspace` / `cargo test --workspace` run this case rides on",
         bin.display()
     );
     bin
 }
 
-/// One `router setup --check` run over `root`, with the roster's one
+/// One `vadis setup --check` run over `root`, with the roster's one
 /// named variable present in the environment (so the exit code is the
 /// load's verdict, 0, never the environment's, 4): (exit, stdout, stderr).
 fn check(bin: &std::path::Path, root: &std::path::Path, json: bool) -> (i32, String, String) {

@@ -1,4 +1,4 @@
-//! CONF-19: two `router replay` runs over the same trace produce
+//! CONF-19: two `vadis replay` runs over the same trace produce
 //! field-identical cost/cache reports.
 
 #![forbid(unsafe_code)]

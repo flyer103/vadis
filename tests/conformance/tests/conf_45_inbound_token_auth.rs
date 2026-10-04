@@ -15,7 +15,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16, auth_line: &str) -> String {
     format!(
@@ -92,7 +92,7 @@ async fn conf_45_inbound_token_auth_guard() {
     std::env::set_var("CONF45_GUARD_TOKEN", "tok-conf45-secret");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     // ① no token → 401, §8's body verbatim, X-Router-Request-Id present.
@@ -164,7 +164,7 @@ async fn conf_45_inbound_token_auth_guard() {
         );
     }
     // The guard adds nothing to the body: the upstream saw the client's
-    // own bytes minus the router-owned member (CONF-27's class; here it
+    // own bytes minus the vadis-owned member (CONF-27's class; here it
     // is what makes "auth on" byte-faithful, DESIGN §12.11).
     let requests = upstream.requests();
     assert_eq!(
@@ -250,7 +250,7 @@ async fn conf_45_no_key_means_no_auth() {
     std::env::remove_var("CONF45_ROUTER_TOKEN");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _h) = testkit::http_post(
@@ -293,7 +293,7 @@ async fn conf_45_missing_env_refuses_startup() {
             None => std::env::remove_var("CONF45_ROUTER_TOKEN"),
         }
         let cfg = config_path.to_string_lossy().into_owned();
-        let code = router_cli::serve(&cfg).await;
+        let code = vadis_cli::serve(&cfg).await;
         assert_ne!(code, 0, "({tag}) a token-less start must be refused");
         // The stderr line itself is asserted by the run-evidence comment
         // (the message is frozen in DESIGN §12.11; the exit code is the

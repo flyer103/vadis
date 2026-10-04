@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/router-core",
-    "crates/router-protocol",
-    "crates/router-providers",
-    "crates/router-runtime",
-    "crates/router-plugins",
-    "crates/router-proxy",
-    "crates/router-plugin-sdk",
-    "crates/router-cli",
-    "crates/router-store",
+    "crates/vadis-core",
+    "crates/vadis-protocol",
+    "crates/vadis-providers",
+    "crates/vadis-runtime",
+    "crates/vadis-plugins",
+    "crates/vadis-proxy",
+    "crates/vadis-plugin-sdk",
+    "crates/vadis-cli",
+    "crates/vadis-store",
     "tests/conformance",
 ]
 
@@ -17,7 +17,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/flyer103/router"
+repository = "https://github.com/flyer103/vadis"
 # The minimum supported Rust version — *measured*, not estimated, and not the same thing as
 # the toolchain CI uses (that one is pinned in `rust-toolchain.toml`). Measured 2026-09-20:
 #   rustup toolchain install 1.88.0 && cargo +1.88.0 build --workspace --locked   -> rc=0
@@ -32,7 +32,7 @@ rust-version = "1.88"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.10"
-# toml / regex: DESIGN §12.1's allowlist row for router-plugins (the
+# toml / regex: DESIGN §12.1's allowlist row for vadis-plugins (the
 # builtin/transform_rules rule file is TOML and its stages select by regex,
 # ADR-019 §7 / rules/tool_output.toml).
 toml = "0.8"
@@ -40,12 +40,12 @@ regex = "1"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
-# rusqlite (bundled SQLite): DESIGN §12.1's allowlist names it for router-store
+# rusqlite (bundled SQLite): DESIGN §12.1's allowlist names it for vadis-store
 # only (ADR-009 item 1) — the single crate that may open the state database.
 # "bundled" compiles the pinned libsqlite3 C library in, so the build does not
 # depend on a system SQLite (ADR-009's consequences accept the bundled C lib).
 rusqlite = { version = "0.40", features = ["bundled"] }
-# reqwest / bytes / http: DESIGN §12.1's allowlist row for router-providers
+# reqwest / bytes / http: DESIGN §12.1's allowlist row for vadis-providers
 # (reqwest, tokio, futures). http + bytes are reqwest's own foundation types,
 # pulled in explicitly so the adapter API names them without depending on
 # reqwest's re-exports staying stable.
@@ -58,7 +58,7 @@ http = "1"
 bytes = "1"
 # futures: named in the same allowlist row (the SSE relay).
 futures = "0.3"
-# notify (the file-watch mechanism): DESIGN §12.1's allowlist row for router-cli,
+# notify (the file-watch mechanism): DESIGN §12.1's allowlist row for vadis-cli,
 # added by ADR-039 — the watcher decision ADR-037 D7 left to the owner's ruling
 # (2026-09-26). The reload re-reads the pair spec §4.14 names and decides by the
 # byte digest (ADR-037 D6); this crate decides only when to look.

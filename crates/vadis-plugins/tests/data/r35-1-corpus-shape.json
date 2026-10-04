@@ -1,0 +1,2050 @@
+{
+ "probe": "r35-1/corpus-shape",
+ "corpus_id": "codex-pair-2026-09-22",
+ "rules_file_sha256": "0c7713348d1ede55b303bcfb98402c1fdd6089f8b974213e1407a38598f5915d",
+ "rule_order": [
+  [
+   "tool-result-json",
+   -1,
+   [
+    "log",
+    "text"
+   ],
+   null
+  ],
+  [
+   "bash-log-noise",
+   0,
+   [
+    "log",
+    "text"
+   ],
+   "^(Bash|bash|shell|run_terminal_cmd)$"
+  ],
+  [
+   "diff-budget",
+   0,
+   [
+    "diff"
+   ],
+   null
+  ],
+  [
+   "grep-hits-budget",
+   0,
+   [
+    "text"
+   ],
+   "^(Grep|grep|rg|ripgrep|search)$"
+  ]
+ ],
+ "kind_arms": {
+  "declared": "vadis_core::transform::kinds_for_tool, verbatim",
+  "granted-shell": "COUNTERFACTUAL: every tool name that the wire's pairing resolves is granted the shell family's kinds [log, text]",
+  "granted-shell-and-tool": "COUNTERFACTUAL: as granted-shell, and every match_tool is treated as satisfied"
+ },
+ "measured_items": [
+  {
+   "item": "it-07",
+   "bytes": 42519,
+   "payload_nodes": 5,
+   "tool_names": [
+    "exec_command"
+   ]
+  },
+  {
+   "item": "it-14",
+   "bytes": 41995,
+   "payload_nodes": 5,
+   "tool_names": [
+    "exec_command"
+   ]
+  }
+ ],
+ "items": [
+  {
+   "item": "it-01",
+   "role": "prelude",
+   "bytes": 35690,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 0,
+   "tool_names": [],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-02",
+   "role": "prelude",
+   "bytes": 36784,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 1,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 1,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 1,
+    "nodes_engine_stopped": 1,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-03",
+   "role": "prelude",
+   "bytes": 37324,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 2,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 2,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 2,
+    "nodes_engine_stopped": 2,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-04",
+   "role": "prelude",
+   "bytes": 38648,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 3,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 3,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-05",
+   "role": "prelude",
+   "bytes": 39632,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 3,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 3,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-06",
+   "role": "prelude",
+   "bytes": 40215,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 4,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 4,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 4,
+    "nodes_engine_stopped": 4,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-07",
+   "role": "measured",
+   "bytes": 42519,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 5,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[6].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[9].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[12].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[20].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "granted_arm": {
+    "nodes_selected": 5,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[6].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[9].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[12].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[20].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 5,
+    "nodes_engine_stopped": 5,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[6].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": 119,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[9].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": 106,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[12].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": 852,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": 73,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": 123,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[20].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": 1988,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": 576,
+        "notes": []
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "item": "it-08",
+   "role": "prelude",
+   "bytes": 35690,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 0,
+   "tool_names": [],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-09",
+   "role": "prelude",
+   "bytes": 36412,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 1,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 1,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 1,
+    "nodes_engine_stopped": 1,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-10",
+   "role": "prelude",
+   "bytes": 36961,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 2,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 2,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 2,
+    "nodes_engine_stopped": 2,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-11",
+   "role": "prelude",
+   "bytes": 38293,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 3,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 3,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-12",
+   "role": "prelude",
+   "bytes": 39280,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 3,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 3,
+    "nodes_engine_stopped": 3,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-13",
+   "role": "prelude",
+   "bytes": 39691,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 4,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_arm": {
+    "nodes_selected": 4,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": []
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 4,
+    "nodes_engine_stopped": 4,
+    "nodes_edited": 0,
+    "nodes": []
+   }
+  },
+  {
+   "item": "it-14",
+   "role": "measured",
+   "bytes": 41995,
+   "sha256_matches_manifest": true,
+   "payload_nodes": 5,
+   "tool_names": [
+    "exec_command"
+   ],
+   "declared_arm": {
+    "nodes_selected": 0,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[5].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[8].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[11].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[16].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": null,
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss",
+         "match_tool miss"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "granted_arm": {
+    "nodes_selected": 5,
+    "nodes_engine_stopped": 0,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[5].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[8].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[11].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[16].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": null,
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": false,
+        "why": [
+         "match_tool miss"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "granted_tool_arm": {
+    "nodes_selected": 5,
+    "nodes_engine_stopped": 5,
+    "nodes_edited": 0,
+    "nodes": [
+     {
+      "path": "input[5].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 119,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": 119,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 119,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[8].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 106,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": 106,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 106,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[11].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 852,
+      "lines": 45,
+      "longest_line_chars": 27,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": 852,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 852,
+        "payload_bytes_out": 73,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[16].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 123,
+      "lines": 6,
+      "longest_line_chars": 26,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": 123,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 123,
+        "payload_bytes_out": 72,
+        "notes": []
+       }
+      ]
+     },
+     {
+      "path": "input[18].output",
+      "tool": "exec_command",
+      "kinds": [
+       "log",
+       "text"
+      ],
+      "bytes": 1988,
+      "lines": 35,
+      "longest_line_chars": 62,
+      "first_selected_rule": "tool-result-json",
+      "engine_stop_rule": "bash-log-noise",
+      "edited": false,
+      "edited_by": null,
+      "first_applied_rule": null,
+      "per_rule": [
+       {
+        "rule": "tool-result-json",
+        "selects": true,
+        "why": [],
+        "applies": false,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": null,
+        "notes": [
+         "json_compact parse failure (JSONDecodeError)"
+        ]
+       },
+       {
+        "rule": "bash-log-noise",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": false,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": 1988,
+        "notes": []
+       },
+       {
+        "rule": "diff-budget",
+        "selects": false,
+        "why": [
+         "match_kind miss"
+        ]
+       },
+       {
+        "rule": "grep-hits-budget",
+        "selects": true,
+        "why": [
+         "match_tool granted (counterfactual)"
+        ],
+        "applies": true,
+        "changes": true,
+        "payload_bytes_in": 1988,
+        "payload_bytes_out": 576,
+        "notes": []
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "summary": {
+  "items": 14,
+  "payload_nodes_total": 36,
+  "tool_names_seen": [
+   "exec_command"
+  ],
+  "tool_names_absent_from_TOOL_KINDS": [
+   "exec_command"
+  ],
+  "nodes_selected_under_declared_kinds": 0,
+  "nodes_engine_stopped_under_declared_kinds": 0,
+  "edits_under_declared_kinds": 0,
+  "nodes_engine_stopped_under_granted_shell_kinds": 0,
+  "edits_under_granted_shell_kinds": 0,
+  "nodes_engine_stopped_under_granted_shell_and_tool": 36,
+  "edits_under_granted_shell_and_tool": 0,
+  "verdict_declared": "no payload node of any item is edited by any landed rule: kinds_for_tool returns [] for every tool name this corpus's wire actually carries",
+  "verdict_granted": "even granting the shell family's kinds to the client's real tool names, no landed rule changes any payload",
+  "verdict_granted_tool": "even with both match_kind and match_tool satisfied for the client's real tool name, no landed rule changes any payload: a corpus-shape fact independent of the reachability defect"
+ }
+}

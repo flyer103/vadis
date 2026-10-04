@@ -15,7 +15,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The direct form: the client names the route `provider/model`.
 const DIRECT_BODY: &str = r#"{
@@ -40,7 +40,7 @@ const ALIAS_BODY: &str = r#"{
 "#;
 
 /// What the upstream must receive for **both** forms: the client's bytes minus
-/// the router-owned member, with the `model` value replaced by the roster id
+/// the vadis-owned member, with the `model` value replaced by the roster id
 /// `glm` — and nothing else touched, trailing newline included.
 const EXPECTED_UPSTREAM_BODY: &str = r#"{
   "model": "glm",
@@ -100,7 +100,7 @@ async fn conf_27_outbound_model_is_the_provider_native_id() {
     std::env::set_var("CONF27_MOCK_KEY", "sk-conf27");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     let (status, body, _h) = testkit::http_post(
@@ -109,14 +109,14 @@ async fn conf_27_outbound_model_is_the_provider_native_id() {
         DIRECT_BODY.as_bytes(),
         &[],
     );
-    assert_eq!(status, 200, "direct route: router status, body {:?}", body);
+    assert_eq!(status, 200, "direct route: vadis status, body {:?}", body);
     let (status, body, _h) = testkit::http_post(
         &listen_addr,
         "/v1/chat/completions",
         ALIAS_BODY.as_bytes(),
         &[],
     );
-    assert_eq!(status, 200, "alias route: router status, body {:?}", body);
+    assert_eq!(status, 200, "alias route: vadis status, body {:?}", body);
 
     let requests = upstream.requests();
     assert_eq!(requests.len(), 2, "one upstream attempt per request");
@@ -131,7 +131,7 @@ async fn conf_27_outbound_model_is_the_provider_native_id() {
     );
     assert!(
         !String::from_utf8_lossy(&requests[0].body).contains("router_meta"),
-        "the router-owned member never reaches the upstream"
+        "the vadis-owned member never reaches the upstream"
     );
     assert!(
         requests[0].body.ends_with(b"}\n"),

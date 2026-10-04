@@ -77,8 +77,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, PlanRig, RecordedRequest, SseChunk};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse, PlanRig, RecordedRequest, SseChunk};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// The testkit plan rig's configured `session.ttl: 11h`, in µs
 /// (CONF-80(a)'s relation, the same constant CONF-81 asserts).
@@ -98,7 +98,7 @@ async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts(tag, "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -185,8 +185,8 @@ fn forbidden_403(body: &[u8]) -> CannedResponse {
 // the state dir's writer lock is serve's)
 // ---------------------------------------------------------------------
 
-fn events(dir: &std::path::Path) -> Vec<router_core::store::StoredEvent> {
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+fn events(dir: &std::path::Path) -> Vec<vadis_core::store::StoredEvent> {
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -456,9 +456,9 @@ fn client_body(session: &str, turn: u32, stream: bool) -> String {
 
 /// The two permitted mutations, computed as a relation on the mock's
 /// own recorded bytes (never a snapshot): the recorded body equals
-/// the client's body modulo (a) router-owned top-level fields removed
+/// the client's body modulo (a) vadis-owned top-level fields removed
 /// and (b) the top-level `model` value replaced by the destination's
-/// provider-native id. This rig's clients send no router-owned field,
+/// provider-native id. This rig's clients send no vadis-owned field,
 /// so the only legal difference is the model rewrite — asserted by
 /// rewriting the expectation the same way and comparing bytes.
 fn assert_forwarded_body(recorded: &[u8], client_body: &str) {

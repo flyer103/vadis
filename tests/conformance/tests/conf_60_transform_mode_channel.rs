@@ -16,7 +16,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
@@ -53,8 +53,8 @@ fallback: []
 const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf60-sess"}"#;
 
 /// The bytes the upstream must see: the client's own bytes minus
-/// `prompt_cache_key`… no — that key is *not* router-owned; the only
-/// mutations are (a) router-owned top-level keys and (b) the model value.
+/// `prompt_cache_key`… no — that key is *not* vadis-owned; the only
+/// mutations are (a) vadis-owned top-level keys and (b) the model value.
 /// For this body the expected upstream body is therefore the client's
 /// bytes with `model` replaced by the native id `glm`.
 const EXPECTED_UPSTREAM_BODY: &str = r#"{"model":"glm","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"conf60-sess"}"#;
@@ -92,7 +92,7 @@ async fn conf_60_transform_mode_opt_in_channel() {
     std::env::set_var("CONF60_MOCK_KEY", "sk-conf60");
 
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     // ① absence ⇒ passthrough: served, and the upstream saw the client's

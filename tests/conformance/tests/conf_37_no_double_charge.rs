@@ -7,12 +7,12 @@
 //! not one per attempt.
 //!
 //! Asserted through the event log's payload projections (the same rows
-//! `router stats` reads), not an internal builder.
+//! `vadis stats` reads), not an internal builder.
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::store::{Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::store::{Query, QueryRow, Store as _};
 
 async fn rig(tag: &str) -> PlanRig {
     // p-plan declares a quota plan (generous — the allowance itself is not
@@ -23,7 +23,7 @@ async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts(tag, quota, testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -35,7 +35,7 @@ async fn rig(tag: &str) -> PlanRig {
 }
 
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

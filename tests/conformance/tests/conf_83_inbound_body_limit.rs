@@ -1,6 +1,6 @@
 //! CONF-83 (spec §4.13 · the inbound body bound, §8 · its refusal, §6 ·
 //! the boundary record; DESIGN §12.15 / §12.8's row): **the bound is the
-//! router's own, and so is the refusal.**
+//! vadis's own, and so is the refusal.**
 //!
 //! At the base tree the cap existed but was the HTTP framework's: axum's
 //! `Bytes` extractor wrapped every protocol-route body in an implicit
@@ -8,7 +8,7 @@
 //! (`Failed to buffer the request body`), with **no**
 //! `X-Router-Request-Id`, **no** trace record and **no** config key —
 //! a refusal an operator could neither correlate nor count (R32-F1).
-//! The landing (§12.15) installs the router's own bound as a boundary
+//! The landing (§12.15) installs the vadis's own bound as a boundary
 //! layer above the transform-mode resolution and the path split,
 //! inside the token guard, with the framework's cap **disabled** so
 //! exactly one owner exists.
@@ -45,7 +45,7 @@
 
 use std::io::{Read, Write};
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The rig's own configured bound (leg (e) moves it): small enough that
 /// the fixtures are cheap, above the 1024 floor the loader enforces.
@@ -112,7 +112,7 @@ async fn rig(
     // alive by leaking; the process is a test.
     std::mem::forget(upstream);
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     (listen_addr, dir, serve_task)
 }
@@ -349,7 +349,7 @@ async fn conf_83_inbound_body_limit() {
 
     // The byte control for (a): the mock's recorded body equals the
     // client's own bytes modulo the two permitted mutations (AGENTS 1)
-    // — here computed as: identical after removing router-owned keys
+    // — here computed as: identical after removing vadis-owned keys
     // is what the forwarding path guarantees; the conformance-level
     // witness is the recorded body's length and the model field, plus
     // the recorded request existing at all (the refusal legs assert
@@ -381,7 +381,7 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
     .unwrap();
     std::env::set_var("CONF83_MOCK_KEY", "sk-conf83");
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
 
     // The same body that was refused at 4096 is served at 8192 (the
@@ -413,7 +413,7 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
     // The byte control: the recorded body IS the client's body modulo
     // the two permitted byte-level mutations (AGENTS 1) — here exactly
     // the model re-point (`mock/glm` → the resolved route's native id
-    // `glm`); no router-owned key is present to remove.
+    // `glm`); no vadis-owned key is present to remove.
     let body_str = String::from_utf8(body.clone()).expect("fixture body is utf-8");
     let expected_upstream = body_str.replace(r#""mock/glm""#, r#""glm""#);
     assert_eq!(
@@ -425,7 +425,7 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
 
     // (e) the loader's own refusal: a value below 1024 is a load error
     // naming the key. Driven through the loader `serve` itself uses.
-    let err = router_cli::config_load::validate_text(&config_yaml(
+    let err = vadis_cli::config_load::validate_text(&config_yaml(
         upstream.addr.port(),
         listen_port,
         1023,
@@ -444,6 +444,6 @@ async fn conf_83_bound_follows_the_key_and_the_mock_receives_nothing() {
     )
     .unwrap();
     let cfg2 = dir2.join("config.yaml").to_string_lossy().into_owned();
-    let code = router_cli::serve(&cfg2).await;
+    let code = vadis_cli::serve(&cfg2).await;
     assert_eq!(code, 2, "an unusable bound exits 2 (the loader's code)");
 }

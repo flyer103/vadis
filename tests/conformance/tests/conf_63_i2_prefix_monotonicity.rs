@@ -28,7 +28,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse};
+use vadis_conformance::testkit::{self, CannedResponse};
 
 /// The repo's landed rule file — the engine's acceptance-tested data.
 const RULES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/tool_output.toml");
@@ -88,7 +88,7 @@ const BASH_LOG_2_TRIMMED: &str = "error[E0308]: mismatched types\n --> src/main.
 const GREP_HITS: &str =
     "src/a.rs-10-  fn unrelated() {\nsrc/a.rs:12:let x = foo();\nsrc/a.rs-13-  trailing context\n";
 
-/// The estimate convention (router-core::transform::estimate_tokens):
+/// The estimate convention (vadis-core::transform::estimate_tokens):
 /// bytes/4, floor. Asserted against the record so the arithmetic the
 /// ledger claims is the arithmetic the domain defines.
 fn est(bytes: usize) -> i64 {
@@ -162,7 +162,7 @@ async fn conf_63_i2_prefix_monotonicity_ledger_and_mode_switch() {
 
     std::env::set_var("CONF63_MOCK_KEY", "sk-conf63");
     let cfg = config_path.to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&format!("127.0.0.1:{listen_port}"));
 
     let post = |body: String, mode_header: bool| {
@@ -356,9 +356,9 @@ async fn conf_63_i2_prefix_monotonicity_ledger_and_mode_switch() {
     // own — parsed out of the outbound body, never transcribed by hand.
     let out2s = String::from_utf8_lossy(&out2).into_owned();
     let marker_start = out2s
-        .find("[router:tee sha256=")
+        .find("[vadis:tee sha256=")
         .expect("tee marker on the wire")
-        + "[router:tee sha256=".len();
+        + "[vadis:tee sha256=".len();
     let marker_end = out2s[marker_start..].find(']').unwrap() + marker_start;
     let marker = &out2s[marker_start..marker_end];
     assert!(

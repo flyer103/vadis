@@ -74,7 +74,7 @@
 #                         lines. Both applied after truncation.
 #   tee marker          : when `lines_dropped > 0` and `tee = true`, append
 #                         one line at the end of the output:
-#                         `[router:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`
+#                         `[vadis:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`
 #                         (original payload = the original bytes entering this
 #                         rule, UTF-8, newlines included;
 #                         lines_dropped = original line count − output line
@@ -262,7 +262,7 @@ src/b.rs:7:foo();
 expected = '''src/a.rs:12:let x = foo();
 --
 src/b.rs:7:foo();
-[router:tee sha256=ed614df208e96092 lines_dropped=3 bytes_original=126]
+[vadis:tee sha256=ed614df208e96092 lines_dropped=3 bytes_original=126]
 '''
 
 [[tests.grep-hits-budget]]
@@ -289,7 +289,7 @@ src/a.rs:5:let r = foo(5);
 src/a.rs:6:let r = foo(6);
 src/a.rs:7:let r = foo(7);
 src/a.rs:8:let r = foo(8);
-[router:tee sha256=fd062073dd793ae1 lines_dropped=4 bytes_original=330]
+[vadis:tee sha256=fd062073dd793ae1 lines_dropped=4 bytes_original=330]
 '''
 
 [[tests.grep-hits-budget]]
@@ -343,7 +343,7 @@ expected = '''diff --git a/src/lib.rs b/src/lib.rs
 @@ -1,3 +1,4 @@ fn main() {
 -    let x = 1;
 +    let x = 2;
-[router:tee sha256=e596ae9c46463f48 lines_dropped=3 bytes_original=190]
+[vadis:tee sha256=e596ae9c46463f48 lines_dropped=3 bytes_original=190]
 '''
 
 [[tests.diff-budget]]

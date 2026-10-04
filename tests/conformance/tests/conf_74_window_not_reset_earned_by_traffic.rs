@@ -21,12 +21,12 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use router_conformance::testkit::{self, PlanRig};
-use router_core::config::{
+use vadis_conformance::testkit::{self, PlanRig};
+use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
-use router_core::cost::Nano;
-use router_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::cost::Nano;
+use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
 
 /// A plan whose allowance is exactly one request (105 chargeable tokens),
 /// so one served in-plan request exhausts it (CONF-35's fixture).
@@ -80,7 +80,7 @@ async fn rig(tag: &str, quota_yaml: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts(tag, quota_yaml, testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -122,7 +122,7 @@ fn parse_ms(ts: &str) -> i64 {
         }
         f[..3].parse().unwrap()
     };
-    router_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
+    vadis_core::peak::utc_midnight_epoch(y, mo, day) as i64 * 1_000
         + h * 3_600_000
         + mi * 60_000
         + s * 1_000

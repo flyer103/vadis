@@ -26,7 +26,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
+use vadis_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
 
 /// The default policy body, matching the rig's (spill, probe recovery,
 /// `cooldown: 0s` — the zero cooldown removes "the family's own cooldown
@@ -112,7 +112,7 @@ async fn rig(tag: &str) -> PlanRig {
     std::env::set_var("CONF_PF_PLAN_KEY", "sk-plan");
     std::env::set_var("CONF_PF_API_KEY", "sk-api");
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -180,8 +180,8 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 /// Every stored event as (kind_raw, payload), read after the server stopped.
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

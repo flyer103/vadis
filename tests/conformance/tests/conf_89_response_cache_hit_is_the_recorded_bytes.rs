@@ -29,7 +29,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, SseChunk};
+use vadis_conformance::testkit::{self, CannedResponse, SseChunk};
 use serde_json::Value;
 
 /// The canned buffered 200: a chat completion with usage (100 in / 20
@@ -132,7 +132,7 @@ impl Rig {
         std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
         std::env::set_var("CONF89_MOCK_KEY", "sk-conf89");
         let cfg = config_path.to_string_lossy().into_owned();
-        let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+        let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
         testkit::wait_listening(&listen_addr);
         Rig {
             upstream,
@@ -486,11 +486,11 @@ async fn conf_89f_a_sessionless_request_is_neither_looked_up_nor_stored() {
 /// not in a `#[cfg(test)]` block inside the owner's module.
 #[test]
 fn conf_89g_owner_level_bounds_and_config_digest_separation() {
-    use router_core::response_cache::{
+    use vadis_core::response_cache::{
         RecordedResponse, RequestFacts, ResponseKey, ResponseStore, SourceRef, MAX_ENTRIES,
         MAX_STORED_BYTES,
     };
-    use router_core::transform::TransformMode;
+    use vadis_core::transform::TransformMode;
 
     fn facts<'a>(digest: &'a str, body: &'a [u8]) -> RequestFacts<'a> {
         RequestFacts {

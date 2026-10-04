@@ -15,7 +15,7 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit;
+use vadis_conformance::testkit;
 
 /// The frozen condition-N sentence, verbatim (spec §8).
 const NO_ROUTE_SENTENCE: &str =
@@ -120,14 +120,14 @@ fallback:
 async fn serve(dir: &std::path::PathBuf, listen_addr: &str) -> tokio::task::JoinHandle<i32> {
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
     let addr = listen_addr.to_string();
-    let task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&addr);
     task
 }
 
 fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
-    use router_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    use vadis_core::store::{Query, QueryRow, Store as _};
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };

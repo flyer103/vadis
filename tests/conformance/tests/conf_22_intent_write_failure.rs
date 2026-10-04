@@ -9,30 +9,30 @@
 //! zero attempts through the real proxy) is kept `#[ignore]`d below: the fake
 //! `ProviderClient` double it needs does not exist yet.
 
-use router_core::error::{ErrorBody, ErrorCode};
-use router_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
+use vadis_core::error::{ErrorBody, ErrorCode};
+use vadis_core::store::{write_intent_then, EventKind, NewEvent, Query, QueryRow, Store};
 use serde_json::{json, Value};
 
 /// A store double whose append always fails — "the injected failure".
 struct FailingStore;
 
 impl Store for FailingStore {
-    fn append(&self, _: NewEvent<'_>) -> Result<router_core::EventId, router_core::StoreError> {
-        Err(router_core::StoreError::Busy)
+    fn append(&self, _: NewEvent<'_>) -> Result<vadis_core::EventId, vadis_core::StoreError> {
+        Err(vadis_core::StoreError::Busy)
     }
-    fn project(&self, _: router_core::ProjectionWrite<'_>) -> Result<(), router_core::StoreError> {
+    fn project(&self, _: vadis_core::ProjectionWrite<'_>) -> Result<(), vadis_core::StoreError> {
         panic!("a failed intent must not reach the projection tier either");
     }
-    fn query(&self, _: Query<'_>) -> Result<QueryRow, router_core::StoreError> {
+    fn query(&self, _: Query<'_>) -> Result<QueryRow, vadis_core::StoreError> {
         Ok(QueryRow::Count(0))
     }
     fn rebuild(
         &self,
-        _: router_core::Projection,
-    ) -> Result<router_core::RebuildStats, router_core::StoreError> {
-        Ok(router_core::RebuildStats::default())
+        _: vadis_core::Projection,
+    ) -> Result<vadis_core::RebuildStats, vadis_core::StoreError> {
+        Ok(vadis_core::RebuildStats::default())
     }
-    fn schema_version(&self) -> Result<u32, router_core::StoreError> {
+    fn schema_version(&self) -> Result<u32, vadis_core::StoreError> {
         Ok(1)
     }
 }
@@ -42,7 +42,7 @@ fn conf_22_intent_failure_blocks_upstream() {
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_in_effect = attempts.clone();
 
-    let result: Result<(router_core::EventId, ()), _> = write_intent_then(
+    let result: Result<(vadis_core::EventId, ()), _> = write_intent_then(
         &FailingStore,
         NewEvent {
             kind: EventKind::UpstreamSubmitted,

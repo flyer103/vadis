@@ -44,8 +44,8 @@
 
 #![forbid(unsafe_code)]
 
-use router_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
-use router_core::store::{Projection, Query, QueryRow, Store as _};
+use vadis_conformance::testkit::{self, CannedResponse, PlanRig, SseChunk};
+use vadis_core::store::{Projection, Query, QueryRow, Store as _};
 
 /// The testkit plan rig's configured `session.ttl: 11h`, in the unit
 /// rule's own terms: `11h` = 39_600_000 ms, and `ttl_us` is the
@@ -70,7 +70,7 @@ async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
         testkit::plan_rig_parts(tag, "", testkit::PLAN_POLICY_DEFAULT).await;
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
-    let serve_task = tokio::task::spawn(async move { router_cli::serve(&cfg).await });
+    let serve_task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
     testkit::wait_listening(&listen_addr);
     PlanRig {
         plan,
@@ -113,7 +113,7 @@ fn bound_rows(
     dir: &std::path::Path,
     session: &str,
 ) -> Vec<(String, String, i64, i64, Option<String>)> {
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let QueryRow::Events(events) = store.query(Query::AllEvents).unwrap() else {
         panic!("events");
     };
@@ -139,7 +139,7 @@ fn bound_rows(
 /// The live `sessions` row for the session, as the shipped read path
 /// sees it — `(provider, model, requests_seen, expires_at_us)`.
 fn live_binding(dir: &std::path::Path, session: &str) -> (String, String, i64, i64) {
-    let store = router_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/router.db")).unwrap();
     let row = match store.query(Query::SessionBinding {
         session_key: session,
     }) {
@@ -196,7 +196,7 @@ fn rebuild_is_a_noop_three(dir: &std::path::Path, session: &str) {
 
 fn rebuild_is_a_noop_n(dir: &std::path::Path, session: &str, expect_rows: usize) {
     let before = live_binding(dir, session);
-    let store = router_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
+    let store = vadis_store::SqliteStore::open(&dir.join("state/router.db")).unwrap();
     let stats = store
         .rebuild(Projection::Sessions)
         .expect("rebuild computes");
