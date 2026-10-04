@@ -31,7 +31,7 @@ protocol matrix, the byte-fidelity and prefix-stability invariants and the accou
 convention. To run one case while iterating:
 
 ```bash
-cargo test -p router-conformance --test conf_20_ordered_write_invariant
+cargo test -p vadis-conformance --test conf_20_ordered_write_invariant
 ```
 
 An `#[ignore = "CONF-NN: depends on <item>"]` case is not a passing case — it is a declared gap,
@@ -88,12 +88,12 @@ Privately, never as a public issue — see [`SECURITY.md`](SECURITY.md).
 
 | Path | What it is |
 |---|---|
-| `crates/router-core` | domain: decision pipeline, cost engine, prefix/cache attribution, quota, trace contract |
-| `crates/router-protocol` | the three-protocol codec: usage normalization, the SSE block parser |
-| `crates/router-providers` | provider adapters: wire_api capability, auth, error classification |
-| `crates/router-proxy` | the data plane (axum), byte-faithful forwarding |
-| `crates/router-cli` | the binary (`serve`, `stats`, `setup`) |
-| `crates/router-store` | SQLite/WAL event log + projections, and the JSONL trace sink |
+| `crates/vadis-core` | domain: decision pipeline, cost engine, prefix/cache attribution, quota, trace contract |
+| `crates/vadis-protocol` | the three-protocol codec: usage normalization, the SSE block parser |
+| `crates/vadis-providers` | provider adapters: wire_api capability, auth, error classification |
+| `crates/vadis-proxy` | the data plane (axum), byte-faithful forwarding |
+| `crates/vadis-cli` | the binary (`serve`, `stats`, `setup`) |
+| `crates/vadis-store` | SQLite/WAL event log + projections, and the JSONL trace sink |
 | `tests/conformance` | the protocol matrix and the byte/prefix/accounting invariants |
 
 Start with `README.md`, then `book/` for the user-facing story.

@@ -1,4 +1,4 @@
-# ADR-025 — `router setup` edits the config by anchored text edits on a verbatim template, never by re-serializing it
+# ADR-025 — `vadis setup` edits the config by anchored text edits on a verbatim template, never by re-serializing it
 
 - Status: accepted
 - Date: 2026-09-22
@@ -23,7 +23,7 @@ wrote none — so `ADR-025` was free, and this round takes it.)*
 The user's direction (2026-09-22) is a usability one: add a `setup` command that guides a user through the
 config blocks, with **most items taking a default**. A second direction (the same day, while this round was
 being written) fixes where the result should land: a config produced this way belongs in the platform's own
-config directory — `~/.config/router/` — not in the directory the operator happens to be standing in. That one
+config directory — `~/.config/vadis/` — not in the directory the operator happens to be standing in. That one
 default drags three contract questions behind it, which decisions 8–10 answer: how the gateway finds the file
 that was written (spec §4.12), what the file's own relative paths then resolve against (§4.1, unchanged, with its
 consequence registered as Q22), and whether a configuration may be assembled from several locations (it may not:
@@ -34,11 +34,11 @@ the provider's official page, and the citation travels **on the line the figure 
 
 Two facts about the toolchain turn that into a design constraint, not a detail:
 
-- `serde_yaml` does **not** preserve comments. Deserializing `config.example.yaml` into `RouterConfig` and
+- `serde_yaml` does **not** preserve comments. Deserializing `config.example.yaml` into `VadisConfig` and
   serializing it back yields a valid, complete, *comment-free* document: every `source:` URL, every read date
-  and every "what it was before" note is gone. There is no `RouterConfig → YAML` path in this repository today,
+  and every "what it was before" note is gone. There is no `VadisConfig → YAML` path in this repository today,
   but `serde_yaml` could provide one, and its output is what "just modify the struct and write it back" means.
-- The parser has `deny_unknown_fields` **18 times** (plus `router-plugins`' rule table), and §12.5's defaults
+- The parser has `deny_unknown_fields` **18 times** (plus `vadis-plugins`' rule table), and §12.5's defaults
   row says only the three defaults spec §4 states explicitly are defaults: "everything else is not enabled
   unless written". There is no in-code default set (hermes-agent's `DEFAULT_CONFIG`) to fall back on, and
   nothing corresponding to its `_config_version`.
@@ -107,7 +107,7 @@ entry and a new plugin entry are hand edits, and the section that owns the block
 insert rule first — position, indentation, and the block's own style).
 
 **8. One file, found by a written order — never merged, and the default site is the XDG location.** `setup`'s
-default output is `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml`, and `serve` / `stats` resolve the file
+default output is `${XDG_CONFIG_HOME:-$HOME/.config}/vadis/config.yaml`, and `serve` / `stats` resolve the file
 they read by the **same** order (explicit `--config` > that location > `./config.yaml` > refuse; the writer alone
 falls back to creating the XDG location) — spec §4.12. Two decisions are packed here. **(a) The default is
 outside the repository**, so a config cannot be committed or `git clean`-ed by accident, it survives a fresh
@@ -129,7 +129,7 @@ absolute path printed at the end is what makes a mistyped `--config` visible ins
 
 **10. The paths inside the file keep their anchor.** §4.1's rule — a relative path resolves against the
 **config file's own directory**, never the CWD, with an absolute value winning — is **not** changed, so a config
-at the XDG location keeps its traces and its store beside itself under `~/.config/router/`. The alternative
+at the XDG location keeps its traces and its store beside itself under `~/.config/vadis/`. The alternative
 (config under `~/.config`, state under `$XDG_STATE_HOME` / `$XDG_DATA_HOME`) is rejected here rather than
 deferred, because it needs a **second** anchor: the store's path is not a config key in v0.1 (fixed at
 `<config dir>/state/router.db`, spec §4.5, ADR-009 item 6), so the split cannot be expressed in the file at all
@@ -165,7 +165,7 @@ anticipates is the way to move the store), and the answer available today for a 
 - **Write an `.env` (or a `secrets.yaml`) next to the config.** Rejected: it creates a second secret location
   that nothing reads, so a user who filled it would still get "provider unavailable" — a silent failure with a
   file as its alibi. It also walks into the class §4.7/§12.11 exists to forbid: a value in a file.
-- **Environment-variable overrides for the answers (`ROUTER_SETUP_ADDR=…`).** Rejected: the written bytes
+- **Environment-variable overrides for the answers (`VADIS_SETUP_ADDR=…`).** Rejected: the written bytes
   would become a function of the shell that ran the command (above a file that is supposed to be the single
   source of truth), and there is no env-shaped *value* here to override — the env-shaped facts are variable
   **names**. The CI story is `--non-interactive` plus `--from` / `--config`.
@@ -179,13 +179,13 @@ anticipates is the way to move the store), and the answer available today for a 
   silent failure. `--non-interactive` is the explicit form of that intent.
 - **Networked onboarding: fetch `/v1/models`, or re-read the cited pricing page and refresh the date.**
   Rejected: it makes the command's output depend on an instant (constraint 2) and turns "check the price"
-  into the router's guesswork (constraint 5). The survey's anti-pattern 2 records the same conclusion from
+  into the vadis's guesswork (constraint 5). The survey's anti-pattern 2 records the same conclusion from
   hermes-agent's `--portal` / `model --refresh` and codex's browser login.
 - **Delegate to a prompt/TUI crate (`dialoguer`, `inquire`) for menus, masked input and arrows.** Rejected for
   now: it is a dependency-allowlist change (§12.1) bought for menus; the questions are lines with defaults,
   and the one place a masked input would be wanted (a key value) is a place this design refuses to go. A PTY
   *test* dependency is the same species and is declined the same way (a script drives the interactive path).
-- **Keeping `--config` required on `serve` and `stats` (today's `router serve --config config.yaml`).** Rejected,
+- **Keeping `--config` required on `serve` and `stats` (today's `vadis serve --config config.yaml`).** Rejected,
   and it was the genuinely close call of this round: it is safe — no discovery rule, no new behaviour on the
   serving path — and it leaves the new default write site pointless, because a user asked to type a
   forty-character XDG path at every start is exactly the friction the default exists to remove. Its "half"
@@ -230,7 +230,7 @@ anticipates is the way to move the store), and the answer available today for a 
   "show the current value, keep it on Enter" are hermes-agent's, and its `--reconfigure` (a flag that came to
   mean the default) is the lesson for **not** adding flags that restate behaviour.
 - **A default location is a usability decision with a contract tail, and the tail is the interesting part.**
-  Choosing `~/.config/router/` forces three answers a "just write `./config.yaml`" default never has to give:
+  Choosing `~/.config/vadis/` forces three answers a "just write `./config.yaml`" default never has to give:
   how `serve` finds what `setup` wrote (spec §4.12's one order), what the file's relative paths now mean (§4.1's
   anchor, unchanged, with its consequence registered as Q22), and why the file is not merged from several
   locations (Q23). Answering them in the round that introduces the location is far cheaper than discovering them
@@ -239,10 +239,10 @@ anticipates is the way to move the store), and the answer available today for a 
 
 ## Consequences
 
-- **Code.** `crates/router-cli/src/setup/` (the writer: sections table, line locator, edits, prompt channel,
+- **Code.** `crates/vadis-cli/src/setup/` (the writer: sections table, line locator, edits, prompt channel,
   report paths — DESIGN §12.14) plus one mechanical extraction in `config_load`: the parser call and
   `validate()` become a shared entry point so the `serve` startup and `setup` cannot drift. No new crate or
-  dependency (stdin, stdout and `std::io::IsTerminal` are std); `router-cli`'s allowlisted set is unchanged.
+  dependency (stdin, stdout and `std::io::IsTerminal` are std); `vadis-cli`'s allowlisted set is unchanged.
   Nothing on the request path is touched: no store event kind, no projection, no trace field,
   `TRACE_SCHEMA_VERSION` stays **2**, and no config key is added (`deny_unknown_fields` would refuse a
   wizard-only key).
@@ -254,9 +254,9 @@ anticipates is the way to move the store), and the answer available today for a 
   had keeps working and their messages keep their shape; they lose nothing, because absence now resolves to a
   path rather than erroring in the parser. That resolution is the **only** serving-path behaviour this round
   changes, it lives in the argument layer (`main` resolves once and passes an absolute path), and the entry
-  points `router_cli::serve(&str)` / `stats::stats(&str, …)` are untouched — which is why the existing rigs
+  points `vadis_cli::serve(&str)` / `stats::stats(&str, …)` are untouched — which is why the existing rigs
   (CONF-23, CONF-25, CONF-43) cannot observe it.
-- **The file's contract.** `router setup` will not write a file it cannot first load with the same loader
+- **The file's contract.** `vadis setup` will not write a file it cannot first load with the same loader
   `serve` uses, and the produced file differs from its base only inside the lines it was answered about — the
   two properties CONF-67 and CONF-69 pin, with the refusal ladder (CONF-68), the canary (CONF-70) and the
   location rule (CONF-79).
@@ -266,7 +266,7 @@ anticipates is the way to move the store), and the answer available today for a 
   `book/getting-started.md` (the user-facing walkthrough — the default location, the permissions, and where the
   file's own paths land — written ahead of the command per AGENTS constraint 8), and `book/operations.md` (a new
   "Where the config comes from" subsection, so an operator running `serve` meets the discovery order too). **The
-  book is written to keep CONF-43 green while the command does not exist**: every `router setup` mention sits in
+  book is written to keep CONF-43 green while the command does not exist**: every `vadis setup` mention sits in
   a paragraph carrying one of that case's five deferral markers, verified at this round's tree. The implementing
   round owes the other half — `README.md`'s CLI block gains the command (CONF-43's direction 2 requires every
   served subcommand to be mentioned in the docs) and the deferral markers are retired.
@@ -278,7 +278,7 @@ anticipates is the way to move the store), and the answer available today for a 
 
 ## Honest boundaries
 
-- **Nothing here is implemented at the time of writing.** `router setup` is not served; §4.11 and §4.12 are
+- **Nothing here is implemented at the time of writing.** `vadis setup` is not served; §4.11 and §4.12 are
   contracts, and both `book/` chapters say so in their own text where a user would otherwise look for the
   command. The G1–G8 properties are what the implementing round must assert, not measurements this ADR reports.
 - **The location rule is the one serving-path behaviour this round changes, and it is deliberately the smallest
@@ -288,7 +288,7 @@ anticipates is the way to move the store), and the answer available today for a 
   why the reported selection carries the rule's name: from a different directory, a run with no `--config` and no
   XDG file writes to the XDG location instead, and the print is what makes that visible rather than surprising.
   CONF-79 is the case that will measure all of it.
-- **The default location puts state under `~/.config/router/` too** (Q22): the traces the file names and the
+- **The default location puts state under `~/.config/vadis/` too** (Q22): the traces the file names and the
   fixed `state/router.db`. That is the price of keeping §4.1's single anchor; it is stated in the book, and the
   operator has a supported answer today (an absolute `trace.dir`). Moving the *store* is the additive `state:`
   key's job, not a second resolution rule.
@@ -310,7 +310,7 @@ anticipates is the way to move the store), and the answer available today for a 
 ## Reversibility
 
 Reversible in both directions, cheaply. **Toward a structured rewrite:** the change is contained to
-`setup/` — the locator module is deleted, `RouterConfig` gains a `Serialize` (with the field-set drift that
+`setup/` — the locator module is deleted, `VadisConfig` gains a `Serialize` (with the field-set drift that
 implies), and an existing file is rewritten once; what is *not* recoverable is the comments of a file a user
 already rewrote, so the recovery is `--backup`/`.bak` plus git. **Away from the command entirely:** `setup` has
 no request-path footprint, no store row and no config key, so removing it is deleting one subcommand and its
@@ -320,7 +320,7 @@ reopening the trade-off this ADR settles. **The location rule, separately, is th
 round and the only piece with a client-visible default:** reverting is deleting `config_path::resolve` and
 restoring `--config`'s `required = true`, after which the serving path refuses an absent flag as it did before —
 and no stored data moves, because the rule never wrote anything (only the *writer* creates, and only the file the
-operator named). The asymmetry to keep in mind: a config a user already put in `~/.config/router/` does not move
+operator named). The asymmetry to keep in mind: a config a user already put in `~/.config/vadis/` does not move
 if the default is reverted, so such a revert is a flag's strictness, never a migration.
 
 ## Publication note (2026-10-03, R62-2)

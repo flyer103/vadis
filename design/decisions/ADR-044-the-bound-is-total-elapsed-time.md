@@ -40,14 +40,14 @@ was.
 
 ### 1.2 What the implementation does — one knob, applied twice
 
-`server.upstream_attempt_timeout` reaches the streaming path as **one value** (`crates/router-cli/`
-`lib.rs`: `Duration::from_millis(rc.router.server.upstream_attempt_timeout.0)`), and the provider
+`server.upstream_attempt_timeout` reaches the streaming path as **one value** (`crates/vadis-cli/`
+`lib.rs`: `Duration::from_millis(rc.vadis.server.upstream_attempt_timeout.0)`), and the provider
 layer then applies it **twice**, with two different semantics:
 
 | | Site | What it bounds | What a death looks like |
 |---|---|---|---|
-| **A — the attempt's total time** | `crates/router-providers/src/stream.rs:128`: `out.body(body).timeout(self.idle_timeout).send()` | reqwest's **per-request timeout**: the clock starts when the request is sent (it covers connect, the head and the body) and it ends when the response body is finished. A relay that is *continuously busy* for longer than the knob dies here. | reqwest's own body error — `error decoding response body` |
-| **B — the gap between reads** | `crates/router-providers/src/stream.rs:181-197` (`read_chunk`): `tokio::time::timeout(idle_timeout, head.response.chunk())`, on the relay's read path (`router-proxy/src/stream_forward.rs:758` builds it from the same knob) | **the gap**: no upstream byte for longer than the knob. This is the only one the pre-ADR R4 letter describes. | `read_chunk`'s own message — `idle bound exceeded: no upstream bytes within upstream_attempt_timeout`, `timed_out: true` |
+| **A — the attempt's total time** | `crates/vadis-providers/src/stream.rs:128`: `out.body(body).timeout(self.idle_timeout).send()` | reqwest's **per-request timeout**: the clock starts when the request is sent (it covers connect, the head and the body) and it ends when the response body is finished. A relay that is *continuously busy* for longer than the knob dies here. | reqwest's own body error — `error decoding response body` |
+| **B — the gap between reads** | `crates/vadis-providers/src/stream.rs:181-197` (`read_chunk`): `tokio::time::timeout(idle_timeout, head.response.chunk())`, on the relay's read path (`vadis-proxy/src/stream_forward.rs:758` builds it from the same knob) | **the gap**: no upstream byte for longer than the knob. This is the only one the pre-ADR R4 letter describes. | `read_chunk`'s own message — `idle bound exceeded: no upstream bytes within upstream_attempt_timeout`, `timed_out: true` |
 
 The document described **B** alone. The behaviour a client can observe is the **wider** of the two:
 **A** also ends a stream that never goes idle at all.
@@ -132,7 +132,7 @@ minutes is *continuously busy* and never idle, and it is bounded all the same �
 reader-visible consequences, in the order a client meets them:
 
 1. the client receives a **truncated stream** (a strict prefix of the events the upstream would have
-   sent) and, for chat completions, **no `[DONE]`** — R6's standing rule: router never presents a
+   sent) and, for chat completions, **no `[DONE]`** — R6's standing rule: vadis never presents a
    truncated stream as complete;
 2. the trace records the failure (`errors[]` with `error_class: stream_truncated`) and the usage it
    actually saw (R8: no carrier ⇒ `usage_missing`, no invented cost);
@@ -189,8 +189,8 @@ and no card may add a guard of its own.
 - **Not** *"the per-read arm (`read_chunk`) is the bound"*. It is real code on the relay's read path
   and it is **left running**, but the readings never show it firing, and the total-elapsed arm is the
   earlier deadline whenever a byte has arrived at all. The code's own comments still call the bound
-  an "idle bound" (`crates/router-providers/src/stream.rs:33`, `:70`, `:90-91`, `:178`;
-  `router-proxy/src/stream_forward.rs:9`) — those are `crates/` bytes, deliberately untouched by this
+  an "idle bound" (`crates/vadis-providers/src/stream.rs:33`, `:70`, `:90-91`, `:178`;
+  `vadis-proxy/src/stream_forward.rs:9`) — those are `crates/` bytes, deliberately untouched by this
   docs-only round, and named here so the vocabulary mismatch is **recorded rather than discovered**.
 - **Not** *"R4 was rewritten wholesale"*. One sentence's definition of the clock changed; the
   consequence (*the relay ends, it does not hang*), the outer `server.request_timeout` sentence and
@@ -204,7 +204,7 @@ and no card may add a guard of its own.
 **Cheap, and its price is named.** Reverting this decision means restoring one sentence of
 `DESIGN` §12.10.3 and two clauses of `docs/spec.md` §4.2 (and one `book/` sentence) — a docs-only
 diff of a few lines — **plus** the code change the letter would then demand: removing or re-scoping
-reqwest's per-request `.timeout(...)` at `crates/router-providers/src/stream.rs:128` so that a busy
+reqwest's per-request `.timeout(...)` at `crates/vadis-providers/src/stream.rs:128` so that a busy
 stream is no longer capped. That code change is **not** small in consequence: it re-opens the
 unbounded-relay risk of §2.3 and would need its own ADR and its own measurements. So the decision is
 **reversible in text, costly in behaviour**, and that asymmetry is the reason it is recorded as the

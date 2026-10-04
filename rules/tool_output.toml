@@ -1,4 +1,4 @@
-# router input-side compression rules / rules/tool_output.toml
+# vadis input-side compression rules / rules/tool_output.toml
 #
 # Contract: shape aligned with ADR-003 (rtk-style declarative pipeline:
 #            pipeline stages / match_output / keep·strip lines / truncate /
@@ -84,9 +84,9 @@
 #                         in v0.1 (spec §4.4 already marks them unimplemented;
 #                         this file must not invent a storage directory or
 #                         endpoint).
-# Lookup and admission: `.router/rules.toml` (project) →
-#         `~/.config/router/rules.toml` (user) → built-in (compiled in);
-#         first hit wins (ADR-003 "three-level override"). `router rules
+# Lookup and admission: `.vadis/rules.toml` (project) →
+#         `~/.config/vadis/rules.toml` (user) → built-in (compiled in);
+#         first hit wins (ADR-003 "three-level override"). `vadis rules
 #         verify` runs all inline tests: any rule whose tests fail → that rule
 #         is not loaded and it is reported in the startup log and `/health`;
 #         the other rules load as usual (trust gate: ADR-008 rules v0.1 does
@@ -164,12 +164,12 @@ expected = '{"a": 1,, "b": 2, "note": "padding for the byte budget guard"}'
 description = "build/test logs: drop progress lines and blank lines, strip ANSI, normalize durations; placeholder when empty"
 # R35-1-F1 (R35-2's repair): selection on the wire's own tool name alone,
 #       the kind gate lifted. The declared tool→kind table
-#       (`router-core/src/transform.rs` TOOL_KINDS) names no client this
+#       (`vadis-core/src/transform.rs` TOOL_KINDS) names no client this
 #       repository configures — every tool call in the captured traffic is
 #       `exec_command` (measured: `autowork/harness/r35-1/corpus-shape.json`,
 #       36/36 payload nodes) — so `match_kind` made this rule unreachable on
 #       the live path for every client that exists. `match_tool` is the
-#       tier-1 selection path (`router-core/src/transform.rs:154-156`), and
+#       tier-1 selection path (`vadis-core/src/transform.rs:154-156`), and
 #       with both-given-both-must-match the gate can only be lifted by
 #       dropping `match_kind` from this rule. The regex keeps the table's
 #       hypothetical shell names (their selection is unchanged: they all
@@ -201,18 +201,18 @@ input = '''
 [ 62%] Building object
 warning: unused variable: `x`
  --> src/lib.rs:12:9
-   Compiling router-core v0.1.0
+   Compiling vadis-core v0.1.0
 
 error[E0308]: mismatched types
  --> src/main.rs:3:5
 
-error: could not compile `router` due to 1 previous error
+error: could not compile `vadis` due to 1 previous error
 '''
 expected = '''warning: unused variable: `x`
  --> src/lib.rs:12:9
 error[E0308]: mismatched types
  --> src/main.rs:3:5
-error: could not compile `router` due to 1 previous error
+error: could not compile `vadis` due to 1 previous error
 '''
 
 [[tests.bash-log-noise]]
@@ -220,7 +220,7 @@ name = "all noise → on_empty"
 input = '''
    Compiling serde v1.0.210
 
-[ 91%] Building router-cli
+[ 91%] Building vadis-cli
 '''
 expected = '<bash: no output>'
 

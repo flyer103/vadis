@@ -25,7 +25,7 @@ Three facts make the naive answers wrong, and they are the reason this is an ADR
   unit. A second currency that is folded in at any exchange rate — even a published one, even once — destroys
   that property *and* violates AGENTS constraint 5, which is about numbers nobody can read off an official page.
   So the second currency has to be carried as data, not converted.
-- **The trace is read without the config** (ADR-005: `router stats` / `router replay` / the analysis loop). A trace field
+- **The trace is read without the config** (ADR-005: `vadis stats` / `vadis replay` / the analysis loop). A trace field
   that says only `184000 nano` is ambiguous the moment a CNY route exists, and a consumer that guesses USD is
   silently wrong in exactly the way this repository forbids.
 - **The CN plans do not publish token allowances.** `GLM Coding Plan` publishes **credits** (Lite 2,000 per 5
@@ -67,7 +67,7 @@ or converted. (The three pages reached from `platform.moonshot.cn` / `platform.m
   `account`, `base_url`, `wire_api` and `api_key_env` on the provider entry (spec §4.6): the same model id
   (`kimi-k3`) is billed in CNY through `api.kimi.com` and in USD through `api.kimi.ai`, and only the entry knows
   which one it is.
-- **No conversion, anywhere.** router applies no exchange rate, stores no rate, and never converts one
+- **No conversion, anywhere.** vadis applies no exchange rate, stores no rate, and never converts one
   currency's figure into another's. A CNY page is transcribed as CNY; a request served by a CNY entry is
   accounted and reported in CNY. An estimated rate is a number nobody published — the same defect class as an
   estimated price (AGENTS constraint 5).
@@ -115,12 +115,12 @@ dimension (that is `currency`). It is surfaced: `/health`'s provider list carrie
 `currency` beside its name, key variable and availability, so "which deployment am I actually spending on" is
 answerable from a reporting surface rather than from a comment.
 
-The router does **not** check region against the host in `base_url`: vendors own their host lists, a built-in
+The vadis does **not** check region against the host in `base_url`: vendors own their host lists, a built-in
 table of them would rot between releases, and a wrong-yet-declared region is a documentation error, not a
 routing one. The check that matters is the `source` rule (item 1), which a reviewer reads on the entry itself.
 
 **The naming convention is documentation, not a load rule, and `moonshot` → `kimi` is a one-time correction
-made now.** The names are operator-chosen: router validates a name for uniqueness, not for shape, because a
+made now.** The names are operator-chosen: vadis validates a name for uniqueness, not for shape, because a
 naming rule that is not checked is a rule that lies. The convention above exists so that a name cannot
 contradict the key variable beside it, which is exactly the state R6-3 left the shipped example in (its
 entries are named `moonshot` / `moonshot-plan` while their `api_key_env` reads `KIMI_API_KEY` /
@@ -164,7 +164,7 @@ current rule, so every existing config and every existing conformance case behav
   client's own string verbatim. The tag moves neither: it exists so that a policy can name a pair the ids
   cannot.
 - **The equivalence is asserted, not verified.** Nothing checks that two routes' models really are the same
-  model — the router cannot know, and the operator can. It is deliberately **explicit**: no rule ever infers a
+  model — the vadis cannot know, and the operator can. It is deliberately **explicit**: no rule ever infers a
   family from ids that look alike (prefix, suffix, substring, case), because an inferred equivalence would be a
   claim about a provider's catalogue that no page makes.
 - **Load rules:** a tag resolves to at most one model entry per provider entry (a duplicate is a load error
@@ -192,7 +192,7 @@ current rule, so every existing config and every existing conformance case behav
 
 ### 6. The reporting surfaces report money per currency — and a mixed window has no total
 
-`router stats` prints every **money** line once per currency present in the window, each labelled, and prints a
+`vadis stats` prints every **money** line once per currency present in the window, each labelled, and prints a
 line naming the currencies it saw. **Counts** (`requests`, `switches`, `switches without usage`, `usage
 missing`, `unknown outcome requests`) and **ratios** (`hit rate`, `continuity p50`) are currency-free and keep
 aggregating across the whole window. A mixed-currency window is **not an error**: a report is produced
@@ -224,7 +224,7 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
 | Re-denominate `overflow_monthly_cap_usd` into the overflow route's currency | Its name would have to lie or change (a rename breaks every config that writes it); a load error keeps the name honest and the comparison single-currency |
 | `region` as a name suffix (`zai-cn`) | See item 3: not additive for the route grammar or for already-written traces |
 | A top-level `families:` section (family → routes), or extending `aliases:` to carry a family | Aliases are client-facing (they appear in `decision.selection_source`); a family is a routing-account concept the client must not be able to name. A separate section duplicates the roster and needs its own combination table. The model entry can state it where the id it maps lives |
-| Infer a family from similar ids (normalise `k3` ↔ `kimi-k3`, strip vendor prefixes) | The router would assert an equivalence about a provider's catalogue that no page states — the fabricated-fact class again; and it would silently change behaviour when a vendor adds a rename |
+| Infer a family from similar ids (normalise `k3` ↔ `kimi-k3`, strip vendor prefixes) | The vadis would assert an equivalence about a provider's catalogue that no page states — the fabricated-fact class again; and it would silently change behaviour when a vendor adds a rename |
 | Extend `quota` to credits + multiple windows to express the CN plans | Real, but a different change: the credit model has a coefficient table, two window kinds and a peak/off-peak multiplier, and none of it is needed for the ledger to be correct (the local counter is a warning, spec §4.6 rule 3). Registered as GAP-Q17 rather than smuggled in |
 | Check `region` against a built-in table of vendor hosts | The table rots, the vendors own it, and the failure it prevents (a commented region that is wrong) is a documentation error |
 
@@ -242,9 +242,9 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
   implementing change), §12.9 (**GAP-Q17**), §12.10.2 (the load-validation rows, the `/health` provider list),
   §12.10.5 (the `cost.computed` / `plan.switched` payloads gain the unit; `EVENT_SCHEMA_VERSION` moves 1 → 2 with
   the trace version), §12.10.8 (the `OverflowSpend` projection's sum is route-scoped, hence single-currency).
-- **The rename is mechanical but wide**: `NanoUsd` appears in `router-core` (`cost.rs`, `breakeven.rs`,
-  `plan.rs`, `quota.rs`, `store.rs`, `trace.rs`, `peak.rs`), `router-store` (`lib.rs`, `trace_sink.rs`) and
-  `router-cli` (`stats.rs`), plus the conformance helpers that build fixtures. No behaviour changes with it;
+- **The rename is mechanical but wide**: `NanoUsd` appears in `vadis-core` (`cost.rs`, `breakeven.rs`,
+  `plan.rs`, `quota.rs`, `store.rs`, `trace.rs`, `peak.rs`), `vadis-store` (`lib.rs`, `trace_sink.rs`) and
+  `vadis-cli` (`stats.rs`), plus the conformance helpers that build fixtures. No behaviour changes with it;
   the currency fields are the behaviour.
 - **`config.example.yaml`** (the coder card's write-set, not this ADR's): the region comments become fields,
   the CN entries land with their CNY tables transcribed from the pages above (each with URL + read date, the
@@ -271,10 +271,10 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
 ## Honest boundaries and verification owed
 
 - **The tag is an unverified assertion** (item 4). Two routes tagged together may in fact be different models;
-  the router honors the operator's statement, and the failure mode is a team that mis-pairs two ids and gets a
+  the vadis honors the operator's statement, and the failure mode is a team that mis-pairs two ids and gets a
   policy routing between non-equivalent models. It is not detectable at this layer, and it is written down
   rather than guessed at.
-- **`region` is declared, not observed.** Nothing in the router confirms that a `cn` entry's endpoint really is
+- **`region` is declared, not observed.** Nothing in the vadis confirms that a `cn` entry's endpoint really is
   the mainland deployment of that vendor; the field is as honest as the operator who wrote it.
 - **The CN plans' exhaustion signal is unobserved.** Plan-first routing moves an account on an upstream `403`
   classified `quota_exhausted` (ADR-011 / spec §4.6 rule 3). Neither CN plan page states which status its
@@ -287,7 +287,7 @@ different change with its own blast radius (registered as **GAP-Q17**, DESIGN §
   says the allowance is only usable "在官方支持的指定工具与产品环境中" and that calling the standard API from a
   self-built application, site, bot or SaaS product does not consume the plan's allowance (`docs.bigmodel.cn/cn/coding-plan/overview`
   and `/glm-coding`, read 2026-09-21). A gateway is a self-built application, so an operator pointing a CN GLM
-  plan's key at router must check that vendor's terms first — the capability described here is not a licence.
+  plan's key at vadis must check that vendor's terms first — the capability described here is not a licence.
   Kimi's documentation is the opposite case: it documents handing the subscription's API key to third-party
   tools (`www.kimi.com/code/docs/`), which is what a gateway is. Both facts are recorded because they are
   facts; neither is a recommendation.

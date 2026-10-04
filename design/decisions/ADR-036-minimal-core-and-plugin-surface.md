@@ -15,8 +15,8 @@
   that need P9), **ADR-029** (the latency baseline R41-3 may not move), **ADR-012** (the mutable
   scope); DESIGN **§4**, **§12.1**, **§12.2**, **§12.3**, **§13.1–§13.5**; `docs/spec.md` §2.1, §3,
   §4 (the `plugins:` block and its four keys), **§4.3**, **§4.4**, §6, **§9.3**; `config.example.yaml`
-  (`plugins:`); `crates/router-runtime/src/lib.rs`, `crates/router-plugin-sdk/src/lib.rs`,
-  `crates/router-cli/src/lib.rs`.
+  (`plugins:`); `crates/vadis-runtime/src/lib.rs`, `crates/vadis-plugin-sdk/src/lib.rs`,
+  `crates/vadis-cli/src/lib.rs`.
 - Numbering note: **ADR-035** landed with R39. This is the next free number in `design/decisions/`.
 - Owner decisions this ADR records (2026-09-25): the direction — **strengthen the plugin mechanism,
   define a minimal core, everything else through plugins** (the `deepseek-harness` / Cordis
@@ -24,9 +24,9 @@
   re-opened later: **no** `ai-gateway-bench` adoption, **no** protocol translation. The semantic /
   exact-match response cache exclusion in D6 is this ADR's own reasoning, not an owner's word.
 - **What this ADR is, and what it is not.** It freezes the **contract**. It writes no code: P9 is
-  `contract-only` in §13.1's register (`crates/router-runtime/src/lib.rs:1-4` and
-  `crates/router-plugin-sdk/src/lib.rs:1-4` are stubs, verbatim: *"Not yet implemented"*), and
-  `inject` / `isolate` / `intercept` are parsed (the `PluginCfg` fields, `router-core/src/config.rs`)
+  `contract-only` in §13.1's register (`crates/vadis-runtime/src/lib.rs:1-4` and
+  `crates/vadis-plugin-sdk/src/lib.rs:1-4` are stubs, verbatim: *"Not yet implemented"*), and
+  `inject` / `isolate` / `intercept` are parsed (the `PluginCfg` fields, `vadis-core/src/config.rs`)
   and validated (the plugin validation loop, `config.rs:1782-1803`) and **nothing acts on them**;
   `disabled` is the exception — it is honoured at start-up (D6.3). Every statement below about the repository is
   cited to a §13.1 row, a leak-register row, or a `CONFn` id; every statement about intent names the
@@ -47,9 +47,9 @@ fiber and rolls back its effects; an `id`/`kind` change rebuilds that entry*).
 
 **Meanwhile the assembly that the list is supposed to drive lives in the CLI, and three plugins are
 resident without ever being declared.** §13.1's **P6** row names its wiring as
-`router-cli/src/lib.rs` (`plugins[].config.rules_file`) — the launcher walks `plugins[]` itself
-(`router-cli/src/lib.rs:269`) to load a rule file — and **P2**'s row names
-`router-cli/src/lib.rs:314,344-375`. `config.example.yaml:1079` says the quiet part out loud:
+`vadis-cli/src/lib.rs` (`plugins[].config.rules_file`) — the launcher walks `plugins[]` itself
+(`vadis-cli/src/lib.rs:269`) to load a rule file — and **P2**'s row names
+`vadis-cli/src/lib.rs:314,344-375`. `config.example.yaml:1079` says the quiet part out loud:
 *"Three more built-in plugins are always resident with no config entries of their own:
 `builtin/cost_ledger`, `builtin/quota_guard`, `builtin/sticky`."* A plugin list that three plugins do
 not appear in is not yet an assembly point.
@@ -60,8 +60,8 @@ reason D3's order is forced rather than chosen:
 
 | row | what it says | consequence for a plugin surface |
 |---|---|---|
-| **L5** (`router-runtime/src/lib.rs:1-4`, `router-plugin-sdk/src/lib.rs:1-4`) | *"primitives whose absence is load-bearing for accepted modes"* — ADR-013's items 1–4 (shadow/canary) compose `isolate`/`intercept` | **`isolate` and `intercept` have no meaning until P9 exists**; M3 `shadow` and M4 `canary` are `contract-only` *because* of this (§13.5) |
-| **L6** (`GuardOutcome`, `router-core/src/plan.rs:3-5`) | named as vocabulary and sketched (`DESIGN.md:368-369`) *"but no such type exists"*; the code answers with a plan-specific `PlanMove` (`plan.rs:52-69`), and the caller is a hand-written method with its own outcome struct (`forward.rs:156,1121-1200`) — *"a second rule would invent a second move type, so 'the guard chain' is a paragraph rather than an interface — which is exactly what a decision provider needs"* | a **`Guard` plugin surface cannot be an interface** until this is settled; a plugin protocol over a paragraph would freeze the second move type as the contract |
+| **L5** (`vadis-runtime/src/lib.rs:1-4`, `vadis-plugin-sdk/src/lib.rs:1-4`) | *"primitives whose absence is load-bearing for accepted modes"* — ADR-013's items 1–4 (shadow/canary) compose `isolate`/`intercept` | **`isolate` and `intercept` have no meaning until P9 exists**; M3 `shadow` and M4 `canary` are `contract-only` *because* of this (§13.5) |
+| **L6** (`GuardOutcome`, `vadis-core/src/plan.rs:3-5`) | named as vocabulary and sketched (`DESIGN.md:368-369`) *"but no such type exists"*; the code answers with a plan-specific `PlanMove` (`plan.rs:52-69`), and the caller is a hand-written method with its own outcome struct (`forward.rs:156,1121-1200`) — *"a second rule would invent a second move type, so 'the guard chain' is a paragraph rather than an interface — which is exactly what a decision provider needs"* | a **`Guard` plugin surface cannot be an interface** until this is settled; a plugin protocol over a paragraph would freeze the second move type as the contract |
 | **L4** (the reserved `auto` / `Selector` slot) | *"there is no `trait Selector`"*, `decision.selection_source` is a `String` (`trace.rs:88`) *"whose third value is absent from spec §3's own list"*, and the honest options are *"to define the value or delete it — a human decision"* | a **`Selector` plugin surface cannot be declared** before that human decision; declaring it would enshrine a documented-but-unreachable value |
 | **L2a / L2b** (P3 re-derived in two transports) | alias/explicit resolution *"including the 404 codes and both message strings"* exists twice (`forward.rs:1270-1306` vs `stream_forward.rs:981-1017`), as does the `supports` capability check and its 400 body (`forward.rs:491-507` vs `stream_forward.rs:332-345`) — *"the two transports can resolve one request differently"* | a plugin-hosted **resolution** would sit on top of a re-derivation; the surface must wait for one implementation, not two |
 
@@ -71,8 +71,8 @@ fields, and §13.4's decision-provider seam (DP-1) already specifies landing an 
 in *fields that already exist*, with *"no dedicated trace field … and no CONF id allocated here"*.
 The four service keys (`CACHE_LEDGER`, `SESSION_TABLE`, `QUOTA_STORE`, `TRACE_SINK`) and the four
 plugin-facing traits — `Transform` (§12.3's sketch and §12.12's landing), `Selector`, `Guard`,
-`Observer` (§12.3) — are sketched but not implemented — §13.2's module map says so for `router-runtime/` and
-`router-plugin-sdk/`, and §13.3's own *not-a-leak* list already declares the shared helpers between
+`Observer` (§12.3) — are sketched but not implemented — §13.2's module map says so for `vadis-runtime/` and
+`vadis-plugin-sdk/`, and §13.3's own *not-a-leak* list already declares the shared helpers between
 the two forwarding paths intentional, which is why L2a/L2b are the only resolution sites in play.
 
 ## Decision
@@ -97,7 +97,7 @@ absence from a plugin is forced:
 | in core | why it cannot be a plugin | where the constraint lives |
 |---|---|---|
 | **P1 `byte-fidelity`** — the client's bytes and ADR-015's exactly **two** span mutations | the only API that can touch client bytes must be owned by the component that answers for the invariant. A plugin holding it could return any body, and **no test could distinguish that from a legitimate translation** — which is precisely the capability this ADR's owner decision declines to ship | AGENTS 1; ADR-007; ADR-015; §13.1 P1 (`body.rs:29,56,90,197`; `forward.rs:223,528`; `stream_forward.rs:365`) |
-| **P2 `inbound-admission`** | it runs **above** the pipeline (one guard, headers only, and a refusal leaves exactly one pre-pipeline record). A component mounted *inside* the pipeline cannot be the thing that admits to it | spec §4.7, §9.1; §12.11; §13.1 P2 (`auth.rs:25,34,49,121`; wiring `router-cli/src/lib.rs:314,344-375`) |
+| **P2 `inbound-admission`** | it runs **above** the pipeline (one guard, headers only, and a refusal leaves exactly one pre-pipeline record). A component mounted *inside* the pipeline cannot be the thing that admits to it | spec §4.7, §9.1; §12.11; §13.1 P2 (`auth.rs:25,34,49,121`; wiring `vadis-cli/src/lib.rs:314,344-375`) |
 | **P5 `decision-record`** | it is the **only** product → analysis-loop channel (constraint 3). If a plugin could write the record, the observation boundary becomes pluggable, and every gate below it becomes negotiable | ADR-005; spec §6, §7; §13.1 P5 (`trace.rs:22,27,88,311`; writer `accounting.rs:358`; sink `trace_sink.rs:40,73`) |
 | **P7 `state-truth`** | intent-before-effect ordering and "projections are never the truth" are **write-path** properties, not features: a plugin that could write state directly could reorder them silently | ADR-009; ADR-010; spec §4.5; §13.1 P7 (`store.rs:26,180,361,412,442`) |
 | **P8 `accounting`** — the integer `Nano` amounts **and the `verified`/`inferred` label** | constraint 4 is a **labelling** invariant: gates read `verified` only. Prices and quota data may be plugin-hosted (they are data, ADR-021/§12.13); the **label** may not be, or a plugin could mint a `verified` saving nobody measured | ADR-006; ADR-018; spec §7, §4.0, §4.8; §13.1 P8 (`cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297`) |
@@ -107,12 +107,12 @@ absence from a plugin is forced:
 
 | order | surface | may propose | what blocks it today |
 |---|---|---|---|
-| 1 | **`Observer`** (§12.3's trait sketch) | nothing — it receives `&DecisionRecord` and `&RouterError` and returns **no value that reaches the wire** | nothing. This is why R41-4's moat observer (inter-chunk jitter + chunk fidelity) is the first plugin: it proves the surface with a measurement that matters and leaves the byte path untouched |
+| 1 | **`Observer`** (§12.3's trait sketch) | nothing — it receives `&DecisionRecord` and `&VadisError` and returns **no value that reaches the wire** | nothing. This is why R41-4's moat observer (inter-chunk jitter + chunk fidelity) is the first plugin: it proves the surface with a measurement that matters and leaves the byte path untouched |
 | 2 | **`Transform`** (§12.3's sketch, §12.12, ADR-019) | a **path-addressed edit plan**, applied as value spans over the client's bytes — *"the parsed view is never what reaches the wire"* | nothing structural: P6's tier-1 engine, mode channel and ledger are `wired` (§13.1 P6, R9-2a/2b); `CONF-16` (R41-0) is its cache-regression case. The remaining absence is the paired `verified` measurement (L5), so every ledger figure stays `inferred` |
 | 3 | **`Guard`** (§12.3's sketch) | `Pass` / `Reject{code}` / `Downgrade(route)` — a pure predicate over (route, projections, stable config, one clock read) | **L6**: the answer vocabulary is prose; a protocol over it would freeze `PlanMove` as the interface |
 | 4 | **`Selector`** (§12.3's sketch) | a `Decision` over the roster; never sees or produces bytes | **L4** (a human decision: define the `plugin` value or delete the slot) **and** **L2a/L2b** (one resolution implementation, not two) |
-| — | provider transport (`router-providers`) | receives a prepared `RawBody`, may add headers, **cannot rewrite the body** | — |
-| — | protocol codecs / mappers (`router-protocol`) | per-cell declaration, `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022's wire gate) | the owner's 〈暂时不做协议翻译〉, so the translation column stays empty and no document may imply a mapper exists |
+| — | provider transport (`vadis-providers`) | receives a prepared `RawBody`, may add headers, **cannot rewrite the body** | — |
+| — | protocol codecs / mappers (`vadis-protocol`) | per-cell declaration, `lossless \| lossy(reason)`; a missing declaration is a `400`, never a silent re-frame (ADR-022's wire gate) | the owner's 〈暂时不做协议翻译〉, so the translation column stays empty and no document may imply a mapper exists |
 | — | price tables / tier config | nothing — **data, not code** (constraint 5: source URL + date in the config comment; ADR-021/§12.13) | — |
 | — | the four service-key **implementations** (`cache_ledger`, `session_table`, `quota_store`, `trace_sink`) | a binding behind a key whose **semantics stay** the core's (the ledger's rules, the table's stickiness, the quota arithmetic, the sink's append-only contract) | — |
 
@@ -172,7 +172,7 @@ none of them moves early:
    *landed*; that is refused here for the §9.3 reason above.)
 3. **The three contract-shaping keys — `inject`, `isolate`, `intercept` — are declared, parsed and
    validated, and nothing acts on them.** **`disabled` is not in that set**: it is honoured today, at
-   start-up (a disabled entry's rule set is not loaded — `router-cli/src/lib.rs:270` — and `/health`
+   start-up (a disabled entry's rule set is not loaded — `vadis-cli/src/lib.rs:270` — and `/health`
    reports the entry as disabled; spec §4.4), and what stays unimplemented is only its *designed
    runtime* semantics (unload a live fiber and roll back its effects). `docs/spec.md` §4.3 and
    `book/plugins.md` say this in the same words, and `book/plugins.md` (45 lines before this round,
@@ -191,7 +191,7 @@ Rust, tier-A plugins are **linked at compile time**, so:
 
 - there is **no module-level HMR**: a code change is a rebuild and a restart. What stays genuinely
   dynamic is **config-level coordination** (a keyed diff: weights, rule TOML, `disabled`) and
-  **tier-B out-of-process** plugins over UDS (`router-plugin-sdk`, also `contract-only` today);
+  **tier-B out-of-process** plugins over UDS (`vadis-plugin-sdk`, also `contract-only` today);
 - the contract keeps the half that matters operationally (all of it **specified, none of it built** yet): **declarative composition at boot**
   (`plugins:` as the single assembly point, `inject` satisfied-or-waiting, realms for A/B,
   intercept for sample/timeout/shadow), **per-plugin rollback** (every registration carries its
@@ -299,8 +299,8 @@ must cite the row and get it settled first.
 - `design/DESIGN.md` §4, §12.1, §12.2, §12.3, §12.12, §12.13, **§13.1–§13.6**, §13.4
 - `docs/spec.md` §2.1, §3, §4, §4.3, §4.4, §4.10, §6, §7, §9.3
 - `config.example.yaml` (`plugins:`), `rules/tool_output.toml`
-- `crates/router-runtime/src/lib.rs`, `crates/router-plugin-sdk/src/lib.rs`,
-  `crates/router-cli/src/lib.rs`, `crates/router-core/src/config.rs`
+- `crates/vadis-runtime/src/lib.rs`, `crates/vadis-plugin-sdk/src/lib.rs`,
+  `crates/vadis-cli/src/lib.rs`, `crates/vadis-core/src/config.rs`
 - ADR-002 (the runtime), ADR-005/009/010 (the record, the truth, the write path), ADR-006/018
   (money), ADR-013 (the rails that need P9), ADR-015/019 (the byte and transform contracts),
   ADR-016 (the register and the seam), ADR-021 (price tiers as data), ADR-022/023 (the wire gate and

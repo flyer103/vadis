@@ -180,7 +180,7 @@ The instrument is a **declared-stimulus** rig, and the declaration is the whole 
   **`NOT established`** rather than printing a number that is really a maximum.
 - **The confound, stated rather than footnoted:** the harness's own scheduling. The client's wake-up after
   the first byte, the stub's own emission jitter and the OS's scheduler all sit inside the measurement, and
-  none of them is the router. The null baseline (§3.1) is what bounds them, and the instrument must report
+  none of them is the vadis. The null baseline (§3.1) is what bounds them, and the instrument must report
   the baseline's own spread — a router `p99` that is smaller than the harness floor's spread is not a
   finding about the router.
 

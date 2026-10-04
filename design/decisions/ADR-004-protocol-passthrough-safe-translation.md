@@ -13,7 +13,7 @@ source. We must also answer: is server-side session state (`store:true` / `previ
 ## Decision
 
 1. **native passthrough first**: when the inbound protocol == the provider's `wire_api`, the only permitted
-   mutation is deleting router-owned fields; every other byte is forwarded as is.
+   mutation is deleting vadis-owned fields; every other byte is forwarded as is.
 2. **Cross-protocol translation must be deterministic**: a mapper is a pure function of
    `(content, stable config)`, and the same content always produces the same upstream bytes; lossy points
    must be registered explicitly (the list in spec §2) and written into the trace.
@@ -46,7 +46,7 @@ compaction); `hermes/agent/transports/codex.py` likewise has `"store": False` + 
   is deferred until there is a measured need (the `stateful_inbound_rate` metric keeps monitoring it).
 - `prompt_cache_key` is promoted to a first-class source of session identity, used for the sticky table and
   the cache-ledger key.
-- Clients resend everything ⇒ the fate of the prefix cache is decided entirely by router's transforms ⇒
+- Clients resend everything ⇒ the fate of the prefix cache is decided entirely by vadis's transforms ⇒
   `prefix_continuity` becomes a blocking gate.
 - If codex switches to the WebSocket transport, the HTTP-only v0.1 depends on its fallback to HTTP (the
   client already has `fallback_to_http`); this is recorded as a future observation item.

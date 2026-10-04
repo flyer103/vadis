@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: ADR-002 (tier-A has no module-level HMR; experimental plugins are tier-B and out of process; config-level coordination), ADR-003 (policy is a revertible, declarative, individually accounted artifact; the verified/inferred convention), ADR-005 (the trace is the only product-analysis-loop interface; research never enters the serving path), ADR-008 (rule files, first-hit override, the inline test as a rule's only spec), ADR-009 (the store and its durability tiers), ADR-010 (the event log as state truth), ADR-011 (the pattern tables are code, not an auto-adoptable artifact), ADR-013 (the online rails that make L1 safe); AGENTS hard constraints 2, 3, 4, 6, 8; spec §1 (non-goals), §4 (the plugin schema), §4.4 (rule files), §6 (observation), §7 (the accounting convention); DESIGN §4 (plugin runtime, realms, `intercept`), §9 (`router replay`), §10 (test strategy), §11 (risks), §12.8 (conformance IDs); the loop charter (mission, roles, gates, direction pool); `book/roadmap.md`
+- Related: ADR-002 (tier-A has no module-level HMR; experimental plugins are tier-B and out of process; config-level coordination), ADR-003 (policy is a revertible, declarative, individually accounted artifact; the verified/inferred convention), ADR-005 (the trace is the only product-analysis-loop interface; research never enters the serving path), ADR-008 (rule files, first-hit override, the inline test as a rule's only spec), ADR-009 (the store and its durability tiers), ADR-010 (the event log as state truth), ADR-011 (the pattern tables are code, not an auto-adoptable artifact), ADR-013 (the online rails that make L1 safe); AGENTS hard constraints 2, 3, 4, 6, 8; spec §1 (non-goals), §4 (the plugin schema), §4.4 (rule files), §6 (observation), §7 (the accounting convention); DESIGN §4 (plugin runtime, realms, `intercept`), §9 (`vadis replay`), §10 (test strategy), §11 (risks), §12.8 (conformance IDs); the loop charter (mission, roles, gates, direction pool); `book/roadmap.md`
 
 ## Background
 
@@ -25,7 +25,7 @@ Two failure modes follow, and neither is hypothetical for this project:
 
 The assets that make a ladder answerable already exist: tier-B plugins are out of process and therefore
 killable (ADR-002); `ctx.isolate` realms and `ctx.intercept` sample/shadow exist in the runtime and are
-already named for the A/B and shadow use cases (DESIGN §4); `router replay` computes money on the real code
+already named for the A/B and shadow use cases (DESIGN §4); `vadis replay` computes money on the real code
 path rather than a Python re-implementation (DESIGN §9); and the verified/inferred convention (spec §7)
 already forbids an inference from entering a gate. What is missing is the ladder's *entry conditions* and
 the statement of what may never move.

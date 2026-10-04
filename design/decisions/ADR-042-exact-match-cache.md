@@ -25,8 +25,8 @@
   §9 mirrors); spec §1 (`:13`), §2 (`:24`), §2.1 (`:81`), §4 (`:137`), §4.3 (`:427`), §4.4 (`:463`), **§4.17
   (new)**, §6 (`:1749`), §7 (`:2086`), §9.2 (`:2371`), §9.3 (`:2500`); DESIGN §4 (`:65`), §12.6 (`:730`),
   §12.8 (`:959`), §12.10.4/§12.10.5 (`:1615`ff), §12.12 (`:2891`), **§12.22 (new)**, §13.1 (`:3985`), §13.2
-  (`:3999`), §13.6 (`:4098`); `config.example.yaml:127-157`; `crates/router-plugins/src/assembly.rs:155,210`;
-  `crates/router-proxy/src/forward.rs:457`; `crates/router-core/src/trace.rs:28,70,295-309`.
+  (`:3999`), §13.6 (`:4098`); `config.example.yaml:127-157`; `crates/vadis-plugins/src/assembly.rs:155,210`;
+  `crates/vadis-proxy/src/forward.rs:457`; `crates/vadis-core/src/trace.rs:28,70,295-309`.
 - Cases: **`CONF-88`** (the capability is **off by default** — green at the base *by construction*, and the
   arm a later config edit must not be able to move) and **`CONF-89`** (**a hit is the recorded bytes**: the
   byte-equality, the record's shape, the ledger's reconciliation). Both ids are claimed from a measurement
@@ -49,7 +49,7 @@
 
 The card asked for four assertions. Three hold as stated; **the first does not, and the exclusion has moved** —
 so it is quoted where it actually is, and the line the card remembered is quoted too, because a document that
-wrote this ADR against a remembered line number would have cited a row about `router-core/src/prefix.rs`.
+wrote this ADR against a remembered line number would have cited a row about `vadis-core/src/prefix.rs`.
 Every line number in this section is re-derived at this branch's HEAD, like every other number in this ADR
 (§11.4); the **quoted text** is the base commit `bf96207`'s, which is both the revision the card's assertion was
 written against and the only revision that still carries the `excluded` row this round replaces — at HEAD that
@@ -57,7 +57,7 @@ row sits at `design/DESIGN.md:4131` and states the reversal.
 
 | # | asserted | what HEAD actually says | verdict |
 |---|---|---|---|
-| 1 | *(the card's assertion, measured at the base `bf96207`)* `design/DESIGN.md:3917` carries the exclusion reasoning | **False, and the exclusion moved.** `design/DESIGN.md:4004` is §13.2's module-map row for `router-core/src/prefix.rs` (at the base, `:3917`): *"\| `router-core/src/prefix.rs` \| P5 (`prefix_blocks[]`, `prefix_continuity`, `extract_prefix_blocks:82`, `prefix_continuity:266`) + P8 (`attribute_tokens:235` is the GAP-Q14 proportional attribution → `inferred`) \| a tokenizer — the allowlist has none, which is why every derived token figure is labelled \|"*. The exclusion reasoning is at **`design/DESIGN.md:4043` at the base `bf96207`** (§13.6's "other surface \| mountable \| the contract it answers" table): *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **quoted where it was** (`:4043`, at the base; `:4131` at HEAD), and §12.6 replaces that row |
+| 1 | *(the card's assertion, measured at the base `bf96207`)* `design/DESIGN.md:3917` carries the exclusion reasoning | **False, and the exclusion moved.** `design/DESIGN.md:4004` is §13.2's module-map row for `vadis-core/src/prefix.rs` (at the base, `:3917`): *"\| `vadis-core/src/prefix.rs` \| P5 (`prefix_blocks[]`, `prefix_continuity`, `extract_prefix_blocks:82`, `prefix_continuity:266`) + P8 (`attribute_tokens:235` is the GAP-Q14 proportional attribution → `inferred`) \| a tokenizer — the allowlist has none, which is why every derived token figure is labelled \|"*. The exclusion reasoning is at **`design/DESIGN.md:4043` at the base `bf96207`** (§13.6's "other surface \| mountable \| the contract it answers" table): *"\| semantic / exact-match response cache \| yes, but **excluded** \| a hit removes the upstream call ⇒ no `usage` object ⇒ the saving is `inferred` forever (AGENTS 4), and the 1 client request = 1 upstream call correspondence the accounting rests on goes (ADR-036, \"What this ADR does not decide\") \|"* | **quoted where it was** (`:4043`, at the base; `:4131` at HEAD), and §12.6 replaces that row |
 | 2 | `docs/spec.md` still lists the response cache among v0.1's non-goals | **True.** `docs/spec.md:13` is the heading — *"**v0.1 non-goals** (explicit exclusions — do not add them on the side):"* — and `docs/spec.md:19` is the row: *"\| Semantic response cache, context summarization \| Large conflict surface with prefix caching; a measured ledger is needed first (P4) \|"* | holds; §11.3 amends the row **additively** |
 | 3 | no `ADR-042` exists yet | **True.** `ls design/decisions/ADR-042*` → *No such file or directory*; the register holds `ADR-001…ADR-041` + `ADR-043` (42 files). | holds |
 | 4 | `main` is at the R50 merge | **True, as the merge being an ancestor of the cut.** The cut point is `bf96207` = `origin/main`, and `git merge-base --is-ancestor 54e4864 HEAD` → **rc=0**: the R50 merge `54e4864` (*"Merge round/50-metrics — R50: `GET /metrics`, the operator's scrape surface (ADR-041)"*) is in this branch's history. The branch is `round/51-cache`, cut from `main` at `bf96207`. | holds |
@@ -220,7 +220,7 @@ Precise definition, because the naive reading ("the prefix continuity of the hit
 - **The one honest difference**, stated so no reader has to find it: an *upstream-registered* prefix cache used
   to be warmed by turn N's call. If turn N was a hit, its call did not happen, and the upstream never stored
   turn N's prefix. So the *upstream's* cache state after a hit is weaker than after a miss at N — cost that the
-  router does not pay (no call, no charge) but that a subsequent turn may pay in `cached_tokens`. This is not a
+  vadis does not pay (no call, no charge) but that a subsequent turn may pay in `cached_tokens`. This is not a
   determinism violation (nothing here depends on a clock) and it is not hidden: it is the same fact as "a hit
   makes no claim about the upstream", and it is measurable as a `cached_tokens` comparison on a later turn in
   the same session. It is registered as a reportable consequence (`R51-0-F5`, §14) rather than asserted here,
@@ -242,7 +242,7 @@ key := ( protocol.protocol_in          — from the request's own path (spec §2
 
 - **No normalisation happens, and there is nothing to normalise.** The digest is taken over the body bytes
   **exactly as the request carried them** — the same bytes constraint 1 calls *"the client's bytes"* — before,
-  and independently of, the two permitted mutations (`router_meta`-class key deletion and the top-level `model`
+  and independently of, the two permitted mutations (`vadis_meta`-class key deletion and the top-level `model`
   value replacement, ADR-015). No parse → reserialize, no whitespace folding, no key reordering, no
   `prompt_cache_key` stripping, no case folding. The two mutations remain **exactly two** (constraint 1), and
   neither feeds the key: the key is computed from the client's own bytes, so a change to a mutation cannot
@@ -275,7 +275,7 @@ It therefore makes **no claim about what the upstream would answer now**. These 
 earlier moment, served again. That sentence is the feature's contract, and it is the vocabulary a reader of a
 hit's record must have:
 
-> **A hit is a replay, not a prediction.** The bytes came from a recorded response; the router asserts nothing
+> **A hit is a replay, not a prediction.** The bytes came from a recorded response; the vadis asserts nothing
 > about what the provider would answer for this request at this moment — not its content, not its price, not
 > its liveness.
 
@@ -289,14 +289,14 @@ hit is `inferred` for ever (§5).
 | not stored | why |
 |---|---|
 | a response whose HTTP status is not `2xx` | an error is not an outcome worth replaying: an upstream `429`/`503` recorded once and replayed later would present a transient refusal as a present fact, which is worse than a miss and unreadable in the ledger. Only a successful, complete response is a candidate. |
-| an **incomplete** body — a stream abandoned mid-way, a client disconnect, an upstream that died mid-stream, a body the router could not read to its end | "the response bytes returned then" has no referent for a partial response. A prefix of a stream is not a response; storing one and replaying it would hand a client a truncated answer as a complete one. Nothing is stored until the body is complete. |
+| an **incomplete** body — a stream abandoned mid-way, a client disconnect, an upstream that died mid-stream, a body the vadis could not read to its end | "the response bytes returned then" has no referent for a partial response. A prefix of a stream is not a response; storing one and replaying it would hand a client a truncated answer as a complete one. Nothing is stored until the body is complete. |
 | a response whose body exceeds the store's byte bound (§3.4) | the bound is a memory bound, not a reason to store something partial. A too-large body is simply not a candidate. |
 | anything at all, when the request carries no session identity | the session is a key component (§3.1); with no session there is no key, so the request is neither looked up nor stored. Fail-closed, and it keeps `session: null` from becoming a shared bucket. |
 
 ### 3.4 The store: in-process memory, one owner, a frozen bound
 
 ```rust
-// crates/router-core/src/response_cache.rs  (the domain half; no I/O, no clock)
+// crates/vadis-core/src/response_cache.rs  (the domain half; no I/O, no clock)
 pub const MAX_ENTRIES: usize = 1024;          // the entry bound
 pub const MAX_STORED_BYTES: u64 = 64 << 20;   // the byte bound (64 MiB) — an entry bound alone cannot bound memory,
                                               //  because a response's size is the upstream's choice
@@ -349,7 +349,7 @@ not have to derive it.
 
 > **A sum over records cannot double-count a replayed response:** a hit's record contributes **no** usage, **no**
 > money and **no** upstream call to any sum — it is `usage_missing`-class (spec §6: *"The flag is what keeps such
-> a record out of every rate, every sum and every gate — `router stats` counts it on its own line and prices it
+> a record out of every rate, every sum and every gate — `vadis stats` counts it on its own line and prices it
 > nowhere"*, `docs/spec.md:1796-1797`) — while the bytes it returned are attributed to the **source** record's
 > id, which is the record that owns the one measurement.
 
@@ -568,17 +568,17 @@ not by review.
 
 | layer | the owner | the shape |
 |---|---|---|
-| the key | `router_core::response_cache::ResponseKey::for_request(&RequestFacts) -> ResponseKey` — **one derivation**, in `router-core`, pure, no clock | the five components of §3.1, built from values the pipeline already holds; the digest is the only one computed here |
-| the store | `router_core::response_cache::ResponseStore` (in-memory, FIFO, two frozen bounds) — **one implementation** | `lookup(&ResponseKey) -> Option<&RecordedResponse>` and `record(&ResponseKey, RecordedResponse)`; `RecordedResponse` carries the bytes, the status and the **source reference** (§4.2) |
-| the mount | the plugin `builtin/response_cache` in `router-plugins`, registered in the assembly's registry beside `builtin/transform_rules` (`assembly.rs:155`) | an entry with `config.enabled: false` mounts **inert** (§6.1); the fiber owns the store instance, so the mechanism's own unload semantics are the store's lifetime (§2.2) |
-| the seam | **one call site** in `crates/router-proxy/src/forward.rs`, the last step before the attempt (§4.4) | `match cache.lookup(&key) { Some(rec) => serve(rec), None => attempt(...) }` — the buffered path's only new branch; the streaming path's twin is the same owner, called at the same position |
+| the key | `vadis_core::response_cache::ResponseKey::for_request(&RequestFacts) -> ResponseKey` — **one derivation**, in `vadis-core`, pure, no clock | the five components of §3.1, built from values the pipeline already holds; the digest is the only one computed here |
+| the store | `vadis_core::response_cache::ResponseStore` (in-memory, FIFO, two frozen bounds) — **one implementation** | `lookup(&ResponseKey) -> Option<&RecordedResponse>` and `record(&ResponseKey, RecordedResponse)`; `RecordedResponse` carries the bytes, the status and the **source reference** (§4.2) |
+| the mount | the plugin `builtin/response_cache` in `vadis-plugins`, registered in the assembly's registry beside `builtin/transform_rules` (`assembly.rs:155`) | an entry with `config.enabled: false` mounts **inert** (§6.1); the fiber owns the store instance, so the mechanism's own unload semantics are the store's lifetime (§2.2) |
+| the seam | **one call site** in `crates/vadis-proxy/src/forward.rs`, the last step before the attempt (§4.4) | `match cache.lookup(&key) { Some(rec) => serve(rec), None => attempt(...) }` — the buffered path's only new branch; the streaming path's twin is the same owner, called at the same position |
 | the record | `Accountant` — **the existing single writer** (DESIGN §12.6) | the hit is one more class through `commit`, with `usage_missing: true` and the `cache` group; no second writer, no second record shape |
 | the label | `inferred` — one word, one meaning, `forward.rs:457`'s own (`verified`/`inferred`, spec §7) | `cache.verdict`, a `&'static str` |
 
 **The required extraction list, closed** (the whole of the refactor the implementation card owes):
 
-1. The key derivation and the store live in **one new module**, `router-core/src/response_cache.rs`, and the
-   request path holds **one** handle to them. Nothing in `router-core::body`, `prefix`, `cost`, `plan`,
+1. The key derivation and the store live in **one new module**, `vadis-core/src/response_cache.rs`, and the
+   request path holds **one** handle to them. Nothing in `vadis-core::body`, `prefix`, `cost`, `plan`,
    `trace` or `store` moves.
 2. The store is reached through the **plugin's assembled handle** at exactly **one call site** in
    `forward.rs` — the same discipline `compose_transform_stage` already follows for the transform chain; if the
@@ -588,7 +588,7 @@ not by review.
 
 ### 9.2 What the one-owner rule forbids here
 
-- A **second key derivation** anywhere — in the plugin, in `router-cli`, in a test helper that a case then
+- A **second key derivation** anywhere — in the plugin, in `vadis-cli`, in a test helper that a case then
   asserts against. The case tests the owner.
 - A **second store** — no per-protocol map, no per-session side map, no cache-of-the-cache, no persistence
   (§2.3(e)).
@@ -689,8 +689,8 @@ R49's file, outside this card's write set), which is registered rather than hidd
 This card adds §4.17 to a 2439-line spec and two rows + paragraphs to DESIGN §12.8, and inserts §12.22 before
 §13: §12.8's rows move nothing above them, `design/DESIGN.md` §13.1 shifts by the length of §12.22, and
 `docs/spec.md` §6/§7/§9.2 shift by the length of §4.17. **Those deltas carry every number in this ADR with them,
-and the implementation card shifts three code files as well** (`crates/router-proxy/src/forward.rs` +11 at the
-cited line, `crates/router-plugins/src/assembly.rs` +40/+44, `crates/router-core/src/trace.rs` +8/+47, and
+and the implementation card shifts three code files as well** (`crates/vadis-proxy/src/forward.rs` +11 at the
+cited line, `crates/vadis-plugins/src/assembly.rs` +40/+44, `crates/vadis-core/src/trace.rs` +8/+47, and
 `book/cost-and-caching.md` +3). The sentence here used to promise the re-derivation to "the round's
 implementation card", and that promise was owed rather than kept: R51-1 touched no document, so **R51-3, the
 round's landing card, performed the mechanical act** — it re-derived every `path:line` in this ADR at this
@@ -784,7 +784,7 @@ Minimum set, each recorded under the loop's evidence for that decision (the R50-
 
 **Consequences that follow from this contract** (things a reader should not have to discover):
 
-1. A hit's record is a **`usage_missing`**-class record, so `router stats` counts it on its own line and prices
+1. A hit's record is a **`usage_missing`**-class record, so `vadis stats` counts it on its own line and prices
    it nowhere — no new reporting line is spent this round (`R51-0-F2` registers the widening).
 2. The **README** gains no claim this round, and gains nothing to *retract* either: R49's own watch item
    (`CLAIM-SOURCES.md:360`) asked that the wording stay true **of the default path**, which it does — the
@@ -802,7 +802,7 @@ Minimum set, each recorded under the loop's evidence for that decision (the R50-
 | id | item | owner | due |
 |---|---|---|---|
 | `R51-0-F1` | **the spec §1 row's drift**: amending the row to name the in-scope exact-match cache drifts R49's claim rows W2/C19/C25 (the loop's claim-sources record, the same file-class), whose file is outside this card's write set and whose W2 clause reads *"do not widen or delete it"*. The amendment is made **because the R51 card's relay instructs it** and because a silent §1 is the same defect class in the other direction; the row's semantic half is untouched, so no sentence becomes false. | the claim table's next owner (a `book/`/contract-touching card) | with the next claim-table amendment |
-| `R51-0-F2` | a `router stats` line for replayed responses (§9.2's own surface; today they fold into `usage missing`) | the next `docs/spec.md` §9.2-touching card | open, with a trigger: the first round that reports the cache's own figures |
+| `R51-0-F2` | a `vadis stats` line for replayed responses (§9.2's own surface; today they fold into `usage missing`) | the next `docs/spec.md` §9.2-touching card | open, with a trigger: the first round that reports the cache's own figures |
 | `R51-0-F3` | the store's bounds are frozen constants (§3.4); a configurable capacity is the widening, with its own key, default and case | the next round that owns `config.example.yaml` | open, with a trigger: a deployment where 64 MiB is the wrong bound |
 | `R51-0-F4` | the store is in-process only (§2.3(e)); persistence across restarts is the widening, and it would need a store-contract owner (ADR-009/010's writer discipline) | backend-coder + the store contract's owner | open, with a trigger: a measured repeat rate that survives a restart argument |
 | `R51-0-F5` | **the upstream-prefix consequence of a hit** (§2.5): a hit does not warm the *upstream's* prefix cache, so a later turn in the same session may pay for it in `cached_tokens`. Reportable as a `cached_tokens` comparison; **not** measurable on the frozen corpus, and **not** a determinism violation. | the round that first measures the cache on live traffic | open |
@@ -824,15 +824,15 @@ One user-facing paragraph, landed this round in `book/cost-and-caching.md` (besi
 opt-in mode, off by default"*, the shape it mirrors). It is written for an operator, links to the contract, and
 copies no price number (constraint 8):
 
-> **Response caching: exact match only, off unless you turn it on.** The router can keep the response to a
+> **Response caching: exact match only, off unless you turn it on.** The vadis can keep the response to a
 > request and hand the *same* request the *same bytes* again — nothing more. "The same" means the client's
 > request bytes are identical, in the same session, on the same protocol, under the same configuration and with
 > the same transform mode: change one byte, or ask from another session, and it is an ordinary request. It is
 > **off by default** — a `builtin/response_cache` entry with `config.enabled: false` (or no entry at all) does
 > nothing, and listing the plugin without flipping that switch still does nothing; turn it on with
-> `enabled: true` and the router serves a repeat from what it recorded rather than calling the provider again.
+> `enabled: true` and the vadis serves a repeat from what it recorded rather than calling the provider again.
 > **What it will and will not claim**: a served repeat is a *replay*, not a prediction — the bytes are the ones
-> the provider returned earlier, so the router makes no claim about what it would answer now — and because no
+> the provider returned earlier, so the vadis makes no claim about what it would answer now — and because no
 > call happens, nothing is measured: the saving is labelled `inferred` (it is never a measured difference), it
 > is excluded from every rate and every sum, and **no gate may count it** (ADR-042; spec §4.17, §6, §7). On the
 > corpora this repository measures against, that class is empty today, so treat it as a fidelity-preserving

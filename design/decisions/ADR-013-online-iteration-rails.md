@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-19
-- Related: ADR-002 (`ctx.isolate` gives two coexisting sets of bindings; `ctx.intercept` sets the sample rate or shadow switch without changing a binding; config-level coordination never needs a rebuild), ADR-003 (artifacts are revertible and individually accounted), ADR-005 (the trace is the only product-analysis-loop interface), ADR-008 (rule files load at startup and on a keyed config diff), ADR-009 (the store; a lost projection is rebuilt), ADR-010 (events and write ordering; the restart story), ADR-011 (`error.classified` and the demotion are this ADR's error-rate signal), ADR-012 (the ladder, the envelope, and the never-mutable list); AGENTS hard constraints 2 (content determinism) and 3 (the observation boundary); spec §4 (the plugin schema: `isolate`, `intercept`, `disabled`), §4.2 (fallback), §6 (metrics), §7 (the accounting convention); DESIGN §4 (realms and `intercept`, and the config-diff reload), §6 (prefix stability), §9 (`router replay`), §11 (risks); the loop charter (the per-round flow)
+- Related: ADR-002 (`ctx.isolate` gives two coexisting sets of bindings; `ctx.intercept` sets the sample rate or shadow switch without changing a binding; config-level coordination never needs a rebuild), ADR-003 (artifacts are revertible and individually accounted), ADR-005 (the trace is the only product-analysis-loop interface), ADR-008 (rule files load at startup and on a keyed config diff), ADR-009 (the store; a lost projection is rebuilt), ADR-010 (events and write ordering; the restart story), ADR-011 (`error.classified` and the demotion are this ADR's error-rate signal), ADR-012 (the ladder, the envelope, and the never-mutable list); AGENTS hard constraints 2 (content determinism) and 3 (the observation boundary); spec §4 (the plugin schema: `isolate`, `intercept`, `disabled`), §4.2 (fallback), §6 (metrics), §7 (the accounting convention); DESIGN §4 (realms and `intercept`, and the config-diff reload), §6 (prefix stability), §9 (`vadis replay`), §11 (risks); the loop charter (the per-round flow)
 
 ## Background
 
@@ -13,7 +13,7 @@ this system make that different from an offline adoption:
    project's first-order lever is the prefix cache (AGENTS gotchas), so the cheapest way to lose money is
    to change a policy in the middle of a session: the next turn re-prefills the whole conversation at the
    miss price.
-2. **The offline gate cannot answer the question.** `router replay` (DESIGN §9) answers "what would this
+2. **The offline gate cannot answer the question.** `vadis replay` (DESIGN §9) answers "what would this
    policy have cost over the frozen corpus" — the corpus is yesterday's traffic by construction. The
    question a canary asks is "what is it costing now, on the traffic that is actually arriving".
 
@@ -37,7 +37,7 @@ the measurement*.
    - Where a shadow's result goes **without inventing a trace field**: the shadow fiber's identity rides in
      the existing free-form `decision.plugin_chain[]` (variant-suffixed, e.g. `cache-guard@shadow`), and its
      byte/prefix verdict rides in the existing `transforms[].cache_impact` / `verdict = inferred` / `error`
-     fields of the request it shadowed. The *comparison* is `router replay`'s job (DESIGN §9), not the
+     fields of the request it shadowed. The *comparison* is `vadis replay`'s job (DESIGN §9), not the
      serving path's. The suffix convention is fixed by the implementing round and recorded in DESIGN §12.6's
      value conventions; a dedicated trace field would be an additive spec §6 change (an optional field does
      not move `schema_version`, DESIGN §12.6) and is deliberately **not** taken here.

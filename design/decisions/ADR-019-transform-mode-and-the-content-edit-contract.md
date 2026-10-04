@@ -31,7 +31,7 @@ conservatism:
    an unlisted reason is a defect by construction.
 2. **Prefix stability.** The client resends the whole body every turn (`store: false`, no
    `previous_response_id`, `prompt_cache_key` as the session identity), so the upstream prompt cache
-   is decided entirely by router's outbound bytes: the same session measured
+   is decided entirely by vadis's outbound bytes: the same session measured
    `cached_tokens` 960/14409 on turn 1 and 14400/14520 (**99.2%**) on turn 2 (AGENTS). Order,
    whitespace, escapes, `tools` (`16` schemas in every request) and unknown fields are all in the
    prefix. Cache fidelity is the first-order lever; a model choice is second-order.
@@ -43,8 +43,8 @@ compression) and P2 (output-side discipline) as **✅ in v0.1**. Content compres
 a change to message content — the one operation constraint 1 names.
 
 What is actually implemented is the opposite of that column: primitive **P6 `transform-chain` is
-`contract-only`** (DESIGN §13.1; `router-plugins/src/lib.rs` is a stub, `transforms: Vec::new()` at
-`router-proxy/src/accounting.rs:483` and `auth.rs:170`), CONF-16's own `#[ignore]` says *"no transform
+`contract-only`** (DESIGN §13.1; `vadis-plugins/src/lib.rs` is a stub, `transforms: Vec::new()` at
+`vadis-proxy/src/accounting.rs:483` and `auth.rs:170`), CONF-16's own `#[ignore]` says *"no transform
 exists to enable yet (the empty chain is measured by CONF-15); enabling this with a vacuous body would
 be an always-true test"*, and R2's gate record reads *"PASS (empty transform chain, so no savings
 rows)"*. The rule **data** is landed (`rules/tool_output.toml`, four rules, 13 inline tests, a stage
@@ -76,15 +76,15 @@ therefore a byte-level guarantee, not a configuration accident:
 ### 2. One opt-in channel: a request header
 
 ```
-X-Router-Transform: passthrough | transform      (absent or "passthrough" ⇒ the byte path)
+X-Vadis-Transform: passthrough | transform      (absent or "passthrough" ⇒ the byte path)
 ```
 
 - Any other value is `400 invalid_request`, decided **before** the body is read — the same stance as
   `deny_unknown_fields` (§12.5): *"I changed it but it did not take effect"* is the most expensive
   silent failure, and a typo must not silently disable a saving the client asked for.
-- Read by `router-proxy`, never by `router-core`: the proxy resolves the header into a `TransformMode`
+- Read by `vadis-proxy`, never by `vadis-core`: the proxy resolves the header into a `TransformMode`
   value and passes it in, exactly as `server.auth_token_env` keeps the environment out of
-  `router-core` (§12.5, §12.11). A header is also **not a body byte**, so the opt-in itself cannot
+  `vadis-core` (§12.5, §12.11). A header is also **not a body byte**, so the opt-in itself cannot
   perturb the prefix block domain, `body_hash`, or the two-mutation table.
 - The client is configured by the same operator who could have written a config key, so this channel
   costs the operator nothing; per-request is what makes "closed mode" assertable (item 5, I3).
@@ -216,8 +216,8 @@ every turn), and nothing here is a measurement:
   would need the AGENTS edit to describe the *default* path rather than a second one.
 - **Operator-forced transform mode (a config key)** — rejected in item 1; it also breaks the stance
   that a client's own request says what happens to it.
-- **A router-owned opt-in *body* field** (the `router_meta`/routing-hint channel, mutation (a)) —
-  rejected for v0.1: it extends `ROUTER_OWNED_TOP_LEVEL_KEYS`, and it puts the opt-in *inside* the
+- **A vadis-owned opt-in *body* field** (the `vadis_meta`/routing-hint channel, mutation (a)) —
+  rejected for v0.1: it extends `VADIS_OWNED_TOP_LEVEL_KEYS`, and it puts the opt-in *inside* the
   bytes the closed-mode assertion examines. Recorded as an additive future channel.
 - **A second endpoint for transforming requests** — rejected: two identities for one conversation
   (session, prefix ledger, stickiness) and a duplicated data plane, for a mode that is one field.
@@ -275,7 +275,7 @@ every turn), and nothing here is a measurement:
   under this ADR, P3's plan half is wired (ADR-014), P4 stays deferred. The correction is recorded
   here because the ADR is append-only and the table is not this ADR's file.
 - **A saving may not be reported until a pair exists.** Until replay or a control turn exists, every
-  transform figure in `router stats` is `inferred`, `verified_savings_tokens` stays 0, and the book
+  transform figure in `vadis stats` is `inferred`, `verified_savings_tokens` stays 0, and the book
   says so — the alternative (reporting byte-length math as measured savings) is the one thing
   constraint 4 forbids outright.
 - **One gap is registered** (new, `docs/spec.md`-shaped, in DESIGN §12.9): a rule's `match_kind` is a

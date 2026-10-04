@@ -1,4 +1,4 @@
-# Spec (WHAT) — router v0.1
+# Spec (WHAT) — vadis v0.1
 
 Convention: this document is the single source of truth for **external behavior and the config
 contract**. Implementation details are in `design/DESIGN.md`; the why is in `design/decisions/`.
@@ -6,7 +6,7 @@ contract**. Implementation details are in `design/DESIGN.md`; the why is in `des
 ## 1. Goals and non-goals
 
 **What it is**: a local-first multi-protocol LLM gateway. Clients (codex / hermes / claude code) point
-their base_url here; router sends each request to the configured (provider, model), saving tokens along
+their base_url here; vadis sends each request to the configured (provider, model), saving tokens along
 the way **without breaking the upstream prefix cache**, and records every decision and every cent as a
 replayable trace.
 
@@ -23,7 +23,7 @@ replayable trace.
 
 ## 2. Protocol contract
 
-The three inbound protocols are semantically equivalent (the same router decision chain) and mirror
+The three inbound protocols are semantically equivalent (the same vadis decision chain) and mirror
 upstream semantics per protocol:
 
 | Inbound | Endpoint | Outbound native condition |
@@ -58,7 +58,7 @@ auditable:
 
 | # | Mutation | Scope |
 |---|---|---|
-| (a) | **deleting router-owned top-level fields** (`router_meta` echo, routing hints) | whole members, with their separators; invariant: the output is valid JSON and every retained member is byte-for-byte its input span |
+| (a) | **deleting vadis-owned top-level fields** (`vadis_meta` echo, routing hints) | whole members, with their separators; invariant: the output is valid JSON and every retained member is byte-for-byte its input span |
 | (b) | **replacing the value of the top-level `model` member** with the resolved provider-native model id | the member's **value span only** — its key, its position, the separators and whitespace around it, and every other byte are untouched |
 
 Everything else is passed through verbatim: message content, order, whitespace, tool schemas, unknown
@@ -86,13 +86,13 @@ whether they apply (ADR-019). No config key, plugin, alias or default can enable
 so the §2 promise above is unconditional for every request that did not ask, and stays testable
 without a configuration in the picture.
 
-| | Passthrough (default) | `X-Router-Transform: transform` |
+| | Passthrough (default) | `X-Vadis-Transform: transform` |
 |---|---|---|
 | outbound body | the client's bytes + the two mutations of §2 | the client's bytes + **a declared, ordered list of value-span edits** + the same two mutations |
 | the promise | byte equality, modulo (a) and (b) | *span* equality: every byte outside the declared value spans is the client's, byte for byte |
 | audit surface | the two-mutation table | the same table **plus** one trace ledger entry per step (rule, path, bytes and tokens in/out, label) |
 
-- **The opt-in is a request header** — `X-Router-Transform: passthrough | transform` (absent or
+- **The opt-in is a request header** — `X-Vadis-Transform: passthrough | transform` (absent or
   `passthrough` ⇒ the byte path). Any other value is `400 invalid_request`, decided before the body is
   read: a typo must not silently disable a saving the client asked for, and it must never silently
   enable one. A header is not a body byte, so asking for a transform cannot perturb the prefix.
@@ -129,7 +129,7 @@ request carries (§2). The form the client used is recorded in the trace as `sel
 provider-native model id is **not** an accepted inbound form: it is not a `provider/model` route and not
 an alias, so it resolves to nothing and is answered `404 unknown_model`.
 
-With an explicit specification, router still runs the **Guard stage** (quota / cost cap / capability /
+With an explicit specification, vadis still runs the **Guard stage** (quota / cost cap / capability /
 `max_tokens`); on a guard hit it acts per the configured policy (reject and explain why, or downgrade to
 the `fallback` chain). A guard `Downgrade` picks another route, so it rewrites the outbound `model` to
 that route's id too (§2).
@@ -138,10 +138,10 @@ that route's id too (§2).
 
 ```yaml
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
-            max_body_bytes: 2097152,         # §4.13: the largest inbound request body the router will read,
+            max_body_bytes: 2097152,         # §4.13: the largest inbound request body the vadis will read,
                                              #   in bytes (default 2 MiB); a larger one is refused at the
                                              #   boundary with §8's `413 request_too_large`
-            auth_token_env: ROUTER_TOKEN }   # optional (§4.7): name of the env var whose value every
+            auth_token_env: VADIS_TOKEN }   # optional (§4.7): name of the env var whose value every
                                              # inbound request must present; absent ⇒ no inbound auth
 session:  { key_sources: ["prompt_cache_key", "header:session-id", "header:thread-id"], ttl: 12h }
 cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
@@ -158,7 +158,7 @@ providers:                             # §4.14: the roster, written inline here
                                        #   Never converted: a CNY page is transcribed as CNY, no rate is ever
                                        #   applied, and two currencies are never added (AGENTS constraint 5)
     urls:                              # spec §4.9: the **complete** URL for every protocol this entry
-                                       #   declares in `supports` below. The router sends it verbatim — it
+                                       #   declares in `supports` below. The vadis sends it verbatim — it
                                        #   composes no path (ADR-020). A declared wire with no URL here, a
                                        #   key outside `supports`, or a non-http(s) value = a load error
       chat:      https://api.deepseek.com/chat/completions
@@ -262,7 +262,7 @@ plugins:
     config: { rules_file: ./rules/tool_output.toml, on_failure: passthrough }
   - id: judge-experiment
     kind: process                      # tier-B: out-of-process plugin
-    url: unix:///tmp/router-plugins/judge.sock
+    url: unix:///tmp/vadis-plugins/judge.sock
     inject: [cache_ledger, session_table]   # dependency declaration (coeffect): stays at load-waiting while unsatisfied
     isolate: false                     # separate realm: can coexist with another version for shadow comparison
     intercept: { sample: 0.05, shadow: true }
@@ -292,7 +292,7 @@ and is optional; its semantics, its defaults and its hard rules are §4.6.
 
 **Roster ids are provider-native.** `models[].id` is the exact string that provider's API expects, and it
 is what the outbound request carries (§2). A client never needs to know it: it writes a `provider/model`
-route or an alias (§3), and router substitutes the resolved id. Pasting a bare native id into a client is
+route or an alias (§3), and vadis substitutes the resolved id. Pasting a bare native id into a client is
 therefore **not** a shortcut — the inbound grammar has no bare-model form, so it resolves to nothing and
 the client gets `404 unknown_model`.
 
@@ -308,7 +308,7 @@ names the roster at its `providers_file:` line, and `providers.example.yaml` is 
 block that used to be inline, moved byte for byte, comments and citations included) — so the example's own
 `# Usage:` line (`cp config.example.yaml config.yaml`, with `providers.example.yaml` kept beside it) is the
 complete instruction. The wizard's embedded roster template and the section table's target-file column are
-served with it: `router setup` writes **both** files from the templates embedded in its binary, and
+served with it: `vadis setup` writes **both** files from the templates embedded in its binary, and
 `--check` validates the pair (DESIGN §12.14). The inline shape is not deprecated **on the reading side** — a
 root that carries the roster itself loads exactly as it always did, and §4.14 is the contract for both
 shapes. On the **writing** side there is one shape: since **ADR-038** a writing run never leaves the roster
@@ -344,9 +344,9 @@ This file defines only the schema and the convention:
   and an `intl` entry the international one. One region's price table is never the evidence for another
   region's figure.
 - Where the official page prices **cache writes per TTL tier** (e.g. a 5-minute and a 1-hour tier), `cache_write`
-  records the tier this router's requests fall into — the page's own stated default when a request carries no
+  records the tier this vadis's requests fall into — the page's own stated default when a request carries no
   explicit TTL — and the model entry's comment names the other tier with its price. The schema has one
-  `cache_write` tier; recording a tier the router's requests never enter would overprice them, and recording
+  `cache_write` tier; recording a tier the vadis's requests never enter would overprice them, and recording
   neither would underprice them.
 - `cache_write: 0` means the upstream does not charge separately for cache writes (e.g. DeepSeek only
   distinguishes hit / miss).
@@ -437,7 +437,7 @@ honoured at start-up (§4.4: the rule set is off, `/health` reports it). `inject
 launcher's assembly: the `plugins:` list **is** the assembly point, so a declared slot that nothing provides
 leaves that plugin in a **named loading wait** rather than failing the boot, and every plugin the launcher
 can mount has its declarations satisfied before the request path is built. `isolate` and `intercept` are
-accepted by the parser and checked at load (the plugin validation loop, `router-core/src/config.rs:1744-1804`:
+accepted by the parser and checked at load (the plugin validation loop, `vadis-core/src/config.rs:1744-1804`:
 the `intercept.sample` range and the `inject` slot names) and **nothing acts on them**: realms and
 interception are the rail features ADR-013 describes, and the surfaces that would use them (`Selector`,
 `Guard`) are still blocked in the leak register (§13.3). Their meaning,
@@ -448,7 +448,7 @@ DESIGN §13.6): `inject` waits until its slots exist, `isolate` gives one key tw
 
 **`disabled` is honoured today, at start-up.** A `disabled: true` entry is not loaded — for
 `builtin/transform_rules` that means its rule set is off, which is §4.4's own wording (*"turns a rule
-set off"*; `router-cli/src/lib.rs:270`) — and `/health` reports the entry as disabled. What is **not**
+set off"*; `vadis-cli/src/lib.rs:270`) — and `/health` reports the entry as disabled. What is **not**
 implemented is this key's *designed runtime* semantics: unloading a live fiber and rolling back its
 effects when the config changes (§4's config-change paragraph below). Until then a `disabled` entry
 behaves as the start-up switch it has always been, not as a live unload.
@@ -468,14 +468,14 @@ pipeline of ADR-003: filter stage, `match_output`, line keep/drop, truncation, `
 
 - A rule may declare `tee = true`. On a hit that did drop lines, **one line is appended** at the **end of
   the output**:
-  `[router:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`.
+  `[vadis:tee sha256=<first 16 hex chars of the original payload's sha256> lines_dropped=<n> bytes_original=<n>]`.
 - **The original text's storage location and retrieval channel (retrieve) are not implemented in v0.1**
   — this version **provides no** retrieval endpoint and defines no on-disk directory. The trace records
   only `tee_id` (§6 "transform"; `null` when tee is not enabled). The implementation is a separate change
   following the P1 compression direction (D3); before it lands, do not use `tee` as a "retrievable
   original text" capability.
 - **The mode is asked for by the client, never by this file** (§2.1): a rule set is configured here,
-  and it edits nothing unless the request carries `X-Router-Transform: transform`. There is no config
+  and it edits nothing unless the request carries `X-Vadis-Transform: transform`. There is no config
   key that enables a content transform, and that absence is the guarantee the passthrough promise
   rests on (ADR-019) — `config.example.yaml`'s `disabled:` knob turns a rule *set* off; it cannot turn
   it *on* for a request that did not ask.
@@ -516,13 +516,13 @@ One request leaves two records, and they have different jobs:
 | Record | Job | Shape | Who reads it |
 |---|---|---|---|
 | **event log** (`events`) | the **state truth**: every state transition (session binding, upstream intent, quota charge, config applied, …) | one row per event, ordered by `event_id` | the serving path and its projections; **internal** — the analysis loop never reads it (ADR-005) |
-| **trace** (`trace.dir` JSONL) | the **analysis truth**: one `DecisionRecord` per request (§6) | one JSON line per request | `router replay` / `router stats` / the analysis loop: the only product → loop channel |
+| **trace** (`trace.dir` JSONL) | the **analysis truth**: one `DecisionRecord` per request (§6) | one JSON line per request | `vadis replay` / `vadis stats` / the analysis loop: the only product → loop channel |
 
 - **Join key: `request_id` + `event_id`.** The trace's `event_id` (§6 "identity") is that request's
   `request.received` event, and the rest of that request's events share its `request_id`; the two records
   are paired exactly, never by timestamp.
 - **Bodies are never persisted** — neither in the log nor in the trace. The log keeps `body_hash` (the
-  first 16 hex chars of `sha256(router-visible body bytes)`, the same convention as the §6 block hash) plus
+  first 16 hex chars of `sha256(vadis-visible body bytes)`, the same convention as the §6 block hash) plus
   a pointer to the trace line; a payload exists only if the operator captured it out of band.
 - **Derived state is not state**: the sticky table, the cache ledger and the quota counters are
   **projections** of `events`; a lost projection is rebuilt from the log, and losing one regresses
@@ -571,7 +571,7 @@ One request leaves two records, and they have different jobs:
 ### 4.6 `account` and `plan_policy` (plan-first routing)
 
 **What it is.** A subscription account and a metered account can serve the same model. `plan_policy` names that
-pair and makes the router prefer the subscription: while the plan is usable the family is routed to `primary`;
+pair and makes the vadis prefer the subscription: while the plan is usable the family is routed to `primary`;
 when the upstream declares the plan exhausted the family continues on `overflow` (a real, metered spend) and
 comes back when the upstream allows it again (ADR-014). The pair is named by a **family tag** (§4.8), not by a
 model id: the two routes' provider-native ids may differ (a coding endpoint's `k3-256k` and the metered
@@ -614,7 +614,7 @@ future key (the `state:` / `retention` precedent), never a reshaped section.
    runs, so this rule reaches the clients that stream, which is every shipped one. The local `quota_counters`
    count may neither refuse a request nor force a spill on its own (GAP-Q1: its denominator may be a
    placeholder); it is recorded
-   in `cost.quota_after`, surfaced by `/health` and `router stats`, and it may **defer** a probe until the
+   in `cost.quota_after`, surfaced by `/health` and `vadis stats`, and it may **defer** a probe until the
    plan's declared window boundary has passed.
 4. **Costs.** In-plan requests are accounted at the plan's marginal cost **0** and record `quota_after`;
    overflow requests are accounted at the model's **real price**. The account a request was billed under is not
@@ -677,7 +677,7 @@ is simply the first route the downgrade considers.
 
 | Key | Type | Semantics |
 |---|---|---|
-| `server.auth_token_env` | string \| absent | The **name of an environment variable of the router process** whose value is the token this process expects from every inbound request to the three protocol endpoints (its value is never written here — §4's secrets rule, and a token is a secret) |
+| `server.auth_token_env` | string \| absent | The **name of an environment variable of the vadis process** whose value is the token this process expects from every inbound request to the three protocol endpoints (its value is never written here — §4's secrets rule, and a token is a secret) |
 
 - **The key absent ⇒ no inbound auth.** That is not a gap: "no key" *is* the local, single-user mode
   this document has always described, which is also what makes the key backward compatible — a config
@@ -725,12 +725,12 @@ never to `/health` — not a path comparison inside the guard that a later edit 
 | Fact | Value |
 |---|---|
 | Response | `401` with §8's unified error body, `error.type = "unauthorized"`; `details.header` names the header the guard read (`"authorization"` / `"x-api-key"`, or `null` when neither was present) |
-| `X-Router-Request-Id` | present — §8's "always" has no exception, and a refusal is the case an operator most needs to correlate |
+| `X-Vadis-Request-Id` | present — §8's "always" has no exception, and a refusal is the case an operator most needs to correlate |
 | Fallback / retry | **never**: §4.2's chain and ADR-011's re-attempt rules are statements about *upstream attempts*, and a request the boundary refused makes none |
 | Upstream | never contacted — no provider request bytes exist for it |
 | State store | **no row**: the guard runs before §4.5's `request.received` event, so the request does not enter the pipeline and unauthenticated traffic cannot write to the store |
 | Trace | **one record**, from the same sink as every other record (§6's one-record-per-request contract — every terminal outcome leaves a line — applies unchanged, and "am I being scanned?" is answerable only from the trace). Its fields are §6's **pre-pipeline** class and it carries `errors[].kind = "unauthorized"` |
-| `router stats` | the record lands in `failed`, split out as `unauthorized`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows already say so — this key introduces **no new figure**) |
+| `vadis stats` | the record lands in `failed`, split out as `unauthorized`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows already say so — this key introduces **no new figure**) |
 
 ### 4.8 `region`, `currency` and the route family tag (one vendor, two regions, two currencies)
 
@@ -747,7 +747,7 @@ tier in that entry's model table, and of nothing else.
   siblings carry. And the price list belongs to the **account** — the same argument that already puts
   `account`, `urls`, `wire_api` and `api_key_env` on the provider entry (§4.6): the same model id can be
   billed in CNY through one deployment and in USD through another, and only the entry knows which.
-- **No conversion, ever.** router applies no exchange rate, stores no rate and never converts one currency's
+- **No conversion, ever.** vadis applies no exchange rate, stores no rate and never converts one currency's
   figure into another's (§4.0). A CNY price page is transcribed **as CNY**; a request served by a CNY entry is
   accounted and reported in CNY. An estimated rate is a number nobody published — the same defect class as an
   estimated price (AGENTS constraint 5) — and it would also make a report depend on when the rate was read.
@@ -774,7 +774,7 @@ of one vendor sit in one roster.
   entries and the meaning of already-written records, and would force a reader to parse a name to recover a
   fact the file can simply state. The naming *convention* over operator-chosen names is documentation
   (ADR-018): `<vendor>[-<region>][-<account>]`, with `<vendor>` matching the key variable's product name.
-- **The router does not check `region` against a host in `urls`.** Vendors own their host lists, a
+- **The vadis does not check `region` against a host in `urls`.** Vendors own their host lists, a
   built-in table of them would rot, and a wrong-yet-declared region is a documentation error, not a routing
   one. The check that matters is the `source` rule above.
 
@@ -793,7 +793,7 @@ tag explicitly to complete the pairing; the pairing is never inferred from id eq
   `decision.requested_model` is still the client's own string verbatim. The tag moves neither; it exists so a
   policy can name a pair the ids cannot.
 - **The equivalence is asserted, not verified.** Nothing checks that two tagged routes really serve one model —
-  the router cannot know and the operator can. It is deliberately explicit for that reason: **no rule infers a
+  the vadis cannot know and the operator can. It is deliberately explicit for that reason: **no rule infers a
   family from ids that look alike** (prefix, suffix, substring, case), because an inferred equivalence would be
   a claim about a provider's catalogue that no page makes.
 - **A tag resolves at most once per provider entry** (a duplicate within one entry is a load error naming
@@ -821,7 +821,7 @@ tag explicitly to complete the pairing; the pairing is never inferred from id eq
 ### 4.9 `urls` (one complete URL per wire protocol)
 
 **`urls` (a provider-entry property, required).** A map from a wire protocol (`chat` | `responses` |
-`anthropic`) to the **complete URL** the router POSTs to for that protocol. There is no `base_url` and no
+`anthropic`) to the **complete URL** the vadis POSTs to for that protocol. There is no `base_url` and no
 path composition: the value is used verbatim — nothing is appended and nothing is trimmed (ADR-020).
 
 ```yaml
@@ -842,7 +842,7 @@ path composition: the value is used verbatim — nothing is appended and nothing
   (`providers.example.yaml`, the file the shipped root names; §4.14)
   serves its OpenAI form and its Anthropic form at *different* bases (re-read 2026-09-21), so the fact
   cannot live on a field that does not name a wire.
-- **The router does not verify that a URL is the vendor's URL.** A wrong-yet-absolute URL is a
+- **The vadis does not verify that a URL is the vendor's URL.** A wrong-yet-absolute URL is a
   documentation error, and the only defences are the `source` rule (§4.0/§4.8) and the human re-read
   (ADR-020, "honest boundaries").
 - **The URL is not body bytes.** Nothing in this key touches the passthrough promise, the prefix hash or
@@ -953,8 +953,8 @@ A **hole** between bands is not refusable because it is not expressible: a band'
 ceiling + 1, so the list covers `[0, ∞)` by construction, and the only ways to break coverage are the two rows
 above (a duplicated ceiling, a missing or detached ceiling).
 
-**Rule 7 — the loader does not check the page, and the router does not guess.** A band's ceiling is a fact the
-vendor published. The router never infers bands from a model's `context` window, from a tokenizer estimate or
+**Rule 7 — the loader does not check the page, and the vadis does not guess.** A band's ceiling is a fact the
+vendor published. The vadis never infers bands from a model's `context` window, from a tokenizer estimate or
 from a sibling model's table, and never interpolates between bands. Where an official page publishes no bands,
 the entry keeps the flat shape: writing a banded table nobody published is fabrication (§4.0, AGENTS
 constraint 5).
@@ -965,23 +965,23 @@ reasoning is in ADR-021's alternatives):
 | Not expressed | Because |
 |---|---|
 | bands on **output** length | the output does not exist when the request is priced, and the published tables band on input; pricing a request on its answer would make the price depend on the answer |
-| **progressive / marginal** brackets (the first N tokens at one rate, the excess at another) | no vendor publishes the bracket formula for these tables, so the arithmetic would be the router's invention and would silently disagree with the invoice |
+| **progressive / marginal** brackets (the first N tokens at one rate, the excess at another) | no vendor publishes the bracket formula for these tables, so the arithmetic would be the vadis's invention and would silently disagree with the invoice |
 | a **`peak` per band** | one multiplier for the entry; N copies of one table would let a band silently lack the multiplier and under-price peak traffic |
 | a **per-band currency** | the unit belongs to the entry (§4.8/ADR-018), and the record already carries one `cost.currency` |
 | a per-band **`source`** field | the entry has one source and it must carry all of its bands; the band's section is prose, so it belongs in the citation comment (rule 5), where a human reads it |
 | **promotional / holiday calendars**, coupons, per-account rates | a calendar is a second time dimension with its own truth source; peak windows (rule 3) are the only time multiplier this schema models, the same stance as GAP-Q6 for holidays |
-| any **hit-rate-dependent or conversation-dependent** rate (`cache_hit` discounts that vary with length, volume rebates, tiered plans) | the published tables don't carry them; a rate that depends on measured history is a reporting statistic, not a price, and nothing in this schema may depend on the router's own past |
+| any **hit-rate-dependent or conversation-dependent** rate (`cache_hit` discounts that vary with length, volume rebates, tiered plans) | the published tables don't carry them; a rate that depends on measured history is a reporting statistic, not a price, and nothing in this schema may depend on the vadis's own past |
 | a **trace field naming the band** | rule 4: the band is recoverable from `usage.input_total` + the priced config of its era, and the record carries money, not prices |
 | **inferring** a ceiling from `context`, from a sibling entry or by interpolation | constraint 5: a ceiling is a published fact, and a guess here corrupts the `verified` cost that every downstream gate rests on |
 | a **new saving/session figure** of any kind | constraint 4: a band is a price, not a change to the request, so there is nothing to save and nothing to label |
 
-**Rule 8 — figures the router computes before the upstream answers.** The band is selected from **measured**
-usage, which exists only after the response. A figure the router must compute earlier — the switch's re-prefill
+**Rule 8 — figures the vadis computes before the upstream answers.** The band is selected from **measured**
+usage, which exists only after the response. A figure the vadis must compute earlier — the switch's re-prefill
 cost (`result.plan_switch`, a failover) and the cache-aware breakeven's two unit prices — has no measured `n`:
 it is computed from the **first band** (the lowest ceiling's prices), the one band every entry is guaranteed to
 have and a choice that invents no estimate. Every such figure keeps its existing `inferred` label (§7) and may
 not be read as a band-faithful quote of the real cost; a band-faithful variant would need a request-size
-estimate the router does not have (GAP-Q14/Q20, DESIGN §12.9 and §12.13).
+estimate the vadis does not have (GAP-Q14/Q20, DESIGN §12.9 and §12.13).
 
 **Selection semantics, worked at the boundaries** (`n` = `usage.input_total`; the figures below are *ceilings*,
 not prices — the boundary rows are the unit tests' source, DESIGN §12.13):
@@ -1000,16 +1000,16 @@ not prices — the boundary rows are the unit tests' source, DESIGN §12.13):
 | `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000000` | 2nd | boundary, inclusive |
 | `tiers: [{up_to: 200000}, {up_to: 1000000}, {no ceiling}]` | `1000001` | 3rd | |
 
-### 4.11 `router setup` — the guided first configuration, and the boundary of what it may write
+### 4.11 `vadis setup` — the guided first configuration, and the boundary of what it may write
 
-*Status: shipped, and this section is its contract. `router setup` is a served subcommand — one of the three
+*Status: shipped, and this section is its contract. `vadis setup` is a served subcommand — one of the three
 the binary has (README's CLI block; CONF-43 keeps the two in step). The path that needs no command is the one
 §4 and §5 already document and it is unchanged: copy `config.example.yaml` with `providers.example.yaml` kept
 beside it, edit the roster, export the keys — and leave the copy in the repository root, where §4.12's third
 candidate finds it for every command below. The rationale and the rejected alternatives are ADR-025; the
 landing is DESIGN §12.14; the location rule this command's default obeys is **§4.12**.*
 
-`router setup` is a **file-writing command that is not in the serving path**: it handles no request, and nothing
+`vadis setup` is a **file-writing command that is not in the serving path**: it handles no request, and nothing
 on the request path reads anything it wrote other than the config file itself. Its whole job is to turn the
 template (the shipped example, §4) into **your** config, with the answers you give and **only** those.
 
@@ -1017,23 +1017,23 @@ template (the shipped example, §4) into **your** config, with the answers you g
 
 | Verb / flag | Semantics | Reason |
 |---|---|---|
-| `router setup [<section>]` | the guided wizard over one section, or over all of them when the argument is absent (or `all`) | hermes-agent's per-section granularity: someone who wants to change one thing is not dragged through the other six (the comparison and its sources are the survey DESIGN §12.14 names) |
+| `vadis setup [<section>]` | the guided wizard over one section, or over all of them when the argument is absent (or `all`) | hermes-agent's per-section granularity: someone who wants to change one thing is not dragged through the other six (the comparison and its sources are the survey DESIGN §12.14 names) |
 | `--config <path>` | the file to write; when it is absent the file is resolved by **§4.12's discovery order** (explicit path > the XDG location > `./config.yaml` > the XDG location, created). The absolute path written is **printed**, with the rule that chose it | one rule for the file the gateway reads and the file this command writes: two rules is how "setup wrote it and serve reads something else" begins. The flag keeps the name `serve` / `stats` use; a card proposed `--out` and it is declined — the path is the **same file**, and two names for one path is how a CLI starts contradicting itself |
 | `--from <path>` | the **template** to start from; default = the `config.example.yaml` **embedded in this binary**, plus the embedded **roster** template (`providers.example.yaml`) for the roster target below | the example is the file an implementation reads directly (§4, CONF-25's counterpart), so the default template must be the one of **this build's own commit**; an installed binary with no example beside it must still work, and a developer trying an edited template passes `--from`. It costs the binary the example's bytes. Since the example splits (§4.14), `--from` names the **root** template in every run **except** the roster swap of the `--force` row below: the `providers`-section run over an existing split root, where it names the replacement **roster** |
 | `--non-interactive` | no prompt at all: every question takes its **default** | the CI / container path. On a fresh target with nothing overridden the result is byte-identical to the template (G1) |
-| `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with router's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
+| `--quick` | ask only about the items `--check` reports unsatisfied (the named environment variables that are missing); nothing missing ⇒ `nothing to do`, exit 0 | hermes-agent's *only ask what is missing*, with vadis's own baseline: under `deny_unknown_fields` and a complete example there are **no missing config keys** (§12.5's defaults row) — the only thing that can be missing at a site is an environment value |
 | `--print [--json]` | print each section's keys with the value the file carries (and the state of a key the template ships commented out); no prompt, no write. A target that does not exist prints the **template's** values, labelled as such. A file that carries the roster **inline** is reported as such, naming the file a writing run would move it to (the shape step below; ADR-038) | a read-only surface is what answers "I changed it but it did not take effect" — the most expensive silent failure this repository knows (§12.5) |
 | `--check [--json]` | load the file with the **same loader** `serve` runs, then check every environment variable the file **names** and print them; no prompt, no write. A file that carries the roster **inline** is reported as such — one line above the names (a `roster` member in `--json`), naming the file a writing run would move it to (the shape step below; ADR-038 D9) — and it is the *only* thing the inline shape adds: the names, the export snippets and the exit codes are the same over both shapes. No target ⇒ exit 2 | the read-only surface a script calls |
 | `--dry-run` | print the edits the run would make (`<anchor>: <old> → <new>`, with the edit kind), in application order, plus the shape step's span when the base root carries the roster inline (`split: providers: lines 100-1058 (959 lines, 71069 bytes) → <roster>`); no write | the write strategy's safety story: a change is inspectable **before** it lands |
-| `--force` | the **base** becomes the template instead of the file that is there: the target is replaced by the template plus your answers | this is both the escape hatch and the recovery from an unusable file. It is **not** `hermes setup --reset`: router has no in-code default set to reset to (§12.5: only the three defaults §4 states are defaults), so the shipped example **is** the default set and "reset" and "start from the template" are one operation. What it discards is any note **you** wrote into your own file, since the base becomes the template again; the `source:` provenance comments survive, because the base is a **file** and never a serializer (ADR-025). It is therefore the explicit hatch, not the routine path — a routine reconfigure is a bare `router setup`, and `--dry-run` prints the replacement first |
+| `--force` | the **base** becomes the template instead of the file that is there: the target is replaced by the template plus your answers | this is both the escape hatch and the recovery from an unusable file. It is **not** `hermes setup --reset`: vadis has no in-code default set to reset to (§12.5: only the three defaults §4 states are defaults), so the shipped example **is** the default set and "reset" and "start from the template" are one operation. What it discards is any note **you** wrote into your own file, since the base becomes the template again; the `source:` provenance comments survive, because the base is a **file** and never a serializer (ADR-025). It is therefore the explicit hatch, not the routine path — a routine reconfigure is a bare `vadis setup`, and `--dry-run` prints the replacement first |
 | `--backup` | before a write, copy the target to `<target>.bak` (one fixed name, replaced each run) | rollback for the anchored-edit path. `--force` **implies** it: the wholesale replace is the operation that can lose content, while an anchored edit's edits are bounded and printable with `--dry-run` |
 
-**There is no `--reconfigure`.** On an existing file a bare `router setup` *is* the reconfigure: every question
+**There is no `--reconfigure`.** On an existing file a bare `vadis setup` *is* the reconfigure: every question
 shows the **current value** as its default. hermes-agent's `--reconfigure` is a compatibility no-op with exactly
 that meaning, and a flag that merely restates the default is a lie in a help text.
 
 **There is no environment-override layer.** A CI run that must differ passes `--from` / `--config` or writes the
-file; there is no `ROUTER_SETUP_ADDR`-style channel. The only env-shaped facts here are environment *variable
+file; there is no `VADIS_SETUP_ADDR`-style channel. The only env-shaped facts here are environment *variable
 names*, and a value read from the ambient environment would make the written config a function of the shell that
 ran the command — the opposite of "the file is the single source of truth" (§4's usage note; §12.5's defaults row).
 
@@ -1103,7 +1103,7 @@ materialized. Four properties, each a sentence a stranger can check:
   previous bytes kept at `<file>.bak` **before** the write (the `--force ⇒ --backup` row below; the shape
   step's own D6 shape). `--force` without the `plugins` section, and every run without `--force`, replaces
   nothing.
-- **A roster-scoped replacement is not a rule-file replacement.** `router setup providers --from <roster>
+- **A roster-scoped replacement is not a rule-file replacement.** `vadis setup providers --from <roster>
   --force` over an existing split root swaps the roster as a unit and does not replace the rule file — the
   `plugins` section is not in that run's section list.
 
@@ -1118,7 +1118,7 @@ re-moded and a rule file the run **replaces** keeping the mode it had (the `0600
 
 **The read-only surfaces, and the dry run.** `--check`'s stdout does not change one byte: a rule file names no
 environment variable and is not one of the facts that surface states, and
-`tests/conformance/tests/conf_86_setup_check_roster_fact.rs` — the only case that pins `router setup`'s output
+`tests/conformance/tests/conf_86_setup_check_roster_fact.rs` — the only case that pins `vadis setup`'s output
 — pins that surface. **`--dry-run` names the file it would create or replace**, in the same per-lane `# <path>`
 / `would write …` report the other two lanes already print. **`--print` shows nothing new**: the rule file's
 existence is a filesystem fact about a file beside the config, not a fact about the config's content, which is
@@ -1147,7 +1147,7 @@ templates, and a fresh run writes both files. Since **ADR-046** it embeds a **th
 **third** file: the rule file the template's `plugins` entry names, materialized beside the config (created
 when absent, replaced only by `--force` with the `plugins` section selected — the rule-file lane above), so a
 landing is the complete working bundle. Since **ADR-038** an existing inline root is normalized by the
-same run: a bare `router setup`, or any section-scoped one, moves the block into the roster file and writes
+same run: a bare `vadis setup`, or any section-scoped one, moves the block into the roster file and writes
 `providers_file:` in its place, so the shape a run produces is the pair whatever the file's history. The
 inline root stays a legal shape **for the reader** — `serve`, `stats` and `--check` load it exactly as they
 always did (§4.14) — but no run of this command produces one. **The load is the whole of what is
@@ -1193,7 +1193,7 @@ recall one: it shows what the file carries and what the file cites. A list- or f
    An anchor that does not resolve with **no** requested change to that key is a **warning** (`not settable in
    this file; left alone`) — nothing was going to be written there anyway.
 4. **No re-serialization, at any verbosity, behind any flag.** A YAML writer round trip (`serde_yaml` on
-   `RouterConfig`) emits a document **without** this file's `source:` citations and `TODO verify against official
+   `VadisConfig`) emits a document **without** this file's `source:` citations and `TODO verify against official
    source` markers, and those comments are the price authority's only carrier (§4.0, ADR-018 / ADR-020). The way
    to *replace* a file wholesale is to hand the command a **different template** (`--from <path> --force`) — a
    file the operator authored and can read — never to regenerate one from memory. **ADR-025 records this
@@ -1218,7 +1218,7 @@ recall one: it shows what the file carries and what the file cites. A list- or f
 
 **Validation and atomicity, before anything lands.**
 
-- **The same loader, on the candidate, before the write.** The candidate text is parsed by the same `RouterConfig`
+- **The same loader, on the candidate, before the write.** The candidate text is parsed by the same `VadisConfig`
   deserializer and the same `validate()` the `serve` startup runs — one shared entry point, so the two cannot
   drift — `deny_unknown_fields` included. **A candidate that does not load is never written**, and the message is
   the loader's own, naming the key.
@@ -1236,7 +1236,7 @@ recall one: it shows what the file carries and what the file cites. A list- or f
   a hard link, an ACL or an extended attribute attached to the old inode does not travel with it. A
   `<target>.bak` copy keeps the mode of the file it copied.
 - **The target's directory is created when it is missing** (`mkdir -p`), because the default location is
-  `~/.config/router/`, which does not exist on a fresh machine. The file this command creates is mode **`0600`**
+  `~/.config/vadis/`, which does not exist on a fresh machine. The file this command creates is mode **`0600`**
   and every directory **it** creates is **`0700`** — set explicitly rather than left to the umask, and a no-op
   on a platform without Unix modes. Restricting both costs nothing even though no key *value* is ever written to
   the file, and a directory that already exists is never re-moded. The absolute path printed at the end is what
@@ -1292,16 +1292,16 @@ affects the *check* output and the exit code, never a byte of the file).
 **No terminal on stdin.** With stdin not a terminal and `--non-interactive` absent, the command prompts nothing:
 it prints the exact working command line for that environment plus the export snippets for the names the file
 carries, and exits **2**. `docker init`'s hard TTY error leaves a script with nothing to do; hermes-agent's
-identical branch returns 0 while writing nothing, which reads as success to a script. Router takes the two
+identical branch returns 0 while writing nothing, which reads as success to a script. Vadis takes the two
 together — refuse (a run that did not do the work is not a success) **and** hand over the command that does
 work. Answers are read as **lines**, an empty line taking the default, and a terminal-less *stdout* is not a
-refusal, so `router setup | tee setup.log` works.
+refusal, so `vadis setup | tee setup.log` works.
 
 **The boundary of what `setup` does not do.**
 
 | It does not | Because |
 |---|---|
-| make any network request, probe an upstream, list a provider's models, or fetch a pricing page | the command must be a pure function of local input: networked onboarding would make the config depend on an instant (AGENTS constraint 2), and "verify the price against the official page" is the operator's read, never the router's guess (constraint 5) |
+| make any network request, probe an upstream, list a provider's models, or fetch a pricing page | the command must be a pure function of local input: networked onboarding would make the config depend on an instant (AGENTS constraint 2), and "verify the price against the official page" is the operator's read, never the vadis's guess (constraint 5) |
 | read, write or echo any key value; create a key; write a `.env` | §4.7 / §12.11: the value never enters a struct, a log line, a trace field or an event payload — and a wizard is none of those |
 | write any vendor fact (price, `source`, `context`, endpoint, model id) | constraint 5: those values are transcriptions of an official page, and a copy of one in code is exactly what the example's comments exist to prevent |
 | add, remove, reorder or reformat anything in the file | ADR-025: the edits are value replacements on existing lines; the comment-destroying rewrite is not offered |
@@ -1310,7 +1310,7 @@ refusal, so `router setup | tee setup.log` works.
 | enable a transform | ADR-019 I3: transform mode is a **request** fact, the client's own opt-in. Switching a plugin entry off or on is a config change; it never edits a request that did not ask |
 | introduce a config key | `deny_unknown_fields`: a key only the wizard understands is an unservable file. There is **no `_config_version`** and no `setup`-owned key — "what is missing" is measured against the shipped example, which §4 already makes the contract, not against a second table |
 | publish a `$schema` | the editor-lint trick needs a schema *generator* and a second definition of the field set; the single source here is the parser's `deny_unknown_fields` plus the example (CONF-25), and two definitions drift |
-| grow a subcommand family (`config get/set`, `doctor`) | one file, one guided command. The read-only needs are `--print` / `--check` / `--dry-run`; a later `router config` family can grow around them without becoming a second writer |
+| grow a subcommand family (`config get/set`, `doctor`) | one file, one guided command. The read-only needs are `--print` / `--check` / `--dry-run`; a later `vadis config` family can grow around them without becoming a second writer |
 | add a crate dependency | zero new dependencies: stdin lines, stdout, and `std::io::IsTerminal` from std. No prompt/TUI crate, no dotenv, no schema generator |
 | touch an existing conformance assertion, a gate or the corpus | AGENTS constraint 9 / ADR-012 |
 
@@ -1342,15 +1342,15 @@ applies wins.
 | # | Candidate | Applies when |
 |---|---|---|
 | 1 | `--config <path>` | the flag is given. A path that does not exist (or does not load) is an error — it never falls through to a later candidate |
-| 2 | `${XDG_CONFIG_HOME:-$HOME/.config}/router/config.yaml` | the file exists |
+| 2 | `${XDG_CONFIG_HOME:-$HOME/.config}/vadis/config.yaml` | the file exists |
 | 3 | `./config.yaml` (relative to the CWD) | the file exists |
-| 4 | the XDG location, **created** (`mkdir -p`, file mode `0600`, a created directory `0700`) | `setup` only, and only when 1–3 found nothing. `serve` / `stats` **refuse** (exit 2) naming `router setup` and `--config` |
+| 4 | the XDG location, **created** (`mkdir -p`, file mode `0600`, a created directory `0700`) | `setup` only, and only when 1–3 found nothing. `serve` / `stats` **refuse** (exit 2) naming `vadis setup` and `--config` |
 
 - **Reading** (`serve`, `stats`, and `setup`'s `--print` / `--check`): candidates 1–3, else refuse.
 - **Writing** (`setup`): candidates 1–3, else candidate 4. The absolute path chosen, and the rule that chose it,
   are printed (`"selected_by": "flag" | "xdg" | "cwd" | "xdg-created"` in `--json`).
 - **This rule decides *which file* is read, never what the file says.** The listen address, the plugin set and
-  the roster still come only from the file (CONF-25), and the resolution lives in `router-cli`'s argument layer:
+  the roster still come only from the file (CONF-25), and the resolution lives in `vadis-cli`'s argument layer:
   the `serve` / `stats` entry points keep taking a resolved path, so the existing rigs drive them unchanged.
 - **The table above gains no row for the roster, and that is the amendment §4.14 requires.** The four
   candidates are ways of *finding the config file*; the roster is **named** by a key inside the file they find
@@ -1373,9 +1373,9 @@ relative path in the file — `trace.dir`, `providers_file` (§4.14), every
 `plugins[*].config.rules_file`, and the fixed `state/router.db` —
 resolves against **the directory containing the config file**, never the CWD; an absolute value wins
 (CONF-25 asserts both halves). So a config at the XDG location keeps its traces and its store beside itself,
-under `~/.config/router/`. That is deliberate — one anchor, and one backup story: the config and its state
+under `~/.config/vadis/`. That is deliberate — one anchor, and one backup story: the config and its state
 travel together (book/operations.md) — and the way to put the traces elsewhere today is an **absolute**
-`trace.dir` (the `paths` section of `router setup` sets it; `~` is **not** expanded, the value is used as
+`trace.dir` (the `paths` section of `vadis setup` sets it; `~` is **not** expanded, the value is used as
 written). Moving the *store* is not a second resolution rule: it is the additive `state:` key §12.5 already
 anticipates, registered as **GAP-Q22** (DESIGN §12.9).
 
@@ -1396,13 +1396,13 @@ one anchor, and not a search.
 |---|---|---|
 | `server.max_body_bytes` | integer (bytes), default **`2097152`** (2 MiB) | The largest inbound request body this process will **read** on the three protocol endpoints. A body larger than it is refused at the boundary, before the pipeline, with §8's `413 request_too_large` |
 
-- **What the bound is for, stated plainly.** Every inbound request body is buffered in full before the router
+- **What the bound is for, stated plainly.** Every inbound request body is buffered in full before the vadis
   decides anything about it (the path split reads `stream`, and the byte boundary needs the bytes), and a body
   is what the store's event log and the trace are *about*. An unbounded inbound body is therefore a
   resource-exhaustion surface: one client's request size is multiplied by the number of concurrent clients, and
   the multiplier is chosen by the client, not by the operator. The key makes that multiplier the operator's.
 - **Defaults are the behaviour that already shipped.** The value is a **declared** form of the cap this build
-  has always had in effect — an implicit **2 MiB** one, imposed by the HTTP layer rather than by the router,
+  has always had in effect — an implicit **2 MiB** one, imposed by the HTTP layer rather than by the vadis,
   with a refusal that is not this document's shape (see *The cap has exactly one owner* above). So the key is
   backward compatible in the same sense §4.7's is: a config written before it behaves exactly as it did. No
   client that works today stops working because this key exists.
@@ -1413,9 +1413,9 @@ one anchor, and not a search.
   deliberately **no "unlimited" spelling**: a bound that can be switched off is the surface this clause exists
   to close, and an operator who wants a very large bound writes a very large number — explicitly, where a
   reader can see it.
-- **The cap has exactly one owner, and it is the router.** The bound is enforced by the router, at the
+- **The cap has exactly one owner, and it is the vadis.** The bound is enforced by the vadis, at the
   boundary, *above* the pipeline — not by the HTTP framework's own default body limit. The framework's cap must
-  therefore be **disabled** (the router's own check replaces it; DESIGN §12.15 names the mechanism), so that
+  therefore be **disabled** (the vadis's own check replaces it; DESIGN §12.15 names the mechanism), so that
   exactly one cap exists, its value is the configured one, and its refusal is this document's. Two caps would
   be two owners of one invariant, and the invisible one would win on the request whose size sits between them.
 
@@ -1424,12 +1424,12 @@ one anchor, and not a search.
 | Fact | Value |
 |---|---|
 | Response | `413` with §8's unified error body, `error.type = "request_too_large"`; `details.limit_bytes` names the configured bound and `details.content_length` the length the request declared (`null` when it declared none) |
-| `X-Router-Request-Id` | present — §8's "always" has no exception, and this is a refusal an operator correlates like any other |
+| `X-Vadis-Request-Id` | present — §8's "always" has no exception, and this is a refusal an operator correlates like any other |
 | Fallback / retry | **never**: no upstream is contacted and nothing is attempted, so §4.2's chain has nothing to walk and no `skipped[]` exists (that array belongs to a walk) |
 | Upstream | never contacted — no provider request bytes exist for it |
 | State store | **no row**: the boundary runs before §4.5's `request.received` event, exactly as §4.7's guard does |
 | Trace | **one record**, §6's pre-pipeline class (`event_id: 0`, `usage_missing: true`, nothing priced), carrying `errors[].kind = "request_too_large"` — a refusal that left no trace would be the one failure an operator could not count |
-| `router stats` | the record lands in `failed`, split out as `request_too_large`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows) |
+| `vadis stats` | the record lands in `failed`, split out as `request_too_large`, and in `usage missing`; it contributes to no sum, no rate and no gate (§9.2's provenance rows) |
 | The connection | **closed after the response.** The refusal may be answered without draining the whole body (that is the point of a bound), so the connection may hold unread request bytes and cannot be reused for another request |
 
 **How a request above the bound is answered, and in which order.** The check is header-first: when the request
@@ -1442,16 +1442,16 @@ and the two arms cannot disagree about which rule answered them.
   and **above** the path split, and it is evaluated **after** §4.7's auth guard — an unauthenticated request is
   still told `401` and never learns anything about this bound. Within the boundary, the body limit answers
   before the mode header: a request whose body cannot be read at all is refused for that reason, and the
-  `X-Router-Transform` value it carried is not additionally adjudicated.
-- **A streaming request is not an exception, and it cannot be cut mid-stream.** The router reads the whole
+  `X-Vadis-Transform` value it carried is not additionally adjudicated.
+- **A streaming request is not an exception, and it cannot be cut mid-stream.** The vadis reads the whole
   request body *before* it opens any response, on both media — the `stream` member that selects the SSE relay
   is a fact of the body (spec §2.1's mode channel is a header, this one is not), so a request that asks for
   streaming is refused with the same complete, non-SSE `413` body every other refusal has, and no SSE head is
-  ever sent for a request the router has not finished reading. The relay streams the *answer*, never the
+  ever sent for a request the vadis has not finished reading. The relay streams the *answer*, never the
   request: there is no state in which the bound could truncate a response that has already begun.
 - **`details.stream` is absent, and that is not an omission.** The two forwarding media differ by that member
-  in the walk's refusals (a fact the router knows by then). Here it does not — the member is a fact of a body
-  this refusal never read, and inventing it would be a claim about content the router did not see (§7's
+  in the walk's refusals (a fact the vadis knows by then). Here it does not — the member is a fact of a body
+  this refusal never read, and inventing it would be a claim about content the vadis did not see (§7's
   discipline: an absent measurement is absent, never a value).
 
 **The bound is not a rate limit, and not a content policy.** It says how much of one request will be read; it
@@ -1498,7 +1498,7 @@ the implementation; the shapes and the keys below are this contract.
 
 A written `providers_file:` whose value is not a path — a null, or the empty string — is **not** shape 3: it never reaches resolution. It is refused at parse time by `providers_file` itself, naming the key and the type found (a null coerced into a path would be a *search* for a file named `null`, the one thing this section forbids). The refusal is about the value's **shape**, not about the name it spells: a string is still a string, so `./null` names and loads a roster file called `null`.
 
-**What does not change.** `RouterConfig::providers` stays **the** representation the serving path reads;
+**What does not change.** `VadisConfig::providers` stays **the** representation the serving path reads;
 the join of the root with its roster happens **once, at load**, and nothing on a request path learns that
 a second file exists (no second resolution rule, no second accessor, no roster service key). Every
 cross-key rule — `aliases`, `fallback`, `plan_policy`, `quota` — is still checked in one pass, in the
@@ -1528,7 +1528,7 @@ that is deliberate: the roster's comments are where the price citations live (§
 never a score** — it is not a config key, it enters no gate, and no report total is derived from it.
 
 **Shipped.** `providers_file` is parsed and resolved at load, and the shipped example is the split form:
-`config.example.yaml` names `providers.example.yaml`. `router setup` writes both files from its embedded
+`config.example.yaml` names `providers.example.yaml`. `vadis setup` writes both files from its embedded
 templates — and, beside them, the **third** file the same template names: the rule file its `plugins` entry
 points at, so one landing is the complete working bundle, the root and the roster and the rules together (the
 rule-file lane in §4.11; ADR-046) — `--check` validates the pair — a root naming a roster that is not there
@@ -1592,7 +1592,7 @@ revision it replaced, together with the keys whose **values** moved. Two consequ
 
 A running process reports each refused candidate as **one line on its own output**, naming the reason the
 loader gave and the revision it is still serving — the way `serve` already reports a refusal at startup,
-except that the process keeps running. `router setup`'s refusal is the same gate answering differently
+except that the process keeps running. `vadis setup`'s refusal is the same gate answering differently
 (exit 2, nothing written, §4.11), because nothing is serving there yet.
 
 **There is nothing to configure.** The reload has one implementation constant — the brief interval it uses
@@ -1632,7 +1632,7 @@ figure of its own — its numbers are §9.2's, rendered.
 | Method / path | `GET /metrics` (one route; no variants, no query parameters, no second path) |
 | Auth | **behind `server.auth_token_env`'s guard**, exactly as the three protocol endpoints (§4.7: *"Nothing else is exempt"* — `/health`'s exemption is `/health`'s alone). A scrape presents the token in `Authorization: Bearer <token>` or `x-api-key: <token>` (§4.7's two accepted forms) |
 | Success | `200`, `content-type: text/plain; version=0.0.4; charset=utf-8` — `# HELP` / `# TYPE` / `name{labels} value` lines |
-| Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Router-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"metrics"`**, and no store row — §4.7's refusal table, unchanged |
+| Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"metrics"`**, and no store row — §4.7's refusal table, unchanged |
 | Any other status | **a defect.** The status set is exactly `{200, 401}`: never `404` (the surface is served), never `501`, never `503`, and never §8's error body on the `200` arm |
 | Window | **`900` seconds, a process constant** (`WINDOW_MS`), not a key, not a flag, not a query parameter; stated in every response by the `router_metrics_window_seconds` series, because §9.2's rule (*"a report must state the window it covers"*) has no other way to be kept in-band |
 | Timestamps | **none.** The scrape's own instant is the scraper's; the body carries no wall-clock value and no uptime, so two scrapes over an unchanged window are **byte-identical** |
@@ -1684,7 +1684,7 @@ summed together.
   the window actually holds — never a zero series for an absent one — and the `# HELP` line says so.
 - **A figure that cannot be computed is omitted, with a named reason — never a `0`** (§9.2's own rule). Zero
   is a *read*; the absence is a *hole*, and every hole is named by a `#` comment line in the body (the
-  exposition has no stderr): `# router: <figure> omitted — <reason>`. `router_metrics_omitted_figures`
+  exposition has no stderr): `# vadis: <figure> omitted — <reason>`. `router_metrics_omitted_figures`
   counts what fired.
 - **Only labels the window produced are emitted** — never a synthetic zero for a failure kind or a savings
   verdict nothing carried.
@@ -1712,13 +1712,13 @@ summed together.
 log) is **not** exposed: the store contract states that the full-log read is *"bounded use: conformance and
 rebuild; **the serving path never scans the log**"* (DESIGN §12.10.8's `Query::AllEvents`), and a per-scrape
 log scan is exactly what that forbids. The omission is constant, and the response names it in-band
-(`# router: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not
-scan it`), so its absence can never be read as a zero. `router stats` remains the surface for it.
+(`# vadis: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not
+scan it`), so its absence can never be read as a zero. `vadis stats` remains the surface for it.
 
-**One owner for every value.** The figures are the ones `router stats` already derives — the window read and
+**One owner for every value.** The figures are the ones `vadis stats` already derives — the window read and
 `stats::aggregate` — and the surface **formats** them; it may not compute a figure from records, and the
 formatter's signature admits none (DESIGN §12.21). Two consequences are contract, not implementation detail:
-`router stats` and this surface can never disagree about a figure, and the per-provider split above can
+`vadis stats` and this surface can never disagree about a figure, and the per-provider split above can
 never appear here without first appearing there.
 
 **Assertions.** `CONF-46` (the status set, the guard's four arms, the absence of §8's body and header on the
@@ -1784,7 +1784,7 @@ plugins:
 
 ## 5. Onboarding prerequisite (mandatory)
 
-The client must bypass any local system proxy, otherwise **the request does not reach router at all**:
+The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
@@ -1802,7 +1802,7 @@ request to the three protocol endpoints must carry the token**, in `Authorizatio
 `x-api-key: <token>`; `GET /health` never does. A client whose token is missing or does not match gets
 `401 unauthorized` — which, unlike every other failure in §8, is not a symptom of anything upstream:
 nothing was sent anywhere. It is the same class of prerequisite as the proxy line above (the client is
-set up wrong, not router), which is why it is stated here as well as in §5's neighbourhood.
+set up wrong, not vadis), which is why it is stated here as well as in §5's neighbourhood.
 
 ## 6. Observation contract (one DecisionRecord per request)
 
@@ -1851,7 +1851,7 @@ vintages without ambiguity.
 answered without a `usage` member". A request that never reached an upstream is in the same class: a
 pre-route rejection, a connect failure, a request the inbound auth guard refused (§4.7), and a request the
 body bound refused (§4.13). The flag
-is what keeps such a record out of every rate, every sum and every gate — `router stats` counts it on
+is what keeps such a record out of every rate, every sum and every gate — `vadis stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
 
 **A `cache` group means a *replay*, not a prediction, and the ledger must be able to say so** (§4.17). Three
@@ -2008,7 +2008,7 @@ field for field, with exactly three differences, named under the table.
 | Field | Value | Why |
 |---|---|---|
 | `config_digest` | the identity of the **loaded** configuration — the same value every record of this process carries | it is a fact of the config, not of the request: the boundary runs before any decision but *after* the config was loaded, and a record with no configuration behind it would have no creator. Written by the same writer, on this class as on every other |
-| `identity.request_id` | allocated, from the same counter as every request | §8's error body and `X-Router-Request-Id` carry it |
+| `identity.request_id` | allocated, from the same counter as every request | §8's error body and `X-Vadis-Request-Id` carry it |
 | `identity.event_id` | **`0`** | no `request.received` row exists: the guard runs before §4.5's row 1, which is *"once per request that entered the pipeline"*. `0` is never a real id (`events.event_id` starts at 1), and it is the same sentinel the parse / route / capability rejections already write |
 | `identity.session` / `thread_id` / `turn_index` | `null` / `null` / `0` | session resolution reads the body and the sticky projection; a refused request has neither, and its body is **never parsed** |
 | `protocol.protocol_in` | the endpoint's own protocol | the route is known before the body is read |
@@ -2025,7 +2025,7 @@ field for field, with exactly three differences, named under the table.
 | `cost.*` (four tiers, `total`) / `quota_after` | `0` / `null` | nothing was priced and no quota was charged |
 | `result.status` | `401` | the client-visible status |
 | `result.upstream_status` / `failover_from` / `plan_switch` | `null` / `null` / `null` | no upstream, no abandoned attempt (fallback is about *attempts*, §4.7), and `plan_switch` stays present-and-null as always |
-| `result.overhead_ms` / `upstream_ms` | measured / `null` | router's own work against no upstream latency |
+| `result.overhead_ms` / `upstream_ms` | measured / `null` | vadis's own work against no upstream latency |
 | `errors[]` | one entry: `kind: "unauthorized"`, `details.header = "authorization"` \| `"x-api-key"` \| `null` | the vocabulary above; `null` means the request presented neither header |
 
 **The body bound's refusal (§4.13) is that class with three differences, and no fourth.** `result.status` is
@@ -2108,7 +2108,7 @@ each improvise):
   fixed-length token bucket (the structure aligns with cache breakpoints, see ADR-007).
 - Each block records `tokens` (that block's token count) and `hash`; `hash` = the **first 16 hex chars**
   of `sha256(block raw bytes)`.
-- That domain **does not include** router-owned fields, so "deleting router-owned fields" changes no
+- That domain **does not include** vadis-owned fields, so "deleting vadis-owned fields" changes no
   block hash (§2 byte boundary).
 - **Blocks are enumerated in the provider's effective prompt (template) order** — the
   system-instruction position first, then `tools`, then the `messages` / `input` items — **not** in
@@ -2120,7 +2120,7 @@ each improvise):
 - The on-disk path / rollover is specified by `trace` in §4.1; a write failure does not block the request
   (§8), and records `errors[].kind = trace_write_failed`.
 
-**Metric definitions** (exposed by `router stats`, referenced by the analysis loop's gates):
+**Metric definitions** (exposed by `vadis stats`, referenced by the analysis loop's gates):
 
 - `cache_hit_rate` = Σ`input_cached` / Σ`input_total`
 - `stateful_inbound_rate` = stateful requests / total requests (used to keep confirming "whether it
@@ -2129,9 +2129,9 @@ each improvise):
 - `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
 - `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
-- `overhead_ms_p99` = the p99 of (`result.overhead_ms` − `result.upstream_ms`) — **router's own overhead,
+- `overhead_ms_p99` = the p99 of (`result.overhead_ms` − `result.upstream_ms`) — **vadis's own overhead,
   excluding the upstream** — over the records of the window **whose `upstream_ms` is present**. A record with
-  no upstream latency (`upstream_ms: null`: a boundary refusal, a pre-route rejection) carries the router's
+  no upstream latency (`upstream_ms: null`: a boundary refusal, a pre-route rejection) carries the vadis's
   work but has nothing to subtract from it, so it is **excluded from the sample** rather than read as a 0 ms
   observation (the absent-measurement rule of §7, which §9.2's provenance row states for this figure)
 - `unknown_outcome_requests` = the number of `upstream.submitted` events in the window with no
@@ -2182,7 +2182,7 @@ rely on each upstream's own error shape):
 
 | `error.type` | HTTP | Trigger |
 |---|---|---|
-| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Router-Transform` value (§2.1 — a client asking for a mode that does not exist is told, never silently served the other way) |
+| `invalid_request` | 400 | request body unparsable / missing `model` / wrong field type; also an unusable `X-Vadis-Transform` value (§2.1 — a client asking for a mode that does not exist is told, never silently served the other way) |
 | `request_too_large` | 413 | the inbound body exceeds `server.max_body_bytes` (§4.13) — refused at the boundary, above the pipeline: no upstream is contacted, nothing is attempted, and no store row is written |
 | `auto_not_supported` | 400 | `model: auto` (v0.1, §3) |
 | `capability_unsupported` | 400 | inbound protocol ∉ that provider's `supports` (an undeclared cell = 400, no "best effort" translation) |
@@ -2196,8 +2196,8 @@ rely on each upstream's own error shape):
 | `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing). It answers the cell the **client named**; it is not the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` below) |
 | `internal` | 500 | everything else |
 
-Response headers: `X-Router-Request-Id` (always), `X-Router-Session` (when a session was resolved),
-`X-Router-Lossy` (when a lossy translation happened). On the SSE path all three headers must already have
+Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a session was resolved),
+`X-Vadis-Lossy` (when a lossy translation happened). On the SSE path all three headers must already have
 been sent before the first event.
 
 Behavior clauses:
@@ -2207,7 +2207,7 @@ Behavior clauses:
   **does** write its trace line (§6). It is the one failure a client can fix without looking at a provider.
 - inbound body above `server.max_body_bytes` → `413 request_too_large` (§4.13), decided at the same boundary,
   by the same rules: before the pipeline, no fallback walk, no retry, no upstream contact, no state-store row,
-  and **one** trace line (§6) — a body the router will not read is refused before it is buffered, and the
+  and **one** trace line (§6) — a body the vadis will not read is refused before it is buffered, and the
   client is told which rule refused it rather than being handed the HTTP layer's own bare `413`.
 - transform failure → **fall back to the original** (fail-safe), the trace records
   `errors[].kind = transform_error`, and the request is forwarded as usual.
@@ -2292,7 +2292,7 @@ carries `null` (ADR-024). A refusal writes no `failover.triggered` row in either
 
 ## 9. Reporting surfaces (the operator's read-out)
 
-Two surfaces read the records of §4.5 and §6 back out: the `plan` section of `GET /health`, and the `router
+Two surfaces read the records of §4.5 and §6 back out: the `plan` section of `GET /health`, and the `vadis
 stats` subcommand. Both are **read-only**; neither is a second source of truth, and neither prices, estimates
 or extrapolates anything. The metric *formulas* stay in §6 ("Metric definitions"); this section says what is
 printed, from which record, and under which §7 label — it defines no new metric and no new gate.
@@ -2308,8 +2308,8 @@ reasons about most: **`config`** (the configuration that was loaded — §4.14),
 
 ```json
 "config": {
-  "root_path": "/Users/me/.config/router/config.yaml",
-  "roster_path": "/Users/me/.config/router/providers.yaml",
+  "root_path": "/Users/me/.config/vadis/config.yaml",
+  "roster_path": "/Users/me/.config/vadis/providers.yaml",
   "root_sha16": "<16 hex chars>",
   "roster_sha16": "<16 hex chars>",
   "config_digest": "<16 hex chars>"
@@ -2353,7 +2353,7 @@ answerable from the records as well as from this member.
 value itself is a secret and is never here:
 
 ```json
-"auth": { "required": true, "env": "ROUTER_TOKEN" }
+"auth": { "required": true, "env": "VADIS_TOKEN" }
 ```
 
 | Key | Type | Semantics |
@@ -2426,10 +2426,10 @@ The situations in which a probe is **not** admitted, and where each appears in t
 `plan_state` row) or an arithmetic on two known instants (`since + cooldown`). There is no case in which
 `deadline` is unknown, and no inferred number is printed here.
 
-### 9.2 `router stats`
+### 9.2 `vadis stats`
 
 ```
-router stats [--config <config path>] --window <duration> [--json]
+vadis stats [--config <config path>] --window <duration> [--json]
 ```
 
 - **`--config`** names the config file; absent, it is found by **§4.12's** discovery order (as it is for `serve`).
@@ -2459,7 +2459,7 @@ carries its currency — §4.8):
 
 ```
 window:      24h (2026-09-19T12:00:00.000Z .. 2026-09-20T12:00:00.000Z)
-trace:       /home/u/router/state/traces (5 files, 61 records)
+trace:       /home/u/vadis/state/traces (5 files, 61 records)
 currencies:  USD                  (money is reported per currency and never summed across them)
 
 requests                         61
@@ -2557,10 +2557,10 @@ Four conventions this report obeys, each of which has bitten someone:
 
 ### 9.3 Surfaces that are **not** served in v0.1
 
-`router replay --trace … --config …` (DESIGN §9's same-code-path replay) and `router trace tail` are
+`vadis replay --trace … --config …` (DESIGN §9's same-code-path replay) and `vadis trace tail` are
 **planned, not served**:
 
-- `router replay` and `router trace tail` are not subcommands of this binary: the CLI accepts `serve` and
+- `vadis replay` and `vadis trace tail` are not subcommands of this binary: the CLI accepts `serve` and
   `stats`, and any other subcommand is refused by the argument parser with a usage error and a **non-zero
   exit** — never a silently ignored flag.
 
@@ -2578,7 +2578,7 @@ The reason to name them here at all is the rule this section exists to keep: **a
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect
 as a documented `plan_switch` reason no code can produce (DESIGN §12.8's case registry, a registered finding). Until they land,
 the trace record of §6 **is** the interface: append-only JSONL, one decision record per request, readable with
-any JSON tool. `router replay` in particular is the analysis harness's prerequisite (DESIGN §9, ADR-005 item 3)
+any JSON tool. `vadis replay` in particular is the analysis harness's prerequisite (DESIGN §9, ADR-005 item 3)
 and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
 promise, and no implementation has yet taken it.
 

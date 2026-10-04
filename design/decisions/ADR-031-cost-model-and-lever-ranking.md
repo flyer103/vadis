@@ -23,7 +23,7 @@
 ## Background
 
 **The repository has four rounds of measurement and no cost figure.** R30 made the live-path byte audits
-runnable; R31 fixed the recorder and ran the first post-R24 live pair; R32 measured the router's own
+runnable; R31 fixed the recorder and ran the first post-R24 live pair; R32 measured the vadis's own
 latency under scale; R33 measured the transform path's latency. None of them produced a token or dollar
 delta: R33's own record says it in one line — *"this round measured **latency**, not tokens; the token
 ledger rows are `inferred`"*. The loop charter's Cost gate reads *"the `verified` $ and token ledger of a
@@ -36,7 +36,7 @@ real money on a lever, so the loop must decide **which** lever to buy first, and
 arithmetic rather than intuition. Three things were missing and each is structural, not cosmetic:
 
 1. **No single arithmetic.** The product computes money in exactly one place
-   (`crates/router-core/src/cost.rs:279-300`: five tiers, integer `Nano`, one floor, the peak multiplier on
+   (`crates/vadis-core/src/cost.rs:279-300`: five tiers, integer `Nano`, one floor, the peak multiplier on
    the sum), and an *analysis* has no frozen statement that it uses that arithmetic rather than a
    plausible-looking re-derivation. A re-derived money line drifts from the trace it claims to explain —
    and a drift is indistinguishable from a saving when both are small.
@@ -58,7 +58,7 @@ rule part of the method rather than a house style.
 
 ### D1. The ranking's money is the product's own cost function — adopted, not re-derived
 
-A money line is computed by exactly the arithmetic of `crates/router-core/src/cost.rs:279-300`:
+A money line is computed by exactly the arithmetic of `crates/vadis-core/src/cost.rs:279-300`:
 
 ```
 uncached = usage.input_total − usage.input_cached
@@ -93,7 +93,7 @@ the ADR is append-only. Nothing in the product changes.
 
 ### D2. The denominator is **$ per 1 000 requests**, on a **named base**, and every row names both
 
-- **The unit is the request**, because that is the unit the router decides on, the unit a trace row already
+- **The unit is the request**, because that is the unit the vadis decides on, the unit a trace row already
   carries, and the unit every lever in the inventory acts through. A `$/1M tokens` figure is *not* the
   ranking unit: it would need a second normalisation (whose token mix?) and it would hide the difference
   between a lever that changes every request and one that changes one in a thousand.
@@ -162,8 +162,8 @@ why" rather than an omitted row — an omission reads as a zero.
    human's; a method may *measure* a quantity without *setting* a limit (ADR-029's boundary, unchanged).
 5. **Touch** the frozen corpus, `tests/conformance/`, the loop replay driver,
    the loop replay contract, the loop charter, the loop execution model.
-6. **Present the ranking as a product surface** — `router stats` serves no `$`-ranked table, and a claim
-   that the router ships one would be false.
+6. **Present the ranking as a product surface** — `vadis stats` serves no `$`-ranked table, and a claim
+   that the vadis ships one would be false.
 7. **Rank a saving whose retrieval path does not exist** — e.g. a `tee`-shaped byte saving while v0.1 has
    no originals store and no retrieve channel (spec §4.4).
 
@@ -193,7 +193,7 @@ why" rather than an omitted row — an omission reads as a zero.
 
 ## References
 
-- `crates/router-core/src/cost.rs:113-137`, `:150-172`, `:205-218`, `:260-300` — the money type, the price
+- `crates/vadis-core/src/cost.rs:113-137`, `:150-172`, `:205-218`, `:260-300` — the money type, the price
   unit, the band selection and the formula this ADR adopts.
 - `config.example.yaml:110-163` — the price entries with their own source URL + date, and the peak windows.
 - the loop's evidence for that decision — the committed live rows whose recomputation is this method's red

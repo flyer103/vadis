@@ -5,7 +5,7 @@ question is about a number, the answer is a link, never a number.
 
 ## Outline
 
-- **"Nothing reaches the router and my client says 503."** Check the local-proxy
+- **"Nothing reaches the vadis and my client says 503."** Check the local-proxy
   prerequisite first: `NO_PROXY=127.0.0.1,localhost`. On macOS, clients that read the system
   proxy do not honour its exclusion list for `127.0.0.1`, so the request goes to the proxy
   instead of the gateway.
@@ -24,7 +24,7 @@ question is about a number, the answer is a link, never a number.
   outbound traffic goes to the providers you configured, authenticated with your own keys.
   Keys themselves live in your environment: the config file references variable names only,
   never the secret values.
-- **"Can I run one router for a team, with accounts?"** No: v0.1 is a single-operator local
+- **"Can I run one vadis for a team, with accounts?"** No: v0.1 is a single-operator local
   gateway; multi-user, multi-tenant and multi-node are explicit non-goals.
 - **"Why was my request routed somewhere other than the model I asked for?"** A configured
   fallback chain is used when a route is refused by the guard — including a provider that is
@@ -47,7 +47,7 @@ question is about a number, the answer is a link, never a number.
   each keeps the id its own provider expects. Without the tag, the policy would have to assume the
   ids are equal — the default, and the behaviour of every config that predates the tag.
 - **"Why does my report show two cost lines and no total?"** Because the window holds requests
-  priced in two currencies. Router never adds one currency to another and never converts one into
+  priced in two currencies. Vadis never adds one currency to another and never converts one into
   another, so it reports each currency separately and states no combined total — a single number
   there would be the one figure it cannot compute honestly
   ([`docs/spec.md` §9.2](../docs/spec.md)).

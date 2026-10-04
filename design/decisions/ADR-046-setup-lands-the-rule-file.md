@@ -1,4 +1,4 @@
-# ADR-046 — `router setup` lands the rule file its own template names
+# ADR-046 — `vadis setup` lands the rule file its own template names
 
 - Status: accepted
 - Date: 2026-10-03 (round R60's contract card, `R60-1`; the owner's authorization recorded in
@@ -21,26 +21,26 @@
   prices — the rule file carries none), **8** (docs before code) and **9** / ADR-012; spec **§4.4** (the
   rule-file format), **§4.11** (the writer and its boundary), **§4.12** (where a path written in the file
   lands), **§4.14** (the pair, and its *Shipped* paragraph); DESIGN **§12.14** (the writer's landing);
-  `tests/conformance/tests/conf_86_setup_check_roster_fact.rs` (the only case that pins `router setup`'s
+  `tests/conformance/tests/conf_86_setup_check_roster_fact.rs` (the only case that pins `vadis setup`'s
   output — it pins `--check`'s **stdout**, which this ADR does not move).
 - Numbering note: the register holds **45** ADRs (`ADR-001` … `ADR-045`), so **046** is the next free number.
 
 ## Background — the measured problem
 
-**Every fresh `router setup` landing starts with a named absence, and the absence is load-bearing.** Measured
+**Every fresh `vadis setup` landing starts with a named absence, and the absence is load-bearing.** Measured
 by the opener (2026-10-03), not inferred, and reproduced verbatim against a copy of the owner's own
-`~/.config/router/config.yaml` on another port:
+`~/.config/vadis/config.yaml` on another port:
 
 ```
-router: transform_rules: rule file <home>/.config/router/rules/tool_output.toml:
+vadis: transform_rules: rule file <home>/.config/vadis/rules/tool_output.toml:
         No such file or directory (os error 2); not loaded
         (a request that asks for transform mode runs with an empty ledger)
 ```
 
-The server starts normally afterwards (`router listening on 127.0.0.1:8793 … [store open], auth: required`),
+The server starts normally afterwards (`vadis listening on 127.0.0.1:8793 … [store open], auth: required`),
 which is what makes the absence a **silent** one: nothing fails, so nothing tells the operator. Its
 consequences are concrete: `Forwarder.transform_engine` is `None`; a request carrying
-`X-Router-Transform: transform` is *asked, not applied*, with an empty ledger; and `/health`'s `plugins`
+`X-Vadis-Transform: transform` is *asked, not applied*, with an empty ledger; and `/health`'s `plugins`
 member still reads the declared entry, because that member reports the **declared config**, not the mounted
 set — so the one surface an operator would check agrees with the config file and not with reality.
 
@@ -54,10 +54,10 @@ set — so the one surface an operator would check agrees with the config file a
 ```
 
 That value is resolved by spec §4.1's in-file rule (`crate::config_load::resolve`,
-`crates/router-cli/src/config_load.rs:219`) against **the directory containing the config file**, never the
+`crates/vadis-cli/src/config_load.rs:219`) against **the directory containing the config file**, never the
 CWD. The file it names exists **only in the repository** (`rules/tool_output.toml`, 16 897 B, sha256
-`97c1f272…`, 4 rules / 13 inline tests). `router setup` writes the root and the roster from its embedded
-templates — spec §4.14's *Shipped* paragraph says so in terms: *\"`router setup` writes both files from its
+`97c1f272…`, 4 rules / 13 inline tests). `vadis setup` writes the root and the roster from its embedded
+templates — spec §4.14's *Shipped* paragraph says so in terms: *\"`vadis setup` writes both files from its
 embedded templates\"* — and materializes **nothing** for the third file that same template names. So the
 command the operator runs to get a working configuration is precisely the command that produces the dangling
 reference.
@@ -76,18 +76,18 @@ through the board and the profiles. This ADR is the semantics; `R60-2` is the co
 
 ## Decision
 
-**D1 — The rule file is a third write target of `router setup`, read from the base config.** A writing run owns
+**D1 — The rule file is a third write target of `vadis setup`, read from the base config.** A writing run owns
 the file its **base config** names at `plugins[id=<entry>].config.rules_file` on its `builtin/transform_rules`
 entry (the shipped template's entry is `tool-output-rules`, naming `./rules/tool_output.toml`), resolved by
 spec §4.1's rule against the directory containing the config file — never the CWD. The path is **read**, never
 prompted and never invented: the `plugins` section's askable key set is unchanged (the shipped section table
-carries `plugins[id=<entry>].disabled` only — `crates/router-cli/src/setup/sections.rs:314-328`), and the run
+carries `plugins[id=<entry>].disabled` only — `crates/vadis-cli/src/setup/sections.rs:314-328`), and the run
 composes no key of its own. A base that names no rule file — no `builtin/transform_rules` entry, or one
 without `config.rules_file` — has **no** third target and materializes nothing.
 
 **D2 — Its bytes are the template embedded in the binary.** The bytes written are the repository's own
 `rules/tool_output.toml`, embedded by path beside the root example and the roster example
-(`crates/router-cli/src/setup/mod.rs:28`/`:35` today) — the third embedded template, embedded for exactly the
+(`crates/vadis-cli/src/setup/mod.rs:28`/`:35` today) — the third embedded template, embedded for exactly the
 reason spec §4.11's `--from` row already gives for the other two: **an installed binary with no example beside
 it must still land a working bundle.** No `--from` names it: there is one embedded rule set, and a selectable
 rule template would be an additive change with its own card.
@@ -99,11 +99,11 @@ the previous bytes kept at `<file>.bak` **before** the write (spec §4.11's `--f
 step's own D6 shape). `--force` without the `plugins` section, and every run without `--force`, replaces
 nothing. This is the roster lane's own rule read for the third file —
 `replaced = !exists || (force && <the section that owns it is selected>)`
-(`crates/router-cli/src/setup/mod.rs:299-306`), whose *create* arm is likewise unqualified by section: a
-`router setup server` over a fresh target lands a complete, working bundle, for the same reason it lands the
+(`crates/vadis-cli/src/setup/mod.rs:299-306`), whose *create* arm is likewise unqualified by section: a
+`vadis setup server` over a fresh target lands a complete, working bundle, for the same reason it lands the
 pair.
 
-**D4 — A roster-scoped replacement is not a rule-file replacement.** `router setup providers --from <roster>
+**D4 — A roster-scoped replacement is not a rule-file replacement.** `vadis setup providers --from <roster>
 --force` over an existing split root swaps the **roster** as a unit (spec §4.11's target-file row, ADR-037 D9)
 and does not replace the rule file: the `plugins` section is not in that run's section list, so only D3's
 create arm can touch the third file there, and it fires only if the file is absent.
@@ -129,7 +129,7 @@ that was already there — exactly as `CONF-69` pins the target's own pair of ha
 
 **D9 — The read-only surfaces do not move, and the dry run names the file.** `--check`'s stdout changes **not
 one byte**: a rule file names no environment variable and is not one of the facts that surface states, and
-`conf_86_setup_check_roster_fact.rs` is the only case that pins `router setup`'s output — it pins that
+`conf_86_setup_check_roster_fact.rs` is the only case that pins `vadis setup`'s output — it pins that
 surface, so that surface is frozen. `--dry-run` **names the file it would create or replace** (the same
 per-lane `# <path>` / `would write …` report the other two lanes already print). `--print` states **nothing
 new**: the rule file's existence is a filesystem fact about a file beside the config, not a fact about the
@@ -150,13 +150,13 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
 |---|---|
 | **Leave the reference dangling** — do nothing | The measured defect **is** this alternative: every fresh XDG install starts with a named absence, the transform silently does not run, and `/health` agrees with the config rather than with the process. A named absence that nothing reports is the failure this ADR exists to end |
 | **Document a manual copy step only** (`cp rules/tool_output.toml …` in `book/`) | Documentation does not produce the file, and the wizard's whole job is to turn the template into your configuration. R44 ended exactly this ceremony for the roster (ADR-038's *Background*: *\"documenting the ceremony does not produce it\"*); repeating it for the third file would make the trap a documented trap. It also fails the installed-binary case outright: a user with no clone has no `rules/` to copy from |
-| **Ship the example's entry `disabled: true`** | This hides the absence instead of fixing it, and it changes a capability the user did not ask about: the shipped example would mount no rule engine, so `X-Router-Transform` would be a no-op **even on a site whose operator later enables the entry** — `disabled` is the start-up switch (spec §4.3), not a file-existence guard. It would also make the shipped example disagree with the roster it ships beside, for a reason that is about a missing file |
+| **Ship the example's entry `disabled: true`** | This hides the absence instead of fixing it, and it changes a capability the user did not ask about: the shipped example would mount no rule engine, so `X-Vadis-Transform` would be a no-op **even on a site whose operator later enables the entry** — `disabled` is the start-up switch (spec §4.3), not a file-existence guard. It would also make the shipped example disagree with the roster it ships beside, for a reason that is about a missing file |
 | **Embed the rule set as a built-in default instead of a file** | Declined by **ADR-003** and **ADR-008**: the rule set is **data** — a declarative, revertible, individually accounted pipeline (ADR-003) with a three-level override and a trust gate (ADR-008) — and a compiled-in default would (i) create a second source of truth for the rules, (ii) make `plugins[].config.rules_file` name a file nothing reads (a lie in the config, which `deny_unknown_fields` would not catch), and (iii) move the rules outside the operator's reach, which is the opposite of what ADR-003 bought |
 | **Write the rule file on every run** (no roster semantics) | It would clobber an operator's own rules on a routine reconfigure — the one thing ADR-025's *refuse rather than guess* discipline and the owner's ruling both forbid. The roster semantics the owner chose (create when absent; replace only under `--force`) is what makes the file the operator's after the first landing |
 
 ## Consequences
 
-- **A fresh landing is complete.** After one `router setup`, the config's `rules_file` reference resolves, the
+- **A fresh landing is complete.** After one `vadis setup`, the config's `rules_file` reference resolves, the
   transform engine mounts, and the startup log carries no `transform_rules: … No such file or directory`
   note. This is the round's whole claim when it closes.
 - **The wizard now writes a file whose content it never edits.** That is a new *class* of write for this
@@ -208,14 +208,14 @@ side is the owner's: ADR-012 / `AGENTS.md` 9), because the lanes and their asser
   `97c1f272811f48e90fa4b6da7f1cc737dd78e8a1b94a57414211d59fe3318102`, 4 rules / 13 inline tests (its own
   header, `rules/tool_output.toml:1-40`).
 - The two templates the run already embeds, and the constants that carry them:
-  `crates/router-cli/src/setup/mod.rs:28` (`EMBEDDED_TEMPLATE`) and `:35` (`EMBEDDED_ROSTER`).
+  `crates/vadis-cli/src/setup/mod.rs:28` (`EMBEDDED_TEMPLATE`) and `:35` (`EMBEDDED_ROSTER`).
 - The roster lane's semantics this ADR's lane follows, read from the code:
-  `crates/router-cli/src/setup/mod.rs:299-306` (`replaced = !exists || (force && targeted)`), `:162-196`
+  `crates/vadis-cli/src/setup/mod.rs:299-306` (`replaced = !exists || (force && targeted)`), `:162-196`
   (the `Lane` and its `lands()`), `:542-561` (the `<file>.bak` copy before a replacement of a file the run
   did not write), `:642` (`backup_path`).
 - The section table's current askable set for `plugins` (no `rules_file` row):
-  `crates/router-cli/src/setup/sections.rs:314-328`.
-- The resolution rule the named path obeys: `crates/router-cli/src/config_load.rs:219`, cited by spec §4.1
+  `crates/vadis-cli/src/setup/sections.rs:314-328`.
+- The resolution rule the named path obeys: `crates/vadis-cli/src/config_load.rs:219`, cited by spec §4.1
   and restated in §4.11/§4.12.
 - The measured defect: the loop state record's *\"Refreshed 2026-10-03 11:19\"* paragraph (the opener's
   reproduction, the cause, and the collision surface), which this card is bound to and by which its own body

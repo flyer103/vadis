@@ -22,7 +22,7 @@
 ## Background
 
 **The survey proposed an evaluation; the evaluation produced a subset; the owner opened step 1.** The
-2026-09-24 instruction was to evaluate RRSI (arXiv:2609.24972v1) for this router. The survey
+2026-09-24 instruction was to evaluate RRSI (arXiv:2609.24972v1) for this vadis. The survey
 (the survey record (2026-09-24) §7) fixed the sequence: step 0 is a **`$0` retrospective
 falsification** against this repository's own committed bytes, and step 1 — *"only if step 0 catches ≥ 1
 defect honestly"* — is a freeze card that writes the contract for the adopted subset. R36-1 ran step 0 as a
@@ -46,7 +46,7 @@ with a named artifact each.**
 
 **Why the loop may write these three and not the fourth.** B, D and G are **loop-side**: B is a ledger and
 a proposer-side condition over rounds; D's screen is a card-body requirement and its product-side invariant
-**already landed** (`crates/router-plugins/src/transform_rules.rs:890` at HEAD, `:880` as landed at
+**already landed** (`crates/vadis-plugins/src/transform_rules.rs:890` at HEAD, `:880` as landed at
 `a429b9a`); G's report is a per-round findings row and its deletion step is ordinary product work through
 the four gates. None of the three mints a number: B's parameters are **none** (`accepted` is already
 defined by the gate table), D's are **none** (a witness is not a threshold), and G's are **`w`** — a declared
@@ -126,7 +126,7 @@ comes, is a **new ADR** — this one is append-only and is not rewritten by its 
 
 | what is added | the witness | read where |
 |---|---|---|
-| a **rule** | a **(tool name, kind)** pair for which `kinds_for_tool(tool)` returns the rule's declared kind, **plus** the locator of the declaration that makes it so | `crates/router-core/src/transform.rs:157` (`TOOL_KINDS`) and `:169` (`kinds_for_tool`) at this HEAD; the table's own test at `:583` |
+| a **rule** | a **(tool name, kind)** pair for which `kinds_for_tool(tool)` returns the rule's declared kind, **plus** the locator of the declaration that makes it so | `crates/vadis-core/src/transform.rs:157` (`TOOL_KINDS`) and `:169` (`kinds_for_tool`) at this HEAD; the table's own test at `:583` |
 | a **stage**, a **module** or a **switch** | the **call site's `file:line`** | the tree of the candidate, quoted with the commit that was read |
 
 **The mandatory section and the check point.** A card whose scope adds a rule, a stage, a module or a
@@ -324,8 +324,8 @@ this repository's units.
 - the survey record (2026-09-24) §2 (the seven mechanisms), §6 (what the survey does not
   establish), §7 (the step-0/step-1 sequence).
 - The artifacts cited at this HEAD: `rules/tool_output.toml:116,124,128,163,183`;
-  `crates/router-core/src/transform.rs:157,169,583`; `crates/router-core/src/breakeven.rs:70` (no call site
-  outside its own module); `crates/router-plugins/src/transform_rules.rs:890`;
+  `crates/vadis-core/src/transform.rs:157,169,583`; `crates/vadis-core/src/breakeven.rs:70` (no call site
+  outside its own module); `crates/vadis-plugins/src/transform_rules.rs:890`;
   the loop cost model; the loop's rank script;
   the recorded codex-pair manifest; the loop state record and `:892`;
   `.gitignore:18` (corpus bodies) and `:29` (raw traces); the loop charter, `:85-100`, `:106-116`;

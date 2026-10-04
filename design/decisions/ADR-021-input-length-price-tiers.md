@@ -34,7 +34,7 @@ for one rate, such a page can only be transcribed as **one** of its bands:
 
 Neither is an estimate and neither is invented — and that is exactly what makes the failure quiet: the config
 holds a number the page really published, applied to requests the page prices differently. The figure that
-lands in the trace, in `router stats` and in every downstream gate is then wrong for a *known* subset of
+lands in the trace, in `vadis stats` and in every downstream gate is then wrong for a *known* subset of
 traffic, and `verified` (a measured delta in measured usage) cannot detect it, because the *usage* is measured
 and only the *rate* is mistranscribed. The requirement this ADR answers: `config.example.yaml` must be able to
 transcribe a banded official table **band for band**.
@@ -66,7 +66,7 @@ must not move with how much of it the cache served.
 
 **4. The selected band prices the whole request.** The band's four prices price *all* of the request's tokens —
 a banded table, not a progressive one. No vendor publishes a bracket formula, and inventing one would put the
-router's arithmetic where the vendor's price belongs.
+vadis's arithmetic where the vendor's price belongs.
 
 **5. Peak/off-peak is orthogonal to the band.** One `peak` table per model entry, at the price level and
 outside the tiers; `peak` inside a band is a load error. The band chooses the four prices, the time window
@@ -114,7 +114,7 @@ decision time, which the dependency allowlist does not have (GAP-Q14, and GAP-Q2
   band usually means 200,000. A band boundary is compared against a *measured* token count, so it must not
   depend on which K a reader assumed. The page's own wording belongs in the band's citation comment.
 - **Progressive (marginal) bands — the first 200K at one rate, the excess at another.** Rejected: no vendor
-  publishes a bracket formula for these tables; the arithmetic would be the router's invention, and it would
+  publishes a bracket formula for these tables; the arithmetic would be the vadis's invention, and it would
   silently disagree with the invoice.
 - **A `peak` per band.** Rejected: N copies of one table, and a band that lacked the multiplier would
   under-price peak traffic. Orthogonality is enforced by where the key lives, once per entry.
@@ -132,7 +132,7 @@ decision time, which the dependency allowlist does not have (GAP-Q14, and GAP-Q2
 
 The config's job is to be **checkable** — ADR-020's argument, applied one level down. A flat transcription of a
 banded page is checkable and wrong: the reviewer clicks the cited URL, finds the number, and confirms it, while
-the router prices a growing share of the traffic at a rate the page assigns to another band. The mistake is
+the vadis prices a growing share of the traffic at a rate the page assigns to another band. The mistake is
 invisible exactly where it matters most: the cost gate's own figure. Transcribing the bands as published costs
 one line per extra band and moves the check no further away than the heading the numbers sit under. Between
 "a schema that cannot express the page" and "one key whose absences and ordering are refusals", the repository's
@@ -144,24 +144,24 @@ constraints (1, 4, 5, 9) choose the second — and the second is additive, so no
   flat entry is unchanged, character for character, and prices identically (spec §4.10 rule 1) — the
   implementing card owes that equality as a unit test.
 - `n` is measured, so a request's band is decided **after** the response; the one figure read earlier (the
-  switch's cost) is band-agnostic by convention and stays `inferred` (GAP-Q20). Nothing in the router guesses a
+  switch's cost) is band-agnostic by convention and stays `inferred` (GAP-Q20). Nothing in the vadis guesses a
   request's size to pick a band.
 - The measurement apparatus is untouched **by construction**: no trace field, no event kind, no projection, no
   gate definition, no corpus, no conformance assertion, no `schema_version` move (§12.6's rule is not even
   reached, because nothing is added), and no saving figure anywhere in the round.
 - `book/cost-and-caching.md` gains the user-facing reading: why a longer prompt can change the price of the
   whole request, and where the bands are recorded — with no price number and no type sketch (constraint 8).
-- The router's own reading of a banded table is *reproduced discontinuity*: a one-token difference across a
+- The vadis's own reading of a banded table is *reproduced discontinuity*: a one-token difference across a
   ceiling re-prices the entire request, because that is what the vendor's table does.
 
 ## Honest boundaries and verification owed
 
-- **The router does not verify a band against the page.** The loader can prove a table is well-formed and that
+- **The vadis does not verify a band against the page.** The loader can prove a table is well-formed and that
   the money follows from it; it cannot prove the ceiling or the four numbers are the vendor's. The only defence
   is the citation rule (constraint 5) plus the human re-read — the same boundary ADR-020 accepted for URLs and
   ADR-018 for `region`.
-- **The band a request *should* fall in is the page's fact, not the router's.** Where a page is ambiguous (a
-  band stated in "characters", or a threshold in a unit the router never sees), the entry stays flat rather
+- **The band a request *should* fall in is the page's fact, not the vadis's.** Where a page is ambiguous (a
+  band stated in "characters", or a threshold in a unit the vadis never sees), the entry stays flat rather
   than guessing; the honest move is a flat table plus a comment, not an inferred band.
 - **Pre-response figures are band-agnostic** (item 8). The number stays `inferred`, and the direction of its
   error is not claimed to be safe in either direction.

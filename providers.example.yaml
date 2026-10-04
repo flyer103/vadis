@@ -1,7 +1,7 @@
 providers:
   # One roster entry per provider; `wire_api` = that provider's **native** wire
   # format (the condition for native passthrough).
-  # `supports` = the set of inbound protocols the router can translate to it
+  # `supports` = the set of inbound protocols the vadis can translate to it
   # (including wire_api itself) — the declared legal cells of the 3×3 matrix;
   # an undeclared cell = 400 (no "best-effort" translation). Translated cells
   # must handle the spec §2 lossy list item by item.
@@ -16,7 +16,7 @@ providers:
         #   "BASE URL (OpenAI Format)" is https://api.deepseek.com and its
         #   "BASE URL (Anthropic Format)" is https://api.deepseek.com/anthropic;
         #   each endpoint above is that base plus the form's own path,
-        #   transcribed in full (ADR-020: the router appends nothing)
+        #   transcribed in full (ADR-020: the vadis appends nothing)
       chat:      https://api.deepseek.com/chat/completions
       responses: https://api.deepseek.com/responses
       anthropic: https://api.deepseek.com/anthropic/v1/messages
@@ -25,7 +25,7 @@ providers:
     supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API),
                                                   #   and each carries its own URL above — so all three cells are reachable
                                                   #   (ADR-020: a declared cell with no endpoint is a load error, and no cell
-                                                  #   here depends on the router appending anything)
+                                                  #   here depends on the vadis appending anything)
     models:
       - id: deepseek-v4-pro
         context: 1m                               # official page: CONTEXT LENGTH = 1M (MAX OUTPUT 384K)

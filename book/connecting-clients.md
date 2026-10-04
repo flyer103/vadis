@@ -3,12 +3,12 @@
 Status: written for v0.1. This is the onboarding path for real clients; wherever a detail is
 contractual, this chapter links to the clause instead of restating it.
 
-Getting a client onto router is a small edit to its base URL plus a bearer token. It has one
+Getting a client onto vadis is a small edit to its base URL plus a bearer token. It has one
 prerequisite that, when missed, makes the gateway look broken while nothing is wrong with it.
 
 ## Prerequisite: let localhost bypass the system proxy
 
-Do this **before** pointing any client at router:
+Do this **before** pointing any client at vadis:
 
 ```bash
 export NO_PROXY=127.0.0.1,localhost
@@ -27,7 +27,7 @@ is insurance rather than the repair of an observed failure. An earlier measureme
 forced a proxy into the environment explicitly did make httpx fail too — that is
 a different experiment from the system-proxy-only one, and both are recorded. Export the
 variable in the same shell (or the same service environment) that starts the client, not
-only in the shell that starts router.
+only in the shell that starts vadis.
 
 The contract clause and its measurement are in
 [`docs/spec.md` §5](../docs/spec.md); `AGENTS.md` records the incident.
@@ -54,15 +54,15 @@ surfaces is [`docs/spec.md` §9.3](../docs/spec.md).
 **codex** declares a custom model provider in `~/.codex/config.toml`:
 
 ```toml
-model_provider = "router"
+model_provider = "vadis"
 model = "coding-fast"                   # a route: provider/model or an alias from your config
 model_catalog_json = "~/.codex/models.json"
 
-[model_providers.router]
-name = "router"
+[model_providers.vadis]
+name = "vadis"
 base_url = "http://127.0.0.1:8790/v1"
 wire_api = "responses"                  # must equal the route's native protocol (see below)
-env_key  = "ROUTER_TOKEN"
+env_key  = "VADIS_TOKEN"
 ```
 
 and a catalog entry for the slug in `~/.codex/models.json` — without one a one-shot
@@ -74,8 +74,8 @@ your route. The catalog entry that was verified against codex-cli 0.137.0:
   "models": [
     {
       "slug": "coding-fast",
-      "display_name": "coding-fast (via router)",
-      "description": "router alias -> deepseek/deepseek-flash",
+      "display_name": "coding-fast (via vadis)",
+      "description": "vadis alias -> deepseek/deepseek-flash",
       "context_window": 1048576,
       "max_context_window": 1048576,
       "supported_reasoning_levels": [],
@@ -101,8 +101,8 @@ export NO_PROXY=127.0.0.1,localhost
 codex exec --skip-git-repo-check -C <dir> "Reply with the single word: pong" < /dev/null
 ```
 
-Expected: the banner names `provider: router` and `model: coding-fast`, the reply is `pong`,
-and the router's trace records the session (codex sends a stable `prompt_cache_key`).
+Expected: the banner names `provider: vadis` and `model: coding-fast`, the reply is `pong`,
+and the vadis's trace records the session (codex sends a stable `prompt_cache_key`).
 
 `wire_api` here is the one easy mistake: it must equal the **provider's** `wire_api` for the
 route you picked, because v0.1 serves only native routes — a chat wire against the example
@@ -115,10 +115,10 @@ Why the non-obvious parts are there:
 - `< /dev/null` — `codex exec` reads stdin for additional input (`Reading additional input from stdin...`); pointing it at `/dev/null` gives that read an immediate EOF when you drive it from a script or CI.
 - `NO_PROXY` — the prerequisite above; reqwest does not honour the system proxy's exclusion list for `127.0.0.1`.
 - `wire_api = "responses"` — a chat wire against the example roster's `deepseek` entry would answer `501 not_implemented` (an inbound protocol the entry does not declare in `supports` answers `400` before that).
-- `env_key = "ROUTER_TOKEN"` — the token a client sends router is router's own **inbound** token, not a provider credential; provider keys live only in the router process's environment.
+- `env_key = "VADIS_TOKEN"` — the token a client sends vadis is vadis's own **inbound** token, not a provider credential; provider keys live only in the vadis process's environment.
 
 The **failover chain never crosses protocols either**: a `fallback` entry — or a plan family's `overflow`
-route — whose `wire_api` is not your inbound protocol is skipped exactly as an entry the router holds no key
+route — whose `wire_api` is not your inbound protocol is skipped exactly as an entry the vadis holds no key
 for is skipped, so your request can never be answered on a wire you did not ask for. When nothing in the
 chain can serve your protocol you get `502 upstream_error` with `details.stage: "no_available_route"` and a
 `details.skipped[]` list naming every candidate it refused and why; the refusal's frozen shape is
@@ -133,14 +133,14 @@ call, real upstream); the commands and outputs are quoted from that run.
    that home's `config.yaml`:
 
 ```yaml
-model: {default: coding-fast, provider: router, base_url: http://127.0.0.1:8790/v1, api_mode: codex_responses}
+model: {default: coding-fast, provider: vadis, base_url: http://127.0.0.1:8790/v1, api_mode: codex_responses}
 custom_providers:
-  - {name: router, provider: router, base_url: http://127.0.0.1:8790/v1, model: coding-fast,
-     api_mode: codex_responses, api_key_env: ROUTER_TOKEN, key_env: ROUTER_TOKEN}
+  - {name: vadis, provider: vadis, base_url: http://127.0.0.1:8790/v1, model: coding-fast,
+     api_mode: codex_responses, api_key_env: VADIS_TOKEN, key_env: VADIS_TOKEN}
 ```
 
-2. Put the router token in that home's `.env` **twice**, same value both times:
-   `ROUTER_TOKEN=<token>` (what the two `*_env` keys above name) and `ROUTER_API_KEY=<token>`
+2. Put the vadis token in that home's `.env` **twice**, same value both times:
+   `VADIS_TOKEN=<token>` (what the two `*_env` keys above name) and `VADIS_API_KEY=<token>`
    (the credential name hermes actually resolves — see the pitfall below).
 
 3. Smoke it — one turn, then its continuation in the same session:
@@ -151,8 +151,8 @@ HERMES_HOME=<hermes-home> hermes -z "Reply with the single word: pong"
 # rc=0, stdout: pong
 
 HERMES_HOME=<hermes-home> hermes --continue -z \
-  "Now use the terminal tool to run the shell command: echo router-hermes-tool . Then reply with exactly its stdout."
-# rc=0, stdout: router-hermes-tool
+  "Now use the terminal tool to run the shell command: echo vadis-hermes-tool . Then reply with exactly its stdout."
+# rc=0, stdout: vadis-hermes-tool
 ```
 
 Why the non-obvious parts are there — all three are load-bearing (the first two were hit for
@@ -163,16 +163,16 @@ real during the smoke):
   URL detection returns nothing and the entry resolves to `chat_completions`, i.e. the wrong
   wire against a responses-native route.
 - **`api_key_env` alone is not enough.** hermes resolves a custom provider's credentials as
-  `<PROVIDER>_API_KEY` — here `ROUTER_API_KEY` — and refuses with
-  `No usable credentials found for provider 'router'. Set RAMP_ROUTER_API_KEY, ROUTER_API_KEY.`
-  when it cannot find it. `key_env: ROUTER_TOKEN` in the entry plus `ROUTER_API_KEY` holding
+  `<PROVIDER>_API_KEY` — here `VADIS_API_KEY` — and refuses with
+  `No usable credentials found for provider 'vadis'. Set RAMP_VADIS_API_KEY, VADIS_API_KEY.`
+  when it cannot find it. `key_env: VADIS_TOKEN` in the entry plus `VADIS_API_KEY` holding
   the token in `.env` is the combination that reached 200.
 - **An isolated `HERMES_HOME`.** The config, `.env` and sessions of that run all live under
   it, so your default profile is left untouched — use it for every command above.
 
 What that run left in the trace, so you know the healthy shape of a hermes session:
 
-- The session is hermes's own `prompt_cache_key`, `pck_`-prefixed; router invents no key of its own. The key is
+- The session is hermes's own `prompt_cache_key`, `pck_`-prefixed; vadis invents no key of its own. The key is
   content-derived, so it holds steady only while the prefix-bearing parts (instructions, tool
   list) stay stable — the continuation turn was recorded at `turn_index` 2 in that session
   with `prefix.continuity` 1.0, i.e. the prefix carried over intact.
@@ -201,18 +201,18 @@ hermes-over-chat as untested here.
 **claude code** keeps the earlier advice — same shape (override the base URL, keep the token
 in the environment) — and was **not** part of the witnessed matrix above.
 
-**What router does with the token a client sends it.** The token a client sends router is *not*
-the credential router uses upstream. Router ignores the client's `Authorization` / `x-api-key`
+**What vadis does with the token a client sends it.** The token a client sends vadis is *not*
+the credential vadis uses upstream. Vadis ignores the client's `Authorization` / `x-api-key`
 header for provider calls: the credential it hands a provider is read from the environment of
-**the router process**, from the variable that provider's `api_key_env` names — the config names
+**the vadis process**, from the variable that provider's `api_key_env` names — the config names
 the variable, never the value. Inbound headers are read for one thing only, the session key
 sources of your `session` config, and they are never forwarded upstream. The client's token
-therefore has exactly one job: it is the client's key to **router itself**, and it only matters
+therefore has exactly one job: it is the client's key to **vadis itself**, and it only matters
 once inbound auth is turned on (next section). With auth off, whatever token your client sends
 is ignored.
 
 Set the model field to an explicit `provider/model` or to an alias defined in your config. What you
-write there is a **route, not a provider model name**: router resolves it and sends the provider its
+write there is a **route, not a provider model name**: vadis resolves it and sends the provider its
 own native model id, so `deepseek/deepseek-v4-pro` and an alias that points at it reach the upstream
 identically. Your own string is not lost — the trace records it as `decision.requested_model`
 alongside the native id it resolved to. Do **not** paste the bare native id into a client: it is not a
@@ -230,19 +230,19 @@ byte-identically, and the alias is the one that does not move when the vendor re
 
 ## Requiring a token (inbound auth)
 
-Router can require a token from every client that talks to it. This is off unless you turn it on,
+Vadis can require a token from every client that talks to it. This is off unless you turn it on,
 and it is a one-line change to your config plus one environment variable:
 
 ```bash
 # 1. make a token (any 32 random bytes are enough; the value is a secret)
-export ROUTER_TOKEN=$(openssl rand -hex 32)
+export VADIS_TOKEN=$(openssl rand -hex 32)
 ```
 
 ```yaml
-# 2. write server.auth_token_env in the router process's config: it names the
+# 2. write server.auth_token_env in the vadis process's config: it names the
 #    variable whose value is the expected token — the name, never the value
 server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
-          auth_token_env: ROUTER_TOKEN }
+          auth_token_env: VADIS_TOKEN }
 ```
 
 3. Give the same value to each client. Either accepted header form works, so send whichever you
@@ -250,16 +250,16 @@ server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout
 
 ```bash
 curl -s http://127.0.0.1:8790/v1/chat/completions \
-  -H "Authorization: Bearer $ROUTER_TOKEN" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $VADIS_TOKEN" -H 'content-type: application/json' \
   -d '{"model":"<provider>/<model>","messages":[{"role":"user","content":"hi"}]}'
 
 curl -s http://127.0.0.1:8790/v1/chat/completions \
-  -H "x-api-key: $ROUTER_TOKEN" -H 'content-type: application/json' \
+  -H "x-api-key: $VADIS_TOKEN" -H 'content-type: application/json' \
   -d '{"model":"<provider>/<model>","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 For codex and hermes the token goes in the same variable their `env_key` names (the snippet above
-uses `ROUTER_TOKEN`) — they send it as `Authorization: Bearer <token>`. Note the endpoint in
+uses `VADIS_TOKEN`) — they send it as `Authorization: Bearer <token>`. Note the endpoint in
 these examples is the chat one: pair it with a chat-native route from your roster (the example
 file's `zai` or `kimi` entries), or use `/v1/responses` for a responses-native route like
 `coding-fast` — v0.1 refuses the cross-protocol cell with `501 not_implemented` (see
@@ -270,7 +270,7 @@ upstream, and the refusal still leaves exactly one trace record (pre-pipeline, c
 
 ```
 HTTP/1.1 401 Unauthorized
-x-router-request-id: req-1
+x-vadis-request-id: req-1
 
 {"error":{"type":"unauthorized","message":"inbound auth: no token presented (send it as 'Authorization: Bearer <token>' or 'x-api-key: <token>')","details":{"header":null},"request_id":"req-1"}}
 ```
@@ -287,7 +287,7 @@ Four things worth knowing before you rely on this:
   ([`docs/spec.md` §8](../docs/spec.md)). Nothing was sent upstream, so a `401` tells you about your
   client's setup and never about a provider.
 - **Writing the key and leaving the variable unset is a startup refusal, not a quiet downgrade.**
-  If `ROUTER_TOKEN` is empty or missing in the router process's environment, `router serve` exits
+  If `VADIS_TOKEN` is empty or missing in the vadis process's environment, `vadis serve` exits
   with a non-zero code and says which variable it wanted. That is deliberate: a gateway that answers
   "I could not find your token, so I skipped the check" is worse than one that refuses to start.
 - **No key at all = local, unauthenticated mode** — today's behaviour, and what a single-user
@@ -301,33 +301,33 @@ once at startup.
 The upstream response. Two additions are **planned design intent, not served in v0.1** — do not
 build against them yet:
 
-- **`router_meta`** in the response body: the plugin chain that applied, the per-step
+- **`vadis_meta`** in the response body: the plugin chain that applied, the per-step
   transform accounting, the resolved session and the cache state. When it lands, this block is
-  router's own and is removed again on the way out when the request is forwarded upstream.
-- **`X-Router-Request-Id`** on every response, **`X-Router-Session`** when a session was
-  resolved, and **`X-Router-Lossy`** when the translation was lossy — the header set
+  vadis's own and is removed again on the way out when the request is forwarded upstream.
+- **`X-Vadis-Request-Id`** on every response, **`X-Vadis-Session`** when a session was
+  resolved, and **`X-Vadis-Lossy`** when the translation was lossy — the header set
   [`docs/spec.md` §8](../docs/spec.md) requires. On a streamed response all three must already
   be present in the response head, before the first event.
 
-What v0.1 sends today: `X-Router-Request-Id` on the streaming path, and
-`X-Router-Failover-From` on a response served by a fallback route instead of the primary one.
+What v0.1 sends today: `X-Vadis-Request-Id` on the streaming path, and
+`X-Vadis-Failover-From` on a response served by a fallback route instead of the primary one.
 The buffered path carries the request id inside an error body rather than as a header, and the
 other two headers land with the translation cells they describe.
 
 ## Session identity
 
-Router takes the session identity from the client's own signals, preferring the body's
+Vadis takes the session identity from the client's own signals, preferring the body's
 cache key (`prompt_cache_key`) and falling back to configured headers; the sources and
 their order are the `session.key_sources` of your config. Do **not** invent a session id
 when the client already sends one: the upstream's own cache is keyed by the client's value,
-so a different key would make router's view of the session and the provider's cache
+so a different key would make vadis's view of the session and the provider's cache
 disagree. When no source is present the request simply has no session (recorded as such,
 `sticky_hit` false) — that is a normal state, not an error.
 
 ## Where your data lands
 
 Both paths are resolved **relative to the directory containing the config file**, not the
-directory you happen to run `router` from:
+directory you happen to run `vadis` from:
 
 - **Traces** — append-only JSONL, one file per rollover interval, under the configured
   `trace.dir`. This is the analysis record (one decision record per request) and the only
@@ -351,7 +351,7 @@ not. Backup, inspection and what the store does when it cannot be opened are in
    without one comes back `401 unauthorized`.
 3. Run **one full session**, not a single request: an agent's first turn misses the cache
    and the following turns should hit it. Watch the session in the trace, or run
-   `router stats --config config.yaml --window 1h` over it, and confirm the first turn is
+   `vadis stats --config config.yaml --window 1h` over it, and confirm the first turn is
    priced as a miss and the later turns are not.
 4. Confirm the identity fields line up: the trace's session equals the client's cache key,
    and `turn_index` increases within the session.
@@ -363,7 +363,7 @@ in v0.1, and [`docs/spec.md` §9.3](../docs/spec.md) is the served/not-served li
 reporting surfaces). What still answers `501 not_implemented` is a route that would need cross-protocol
 translation — an inbound protocol that is not the provider's own `wire_api` (see
 [Protocols](protocols.md)). The proxy prerequisite above is the one you need before any of it can
-reach router at all; the token (if you turned inbound auth on) is what gets a request through the
+reach vadis at all; the token (if you turned inbound auth on) is what gets a request through the
 front door.
 
 ## Authoritative sources

@@ -1,4 +1,4 @@
-# ADR-038 — `router setup` writes the pair: an inline roster is moved, never preserved
+# ADR-038 — `vadis setup` writes the pair: an inline roster is moved, never preserved
 
 - Status: accepted
 - Date: 2026-09-26
@@ -13,7 +13,7 @@
   spec §4.11 (the *target file* column), **§4.14** (the two shapes); DESIGN §12.14 (the writer);
   ADR-020 / ADR-021 (the citations and the price tables the moved bytes carry as comments).
 - Numbering note: the register holds **37** ADRs (`ADR-001` … `ADR-037`), so **038** is the next free number.
-- Scope note: **the reader is untouched.** `serve`, `stats` and `router setup --check` load an inline root
+- Scope note: **the reader is untouched.** `serve`, `stats` and `vadis setup --check` load an inline root
   exactly as they do today — §4.14's *"the inline shape is not deprecated"* keeps its full meaning for the
   file that is there, and loses its meaning only for the file **this wizard** writes. No parse rule, no
   loader message, no `TRACE_SCHEMA_VERSION`, no dependency and no conformance assertion moves.
@@ -26,20 +26,20 @@ roster file:
 
 | File | The roster's block | Lines | Bytes | `<roster>` beside it |
 |---|---|---|---|---|
-| `~/.config/router/config.yaml` (the XDG candidate, and the file a bare `router setup` resolves) | `providers:` at line 100 … line 1058 | 959 | 71 069 | **none** |
+| `~/.config/vadis/config.yaml` (the XDG candidate, and the file a bare `vadis setup` resolves) | `providers:` at line 100 … line 1058 | 959 | 71 069 | **none** |
 | `<repo>/config.yaml` (the CWD candidate) | `providers:` at line 78 … line 739 | 662 | 36 517 | **none** |
 
 The two halves of the wizard's behaviour, measured at `ddd7a75` with the installed
-`<home>/bin/router` (a build of 2026-09-26 10:01 that **does** embed the split template — `strings` finds
+`<home>/bin/vadis` (a build of 2026-09-26 10:01 that **does** embed the split template — `strings` finds
 `providers_file:`, so the observation is not a stale binary):
 
-- **A fresh target writes the pair.** `router setup --non-interactive --config <a path that does not
+- **A fresh target writes the pair.** `vadis setup --non-interactive --config <a path that does not
   exist>` writes `config.yaml` (14 960 B) **and** `providers.example.yaml` (71 070 B), exit 0, both `0600`.
-- **An existing inline root writes nothing and creates no roster.** `router setup --non-interactive
+- **An existing inline root writes nothing and creates no roster.** `vadis setup --non-interactive
   providers --config <a copy of the inline root>` prints `no change: … left as it is`, exit 0, and the
   directory still holds exactly one file.
-- **A bare `router setup` in the repository root edits the XDG file** (`router setup --print` reports
-  `# <home>/.config/router/config.yaml`), because §4.12's second candidate outranks its third:
+- **A bare `vadis setup` in the repository root edits the XDG file** (`vadis setup --print` reports
+  `# <home>/.config/vadis/config.yaml`), because §4.12's second candidate outranks its third:
   the file a user thinks they are configuring is not always the file the wizard opens. Both candidates are
   inline, so the shape outcome is the same either way.
 
@@ -50,11 +50,11 @@ file that never had the key, and it stays hand-work."* Two consequences followed
 user-visible:
 
 1. **The roster file exists only for users whose first run happened after the split.** A config written
-   before it stays inline **forever**: a bare `router setup` over it is the no-op measured above, and the
+   before it stays inline **forever**: a bare `vadis setup` over it is the no-op measured above, and the
    only documented migration (`--force`) replaces the whole root with the template — every hand edit that
    is not in the template survives only at `config.yaml.bak` (spec §4.11's `--force` row: *"What it
    discards is any note **you** wrote into your own file"*). That is a reset, not a migration.
-2. **The silence is indistinguishable from a failure.** After a full `router setup`, nothing appears beside
+2. **The silence is indistinguishable from a failure.** After a full `vadis setup`, nothing appears beside
    the config, and no line says why — which is how this ADR's own problem was reported (〈我发现最后不会自动
    生成 provider 文件〉, 2026-09-26).
 
@@ -66,7 +66,7 @@ run splits, and a conflicting roster is **backed up and overwritten** rather tha
 
 ## Decision
 
-**D1 — The run's shape is always the pair.** No `router setup` run — bare, `all` or one section, interactive
+**D1 — The run's shape is always the pair.** No `vadis setup` run — bare, `all` or one section, interactive
 or `--non-interactive`, over a fresh target or an existing file — leaves the root carrying the roster
 inline. A root whose **parsed** shape is inline-with-`providers` is normalized **before anything is
 planned**, and the normalization is part of the run's candidate like every other change.
@@ -127,8 +127,8 @@ equal the moved block is not written and not backed up at all.
 
 | Alternative | Why it is not the decision |
 |---|---|
-| `router setup --split`, the migration as an explicit flag (this ADR's first draft) | **Owner-declined**: it makes the user carry a shape distinction the tool exists to decide. ADR-025 already argues the class (its `--reconfigure` lesson: no flags that restate behaviour), and spec §4.11 states it in terms: *"a flag that merely restates the default is a lie in a help text."* A wizard that writes two shapes needs a paragraph to explain which one you are in; one that writes one shape needs a sentence |
-| Split only on a bare `router setup` / only when the run includes the `providers` section | **Owner-declined**: the shape must not depend on which section you happened to ask for. Two runs over one file would leave two shapes, and "did my config get split?" would become a question about argv |
+| `vadis setup --split`, the migration as an explicit flag (this ADR's first draft) | **Owner-declined**: it makes the user carry a shape distinction the tool exists to decide. ADR-025 already argues the class (its `--reconfigure` lesson: no flags that restate behaviour), and spec §4.11 states it in terms: *"a flag that merely restates the default is a lie in a help text."* A wizard that writes two shapes needs a paragraph to explain which one you are in; one that writes one shape needs a sentence |
+| Split only on a bare `vadis setup` / only when the run includes the `providers` section | **Owner-declined**: the shape must not depend on which section you happened to ask for. Two runs over one file would leave two shapes, and "did my config get split?" would become a question about argv |
 | Keep the shape, document the hand-split in `book/` | The measured problem is that the roster file never appears; documenting the ceremony does not produce it. The wizard's whole job is to turn the template into your config, and the template has been a pair since R43 |
 | Refuse when a roster file already exists beside an inline root | Declined by the owner in favour of D6's backup-and-continue: refusing turns a condition the run can make safe into a manual chore, and the operator's bytes are kept by name either way |
 | Normalize a both-written or unparseable root too (extract the inline block, drop the other key) | **D5**: that is the wizard repairing a file that does not load. The refusal is a contract about shapes, and a run that "fixes" it writes a config the operator has never seen |
@@ -136,7 +136,7 @@ equal the moved block is not written and not backed up at all.
 
 ## Consequences
 
-- **A run that used to be a no-op now writes.** Over an inline root, a bare `router setup` (or any
+- **A run that used to be a no-op now writes.** Over an inline root, a bare `vadis setup` (or any
   section-scoped run) prints a `split:` line and lands two files where it previously printed `no change`.
   `--dry-run` reports a write where it reported none. This is the decision, not a regression: the wizard's
   output shape is now a function of the tool, not of the file's history.
@@ -146,7 +146,7 @@ equal the moved block is not written and not backed up at all.
 - **The failure modes stay loadable.** Roster-first landing means every partial state still loads: root
   inline with an extra roster beside it (a stray file §4.12 never reads), or root naming a roster that is
   already written. No state exists in which the root names a file that is not there.
-- **The `.example` spelling now appears in live configs.** `~/.config/router/providers.example.yaml` is a
+- **The `.example` spelling now appears in live configs.** `~/.config/vadis/providers.example.yaml` is a
   user's own roster. The name is D2's consequence; §4's `# Usage:` line and the book already use it for the
   pair, and §4.14's *named, never searched* rule means the name is an operator's to change by hand.
 - **Nothing else moves**: the anchored-edit strategy, the refusal ladder, `--check`'s probes, the section
@@ -164,7 +164,7 @@ equal the moved block is not written and not backed up at all.
 - **spec §4.14**'s *"the inline shape is not deprecated"* keeps its reading side and gains the write side's
   statement.
 - **One assertion of R43's own test set is amended, and named here rather than edited quietly**:
-  `providers_edit_lands_in_the_root_under_the_inline_form` (`crates/router-cli/src/setup/mod.rs`) asserted
+  `providers_edit_lands_in_the_root_under_the_inline_form` (`crates/vadis-cli/src/setup/mod.rs`) asserted
   that an answered `providers` question over an inline root moves the **root's** line. Under D1 the same
   question lands in the roster the run created; the test becomes that case, with the root's own bytes
   asserted *not* to carry the answer. The loader's inline control (CONF-85's `(f)` arm, `conf_85_roster_file.rs`)
@@ -173,9 +173,9 @@ equal the moved block is not written and not backed up at all.
 ## Evidence this ADR rests on (all re-runnable at `ddd7a75`)
 
 - The two spans above: `providers:` at `config.yaml:78` (662 lines / 36 517 B) and at
-  `~/.config/router/config.yaml:100` (959 lines / 71 069 B), measured by scanning the files' own bytes for
+  `~/.config/vadis/config.yaml:100` (959 lines / 71 069 B), measured by scanning the files' own bytes for
   the header line and the last line the block owns.
-- The three wizard probes quoted under *Background*, run with `<home>/bin/router` (2026-09-26 10:01 build) on
+- The three wizard probes quoted under *Background*, run with `<home>/bin/vadis` (2026-09-26 10:01 build) on
   throwaway copies under the scratch directory; the fresh-target probe's two file sizes are its own output.
 - `providers.example.yaml` measured at 71 070 B / 960 lines, its 959 content lines byte-equal to the XDG
   root's inline span (71 069 B) — the inline configs on this machine carry the roster the split moved,
@@ -197,7 +197,7 @@ the reading side**"*) and `docs/spec.md:1061` (the shape step). A reader who fol
 finds the load-side contract, which is a different sentence.
 
 **2. The scope note's reading (`:16`–`:19`) — `R45-1-F1`.** *"the reader is untouched. `serve`, `stats` and
-`router setup --check` load an inline root exactly as they do today"* was true of the **load** and of the
+`vadis setup --check` load an inline root exactly as they do today"* was true of the **load** and of the
 **exit codes**, and R45-1 (2026-09-26) measured the one thing it read as covering and no longer describes:
 over an inline root, `--check` prints one roster-fact line above its names (a `roster` member in `--json`) —
 the fourth surface **D9** did not name. The current reading, as the contract carries it since R45:
@@ -212,7 +212,7 @@ reads them marks them closed; a future reader of `:16`–`:19` or `:164` should 
 
 ## Redaction note (2026-10-03, R62-1)
 
-The owner home path inside the quoted `router setup --print` log line was
+The owner home path inside the quoted `vadis setup --print` log line was
 replaced with `<home>`. The logged behaviour and the decision are unchanged; only
 the machine-local path prefix was redacted for publication.
 

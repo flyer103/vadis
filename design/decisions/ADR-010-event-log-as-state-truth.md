@@ -6,7 +6,7 @@
 
 ## Background
 
-Round 2 makes router stateful in the durable sense: a sticky session binding, the cache ledger and the
+Round 2 makes vadis stateful in the durable sense: a sticky session binding, the cache ledger and the
 quota counters must survive a restart, and a crash must not turn "what the gateway did" into a guess under
 the operator's feet. The previous design treated state as *derived memory* — the counters were the truth
 and any history was implicit — which fails in two ways:
@@ -19,7 +19,7 @@ and any history was implicit — which fails in two ways:
 
 It is worth stating the context that makes this asymmetry expensive: clients are stateless and resend the
 whole conversation (ADR-004), so the gateway is the only place in the system where a request's lifecycle is
-recorded at all. If router loses an intent, nobody else kept a copy.
+recorded at all. If vadis loses an intent, nobody else kept a copy.
 
 ## Decision
 
@@ -62,7 +62,7 @@ recorded at all. If router loses an intent, nobody else kept a copy.
    - its cost stays **uncomputed**: there is no `usage` to read, and inventing a number is forbidden by the
      accounting convention (spec §7);
    - reconciliation is left to the operator, against the provider's own bill and the measured captures.
-     `router stats` reports the number of `unknown_outcome` requests in the window, so the ambiguity is
+     `vadis stats` reports the number of `unknown_outcome` requests in the window, so the ambiguity is
      visible rather than absorbed into a total.
 5. **Honest boundary (unverified, and it may not be fixable by cleverness).** Whether an OpenAI-compatible
    upstream honours an idempotency key is **not verified** in v0.1, and no client-supplied request id is
@@ -116,11 +116,11 @@ recorded at all. If router loses an intent, nobody else kept a copy.
   the log, so the analysis record and the state truth join on `request_id` + `event_id` rather than on
   timestamps.
 - Money keeps a single authority: cost answers come from the trace (spec §6/§7, ADR-005). `cost.computed`
-  and `quota.charged` rows are *state* events — what was charged to a plan — and `router replay` remains the
+  and `quota.charged` rows are *state* events — what was charged to a plan — and `vadis replay` remains the
   authority for money. The two must not be presented as interchangeable numbers.
 - A vocabulary change must keep old rows readable: `events.schema_version` is per row, rows are never
   rewritten, and readers upcast (ADR-009 item 7).
-- Operator tooling for the projections and the `unknown_outcome` report (a `router state`-style surface)
+- Operator tooling for the projections and the `unknown_outcome` report (a `vadis state`-style surface)
   becomes necessary, but it is a **separate change** with its own doc update; this ADR does not add it to
   the CLI surface.
 

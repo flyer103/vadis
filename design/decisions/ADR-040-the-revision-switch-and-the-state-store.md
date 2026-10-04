@@ -7,9 +7,9 @@
   keyed on (`config_digest = sha16(root_sha16 + ":" + roster_sha16)`, a *byte* digest over the pair),
   **D2** gives the files it reads (*named, never searched* — the root names its roster, so the reload
   has one path to look at and not a search), **D4** gives the once-at-load join the serving path reads
-  (`RouterConfig::providers` stays the only representation), and **D7** is the item this ADR closes:
+  (`VadisConfig::providers` stays the only representation), and **D7** is the item this ADR closes:
   *"the atomic-swap decision"* left to the reload's own round; **ADR-039** — the **mechanism** half of
-  D7 (a file-watch crate, `notify` 8.2.0, in `router-cli` only; the watcher decides *when to look*, the
+  D7 (a file-watch crate, `notify` 8.2.0, in `vadis-cli` only; the watcher decides *when to look*, the
   digest decides *whether anything changed*), and D4 there is the list of what it deliberately left
   here; **ADR-002** (the declarative loader, the fiber state machine, the unload order, and the keyed
   config diff this ADR does **not** assume exists — §12.2's sketch, measured below); **ADR-004** (the
@@ -48,29 +48,29 @@ how the old revision stops being used, what an in-flight request sees"*) togethe
 side of it (its D4, row 2). The loop state record's waiting-on-human row 17 carries the same item.
 
 **What already exists, so the decision is as small as it is.** The reload does not need an identity
-invented: `config_digest` is computed once at load (`crates/router-cli/src/config_load.rs:199`), carried
-on every trace record (`crates/router-core/src/trace.rs:46`), written into `config.applied`'s payload
-(`crates/router-cli/src/lib.rs:229`) and reported by `/health` (`crates/router-proxy/src/health.rs:41`).
+invented: `config_digest` is computed once at load (`crates/vadis-cli/src/config_load.rs:199`), carried
+on every trace record (`crates/vadis-core/src/trace.rs:46`), written into `config.applied`'s payload
+(`crates/vadis-cli/src/lib.rs:229`) and reported by `/health` (`crates/vadis-proxy/src/health.rs:41`).
 The reload does not need a second reader: `config_load::load`
-(`crates/router-cli/src/config_load.rs:146`) reads the root, reads the named roster, joins and validates
-— the same two calls `router setup` reaches the parser through (DESIGN §12.10.2's *"`load` is the only
+(`crates/vadis-cli/src/config_load.rs:146`) reads the root, reads the named roster, joins and validates
+— the same two calls `vadis setup` reaches the parser through (DESIGN §12.10.2's *"`load` is the only
 reader, and `load` is the only validator"*).
 And it does not need a new event: DESIGN §12.10.5 **row 13** already specifies `config.applied` as
 written *"at startup after validation, **and on every accepted config diff**"* — a trigger the tree has
 never had a caller for, because nothing diffed a config (measured: `config.applied` is appended at
-exactly one site, `crates/router-cli/src/lib.rs:212`, on the startup path).
+exactly one site, `crates/vadis-cli/src/lib.rs:212`, on the startup path).
 
 **Three facts about the tree bound this ADR, and each is a measurement rather than an assumption.**
 
 1. **There is no reload machinery, and the assembly says so in its own words.** `declared_inject`
-   (`crates/router-plugins/src/assembly.rs:276-277`) records it: *"the assembly is built once at start-up
+   (`crates/vadis-plugins/src/assembly.rs:276-277`) records it: *"the assembly is built once at start-up
    and never reloaded (the round's scope call (ii) — no config-diff, no live reload)."* The runtime can
-   load, unload and **re-load** a fiber — `router-runtime/src/loader.rs:807` is the unit test
+   load, unload and **re-load** a fiber — `vadis-runtime/src/loader.rs:807` is the unit test
    `a_reloaded_provider_reactivates_its_dependents` — but the *keyed config diff* DESIGN §12.2's last row
    names (`apply_config_diff`) **does not exist** (`git grep apply_config_diff` → no output). So D5's
    "mount only the delta" is a contract for the implementing round, not a capability it inherits.
 2. **No store table is keyed by the configuration, and the DDL is the evidence.** The seven tables
-   (`crates/router-store/src/lib.rs:42-110`) are keyed by `event_id`, `session_key`,
+   (`crates/vadis-store/src/lib.rs:42-110`) are keyed by `event_id`, `session_key`,
    `(session_key, block_index)`, `(provider, plan_idx, window_start_us)`, `(scope, provider, model)` and
    `family`; **no column anywhere holds a digest or a revision**. The identity is a *carried value*
    (trace field, event payload member, `/health` member), which is exactly what ADR-037 D6 decided it is:
@@ -84,7 +84,7 @@ exactly one site, `crates/router-cli/src/lib.rs:212`, on the startup path).
    roster. D4 answers that case rather than pretending it cannot happen.
 
 **What a "revision" therefore is, in one sentence.** A revision is **the immutable value a successful
-load of the pair produces** — the validated `RouterConfig`, the resolved paths and identity (§12.10.2's
+load of the pair produces** — the validated `VadisConfig`, the resolved paths and identity (§12.10.2's
 `ResolvedConfig`), and whatever the runtime mounted for it — and two revisions are the same revision
 **iff their `config_digest` is equal**, because ADR-039 chose the digest as the decider and the
 notification only as the trigger.
@@ -115,12 +115,12 @@ publication of that finished value.** The sequence, in order:
    attempt (D4) and nothing below runs;
 3. **commit** one `config.applied` row (row 13, `FULL`, the class intent/accounting uses) carrying the
    new digest — the same order the startup path already uses (*"committed before the process starts
-   serving on top of it"*, `crates/router-cli/src/lib.rs:210-231`);
+   serving on top of it"*, `crates/vadis-cli/src/lib.rs:210-231`);
 4. **publish** the handle: one store that a reader either sees complete or does not see.
 
 **The serving path captures the published revision once per request**, at receive, and reads *that*
 revision for the request's whole lifetime — the same discipline that already governs the trace writer
-(`ConfigTraceWriter` holds the digest beside the sink it wraps, `crates/router-cli/src/lib.rs:99-135`,
+(`ConfigTraceWriter` holds the digest beside the sink it wraps, `crates/vadis-cli/src/lib.rs:99-135`,
 and refuses to construct with an empty one) and the same discipline ADR-037's consequences demand
 (*"nothing behind a request opens, reads or hashes a file"*).
 
@@ -147,7 +147,7 @@ function of the owner's answer to the question in the next section:
   captured the old revision**: the old revision's structures are retained while a handle to them exists
   and are dropped with the last holder. No deadline, no timer, no drain window, nothing to configure.
 - **if a session is pinned** (the "pin" family), the bound is **the last live session bound to the old
-  revision** — i.e. up to `session.ttl` (`SessionCfg`, `crates/router-core/src/config.rs:628`; DESIGN
+  revision** — i.e. up to `session.ttl` (`SessionCfg`, `crates/vadis-core/src/config.rs:628`; DESIGN
   §12.10.4's `sessions.expires_at_us`), and the old revision's structures must be retained for that whole
   period.
 
@@ -179,7 +179,7 @@ axis (R47-0b's); what this ADR fixes is that a refusal is **observable** and tha
 `config.applied` row**.
 
 **A revision once published is immutable.** A correction is published as a *new* revision; nothing
-patches a loaded `RouterConfig`, a resolved path or a mounted rule set in place, and the publish is the
+patches a loaded `VadisConfig`, a resolved path or a mounted rule set in place, and the publish is the
 only writer of what the request path reads. That is what keeps AGENTS 2 true across a switch: the
 "stable config" a transform is a pure function of cannot change underneath a request.
 
@@ -200,11 +200,11 @@ key whose only consumer is an object the **process** builds once at startup and 
 and the refusal names the key.
 
 **Refused — the named set, and it is the process's own resources.** `server.addr` (the listener is bound
-once, `crates/router-cli/src/lib.rs:853-854` names the bind failure), the resolved `trace.dir` (resolved at
+once, `crates/vadis-cli/src/lib.rs:853-854` names the bind failure), the resolved `trace.dir` (resolved at
 load and held by the trace writer, which is also why `trace.rollover` is the unit that may move, not the
 directory) and the state store's path (fixed at `<config dir>/state/router.db`, spec §4.5). Measured, and
 in the same class though less obviously so: **`server.upstream_attempt_timeout`** is read to build each
-provider transport at startup (`crates/router-cli/src/lib.rs:299-304` — `ReqwestProviderClient::new(timeout)`),
+provider transport at startup (`crates/vadis-cli/src/lib.rs:299-304` — `ReqwestProviderClient::new(timeout)`),
 so it is not a per-request read today; **`server.max_body_bytes`** is consumed by the inbound-body layer
 (§12.15), built for the process. Both are **refused by default**, and the implementing round may promote
 either by rebuilding its object as part of the revision — cheap for a layer, not free for a connection
@@ -228,11 +228,11 @@ diff API for this does not exist yet (Background, fact 1), so this is a contract
 lands the reload, not a description of the tree.
 
 **One honesty note on `auth_token_env`, because it is a process fact and not a file fact.** The token's
-*value* is read by `std::env` once, at startup (`crates/router-cli/src/lib.rs:176-193`), and rotating it
+*value* is read by `std::env` once, at startup (`crates/vadis-cli/src/lib.rs:176-193`), and rotating it
 means restarting the process — that is the existing contract (spec §4.7). A revision may therefore
 change the *name* the config names, and the reload must then read the newly-named variable; a revision
 that names a variable that is unset refuses the switch with the startup refusal's own reason
-(`crates/router-cli/src/lib.rs:184-189`) rather than quietly serving without a gate. Whether the value
+(`crates/vadis-cli/src/lib.rs:184-189`) rather than quietly serving without a gate. Whether the value
 should be re-read per switch is **not** decided here: the existing sentence ("read once") stands, and
 re-reading it would be a change to §4.7's contract, not to this one.
 
@@ -340,7 +340,7 @@ untouched — the reload's only product → analysis-loop channel is the trace J
 on that trace is `config_digest` on every record*, additive as ADR-037 D6 left it, with
 `TRACE_SCHEMA_VERSION` staying **2**; and **there is no new user-facing flag** — the reload is default
 behaviour, as the owner's standing R44 ruling requires (`setup`'s pair write is the precedent: the
-capability is a behaviour, not a parameter). No `--watch`, no `router reload` verb, no `SIGHUP`, no
+capability is a behaviour, not a parameter). No `--watch`, no `vadis reload` verb, no `SIGHUP`, no
 `server.reload: true`, no interval key. The **debounce window** ADR-039 D3 registered as a second
 allowlist decision is an implementation constant, **not** a config key, and it is R47-0b's to decide.
 
@@ -384,7 +384,7 @@ with a typed error (a new `error.type` in §12.7's vocabulary, naming both diges
 served by the new one.
 - *What a client mid-conversation sees:* an **interrupted conversation** — the turn fails, and the client
   must restart its thread (a fresh session, a cold prefix) to continue. It is a failure the client did
-  nothing to earn: the trigger is entirely internal to router.
+  nothing to earn: the trigger is entirely internal to vadis.
 - *What it buys:* exactly **one** revision serves at any instant — no pin, no retention, no second live
   revision, and no possibility of two turns of one conversation being governed by different
   configurations. The switch is total and immediate, and its effect is unmissable.
@@ -464,8 +464,8 @@ session-level policy may land** — a card that needs it blocks on the owner.
   and row 6 (how the watcher survives the `rename`) remain where they were: the owner's and 0b's
   respectively.
 - **What the implementing round inherits as work, not as invention:** the reload's own loop and its
-  second `load` entry point in `router-cli`; the published handle and the capture-once seam in
-  `router-proxy`; the delta-only plugin mount, which needs the keyed diff DESIGN §12.2 sketches and
+  second `load` entry point in `vadis-cli`; the published handle and the capture-once seam in
+  `vadis-proxy`; the delta-only plugin mount, which needs the keyed diff DESIGN §12.2 sketches and
   nothing yet implements; the debounce (0b); and the rig that drives a landing the reload performs
   itself — a `temp`+`rename` of the pair, not a hand edit (ADR-039's own consequence for the platform
   backends).
@@ -502,7 +502,7 @@ session-level policy may land** — a card that needs it blocks on the owner.
 
 ## Reversibility
 
-**Every decision here is reversible inside `router-cli`'s and `router-proxy`'s own code, and none of
+**Every decision here is reversible inside `vadis-cli`'s and `vadis-proxy`'s own code, and none of
 them is stored.** Removing the watcher returns the tree to a process that serves what it loaded at
 startup, exactly as today; the identity, the trace field and the `config.applied` row all predate the
 reload and outlive its removal. The pin arm, if chosen, is memory-only and dies with the process, so
@@ -530,19 +530,19 @@ grep -n '^### 12\.20' design/DESIGN.md            -> no output   (free)
 
 # no reload machinery, and the assembly says so in its own words
 git grep -n -i -e reload -e notify -e watcher -- 'crates/**/*.rs'
-  -> crates/router-plugins/src/assembly.rs:276-277  "built once at start-up and never reloaded ... no config-diff, no live reload"
-  -> crates/router-runtime/src/loader.rs:807        a_reloaded_provider_reactivates_its_dependents (the runtime can re-load a fiber)
+  -> crates/vadis-plugins/src/assembly.rs:276-277  "built once at start-up and never reloaded ... no config-diff, no live reload"
+  -> crates/vadis-runtime/src/loader.rs:807        a_reloaded_provider_reactivates_its_dependents (the runtime can re-load a fiber)
 git grep -n apply_config_diff -- crates/           -> no output   (DESIGN 12.2's keyed diff is a sketch, not code)
 git grep -n notify -- Cargo.toml crates/*/Cargo.toml -> no output (the dependency has not landed; ADR-039 D3)
 
 # no store table is keyed by the configuration
-git grep -n -e 'CREATE TABLE' -e 'PRIMARY KEY' -- crates/router-store/   # 7 tables: event_id, session_key,
+git grep -n -e 'CREATE TABLE' -e 'PRIMARY KEY' -- crates/vadis-store/   # 7 tables: event_id, session_key,
   # (session_key, block_index), (provider, plan_idx, window_start_us), (scope, provider, model), family
 git grep -n config_digest -- 'crates/**'   # trace field, config.applied payload, /health, the trace writer
 
 # the gate's two consequences: startup exits, a reload may not
-git grep -n -e 'return 2;' -e 'return 3;' -e 'return 4;' -- crates/router-cli/src/lib.rs   # 2 config, 3 bind, 4 env/store
-crates/router-cli/src/lib.rs:212   -> the only append of EventKind::ConfigApplied in the tree (startup)
+git grep -n -e 'return 2;' -e 'return 3;' -e 'return 4;' -- crates/vadis-cli/src/lib.rs   # 2 config, 3 bind, 4 env/store
+crates/vadis-cli/src/lib.rs:212   -> the only append of EventKind::ConfigApplied in the tree (startup)
 
 # the landing is atomic per file (the torn-pair case is two renames, not one)
 grep -n rename docs/spec.md   -> spec 4.11: temp file "flushed, and is then renamed over the target
@@ -615,7 +615,7 @@ switch, and `TRACE_SCHEMA_VERSION` stays 2.** The medium decision is what makes 
 cheap half of AGENTS 3.
 
 **The payload.** Row 13's payload today is the startup object (measured at this commit,
-`crates/router-cli/src/lib.rs:212-231`: `config_path`, `schema_version`, `root_path`, `roster_path`,
+`crates/vadis-cli/src/lib.rs:212-231`: `config_path`, `schema_version`, `root_path`, `roster_path`,
 `root_sha16`, `roster_sha16`, `config_digest`). A switch's row is that object **plus two members, carried by
 every row 13** so that a reader never has to ask which vintage it holds:
 
@@ -630,7 +630,7 @@ list describes exactly that pair. It is attribution, not a key (RV-6): a member 
 a config key or a gate input.
 
 **The key-path grammar.** The diff runs over the **validated, joined** configuration — the value the process
-serves, `RouterConfig::providers` staying the only representation (ADR-037 D4) — never over file text:
+serves, `VadisConfig::providers` staying the only representation (ADR-037 D4) — never over file text:
 
 - object members join with `.`: `session.ttl`, `server.auth_token_env`, `plugins`.
 - an array element is named by its **identity key** where the element carries one — `providers[zai]`,
@@ -679,7 +679,7 @@ could only restate the digest would not be worth carrying.
 
 **The emission point.** Row 13 is committed as step 3 of D2's sequence — after the gate, **before** the
 publish — so the row precedes the effect it authorizes (ADR-010's order; the startup path's own order,
-`crates/router-cli/src/lib.rs:210-231`). The rejected alternative is worth naming because it is the obvious
+`crates/vadis-cli/src/lib.rs:210-231`). The rejected alternative is worth naming because it is the obvious
 one: writing the row **after** the publish opens a window in which a record already carries the new digest
 while no `config.applied` row for it exists — precisely the state RV-1 calls a defect. Three further
 refinements this axis owns:
@@ -705,7 +705,7 @@ exactly that path, derived by the rig from the two files it wrote; startup carri
 ### D11 — a refused candidate at runtime: one line on the process's own output, and the revision in force keeps serving
 
 **The surface is the process's own output, one line per refused candidate** — the medium `serve`'s startup
-refusals already use (`crates/router-cli/src/lib.rs:155`, `:164`, `:202`, `:321`, `:346`; asserted from the
+refusals already use (`crates/vadis-cli/src/lib.rs:155`, `:164`, `:202`, `:321`, `:346`; asserted from the
 outside by `tests/conformance/tests/conf_23_startup_refusals.rs` and `conf_45`, which spawn the binary and
 match the reason on stderr). The line's **content** is this contract; its wording belongs to the
 implementation:
@@ -824,8 +824,8 @@ window, or must a fresh p99 ladder be run — and if so, which gate consumes it?
 | # | What the ruling decides | The measured fact it decides about |
 |---|---|---|
 | 1 | whether a switch's own cost is inside the gate quantity or outside it | the L1 quantity is `result.overhead_ms − result.upstream_ms` (DESIGN §12.16, `design/DESIGN.md:3439-3441`; the loop charter's blocking Latency row), and a reload's load + gate + publish happens **off the request path** (D2) — so the quantity is **blind to a reload by construction**. The ruling says whether that blindness is intended. |
-| 2 | whether the first turn that crosses an outbound-visible change belongs in the sample | such a turn re-prefills (D7.3), and the re-prefill lands in `upstream_ms` — the **subtracted** term — so it *lowers* the measured router overhead. In the sample, excluded, or a quantity of its own: the ruling's. |
-| 3 | whether a new instrument is needed at all | the quantity a ladder would most naturally read (a publish → the first request served by the new revision) is **derivable today** from the two media the repo already has: the `config.applied` row's `ts_us` (store, microseconds) and the `ts` of the first record carrying the new `config_digest` (trace, **RFC3339 UTC at millisecond precision**, `crates/router-core/src/trace.rs:35-36`). Millisecond resolution, no new instrument; anything finer is a gate-side decision. |
+| 2 | whether the first turn that crosses an outbound-visible change belongs in the sample | such a turn re-prefills (D7.3), and the re-prefill lands in `upstream_ms` — the **subtracted** term — so it *lowers* the measured vadis overhead. In the sample, excluded, or a quantity of its own: the ruling's. |
+| 3 | whether a new instrument is needed at all | the quantity a ladder would most naturally read (a publish → the first request served by the new revision) is **derivable today** from the two media the repo already has: the `config.applied` row's `ts_us` (store, microseconds) and the `ts` of the first record carrying the new `config_digest` (trace, **RFC3339 UTC at millisecond precision**, `crates/vadis-core/src/trace.rs:35-36`). Millisecond resolution, no new instrument; anything finer is a gate-side decision. |
 
 **Nothing is decided here, and nothing may be measured as a gate input before the ruling** — AGENTS 9 /
 ADR-012 put the L1 envelope and the gate definitions outside the mutable scope, and AGENTS 4 forbids
@@ -840,18 +840,18 @@ in **R47** (merge `db2ac77`). Both corrections are pointers rather than restatem
 
 1. **The honest-boundaries sentence** (*"Nothing here is served at the time of writing … no watcher,
    no second `load` entry point, no published handle and no keyed diff"*) — all four are in the tree
-   now: the watcher is `crates/router-cli/src/reload.rs` (`Watcher`, the leading-edge `Coalescer`,
+   now: the watcher is `crates/vadis-cli/src/reload.rs` (`Watcher`, the leading-edge `Coalescer`,
    the one `COALESCE_WINDOW` constant — R47-1, `b1c364a`); the second `load` entry point is
    `reload::look`, which runs the same `config_load::load` `serve` starts with; the published handle
-   is `router_proxy`'s `RevisionCell` (`crates/router-proxy/src/revision.rs`), written only by
+   is `vadis_proxy`'s `RevisionCell` (`crates/vadis-proxy/src/revision.rs`), written only by
    `reload::Publisher` (R47-2, `2a04c9a` / `078094c`); and the keyed diff is
-   `crates/router-core/src/config_diff.rs` (`router_core::changed_keys` — R47-2, `d4c849b`). R47-3's
+   `crates/vadis-core/src/config_diff.rs` (`vadis_core::changed_keys` — R47-2, `d4c849b`). R47-3's
    independent verification of the landing returned **NO BLOCKING FINDING**
    (the loop's verdict record), and R47-4 measured D7.2's prefix-neutrality claim on the
    frozen corpus at $0 — it **HOLDS** (the loop's evidence for that decision).
 2. **The evidence block's `git grep -n notify -- Cargo.toml crates/*/Cargo.toml -> no output (the
    dependency has not landed; ADR-039 D3)`** — the dependency has landed: `notify = "8"` at
-   `Cargo.toml:65` and `notify = { workspace = true }` at `crates/router-cli/Cargo.toml:41` (R47-1,
+   `Cargo.toml:65` and `notify = { workspace = true }` at `crates/vadis-cli/Cargo.toml:41` (R47-1,
    `34f76d0`, the manifest comment in ADR-039 D3's shape). The block's other no-output readings still
    hold at this commit: `apply_config_diff` exists nowhere in `crates/` (the keyed diff landed under
    D10's own name, `changed_keys`), and no store table is keyed by the configuration (RV-6).
