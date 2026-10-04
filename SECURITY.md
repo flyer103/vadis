@@ -5,7 +5,7 @@
 **Do not open a public issue for a security problem.** Report it privately through GitHub's
 private vulnerability reporting: open the repository's **Security** tab and click
 **Report a vulnerability** (the form is also at
-<https://github.com/flyer103/router/security/advisories/new>). If that button is not offered,
+<https://github.com/flyer103/vadis/security/advisories/new>). If that button is not offered,
 open an issue whose *only* content is "security report — please enable private vulnerability
 reporting", and wait; do not describe the problem in the issue.
 
