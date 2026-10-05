@@ -169,17 +169,35 @@ pub(crate) fn build_revision(
     // themselves are never read here (the provider client holds them,
     // §12.10.1) and never reported — only their presence travels to
     // /health, beside each entry's declared region and currency
-    // (spec §4.8).
+    // (spec §4.8). ADR-049 §3 rule 2: the pool is probed per name, and
+    // the provider-level fact is the pool's disjunction.
     let provider_keys: Vec<vadis_proxy::ProviderKeyFacts> = rc
         .vadis
         .providers
         .iter()
-        .map(|p| vadis_proxy::ProviderKeyFacts {
-            name: p.name.clone(),
-            api_key_env: p.api_key_env.clone(),
-            present: std::env::var_os(&p.api_key_env).is_some(),
-            region: p.region,
-            currency: p.currency,
+        .map(|p| {
+            let pool = p.key_pool();
+            let facts: Vec<bool> = pool.iter().map(|n| std::env::var_os(n).is_some()).collect();
+            let present = facts.iter().any(|&b| b);
+            vadis_proxy::ProviderKeyFacts {
+                name: p.name.clone(),
+                // The one-key spelling's own facts (ADR-049 §7(a)): the
+                // first declared name, whatever spelling was written —
+                // so the existing members keep their exact meaning.
+                api_key_env: pool.first().cloned().unwrap_or_default(),
+                present,
+                region: p.region,
+                currency: p.currency,
+                keys: (p.api_keys.is_some()).then(|| {
+                    pool.iter()
+                        .zip(facts.iter())
+                        .map(|(n, &b)| vadis_proxy::KeyFact {
+                            env: n.clone(),
+                            present: b,
+                        })
+                        .collect()
+                }),
+            }
         })
         .collect();
 
@@ -201,22 +219,30 @@ pub(crate) fn build_revision(
     // by the engine (never in /health, logs or events). A keyless provider
     // gets no transport: the chain skips it and /health reports it
     // unavailable.
+    // ADR-049 §3 rule 7: the values are read once here, all of them —
+    // one per **present** pool name, in declaration order (the rotation
+    // order). Held only by the engine, never in /health, logs or events;
+    // a provider with no present name gets no transport and no entry.
     let mut transports: HashMap<String, std::sync::Arc<dyn vadis_proxy::ProviderTransport>> =
         HashMap::new();
-    let mut api_keys: HashMap<String, String> = HashMap::new();
+    let mut api_keys: HashMap<String, Vec<String>> = HashMap::new();
     for p in &rc.vadis.providers {
-        if let Some(v) = std::env::var_os(&p.api_key_env) {
-            let key = v.to_string_lossy().into_owned();
-            let timeout =
-                std::time::Duration::from_millis(rc.vadis.server.upstream_attempt_timeout.0);
-            match vadis_providers::ReqwestProviderClient::new(timeout) {
-                Ok(client) => {
-                    transports.insert(p.name.clone(), std::sync::Arc::new(client));
-                    api_keys.insert(p.name.clone(), key);
-                }
-                Err(e) => {
-                    note(format!("provider '{}': client build failed: {e}", p.name));
-                }
+        let pool: Vec<String> = p
+            .key_pool()
+            .iter()
+            .filter_map(|n| std::env::var_os(n).map(|v| v.to_string_lossy().into_owned()))
+            .collect();
+        if pool.is_empty() {
+            continue;
+        }
+        let timeout = std::time::Duration::from_millis(rc.vadis.server.upstream_attempt_timeout.0);
+        match vadis_providers::ReqwestProviderClient::new(timeout) {
+            Ok(client) => {
+                transports.insert(p.name.clone(), std::sync::Arc::new(client));
+                api_keys.insert(p.name.clone(), pool);
+            }
+            Err(e) => {
+                note(format!("provider '{}': client build failed: {e}", p.name));
             }
         }
     }

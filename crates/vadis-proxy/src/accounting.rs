@@ -119,6 +119,10 @@ pub struct AccountCtx<'a> {
     /// The client's own `model` string, verbatim (§12.10.7 / spec §6);
     /// `None` only on a failure path where none was ever parsed.
     pub requested_model: Option<&'a str>,
+    /// spec §6 `decision.key_index` (ADR-049 §3): the pool credential
+    /// that served — `None` on the single-key spelling and on records
+    /// nothing served.
+    pub key_index: Option<u32>,
     pub decision_ms: u32,
     pub started: Instant,
     pub now_epoch_s: u64,
@@ -565,6 +569,7 @@ impl<'a> Accountant<'a> {
                 selection_source: ctx.selection_source.to_string(),
                 plugin_chain: Vec::new(),
                 decision_ms: ctx.decision_ms,
+                key_index: ctx.key_index,
             },
             state: StateRec {
                 stateful_inbound: false,

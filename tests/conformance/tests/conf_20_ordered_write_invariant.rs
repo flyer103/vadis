@@ -190,7 +190,7 @@ fallback: []
     let forwarder = Forwarder {
         config: rc.vadis.clone(),
         transports,
-        api_keys: HashMap::from([("p1".into(), "k".into())]),
+        api_keys: HashMap::from([("p1".into(), vec!["k".to_string()])]),
         store: Some(store as Arc<dyn vadis_core::store::Store>),
         trace: None,
         transform_engine: None,

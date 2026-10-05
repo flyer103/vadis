@@ -181,6 +181,7 @@ mod tests {
             recover: vadis_core::config::RecoveryMode::Probe,
             cooldown: vadis_core::config::DurationVal(0),
             overflow_monthly_cap_usd: None,
+            overflow_selection: vadis_core::config::OverflowSelection::Declared,
         }
     }
 
@@ -195,7 +196,8 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            api_key_env: "K".into(),
+            api_key_env: Some("K".to_string()),
+            api_keys: None,
             wire_api: vadis_core::config::WireApi::Chat,
             supports: vec![vadis_core::config::WireApi::Chat],
             account: AccountKind::CodingPlan,
@@ -281,6 +283,7 @@ mod tests {
             plugins: Vec::new(),
             fallback: Vec::new(),
             plan_policy: None,
+            plan_policies: None,
             state: None,
         }
     }

@@ -67,7 +67,11 @@ pub fn probe(name: &str, distinguish_empty: bool) -> KeyState {
 pub fn check_rows(cfg: &vadis_core::config::VadisConfig) -> Vec<(String, KeyState)> {
     let mut rows = Vec::new();
     for p in &cfg.providers {
-        rows.push((p.api_key_env.clone(), probe(&p.api_key_env, false)));
+        // ADR-049 §3: every declared name is a row of its own — the
+        // pool is enumerated, not collapsed to its first member.
+        for name in p.key_pool() {
+            rows.push((name.clone(), probe(name, false)));
+        }
     }
     if let Some(name) = &cfg.server.auth_token_env {
         rows.push((name.clone(), probe(name, true)));

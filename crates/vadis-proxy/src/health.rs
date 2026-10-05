@@ -52,6 +52,9 @@ pub struct ConfigIdentity {
 /// One provider entry's operator-facing facts (spec §9.1's provider list,
 /// §4.8's two new members): name, key variable, key presence, and the
 /// declared region and currency — all reads of the loaded config.
+/// ADR-049 §7(a): the pool is reported per credential name — `api_key_env`
+/// keeps the one-key spelling's own facts (the pool's first name), and
+/// `keys[]` carries one entry per declared name in order.
 #[derive(Clone)]
 pub struct ProviderKeyFacts {
     pub name: String,
@@ -59,6 +62,20 @@ pub struct ProviderKeyFacts {
     pub present: bool,
     pub region: vadis_core::config::Region,
     pub currency: vadis_core::Currency,
+    /// One entry per declared credential name, in declaration order
+    /// (ADR-049 §3 rule 1). `None` when the entry writes the one-key
+    /// spelling — the provider-level fields above already say everything
+    /// there is to say, and no existing reader moves.
+    pub keys: Option<Vec<KeyFact>>,
+}
+
+/// One credential's presence fact (ADR-049 §7(a)): the env **name** and
+/// whether the environment holds it. The value never travels here (spec
+/// §4.7's own sentence, at N names).
+#[derive(Clone)]
+pub struct KeyFact {
+    pub env: String,
+    pub present: bool,
 }
 
 /// `/health` reports what was actually loaded (DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
@@ -88,7 +105,10 @@ pub fn health_json(state: &AppState) -> Value {
         .provider_keys
         .iter()
         .map(|f| {
-            json!({
+            // ADR-049 §7(a): `keys[]` appears only for a pool entry —
+            // the one-key spelling's body is unchanged byte-for-byte,
+            // so every existing reader of `providers[]` is untouched.
+            let mut v = json!({
                 "name": f.name,
                 "api_key_env": f.api_key_env,
                 "api_key_present": f.present,
@@ -99,7 +119,15 @@ pub fn health_json(state: &AppState) -> Value {
                 // or from each other.
                 "region": f.region.as_str(),
                 "currency": f.currency.as_code(),
-            })
+            });
+            if let Some(keys) = &f.keys {
+                v["keys"] = Value::Array(
+                    keys.iter()
+                        .map(|k| json!({ "env": k.env, "present": k.present }))
+                        .collect(),
+                );
+            }
+            v
         })
         .collect();
 
@@ -380,6 +408,7 @@ mod tests {
             recover,
             cooldown: DurationVal(cooldown_ms),
             overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+            overflow_selection: vadis_core::config::OverflowSelection::Declared,
         }
     }
 
@@ -640,6 +669,7 @@ mod tests {
             plugins: Vec::<PluginCfg>::new(),
             fallback: Vec::new(),
             plan_policy: None,
+            plan_policies: None,
             state: None,
         }
     }

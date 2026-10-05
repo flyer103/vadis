@@ -121,6 +121,14 @@ pub struct DecisionRec {
     pub plugin_chain: Vec<String>,
     /// Decision time in milliseconds (selector + guards).
     pub decision_ms: u32,
+    /// ADR-049 §3 / spec §6: the credential of the provider's pool that
+    /// served — an integer index into the entry's `api_keys`. `None`
+    /// (serialized `null`) when the provider holds one credential
+    /// (`api_key_env`, the single-key spelling) and on records no
+    /// upstream attempt served (the no_available_route refusal). The
+    /// key's *value* is never a trace field (spec §4.7's rule, at N
+    /// names — CONF-92's boundary).
+    pub key_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -528,6 +536,7 @@ mod tests {
                 requested_model: Some("zai/glm-5.3".into()),
                 selection_source: "explicit".into(),
                 plugin_chain: Vec::new(),
+                key_index: None,
                 decision_ms: 0,
             },
             state: StateRec {

@@ -292,6 +292,7 @@ mod tests {
             recover: RecoveryMode::Probe,
             cooldown: DurationVal(15 * 60 * 1_000),
             overflow_monthly_cap_usd: None,
+            overflow_selection: crate::config::OverflowSelection::Declared,
         }
     }
 

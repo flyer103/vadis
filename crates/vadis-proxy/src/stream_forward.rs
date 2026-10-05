@@ -99,7 +99,15 @@ struct Candidate {
     /// for `wire` (spec §4.9, ADR-020). Resolved once, when the candidate is
     /// built, so the attempt path composes nothing.
     url: String,
-    api_key: String,
+    /// The provider's credential pool (ADR-049 §3): the present names'
+    /// values, in rotation order. A single-credential provider has a
+    /// one-entry pool — its relay is exactly what it was before the
+    /// pool existed.
+    api_keys: Vec<String>,
+    /// The pool cursor this candidate's walk is on: the index of the key
+    /// the NEXT attempt presents (ADR-049 §3 rule 6 — a request never
+    /// re-attempts a key it has already tried).
+    key_index: usize,
 }
 
 /// The relay's own context, fully owned (`'static`): what the stream
@@ -189,6 +197,13 @@ struct RelayState {
     /// when the capability is off or the request is sessionless, so the
     /// ordinary stream path buffers nothing.
     record_buf: Option<Vec<u8>>,
+    /// The answering attempt's pool cursor (ADR-049 §3): the index of
+    /// the credential that served — the trace's `decision.key_index`
+    /// when the answering provider holds more than one.
+    key_index: usize,
+    /// Whether the answering provider's pool is real (>1 present key) —
+    /// `decision.key_index` is null on the single-credential spelling.
+    multi_key: bool,
 }
 
 fn now_us() -> i64 {
@@ -531,6 +546,9 @@ impl Forwarder {
                     turn_index,
                     selection_source,
                     requested_model: Some(model),
+                    // No attempt yet: the pool's credential is a walk
+                    // fact (ADR-049 §3).
+                    key_index: None,
                     decision_ms,
                     started,
                     now_epoch_s,
@@ -599,6 +617,9 @@ impl Forwarder {
                     turn_index,
                     selection_source,
                     requested_model: Some(model),
+                    // The replay made no upstream attempt: no
+                    // credential served (ADR-042 §4.3).
+                    key_index: None,
                     decision_ms,
                     started,
                     now_epoch_s,
@@ -719,7 +740,12 @@ impl Forwarder {
                     chain_pos: pos,
                     wire: cfg.wire_api,
                     url: url.to_string(),
-                    api_key: self.api_keys[&cfg.name].clone(),
+                    // ADR-049 §3 rule 1: the provider's **present**
+                    // pool, in declaration order — the candidate owns
+                    // its pool so the relay's rotation arm can advance
+                    // within the provider after the handler returned.
+                    api_keys: self.api_keys[&cfg.name].clone(),
+                    key_index: 0,
                 });
             }
         }
@@ -790,421 +816,501 @@ impl Forwarder {
         // attempted.
         let mut cooling_abandoned: Option<RouteSpec> = None;
 
-        for (ci, cand) in candidates.iter().enumerate() {
-            if attempted.iter().any(|p| p == &cand.route.provider) {
-                continue;
-            }
-            if self.provider_in_cooldown(&cand.route.provider) {
-                // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
-                // `failover_from` table, row 2): the projection refused
-                // this candidate before any attempt, so the walk moves on
-                // — the skip *abandons* the route and `failover_from`
-                // names it, exactly like a failed attempt would.
-                if failover_from.is_none() {
-                    failover_from = Some(cand.route.clone());
+        let mut cand_i = 0usize;
+        while cand_i < candidates.len() {
+            let mut cand = candidates[cand_i].clone();
+            cand_i += 1;
+            {
+                if attempted.iter().any(|p| p == &cand.route.provider) {
+                    continue;
                 }
-                walk_skipped.push(ChainSkipped {
-                    pos: cand.chain_pos,
-                    skip: (cand.route.clone(), crate::forward::SKIP_DEMOTED),
-                });
-                if let Some(policy) = &self.config.plan_policy {
-                    if cand.route == policy.primary {
-                        cooling_abandoned = Some(cand.route.clone());
+                if self.provider_in_cooldown(&cand.route.provider) {
+                    // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
+                    // `failover_from` table, row 2): the projection refused
+                    // this candidate before any attempt, so the walk moves on
+                    // — the skip *abandons* the route and `failover_from`
+                    // names it, exactly like a failed attempt would.
+                    if failover_from.is_none() {
+                        failover_from = Some(cand.route.clone());
+                    }
+                    walk_skipped.push(ChainSkipped {
+                        pos: cand.chain_pos,
+                        skip: (cand.route.clone(), crate::forward::SKIP_DEMOTED),
+                    });
+                    if let Some(policy) = &self.config.plan_policy {
+                        if cand.route == policy.primary {
+                            cooling_abandoned = Some(cand.route.clone());
+                        }
+                    }
+                    continue;
+                }
+                attempted.push(cand.route.provider.clone());
+                let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
+                facts.attempted_route = Some(cand.route.clone());
+
+                // The cooling displacement's record (spec §6's producer table,
+                // CONF-42), the streaming twin of the buffered walk's fill:
+                // the family's primary was refused by the cooldown projection
+                // before any attempt and THIS candidate is the one actually
+                // serving the request. Trace row only — no `plan.switched`
+                // event, no `plan_state` move (§4.6 rule 3); the figures
+                // follow the failover's price convention (ADR-011 item 9).
+                if let Some(abandoned) = cooling_abandoned.take() {
+                    if facts.plan_switch.is_none() {
+                        let (reprefill, cost_nano) =
+                            self.failover_cost(session.as_deref(), &cand.route);
+                        facts.plan_switch = Some(PlanSwitchRec {
+                            from: abandoned.to_string(),
+                            to: cand.route.to_string(),
+                            reason: REASON_PRIMARY_COOLING_DOWN,
+                            probe: false,
+                            reprefill_tokens: reprefill,
+                            switch_cost_nano: cost_nano,
+                            cost_currency: self.route_currency(&cand.route),
+                        });
                     }
                 }
-                continue;
-            }
-            attempted.push(cand.route.provider.clone());
-            let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
-            facts.attempted_route = Some(cand.route.clone());
 
-            // The cooling displacement's record (spec §6's producer table,
-            // CONF-42), the streaming twin of the buffered walk's fill:
-            // the family's primary was refused by the cooldown projection
-            // before any attempt and THIS candidate is the one actually
-            // serving the request. Trace row only — no `plan.switched`
-            // event, no `plan_state` move (§4.6 rule 3); the figures
-            // follow the failover's price convention (ADR-011 item 9).
-            if let Some(abandoned) = cooling_abandoned.take() {
-                if facts.plan_switch.is_none() {
-                    let (reprefill, cost_nano) =
-                        self.failover_cost(session.as_deref(), &cand.route);
-                    facts.plan_switch = Some(PlanSwitchRec {
-                        from: abandoned.to_string(),
-                        to: cand.route.to_string(),
-                        reason: REASON_PRIMARY_COOLING_DOWN,
-                        probe: false,
-                        reprefill_tokens: reprefill,
-                        switch_cost_nano: cost_nano,
-                        cost_currency: self.route_currency(&cand.route),
-                    });
-                }
-            }
-
-            // Mutation (b), per attempt (§12.10.7): this route's native id.
-            let outbound = match rewrite_outbound_model(&base, &cand.route.model) {
-                Ok(b) => Bytes::from(b.into_owned()),
-                Err(e) => {
-                    return StreamOutcome::Failure(ForwardFailure {
-                        status: 500,
-                        code: ErrorCode::Internal,
-                        message: format!(
-                            "cannot rewrite the outbound model to the native id: {e:?}"
-                        ),
-                        details: Some(json!({"stream": true})),
-                    })
-                }
-            };
-            let attempt_hash = vadis_core::prefix::body_sha16(&outbound);
-
-            // Row 5 — the intent, FULL, committed before the wire
-            // (CONF-20). The payload carries the session's prefix blocks
-            // (the ledger rebuild reads them, §12.10.6); `body_hash` is
-            // this attempt's byte-final bytes (§12.10.5 note R4).
-            let intent = NewEvent {
-                kind: EventKind::UpstreamSubmitted,
-                request_id: Some(request_id),
-                session: session.as_deref(),
-                body_hash: Some(&attempt_hash),
-                trace_ref: None,
-                payload: json!({
-                    "route": route_label,
-                    "attempt_index": attempt_index,
-                    "protocol_out": cand.wire.as_str(),
-                    "stream": true,
-                    "prefix_blocks": facts.blocks.iter().map(|b| json!({
-                        "index": b.index, "kind": b.kind.as_str(),
-                        "tokens": b.tokens, "hash": b.hash,
-                    })).collect::<Vec<_>>(),
-                }),
-            };
-            let intent_id = if let Some(store) = &self.store {
-                match store.append(intent) {
-                    Ok(id) => Some(id),
-                    Err(_) => {
-                        // CONF-22: nothing reached the upstream; the
-                        // client's retry is safe.
+                // Mutation (b), per attempt (§12.10.7): this route's native id.
+                let outbound = match rewrite_outbound_model(&base, &cand.route.model) {
+                    Ok(b) => Bytes::from(b.into_owned()),
+                    Err(e) => {
                         return StreamOutcome::Failure(ForwardFailure {
                             status: 500,
                             code: ErrorCode::Internal,
-                            message: "the state store rejected the upstream intent".into(),
-                            details: Some(json!({"stage": "intent"})),
-                        });
+                            message: format!(
+                                "cannot rewrite the outbound model to the native id: {e:?}"
+                            ),
+                            details: Some(json!({"stream": true})),
+                        })
                     }
-                }
-            } else {
-                None
-            };
+                };
+                let attempt_hash = vadis_core::prefix::body_sha16(&outbound);
 
-            let attempt_started = Instant::now();
-            match open_head(&client, cand, &outbound).await {
-                OpenHead::Head(head) => {
-                    let head_ms = Some(attempt_started.elapsed().as_millis() as u32);
-                    facts.upstream_ms = head_ms;
-                    last_upstream_status = Some(head.status);
-                    facts.last_upstream_status = Some(head.status);
-                    if (200..300).contains(&head.status) {
-                        // A probe succeeded (ADR-014 item 3): a 2xx head on
-                        // the primary while the family was on overflow
-                        // flips the family back and records it.
-                        if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
-                            if let Some(policy) = self.config.plan_policy.as_ref() {
-                                // The return trip's trace row (spec §6),
-                                // the buffered path's twin: set HERE —
-                                // only a 2xx head is a recovery — with
-                                // the displacement from the STATE's
-                                // route (overflow) and a 0 cost back.
-                                if facts.plan_switch.is_none() {
-                                    facts.plan_switch = Some(PlanSwitchRec {
-                                        from: policy.overflow.to_string(),
-                                        to: policy.primary.to_string(),
-                                        reason: REASON_PRIMARY_RECOVERED,
-                                        probe: true,
-                                        reprefill_tokens: None,
-                                        switch_cost_nano: Some(0),
-                                        cost_currency: self.route_currency(&policy.primary),
-                                    });
-                                }
-                                self.plan_probe_succeeded(request_id, policy, session.as_deref());
-                            }
+                // Row 5 — the intent, FULL, committed before the wire
+                // (CONF-20). The payload carries the session's prefix blocks
+                // (the ledger rebuild reads them, §12.10.6); `body_hash` is
+                // this attempt's byte-final bytes (§12.10.5 note R4).
+                let intent = NewEvent {
+                    kind: EventKind::UpstreamSubmitted,
+                    request_id: Some(request_id),
+                    session: session.as_deref(),
+                    body_hash: Some(&attempt_hash),
+                    trace_ref: None,
+                    payload: json!({
+                        "route": route_label,
+                        "attempt_index": attempt_index,
+                        "protocol_out": cand.wire.as_str(),
+                        "stream": true,
+                        "prefix_blocks": facts.blocks.iter().map(|b| json!({
+                            "index": b.index, "kind": b.kind.as_str(),
+                            "tokens": b.tokens, "hash": b.hash,
+                        })).collect::<Vec<_>>(),
+                    }),
+                };
+                let intent_id = if let Some(store) = &self.store {
+                    match store.append(intent) {
+                        Ok(id) => Some(id),
+                        Err(_) => {
+                            // CONF-22: nothing reached the upstream; the
+                            // client's retry is safe.
+                            return StreamOutcome::Failure(ForwardFailure {
+                                status: 500,
+                                code: ErrorCode::Internal,
+                                message: "the state store rejected the upstream intent".into(),
+                                details: Some(json!({"stage": "intent"})),
+                            });
                         }
-                        // The relay takes it from here: the head is 2xx,
-                        // the accounting facts travel with the stream.
-                        let content_type = head.content_type.clone();
-                        let client_requested_usage = parsed
-                            .get("stream_options")
-                            .and_then(|o| o.get("include_usage"))
-                            .and_then(|b| b.as_bool())
-                            .unwrap_or(false);
-                        let ctx = RelayCtx {
-                            store: self.store.clone(),
-                            trace: self.trace.clone(),
-                            accounting,
-                            idle,
-                            request_id: request_id.to_string(),
-                            proto_in,
-                            session: session.clone(),
-                            turn_index,
-                            requested_model: Some(model.to_string()),
-                            selection_source,
-                            decision_ms,
-                            started,
-                            now_epoch_s,
-                            received_event: facts.received_event,
-                            blocks: facts.blocks.clone(),
-                            client_requested_usage,
-                            plan_switch: facts.plan_switch.clone(),
-                            // The one value (spec §6): the read from
-                            // session resolution, carried through — the
-                            // relay's record is not a second opinion.
-                            sticky_hit,
-                            transform_mode: facts.transform_mode,
-                            transform_records: facts.transform_records.clone(),
-                            transform_error: facts.transform_error.clone(),
-                            cache: match (&self.response_cache, &cache_key) {
-                                (Some(cache), Some(key)) => Some((Arc::clone(cache), key.clone())),
-                                _ => None,
-                            },
-                            content_type: content_type.clone(),
-                        };
-                        let state = RelayState {
-                            tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
-                            head,
-                            relayed: false,
-                            remaining: candidates[ci + 1..].to_vec(),
-                            attempted,
-                            route_label,
-                            wire: cand.wire,
-                            head_ms,
-                            intent: intent_id,
-                            failover_from: failover_from.clone(),
-                            // Only a request the capability records buffers a
-                            // copy; the ordinary stream path holds nothing.
-                            record_buf: ctx.cache.is_some().then(Vec::new),
-                        };
-                        facts.failover_from = failover_from.clone();
-                        let relay = relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
-                        return StreamOutcome::Success(StreamSuccess {
-                            status: 200,
-                            content_type,
-                            route: cand.route.clone(),
-                            failover_from,
-                            body: Box::pin(relay),
-                        });
                     }
-                    // A failure status head before any relayed byte is the
-                    // ordinary error path (R6 column 1), classified per
-                    // DESIGN §12.10.3 R12: the head's OWN answer — status,
-                    // headers and body bytes — through the provider
-                    // layer's one reader, the same evidence expression
-                    // the buffered path feeds the classifier. The read is
-                    // bounded by R4's idle bound alone (no byte cap); a
-                    // read that ends short leaves the classifier the
-                    // bytes that arrived.
-                    let status = head.status;
-                    let resp = head.into_upstream_response(idle).await;
-                    let evidence = ErrorEvidence {
-                        status: Some(status),
-                        retry_after: resp.retry_after.as_deref(),
-                        body: &resp.body,
-                        wrote_full_request: true,
-                        transport_cause: None,
-                    };
-                    let cls = classify_upstream_error(&evidence);
-                    last_class = Some(cls.class);
-                    let classified_id =
-                        self.record_classification(request_id, attempt_index, Some(status), &cls);
-                    self.apply_demotion(&cand.route.provider, &cls, classified_id);
-                    // The plan policy's only account-moving signal
-                    // (ADR-014 item 2): 403 `quota_exhausted` on the
-                    // family's primary flips the family to overflow and
-                    // records `plan.switched` before the next intent.
-                    if cls.class.demotes_provider() {
-                        if let Some(policy) = self.config.plan_policy.as_ref() {
-                            if cand.route == policy.primary {
-                                self.record_plan_switch(
+                } else {
+                    None
+                };
+
+                let attempt_started = Instant::now();
+                // The rotation arm (ADR-049 §3 rule 3), the streaming twin:
+                // a credential-class failure whose pool still holds an
+                // untried key retries the SAME route on the next key —
+                // `rotate_credential` with the index, no demotion,
+                // `failover_from` untouched. Only an exhausted pool leaves
+                // the provider. `quota_exhausted` never rotates (rule 4).
+                'keys: loop {
+                    match open_head(&client, &cand, &outbound).await {
+                        OpenHead::Head(head) => {
+                            let head_ms = Some(attempt_started.elapsed().as_millis() as u32);
+                            facts.upstream_ms = head_ms;
+                            last_upstream_status = Some(head.status);
+                            facts.last_upstream_status = Some(head.status);
+                            if (200..300).contains(&head.status) {
+                                // A probe succeeded (ADR-014 item 3): a 2xx head on
+                                // the primary while the family was on overflow
+                                // flips the family back and records it.
+                                if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
+                                    if let Some(policy) = self.config.plan_policy.as_ref() {
+                                        // The return trip's trace row (spec §6),
+                                        // the buffered path's twin: set HERE —
+                                        // only a 2xx head is a recovery — with
+                                        // the displacement from the STATE's
+                                        // route (overflow) and a 0 cost back.
+                                        if facts.plan_switch.is_none() {
+                                            facts.plan_switch = Some(PlanSwitchRec {
+                                                from: policy.overflow.to_string(),
+                                                to: policy.primary.to_string(),
+                                                reason: REASON_PRIMARY_RECOVERED,
+                                                probe: true,
+                                                reprefill_tokens: None,
+                                                switch_cost_nano: Some(0),
+                                                cost_currency: self.route_currency(&policy.primary),
+                                            });
+                                        }
+                                        self.plan_probe_succeeded(
+                                            request_id,
+                                            policy,
+                                            session.as_deref(),
+                                        );
+                                    }
+                                }
+                                // The relay takes it from here: the head is 2xx,
+                                // the accounting facts travel with the stream.
+                                let content_type = head.content_type.clone();
+                                let client_requested_usage = parsed
+                                    .get("stream_options")
+                                    .and_then(|o| o.get("include_usage"))
+                                    .and_then(|b| b.as_bool())
+                                    .unwrap_or(false);
+                                let ctx = RelayCtx {
+                                    store: self.store.clone(),
+                                    trace: self.trace.clone(),
+                                    accounting,
+                                    idle,
+                                    request_id: request_id.to_string(),
+                                    proto_in,
+                                    session: session.clone(),
+                                    turn_index,
+                                    requested_model: Some(model.to_string()),
+                                    selection_source,
+                                    decision_ms,
+                                    started,
+                                    now_epoch_s,
+                                    received_event: facts.received_event,
+                                    blocks: facts.blocks.clone(),
+                                    client_requested_usage,
+                                    plan_switch: facts.plan_switch.clone(),
+                                    // The one value (spec §6): the read from
+                                    // session resolution, carried through — the
+                                    // relay's record is not a second opinion.
+                                    sticky_hit,
+                                    transform_mode: facts.transform_mode,
+                                    transform_records: facts.transform_records.clone(),
+                                    transform_error: facts.transform_error.clone(),
+                                    cache: match (&self.response_cache, &cache_key) {
+                                        (Some(cache), Some(key)) => {
+                                            Some((Arc::clone(cache), key.clone()))
+                                        }
+                                        _ => None,
+                                    },
+                                    content_type: content_type.clone(),
+                                };
+                                let state = RelayState {
+                                    tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
+                                    head,
+                                    relayed: false,
+                                    // The tail of the chain after the answering
+                                    // candidate — owned, because this loop
+                                    // consumed the vector (into_iter).
+                                    remaining: candidates.clone(),
+                                    attempted,
+                                    route_label,
+                                    wire: cand.wire,
+                                    head_ms,
+                                    intent: intent_id,
+                                    failover_from: failover_from.clone(),
+                                    // Only a request the capability records buffers a
+                                    // copy; the ordinary stream path holds nothing.
+                                    record_buf: ctx.cache.is_some().then(Vec::new),
+                                    key_index: cand.key_index,
+                                    multi_key: cand.api_keys.len() > 1,
+                                };
+                                facts.failover_from = failover_from.clone();
+                                let relay =
+                                    relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
+                                return StreamOutcome::Success(StreamSuccess {
+                                    status: 200,
+                                    content_type,
+                                    route: cand.route.clone(),
+                                    failover_from,
+                                    body: Box::pin(relay),
+                                });
+                            }
+                            // A failure status head before any relayed byte is the
+                            // ordinary error path (R6 column 1), classified per
+                            // DESIGN §12.10.3 R12: the head's OWN answer — status,
+                            // headers and body bytes — through the provider
+                            // layer's one reader, the same evidence expression
+                            // the buffered path feeds the classifier. The read is
+                            // bounded by R4's idle bound alone (no byte cap); a
+                            // read that ends short leaves the classifier the
+                            // bytes that arrived.
+                            let status = head.status;
+                            let resp = head.into_upstream_response(idle).await;
+                            let evidence = ErrorEvidence {
+                                status: Some(status),
+                                retry_after: resp.retry_after.as_deref(),
+                                body: &resp.body,
+                                wrote_full_request: true,
+                                transport_cause: None,
+                            };
+                            let cls = classify_upstream_error(&evidence);
+                            last_class = Some(cls.class);
+                            // The rotation arm (ADR-049 §3 rule 3, CONF-91(a)),
+                            // the streaming twin: rotate within the provider
+                            // before any fallover; the index, never the value.
+                            if cls.class.is_credential_class()
+                                && cand.key_index + 1 < cand.api_keys.len()
+                            {
+                                let (reprefill, cost_nano) =
+                                    self.failover_cost(session.as_deref(), &cand.route);
+                                self.record_rotation(
                                     request_id,
-                                    policy,
-                                    &PlanAccount::Primary,
-                                    &PlanAccount::Overflow,
-                                    REASON_PRIMARY_EXHAUSTED,
-                                    false,
-                                    session.as_deref(),
+                                    attempt_index,
+                                    Some(status),
+                                    &cls,
+                                    (cand.key_index + 1) as u32,
+                                    reprefill,
+                                    cost_nano,
                                 );
-                                if policy.on_primary_exhausted
-                                    == vadis_core::config::OnPrimaryExhausted::Block
-                                {
-                                    return StreamOutcome::Failure(ForwardFailure {
-                                        status: 429,
-                                        code: ErrorCode::QuotaExceeded,
-                                        message: format!(
-                                            "plan family '{}' is exhausted and \
+                                cand.key_index += 1;
+                                attempt_index += 1;
+                                continue 'keys;
+                            }
+                            let classified_id = self.record_classification(
+                                request_id,
+                                attempt_index,
+                                Some(status),
+                                &cls,
+                            );
+                            self.apply_demotion(&cand.route.provider, &cls, classified_id);
+                            // The plan policy's only account-moving signal
+                            // (ADR-014 item 2): 403 `quota_exhausted` on the
+                            // family's primary flips the family to overflow and
+                            // records `plan.switched` before the next intent.
+                            if cls.class.demotes_provider() {
+                                if let Some(policy) = self.config.plan_policy.as_ref() {
+                                    if cand.route == policy.primary {
+                                        self.record_plan_switch(
+                                            request_id,
+                                            policy,
+                                            &PlanAccount::Primary,
+                                            &PlanAccount::Overflow,
+                                            REASON_PRIMARY_EXHAUSTED,
+                                            false,
+                                            session.as_deref(),
+                                        );
+                                        if policy.on_primary_exhausted
+                                            == vadis_core::config::OnPrimaryExhausted::Block
+                                        {
+                                            return StreamOutcome::Failure(ForwardFailure {
+                                                status: 429,
+                                                code: ErrorCode::QuotaExceeded,
+                                                message: format!(
+                                                    "plan family '{}' is exhausted and \
                                              on_primary_exhausted is 'block': the request is \
                                              refused rather than served from the metered \
                                              account (spec 4.6)",
-                                            policy.family
-                                        ),
-                                        details: Some(json!({
-                                            "family": policy.family,
-                                            "account_state": "overflow",
-                                            "reason": "quota_exhausted",
-                                            "stream": true,
-                                        })),
-                                    });
-                                }
-                                if facts.plan_switch.is_none() {
-                                    let (reprefill, cost_nano) =
-                                        self.failover_cost(session.as_deref(), &policy.overflow);
-                                    facts.plan_switch = Some(PlanSwitchRec {
-                                        from: policy.primary.to_string(),
-                                        to: policy.overflow.to_string(),
-                                        reason: REASON_PRIMARY_EXHAUSTED,
-                                        probe: false,
-                                        reprefill_tokens: reprefill,
-                                        switch_cost_nano: cost_nano,
-                                        cost_currency: self.route_currency(&policy.overflow),
-                                    });
+                                                    policy.family
+                                                ),
+                                                details: Some(json!({
+                                                    "family": policy.family,
+                                                    "account_state": "overflow",
+                                                    "reason": "quota_exhausted",
+                                                    "stream": true,
+                                                })),
+                                            });
+                                        }
+                                        if facts.plan_switch.is_none() {
+                                            let (reprefill, cost_nano) = self.failover_cost(
+                                                session.as_deref(),
+                                                &policy.overflow,
+                                            );
+                                            facts.plan_switch = Some(PlanSwitchRec {
+                                                from: policy.primary.to_string(),
+                                                to: policy.overflow.to_string(),
+                                                reason: REASON_PRIMARY_EXHAUSTED,
+                                                probe: false,
+                                                reprefill_tokens: reprefill,
+                                                switch_cost_nano: cost_nano,
+                                                cost_currency: self
+                                                    .route_currency(&policy.overflow),
+                                            });
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    self.append_event(
-                        EventKind::UpstreamResponded,
-                        request_id,
-                        None,
-                        json!({
-                            "status": status,
-                            "route": route_label,
-                            "attempt_index": attempt_index,
-                            "wrote_full_request": true,
-                            "stream": true,
-                            "usage": Value::Null,
-                        }),
-                        session.as_deref(),
-                    );
-                    if let Some(next) = self.next_candidate_for(&candidates, &attempted, cls.class)
-                    {
-                        let (reprefill, switch_cost) =
-                            self.failover_cost(session.as_deref(), &next);
-                        self.record_failover(
-                            request_id,
-                            attempt_index,
-                            &cand.route,
-                            &next,
-                            &cls,
-                            session.as_deref(),
-                            reprefill,
-                            switch_cost,
-                        );
-                        if failover_from.is_none() {
-                            failover_from = Some(cand.route.clone());
-                        }
-                        facts.failover_from = failover_from.clone();
-                        attempt_index += 1;
-                        continue;
-                    }
-                    let deterministic = matches!(
-                        cls.class,
-                        vadis_core::error_class::ErrorClass::FormatError
-                            | vadis_core::error_class::ErrorClass::ContentPolicyBlocked
-                    );
-                    return StreamOutcome::Failure(ForwardFailure {
-                        status: 502,
-                        code: ErrorCode::UpstreamError,
-                        message: if deterministic {
-                            format!(
+                            self.append_event(
+                                EventKind::UpstreamResponded,
+                                request_id,
+                                None,
+                                json!({
+                                    "status": status,
+                                    "route": route_label,
+                                    "attempt_index": attempt_index,
+                                    "wrote_full_request": true,
+                                    "stream": true,
+                                    "usage": Value::Null,
+                                }),
+                                session.as_deref(),
+                            );
+                            if let Some(next) =
+                                self.next_candidate_for(&candidates, &attempted, cls.class)
+                            {
+                                let (reprefill, switch_cost) =
+                                    self.failover_cost(session.as_deref(), &next);
+                                self.record_failover(
+                                    request_id,
+                                    attempt_index,
+                                    &cand.route,
+                                    &next,
+                                    &cls,
+                                    session.as_deref(),
+                                    reprefill,
+                                    switch_cost,
+                                );
+                                if failover_from.is_none() {
+                                    failover_from = Some(cand.route.clone());
+                                }
+                                facts.failover_from = failover_from.clone();
+                                attempt_index += 1;
+                                break 'keys;
+                            }
+                            let deterministic = matches!(
+                                cls.class,
+                                vadis_core::error_class::ErrorClass::FormatError
+                                    | vadis_core::error_class::ErrorClass::ContentPolicyBlocked
+                            );
+                            return StreamOutcome::Failure(ForwardFailure {
+                                status: 502,
+                                code: ErrorCode::UpstreamError,
+                                message: if deterministic {
+                                    format!(
                                 "upstream rejected the request deterministically ({}); it is not retried",
                                 cls.class.as_str()
                             )
-                        } else {
-                            format!(
-                                "upstream error ({}) and the fallback chain is exhausted",
-                                cls.class.as_str()
-                            )
-                        },
-                        details: Some(json!({
-                            "upstream_status": status,
-                            "error_class": cls.class.as_str(),
-                            "stream": true,
-                        })),
-                    });
-                }
-                OpenHead::NotSent(kind, code, message) => {
-                    // No request bytes went out: nothing billed. The
-                    // transport kind is the classification evidence —
-                    // the same inputs the buffered path feeds the
-                    // classifier, so a connect failure is
-                    // `connect_failure` on both paths. No
-                    // upstream.responded row: the attempt never reached
-                    // the upstream.
-                    let evidence = ErrorEvidence {
-                        status: None,
-                        retry_after: None,
-                        body: b"",
-                        wrote_full_request: false,
-                        transport_cause: Some(match kind {
-                            vadis_providers::TransportKind::Connect => TransportCause::Connect,
-                            vadis_providers::TransportKind::Timeout => TransportCause::Timeout,
-                            vadis_providers::TransportKind::Other => TransportCause::Other,
-                        }),
-                    };
-                    let cls = classify_upstream_error(&evidence);
-                    last_class = Some(cls.class);
-                    let classified_id =
-                        self.record_classification(request_id, attempt_index, None, &cls);
-                    self.apply_demotion(&cand.route.provider, &cls, classified_id);
-                    if let Some(next) = self.next_candidate_for(&candidates, &attempted, cls.class)
-                    {
-                        let (reprefill, switch_cost) =
-                            self.failover_cost(session.as_deref(), &next);
-                        self.record_failover(
-                            request_id,
-                            attempt_index,
-                            &cand.route,
-                            &next,
-                            &cls,
-                            session.as_deref(),
-                            reprefill,
-                            switch_cost,
-                        );
-                        if failover_from.is_none() {
-                            failover_from = Some(cand.route.clone());
+                                } else {
+                                    format!(
+                                        "upstream error ({}) and the fallback chain is exhausted",
+                                        cls.class.as_str()
+                                    )
+                                },
+                                details: Some(json!({
+                                    "upstream_status": status,
+                                    "error_class": cls.class.as_str(),
+                                    "stream": true,
+                                })),
+                            });
                         }
-                        facts.failover_from = failover_from.clone();
-                        attempt_index += 1;
-                        continue;
-                    }
-                    return StreamOutcome::Failure(ForwardFailure {
-                        status: 502,
-                        code,
-                        message: format!(
+                        OpenHead::NotSent(kind, code, message) => {
+                            // No request bytes went out: nothing billed. The
+                            // transport kind is the classification evidence —
+                            // the same inputs the buffered path feeds the
+                            // classifier, so a connect failure is
+                            // `connect_failure` on both paths. No
+                            // upstream.responded row: the attempt never reached
+                            // the upstream.
+                            let evidence = ErrorEvidence {
+                                status: None,
+                                retry_after: None,
+                                body: b"",
+                                wrote_full_request: false,
+                                transport_cause: Some(match kind {
+                                    vadis_providers::TransportKind::Connect => {
+                                        TransportCause::Connect
+                                    }
+                                    vadis_providers::TransportKind::Timeout => {
+                                        TransportCause::Timeout
+                                    }
+                                    vadis_providers::TransportKind::Other => TransportCause::Other,
+                                }),
+                            };
+                            let cls = classify_upstream_error(&evidence);
+                            last_class = Some(cls.class);
+                            // The rotation arm, transport twin (ADR-049 §3 rule
+                            // 3): no bytes billed, so the rotation is exactly as
+                            // safe as the fallover it precedes.
+                            if cls.class.is_credential_class()
+                                && cand.key_index + 1 < cand.api_keys.len()
+                            {
+                                let (reprefill, cost_nano) =
+                                    self.failover_cost(session.as_deref(), &cand.route);
+                                self.record_rotation(
+                                    request_id,
+                                    attempt_index,
+                                    None,
+                                    &cls,
+                                    (cand.key_index + 1) as u32,
+                                    reprefill,
+                                    cost_nano,
+                                );
+                                cand.key_index += 1;
+                                attempt_index += 1;
+                                continue 'keys;
+                            }
+                            let classified_id =
+                                self.record_classification(request_id, attempt_index, None, &cls);
+                            self.apply_demotion(&cand.route.provider, &cls, classified_id);
+                            if let Some(next) =
+                                self.next_candidate_for(&candidates, &attempted, cls.class)
+                            {
+                                let (reprefill, switch_cost) =
+                                    self.failover_cost(session.as_deref(), &next);
+                                self.record_failover(
+                                    request_id,
+                                    attempt_index,
+                                    &cand.route,
+                                    &next,
+                                    &cls,
+                                    session.as_deref(),
+                                    reprefill,
+                                    switch_cost,
+                                );
+                                if failover_from.is_none() {
+                                    failover_from = Some(cand.route.clone());
+                                }
+                                facts.failover_from = failover_from.clone();
+                                attempt_index += 1;
+                                break 'keys;
+                            }
+                            return StreamOutcome::Failure(ForwardFailure {
+                                status: 502,
+                                code,
+                                message: format!(
                             "upstream connect failed and the fallback chain is exhausted: {message}"
                         ),
-                        details: Some(json!({
-                            "upstream_status": Value::Null,
-                            "error_class": cls.class.as_str(),
-                            "stream": true,
-                        })),
-                    });
-                }
-                OpenHead::UnknownOutcome(message) => {
-                    // Full write, no head: `unknown_outcome` (ADR-011
-                    // item 6 row 3) — no retry, no failover, deliberately
-                    // no closure event.
-                    facts.upstream_ms = Some(attempt_started.elapsed().as_millis() as u32);
-                    return StreamOutcome::Failure(ForwardFailure {
-                        status: 502,
-                        code: ErrorCode::UpstreamError,
-                        message,
-                        details: Some(json!({
-                            "stage": "unknown_outcome",
-                            "error_class": "timeout",
-                            "stream": true,
-                        })),
-                    });
-                }
-            }
-        }
+                                details: Some(json!({
+                                    "upstream_status": Value::Null,
+                                    "error_class": cls.class.as_str(),
+                                    "stream": true,
+                                })),
+                            });
+                        }
+                        OpenHead::UnknownOutcome(message) => {
+                            // Full write, no head: `unknown_outcome` (ADR-011
+                            // item 6 row 3) — no retry, no failover, deliberately
+                            // no closure event.
+                            facts.upstream_ms = Some(attempt_started.elapsed().as_millis() as u32);
+                            return StreamOutcome::Failure(ForwardFailure {
+                                status: 502,
+                                code: ErrorCode::UpstreamError,
+                                message,
+                                details: Some(json!({
+                                    "stage": "unknown_outcome",
+                                    "error_class": "timeout",
+                                    "stream": true,
+                                })),
+                            });
+                        }
+                    }
+                } // 'keys
+            } // the candidate's key-pool arm
+        } // while: the chain walk
 
         // Every candidate was skipped or exhausted. If nothing was
         // attempted, this is the frozen `no_available_route` refusal
@@ -1389,7 +1495,14 @@ async fn open_head(
         model: &cand.route.model,
         protocol_out: cand.wire,
         url: &cand.url,
-        api_key: &cand.api_key,
+        // The cursor's credential (ADR-049 §3): the pool advances only
+        // through the rotation arm — every other path presents the key
+        // the candidate's walk is on.
+        api_key: cand
+            .api_keys
+            .get(cand.key_index)
+            .map(String::as_str)
+            .unwrap_or(""),
         attempt: 0,
     };
     match client.open(&plan, outbound).await {
@@ -1664,6 +1777,9 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
         turn_index: ctx.turn_index,
         selection_source: ctx.selection_source,
         requested_model: ctx.requested_model.as_deref(),
+        // The credential that served the stream (ADR-049 §3): the
+        // relay's own cursor — an index, and only for a real pool.
+        key_index: st.multi_key.then_some(st.key_index as u32),
         decision_ms: ctx.decision_ms,
         started: ctx.started,
         now_epoch_s: ctx.now_epoch_s,
