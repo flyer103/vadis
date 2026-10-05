@@ -109,6 +109,17 @@ CREATE TABLE plan_state (
 );
 "#,
     ),
+    (
+        // DDL version 3 (ADR-049 §5.2): the state generalizes from the
+        // two-valued word to **the active route**. Additive — one
+        // nullable column backfilled from the event log's own
+        // `to_route` (the same value the incremental path writes), no
+        // existing row rewritten (ADR-009 item 7).
+        3,
+        r#"
+ALTER TABLE plan_state ADD COLUMN route TEXT;
+"#,
+    ),
 ];
 
 /// The SQLite implementation. Construct through [`SqliteStore::open`].
@@ -352,7 +363,7 @@ impl SqliteStore {
         }
         if want(Projection::PlanState) {
             push(
-                "SELECT family, account, since_us, until_us, last_event \
+                "SELECT family, account, route, since_us, until_us, last_event \
                   FROM plan_state ORDER BY family",
             )?;
         }
@@ -564,13 +575,15 @@ impl SqliteStore {
     }
 
     /// DESIGN §12.10.8's rebuild rule: scan `plan.switched` in `event_id`
-    /// order, per family — the last row's `to_account` is the current
-    /// account, its `ts_us` is `since_us`, its `event_id` is
-    /// `last_event`, and `until_us = since_us + cooldown_ms × 1000`
-    /// while the account is `overflow` (the payload carries the
+    /// order, per family — the last row's `to_route` is the active route,
+    /// its `to_account` the derived wire word, its `ts_us` `since_us`, its
+    /// `event_id` `last_event`, and `until_us = since_us + cooldown_ms ×
+    /// 1000` while the account is `overflow` (the payload carries the
     /// then-current cooldown, so the log alone determines the row; the
     /// serving path recomputes the probe gate from the *current* config
-    /// against `since_us`).
+    /// against `since_us`). The route comes from the event's own
+    /// `to_route` payload member, so the incremental path and the rebuild
+    /// write the identical value from the identical source (CONF-21).
     fn rebuild_plan_state(
         &self,
         conn: &Connection,
@@ -593,6 +606,11 @@ impl SqliteStore {
                 .get("to_account")
                 .and_then(|v| v.as_str())
                 .unwrap_or("primary");
+            let route = ev
+                .payload
+                .get("to_route")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let cooldown_us = ev
                 .payload
                 .get("cooldown_ms")
@@ -608,8 +626,8 @@ impl SqliteStore {
                 None
             };
             conn.execute(
-                "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
-                params![family, account, ev.ts_us, until_us, ev.event_id.0],
+                "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route",
+                params![family, account, ev.ts_us, until_us, ev.event_id.0, route],
             )
             .map_err(|e| map_err(false, e))?;
             count += 1;
@@ -727,12 +745,15 @@ impl Store for SqliteStore {
             ProjectionWrite::PlanSwitched {
                 family,
                 account,
+                to_route,
                 cooldown_us,
                 last_event,
             } => {
                 // since_us anchors on the event row's own ts_us (never a
                 // second clock read), so the incremental path and the
-                // rebuild compute identical values (CONF-21).
+                // rebuild compute identical values (CONF-21). The route
+                // is the caller's active route — the same `to_route` the
+                // rebuild reads from the event payload.
                 let since_us: i64 = tx
                     .query_row(
                         "SELECT ts_us FROM events WHERE event_id = ?1",
@@ -746,8 +767,8 @@ impl Store for SqliteStore {
                     None
                 };
                 tx.execute(
-                    "INSERT INTO plan_state (family, account, since_us, until_us, last_event) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event",
-                    params![family, account, since_us, until_us, last_event.0],
+                    "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route",
+                    params![family, account, since_us, until_us, last_event.0, to_route],
                 )
                 .map_err(|e| map_err(false, e))?;
             }
@@ -898,16 +919,17 @@ impl Store for SqliteStore {
             }
             Query::PlanState { family } => {
                 let row = conn.query_row(
-                    "SELECT family, account, since_us, until_us, last_event FROM plan_state \
+                    "SELECT family, account, route, since_us, until_us, last_event FROM plan_state \
                      WHERE family = ?1",
                     params![family],
                     |r| {
                         Ok(PlanStateProjRow {
                             family: r.get(0)?,
                             account: r.get(1)?,
-                            since_us: r.get(2)?,
-                            until_us: r.get(3)?,
-                            last_event: r.get(4)?,
+                            route: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            since_us: r.get(3)?,
+                            until_us: r.get(4)?,
+                            last_event: r.get(5)?,
                         })
                     },
                 );
@@ -1311,7 +1333,7 @@ mod tests {
         let dir = tempdir("plan-state");
         let db = dir.join("state/vadis.db");
         let s = SqliteStore::open(&db).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2, "DDL version 2");
+        assert_eq!(s.schema_version().unwrap(), 3, "DDL version 3");
 
         let switched = || NewEvent {
             kind: EventKind::PlanSwitched,
@@ -1323,6 +1345,8 @@ mod tests {
                 "family": "glm-5.3",
                 "from_account": "primary",
                 "to_account": "overflow",
+                "from_route": "zai-plan/glm-5.3",
+                "to_route": "zai/glm-5.3",
                 "reason": "primary_exhausted",
                 "probe": false,
                 "cooldown_ms": 900_000i64,
@@ -1332,6 +1356,7 @@ mod tests {
         s.project(ProjectionWrite::PlanSwitched {
             family: "glm-5.3",
             account: "overflow",
+            to_route: "zai/glm-5.3",
             cooldown_us: 900_000 * 1_000,
             last_event: ev,
         })
@@ -1343,6 +1368,10 @@ mod tests {
         };
         let inc = row.expect("the family switched");
         assert_eq!(inc.account, "overflow");
+        // ADR-049 §5.2: the row carries the ACTIVE ROUTE, and the
+        // incremental write and the rebuild source it identically (the
+        // event's own `to_route`).
+        assert_eq!(inc.route, "zai/glm-5.3");
         assert_eq!(inc.last_event, ev.0);
         // since_us is the event row's own ts_us, read back directly.
         let ts_us: i64 = s
@@ -1378,7 +1407,8 @@ mod tests {
         assert_eq!(after.expect("still switched"), inc);
     }
 
-    // (7) a v1 database migrates forward to v2 without touching events.
+    // (7) a v1 database migrates forward (v2, then v3) without touching
+    //     events.
     #[test]
     fn v1_db_migrates_to_v2() {
         let dir = tempdir("v1-to-v2");
@@ -1396,11 +1426,59 @@ mod tests {
             .unwrap();
         }
         let s = SqliteStore::open(&db).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), 3);
         let QueryRow::Events(evs) = s.query(Query::AllEvents).unwrap() else {
             panic!("expected events");
         };
         assert_eq!(evs.len(), 1, "no row rewritten or lost");
+    }
+
+    // ADR-049 §5.2: a pre-tier (v2) database migrates forward, and the
+    // generalized projection is rebuildable from its own log — the last
+    // `plan.switched` row's `to_route` becomes the active route, so an
+    // old log (whose rows already carry `to_route`) backfills the new
+    // column without any row rewrite.
+    #[test]
+    fn v2_plan_state_backfills_route_from_the_log_on_rebuild() {
+        let dir = tempdir("v2-route");
+        let db = dir.join("state/vadis.db");
+        let s = SqliteStore::open(&db).unwrap();
+        let ev = s
+            .append(NewEvent {
+                kind: EventKind::PlanSwitched,
+                request_id: Some("req-old"),
+                session: None,
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({
+                    "family": "glm-5.3",
+                    "from_account": "primary",
+                    "to_account": "overflow",
+                    "from_route": "zai-plan/glm-5.3",
+                    "to_route": "zai/glm-5.3",
+                    "reason": "primary_exhausted",
+                    "probe": false,
+                    "cooldown_ms": 0i64,
+                }),
+            })
+            .unwrap();
+        s.project(ProjectionWrite::PlanSwitched {
+            family: "glm-5.3",
+            account: "overflow",
+            to_route: "zai/glm-5.3",
+            cooldown_us: 0,
+            last_event: ev,
+        })
+        .unwrap();
+        // The rebuild's word is law: the row comes back identical.
+        s.rebuild(Projection::PlanState).unwrap();
+        let QueryRow::PlanState(row) = s.query(Query::PlanState { family: "glm-5.3" }).unwrap()
+        else {
+            panic!("expected a plan_state row");
+        };
+        let row = row.expect("still switched");
+        assert_eq!(row.route, "zai/glm-5.3", "the active route survives");
+        assert_eq!(row.account, "overflow");
     }
 
     #[test]
@@ -1493,6 +1571,8 @@ mod tests {
                     "family": "glm-5.3",
                     "from_account": "primary",
                     "to_account": "overflow",
+                    "from_route": "prov-a/glm-5.3",
+                    "to_route": "prov-b/glm-5.3",
                     "reason": "primary_exhausted",
                     "probe": false,
                     "cooldown_ms": 0i64,
@@ -1502,6 +1582,7 @@ mod tests {
         s.project(ProjectionWrite::PlanSwitched {
             family: "glm-5.3",
             account: "overflow",
+            to_route: "prov-b/glm-5.3",
             cooldown_us: 0,
             last_event: ev,
         })
