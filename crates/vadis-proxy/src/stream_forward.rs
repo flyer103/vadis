@@ -60,7 +60,7 @@ use crate::forward::{
     RequestFacts, REASON_PRIMARY_COOLING_DOWN,
 };
 use vadis_core::plan::{
-    route_in_family, PlanAccount, REASON_PRIMARY_EXHAUSTED, REASON_PRIMARY_RECOVERED,
+    account_of_route, displacement_reason, plan_tier, route_in_family, REASON_PRIMARY_RECOVERED,
 };
 use vadis_core::trace::PlanSwitchRec;
 
@@ -353,31 +353,33 @@ impl Forwarder {
             Ok(Some(g)) => {
                 if g.route != primary {
                     // Reason by DIRECTION — the destination account
-                    // (spec §6's producer table; the buffered path's
-                    // twin): a move to the family's overflow route is an
-                    // exhaustion displacement, a move to the primary is
-                    // a recovery — never the pre-request account state.
-                    let to_overflow = plan_policy.as_ref().is_some_and(|p| p.overflow == g.route);
-                    facts.plan_switch = Some(PlanSwitchRec {
-                        from: primary.to_string(),
-                        to: g.route.to_string(),
-                        reason: if to_overflow {
-                            REASON_PRIMARY_EXHAUSTED
-                        } else {
-                            REASON_PRIMARY_RECOVERED
-                        },
-                        probe: g.probe,
-                        reprefill_tokens: None,
-                        switch_cost_nano: None,
-                        // §4.8: the destination route's unit (the buffered
-                        // path's twin writes the same value).
-                        cost_currency: self.route_currency(&g.route),
-                    });
+                    // (spec §6's producer table, extended by ADR-049
+                    // §5.2's reason-by-direction rule; the buffered
+                    // path's twin): a move to the metered tier is
+                    // `primary_exhausted`, a move within the plan tier
+                    // is `plan_exhausted`, a move back into the tier is
+                    // `primary_recovered` — never the pre-request
+                    // account state.
+                    if let Some(policy) = plan_policy.as_ref() {
+                        let tier = plan_tier(&self.config, policy);
+                        facts.plan_switch = Some(PlanSwitchRec {
+                            from: primary.to_string(),
+                            to: g.route.to_string(),
+                            reason: displacement_reason(policy, &tier, &primary, &g.route),
+                            probe: g.probe,
+                            reprefill_tokens: None,
+                            switch_cost_nano: None,
+                            // §4.8: the destination route's unit (the buffered
+                            // path's twin writes the same value).
+                            cost_currency: self.route_currency(&g.route),
+                        });
+                    }
                 } else if g.probe {
                     // The admitted probe's return trip (spec §6): the
                     // same record the buffered path writes — the
-                    // displacement is from the STATE's route (overflow),
-                    // the way back costs 0 (in-plan destination).
+                    // displacement is from the STATE's route (the
+                    // metered tier), the way back costs 0 (in-plan
+                    // destination).
                     if let Some(policy) = plan_policy.as_ref() {
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: policy.overflow.to_string(),
@@ -672,10 +674,28 @@ impl Forwarder {
         let mut skipped: Vec<ChainSkipped> = Vec::new();
         let mut chain_pos: usize = 0;
         {
+            // The offered chain (spec §4.2 refined by §4.6 / ADR-049
+            // §5.1/§5.7): the family's ACTIVE route, the plan tier's
+            // remaining members in declaration order, the family's
+            // `overflow` route, then the global fallback list. The guard
+            // already moved `primary` to the active route, and the tier
+            // members BEFORE it are the drained ones (§5.2's coherence
+            // rule) — deliberately absent, exactly the buffered path's
+            // twin chain.
             let mut routes: Vec<RouteSpec> = vec![primary.clone()];
             if let Some(policy) = &plan_policy {
-                if route_in_family(policy, &primary) && !routes.contains(&policy.overflow) {
-                    routes.insert(1, policy.overflow.clone());
+                let tier = plan_tier(&self.config, policy);
+                if route_in_family(policy, &tier, &primary) {
+                    if let Some(active_pos) = tier.iter().position(|r| r == &primary) {
+                        for member in tier.iter().skip(active_pos + 1) {
+                            if !routes.contains(member) {
+                                routes.push(member.clone());
+                            }
+                        }
+                    }
+                    if !routes.contains(&policy.overflow) {
+                        routes.push(policy.overflow.clone());
+                    }
                 }
             }
             for route in routes
@@ -1091,56 +1111,79 @@ impl Forwarder {
                             );
                             self.apply_demotion(&cand.route.provider, &cls, classified_id);
                             // The plan policy's only account-moving signal
-                            // (ADR-014 item 2): 403 `quota_exhausted` on the
-                            // family's primary flips the family to overflow and
-                            // records `plan.switched` before the next intent.
+                            // (ADR-014 item 2; ADR-049 §5.2 across the
+                            // tier — the buffered path's twin): a 403
+                            // `quota_exhausted` on one of the family's
+                            // PLAN routes retires that plan and moves the
+                            // family to the walk's next step — the next
+                            // plan member (`plan_exhausted`, in-plan), the
+                            // metered tier otherwise
+                            // (`primary_exhausted`) — before the next
+                            // intent. `block` refuses while the WHOLE
+                            // tier is exhausted.
                             if cls.class.demotes_provider() {
                                 if let Some(policy) = plan_policy.as_ref() {
-                                    if cand.route == policy.primary {
+                                    let tier = plan_tier(&self.config, policy);
+                                    if tier.contains(&cand.route) {
+                                        let from = cand.route.clone();
+                                        let next_plan = tier
+                                            .iter()
+                                            .position(|r| r == &cand.route)
+                                            .and_then(|pos| tier.get(pos + 1))
+                                            .cloned();
+                                        let to = next_plan
+                                            .clone()
+                                            .unwrap_or_else(|| policy.overflow.clone());
+                                        let to_account =
+                                            account_of_route(&tier, &to).as_str().to_string();
                                         self.record_plan_switch(
                                             request_id,
                                             policy,
-                                            &PlanAccount::Primary,
-                                            &PlanAccount::Overflow,
-                                            REASON_PRIMARY_EXHAUSTED,
+                                            &from,
+                                            &to,
+                                            &to_account,
                                             false,
                                             session.as_deref(),
                                         );
                                         if policy.on_primary_exhausted
                                             == vadis_core::config::OnPrimaryExhausted::Block
                                         {
-                                            return StreamOutcome::Failure(ForwardFailure {
-                                                status: 429,
-                                                code: ErrorCode::QuotaExceeded,
-                                                message: format!(
-                                                    "plan family '{}' is exhausted and \
+                                            // Block refuses only once every
+                                            // plan is drained — i.e. when
+                                            // the move above left the tier.
+                                            if to_account == "overflow" {
+                                                return StreamOutcome::Failure(ForwardFailure {
+                                                    status: 429,
+                                                    code: ErrorCode::QuotaExceeded,
+                                                    message: format!(
+                                                        "plan family '{}' is exhausted and \
                                              on_primary_exhausted is 'block': the request is \
                                              refused rather than served from the metered \
                                              account (spec 4.6)",
-                                                    policy.family
-                                                ),
-                                                details: Some(json!({
-                                                    "family": policy.family,
-                                                    "account_state": "overflow",
-                                                    "reason": "quota_exhausted",
-                                                    "stream": true,
-                                                })),
-                                            });
+                                                        policy.family
+                                                    ),
+                                                    details: Some(json!({
+                                                        "family": policy.family,
+                                                        "account_state": "overflow",
+                                                        "reason": "quota_exhausted",
+                                                        "stream": true,
+                                                    })),
+                                                });
+                                            }
                                         }
                                         if facts.plan_switch.is_none() {
-                                            let (reprefill, cost_nano) = self.failover_cost(
-                                                session.as_deref(),
-                                                &policy.overflow,
-                                            );
+                                            let (reprefill, cost_nano) =
+                                                self.failover_cost(session.as_deref(), &to);
                                             facts.plan_switch = Some(PlanSwitchRec {
-                                                from: policy.primary.to_string(),
-                                                to: policy.overflow.to_string(),
-                                                reason: REASON_PRIMARY_EXHAUSTED,
+                                                from: from.to_string(),
+                                                to: to.to_string(),
+                                                reason: displacement_reason(
+                                                    policy, &tier, &from, &to,
+                                                ),
                                                 probe: false,
                                                 reprefill_tokens: reprefill,
                                                 switch_cost_nano: cost_nano,
-                                                cost_currency: self
-                                                    .route_currency(&policy.overflow),
+                                                cost_currency: self.route_currency(&to),
                                             });
                                         }
                                     }
