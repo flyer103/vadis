@@ -94,6 +94,14 @@ pub struct Coalescer {
     window_ms: u64,
     burst_start_ms: Option<u64>,
     last_event_ms: Option<u64>,
+    /// Whether the open burst saw any event after its leading one. The
+    /// trailing look's trigger as a FACT, not an inference from
+    /// `last_event_ms > burst_start_ms`: an event can land in the same
+    /// millisecond as the burst's start (inotify's registration is that
+    /// fast), and a follow-on the leading look may have raced must still
+    /// get its trailing look — `last > start` would see "no follow-on"
+    /// and the raced bytes would wait for the next event forever.
+    saw_follow_on: bool,
 }
 
 impl Coalescer {
@@ -102,6 +110,7 @@ impl Coalescer {
             window_ms,
             burst_start_ms: None,
             last_event_ms: None,
+            saw_follow_on: false,
         }
     }
 
@@ -110,11 +119,13 @@ impl Coalescer {
         match self.burst_start_ms {
             Some(start) if t_ms < start + self.window_ms => {
                 self.last_event_ms = Some(t_ms);
+                self.saw_follow_on = true;
                 EventDecision::Folded
             }
             _ => {
                 self.burst_start_ms = Some(t_ms);
                 self.last_event_ms = Some(t_ms);
+                self.saw_follow_on = false;
                 EventDecision::LookNow
             }
         }
@@ -124,7 +135,7 @@ impl Coalescer {
     /// open and it saw more than its leading event.
     pub fn trailing_due_at_ms(&self) -> Option<u64> {
         match (self.burst_start_ms, self.last_event_ms) {
-            (Some(start), Some(last)) if last > start => Some(last + self.window_ms),
+            (Some(_), Some(last)) if self.saw_follow_on => Some(last + self.window_ms),
             _ => None,
         }
     }
@@ -144,8 +155,13 @@ impl Coalescer {
             // An event the loop saw before the sentinel already ran the
             // startup window's look; the trailing edge of that burst
             // (which the sentinel's arrival re-anchors, below) covers
-            // anything the look raced.
+            // anything the look raced. The sentinel itself counts as a
+            // follow-on: the burst's leading look ran BEFORE the
+            // registration finished, so a landing inside the window is
+            // exactly what that look raced and the trailing look exists
+            // to read (the same-millisecond fold is the CI shape).
             self.last_event_ms = Some(t_ms);
+            self.saw_follow_on = true;
             EventDecision::Folded
         } else {
             self.on_event(t_ms)
@@ -157,6 +173,7 @@ impl Coalescer {
     pub fn burst_closed(&mut self) {
         self.burst_start_ms = None;
         self.last_event_ms = None;
+        self.saw_follow_on = false;
     }
 }
 
@@ -1223,6 +1240,19 @@ fallback: []
         // sentinel's own time (it was, at latest, the burst's last
         // event), so the burst still closes.
         assert_eq!(c.trailing_due_at_ms(), Some(2_200));
+        c.burst_closed();
+        assert_eq!(c.trailing_due_at_ms(), None);
+
+        // The same-millisecond fold (R66-FIX's Linux shape, CI run
+        // 37332708961's environment): the landing's events arrive in the
+        // same millisecond as the burst's start — instant inotify
+        // registration — and the follow-on fact must still arm the
+        // trailing look, or the raced bytes wait for the next event
+        // forever (`last > start` misread "same ms" as "no follow-on").
+        let mut c = Coalescer::new(200);
+        assert_eq!(c.on_startup_catchup(1_000), EventDecision::LookNow);
+        assert_eq!(c.on_event(1_000), EventDecision::Folded);
+        assert_eq!(c.trailing_due_at_ms(), Some(1_200));
         c.burst_closed();
         assert_eq!(c.trailing_due_at_ms(), None);
 
