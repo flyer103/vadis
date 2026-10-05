@@ -206,8 +206,103 @@ async fn conf_95_output_then_declaration_order_break_ties() {
     );
 }
 
+/// (d) Purity (AGENTS constraint 2): two evaluations of the ranking on
+/// one revision are identical. The ranking is a pure function of
+/// (roster, config) — no turn number, wall clock or RNG — because a
+/// per-call input silently re-orders the spill between two turns of one
+/// conversation, invalidating the upstream prefix cache and *raising*
+/// cost while looking like a saving. The strongest form the observation
+/// boundary allows: not "call the function twice", but **two spilled
+/// requests under one `serve`** (one roster, one config, one revision),
+/// separated by more than the 403's provider-demotion window so a clock
+/// or counter read would have moved between them, on distinct session
+/// keys so stickiness cannot shortcut the second evaluation — and the
+/// two trace records' resolved candidate orders must be equal, element
+/// for element.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_95_two_evaluations_of_one_revision_are_identical() {
+    let plan = testkit::MockUpstream::start().await.unwrap();
+    let a = testkit::MockUpstream::start().await.unwrap();
+    let b = testkit::MockUpstream::start().await.unwrap();
+    let c = testkit::MockUpstream::start().await.unwrap();
+    let listen_port = testkit::free_port();
+    let listen_addr = format!("127.0.0.1:{listen_port}");
+    let dir = testkit::tempdir("conf95-purity");
+
+    for n in ["CONF95_PLAN", "CONF95_P_A", "CONF95_P_B", "CONF95_P_C"] {
+        std::env::set_var(n, "sk-fixture");
+    }
+    std::fs::write(
+        dir.join("config.yaml"),
+        tie_config(
+            listen_port,
+            plan.addr.port(),
+            a.addr.port(),
+            b.addr.port(),
+            c.addr.port(),
+        ),
+    )
+    .unwrap();
+
+    // Both requests spill: the plan 403s twice (the second attempt
+    // happens after the first 403's `Retry-After: 1` demotion lapses),
+    // and the metered tier's head (p-a) answers both.
+    plan.queue(testkit::plan_forbidden_403());
+    plan.queue(testkit::plan_forbidden_403());
+    a.queue(testkit::plan_ok("one"));
+    a.queue(testkit::plan_ok("two"));
+
+    let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
+    let task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
+    testkit::wait_listening(&listen_addr);
+
+    let post = |key: &str| {
+        let body = format!(
+            r#"{{"model":"p-plan/m","messages":[{{"role":"user","content":"x"}}],"prompt_cache_key":"{key}","stream":false}}"#
+        );
+        let _ = testkit::http_post(&listen_addr, "/v1/chat/completions", body.as_bytes(), &[]);
+    };
+    post("S1");
+    // Longer than the 403's one-second provider demotion, so request
+    // two re-probes the plan and evaluates the ranking anew — a wall
+    // clock or a call counter would read differently on this side of
+    // the sleep.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    post("S2");
+
+    task.abort();
+    let _ = task.await;
+
+    let orders: Vec<Vec<String>> = trace_records(&dir)
+        .into_iter()
+        .filter(|r| r["result"]["plan_switch"]["candidates"].is_array())
+        .map(|r| {
+            r["result"]["plan_switch"]["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        orders.len(),
+        2,
+        "two spilled requests must each leave a record carrying the ranking"
+    );
+    assert_eq!(
+        orders[0].len(),
+        3,
+        "the ranked set is the three metered candidates, so the comparison is non-vacuous"
+    );
+    assert_eq!(
+        orders[0], orders[1],
+        "two evaluations of the ranking on one revision are identical — a difference here \
+         means the ranking read a turn number, a clock or an RNG (AGENTS constraint 2)"
+    );
+}
+
 /// (e) The refusals: mixed currency, and a cap over a non-USD candidate.
-#[ignore = "CONF-95: depends on overflow_selection: cheapest and the ranking function"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_95_mixed_currency_is_refused_at_load() {
     let dir = testkit::tempdir("conf95-currency");
@@ -271,5 +366,8 @@ plan_policy:
         "the refusal names the currencies found, got: {err}"
     );
     let code = vadis_cli::serve(&cfg).await;
-    assert_eq!(code, 2, "the mixed-currency family refuses to load (exit 2)");
+    assert_eq!(
+        code, 2,
+        "the mixed-currency family refuses to load (exit 2)"
+    );
 }
