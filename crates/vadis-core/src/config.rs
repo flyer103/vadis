@@ -1936,6 +1936,38 @@ impl VadisConfig {
         for (pi, p) in self.providers.iter().enumerate() {
             let ppath = format!("providers[{pi}] ({})", p.name);
 
+            // The credential ladder (ADR-049 §3 / spec §4.6.1 :734): a
+            // provider entry names its credential with exactly one of
+            // the two spellings — `api_key_env:` (one key) or
+            // `api_keys:` (the pool, in rotation order). Both written
+            // is an ambiguous credential; neither written is a keyless
+            // provider that would silently answer every request with a
+            // transport-less refusal (§12.10.2). Same convention as the
+            // `providers/providers_file` and `plan_policy/plan_policies`
+            // ladders: the error names both keys, so a hand-edited file
+            // has the exact paths to act on.
+            match (&p.api_key_env, &p.api_keys) {
+                (Some(_), Some(_)) => {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.api_key_env / {ppath}.api_keys"),
+                        "both keys are written — exactly one of `api_key_env:` (one \
+                         credential) and `api_keys:` (the pool, in rotation order) \
+                         is written (spec §4.6.1, ADR-049 §3)"
+                            .to_string(),
+                    ));
+                }
+                (None, None) => {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.api_key_env / {ppath}.api_keys"),
+                        "neither key is written — exactly one of `api_key_env:` (one \
+                         credential) and `api_keys:` (the pool, in rotation order) \
+                         names this provider's credential (spec §4.6.1, ADR-049 §3)"
+                            .to_string(),
+                    ));
+                }
+                _ => {}
+            }
+
             if !p.supports.contains(&p.wire_api) {
                 let supports: Vec<&str> = p.supports.iter().map(|w| w.as_str()).collect();
                 return Err(ConfigError::new(
@@ -3404,5 +3436,72 @@ mod tests {
         let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0)));
         cfg.validate().expect("a zero cap is legal");
         assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), Nano(500_000_000));
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.6.1 / ADR-049 §3: the credential ladder — a provider
+    // entry names its credential with exactly one of `api_key_env`
+    // (one key) and `api_keys` (the pool). The two spellings are
+    // probed on the parsed config (typed mutations, like the policy
+    // cross-field checks above) so the refusal is stated directly.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn both_credential_spellings_written_is_a_load_error_naming_both_keys() {
+        let mut cfg = planned();
+        // zai already writes the one-key spelling; adding the pool
+        // spelling to the same entry is the ambiguous credential.
+        cfg.providers[1].api_keys = Some(vec!["ZAI_A".into(), "ZAI_B".into()]);
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("both keys are written"),
+            "the ladder's own wording, got: {err}"
+        );
+        assert!(
+            err.contains("api_key_env") && err.contains("api_keys"),
+            "the refusal names both keys, got: {err}"
+        );
+        assert!(
+            err.contains("providers[1] (zai)"),
+            "the refusal names the entry, got: {err}"
+        );
+    }
+
+    #[test]
+    fn neither_credential_spelling_written_is_a_load_error_naming_both_keys() {
+        let mut cfg = planned();
+        cfg.providers[1].api_key_env = None;
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("neither key is written"),
+            "the ladder's own wording, got: {err}"
+        );
+        assert!(
+            err.contains("api_key_env") && err.contains("api_keys"),
+            "the refusal names both keys (the fix is to write one of \
+             them), got: {err}"
+        );
+        assert!(
+            err.contains("providers[1] (zai)"),
+            "the refusal names the entry, got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_pool_spelling_alone_is_the_legal_alternative() {
+        // The positive control: the pool spelling replaces the one-key
+        // spelling on the same entry and the config validates, with
+        // `key_pool()` answering the pool's names in declaration order
+        // (ADR-049 §3 rule 1) — the ladder refuses the ambiguity, not
+        // the pool.
+        let mut cfg = planned();
+        cfg.providers[1].api_key_env = None;
+        cfg.providers[1].api_keys = Some(vec!["ZAI_A".into(), "ZAI_B".into(), "ZAI_C".into()]);
+        cfg.validate().expect("the pool spelling alone is legal");
+        assert_eq!(
+            cfg.providers[1].key_pool(),
+            ["ZAI_A", "ZAI_B", "ZAI_C"],
+            "declaration order is rotation order"
+        );
     }
 }
