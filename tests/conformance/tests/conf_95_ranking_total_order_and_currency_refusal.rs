@@ -139,7 +139,6 @@ plan_policy:
 
 /// (a)+(b)+(c) The resolved ranking, read off the first spilled request's own
 /// trace record.
-#[ignore = "CONF-95: depends on overflow_selection: cheapest and the ranking function"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_95_output_then_declaration_order_break_ties() {
     let plan = testkit::MockUpstream::start().await.unwrap();
@@ -257,6 +256,20 @@ plan_policy:
 "#;
     std::fs::write(dir.join("config.yaml"), config).unwrap();
     let cfg = dir.join("config.yaml").to_string_lossy().into_owned();
+    // A load refusal is exit 2 (the loader's code; bind is 3), and the
+    // refusal's own message names the family and the currencies found —
+    // a bind failure can satisfy neither (spec §8's row). Driven through
+    // the loader `serve` itself uses, then through `serve` for the code.
+    let err = vadis_cli::config_load::validate_text(config)
+        .expect_err("a mixed-currency metered candidate set cannot load");
+    assert!(
+        err.contains("family 'm'"),
+        "the refusal names the family, got: {err}"
+    );
+    assert!(
+        err.contains("USD") && err.contains("CNY"),
+        "the refusal names the currencies found, got: {err}"
+    );
     let code = vadis_cli::serve(&cfg).await;
-    assert_ne!(code, 0, "the mixed-currency family refuses to load");
+    assert_eq!(code, 2, "the mixed-currency family refuses to load (exit 2)");
 }

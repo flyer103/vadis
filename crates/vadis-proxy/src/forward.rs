@@ -25,7 +25,8 @@ use vadis_core::error_class::{
     classify_upstream_error, Classification, ErrorClass, ErrorEvidence, TransportCause,
 };
 use vadis_core::plan::{
-    account_of_route, displacement_reason, plan_tier, route_in_family, PlanFirstRule, PlanMove,
+    account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family,
+    PlanFirstRule, PlanMove,
     PlanRequest, PlanStateRow, REASON_PRIMARY_RECOVERED,
 };
 use vadis_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
@@ -252,6 +253,26 @@ fn now_us() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0)
+}
+
+/// The `plan_switch.candidates[]` field (spec §6 / ADR-049 §5.6): the
+/// resolved metered ranking, one `"<provider>/<model>"` string per
+/// candidate in rank order — `None` under `declared` (nothing was
+/// ranked; the key serializes null so the key set never changes shape).
+/// One owner both media call, so the two paths cannot disagree.
+pub(crate) fn metered_candidates_field(
+    config: &vadis_core::config::VadisConfig,
+    policy: &vadis_core::config::PlanPolicyCfg,
+) -> Option<Vec<String>> {
+    match policy.overflow_selection {
+        vadis_core::config::OverflowSelection::Cheapest => Some(
+            vadis_core::plan::ranked_metered_candidates(config, policy)
+                .iter()
+                .map(|c| format!("{}/{}", c.route.provider, c.route.model))
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 /// The UTC calendar-month boundary (µs) containing `now_us` — the
@@ -796,10 +817,11 @@ impl Forwarder {
                     // reads `overflow` whichever way it goes.
                     if let Some(policy) = plan_policy.as_ref() {
                         let tier = plan_tier(&self.config, policy);
+                        let metered = metered_walk(&self.config, policy);
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(policy, &tier, &primary, &g.route),
+                            reason: displacement_reason(policy, &tier, &metered, &primary, &g.route),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
@@ -808,6 +830,8 @@ impl Forwarder {
                             // is a fact about the destination and is
                             // stated regardless).
                             cost_currency: self.route_currency(&g.route),
+                            candidates: metered_candidates_field(&self.config, policy),
+                            chosen: Some(g.route.to_string()),
                         });
                     }
                 }
@@ -1114,7 +1138,8 @@ impl Forwarder {
         let mut candidates: Vec<RouteSpec> = vec![primary.clone()];
         if let Some(policy) = &plan_policy {
             let tier = plan_tier(&self.config, policy);
-            if route_in_family(policy, &tier, &primary) {
+            let metered = metered_walk(&self.config, policy);
+            if route_in_family(&tier, &metered, &primary) {
                 // §5.1/§5.7: the tier's members after the active route,
                 // in declaration order, come before anything metered —
                 // the tier is drained before a cent is spent.
@@ -1125,8 +1150,13 @@ impl Forwarder {
                         }
                     }
                 }
-                if !candidates.contains(&policy.overflow) {
-                    candidates.push(policy.overflow.clone());
+                // §5.7: the metered tier in walk order — the policy's
+                // `overflow` alone under `declared` (today's chain),
+                // the §5.6 ranking under `cheapest`.
+                for member in &metered {
+                    if !candidates.contains(member) {
+                        candidates.push(member.clone());
+                    }
                 }
             }
         }
@@ -1225,6 +1255,10 @@ impl Forwarder {
                         reprefill_tokens: reprefill,
                         switch_cost_nano: cost_nano,
                         cost_currency: self.route_currency(candidate),
+                        candidates: plan_policy
+                            .as_ref()
+                            .and_then(|p| metered_candidates_field(&self.config, p)),
+                        chosen: Some(candidate.to_string()),
                     });
                 }
             }
@@ -1411,6 +1445,8 @@ impl Forwarder {
                                             reprefill_tokens: None,
                                             switch_cost_nano: Some(0),
                                             cost_currency: self.route_currency(&policy.primary),
+                                            candidates: metered_candidates_field(&self.config, policy),
+                                            chosen: Some(candidate.to_string()),
                                         });
                                     }
                                     self.plan_probe_succeeded(
@@ -1575,6 +1611,7 @@ impl Forwarder {
                         if cls.class.demotes_provider() {
                             if let Some(policy) = plan_policy.as_ref() {
                                 let tier = plan_tier(&self.config, policy);
+                                let metered = metered_walk(&self.config, policy);
                                 if tier.contains(candidate) {
                                     let from = candidate.clone();
                                     let next_plan = tier
@@ -1584,7 +1621,7 @@ impl Forwarder {
                                         .cloned();
                                     let to = next_plan
                                         .clone()
-                                        .unwrap_or_else(|| policy.overflow.clone());
+                                        .unwrap_or_else(|| metered.first().cloned().unwrap_or_else(|| policy.overflow.clone()));
                                     let to_account =
                                         account_of_route(&tier, &to).as_str().to_string();
                                     self.record_plan_switch(
@@ -1630,11 +1667,15 @@ impl Forwarder {
                                         facts.plan_switch = Some(PlanSwitchRec {
                                             from: from.to_string(),
                                             to: to.to_string(),
-                                            reason: displacement_reason(policy, &tier, &from, &to),
+                                            reason: displacement_reason(
+                                                policy, &tier, &metered, &from, &to,
+                                            ),
                                             probe: false,
                                             reprefill_tokens: reprefill,
                                             switch_cost_nano: cost_nano,
                                             cost_currency: self.route_currency(&to),
+                                            candidates: metered_candidates_field(&self.config, policy),
+                                            chosen: Some(to.to_string()),
                                         });
                                     }
                                 }
@@ -1834,7 +1875,8 @@ impl Forwarder {
         // single-member tier (every config before this ADR) is exactly
         // the pre-tier shape.
         let tier = plan_tier(&self.config, policy);
-        if !route_in_family(policy, &tier, resolved) {
+        let metered = metered_walk(&self.config, policy);
+        if !route_in_family(&tier, &metered, resolved) {
             return Ok(None);
         }
         // The state read (projection; absent ⇒ the family never switched,
@@ -1872,7 +1914,11 @@ impl Forwarder {
                 since_us: 0,
             },
         };
-        let rule = PlanFirstRule::new(policy.clone(), tier.clone());
+        // ADR-049 §5.7: the metered tier in walk order (the policy's
+        // `overflow` under `declared`, the §5.6 ranking under `cheapest`)
+        // — the guard's `Downgrade` names its head, so the guard and the
+        // walk cannot disagree about where a spill starts.
+        let rule = PlanFirstRule::with_metered(policy.clone(), tier.clone(), metered.clone());
         let req = PlanRequest {
             session,
             turn_index,
@@ -1927,20 +1973,30 @@ impl Forwarder {
 
     /// The family's measured metered spend this UTC month (DESIGN
     /// §12.10.8: a SUM over the overflow route's `cost.computed` rows —
-    /// no counter exists to disagree with the log).
+    /// no counter exists to disagree with the log). ADR-049 §5.8: under
+    /// `cheapest` the cap's subject is the family's WHOLE metered spend
+    /// — every candidate's route summed; under `declared` the single
+    /// `overflow` route, today's subject.
     fn overflow_spend(&self, policy: &PlanPolicyCfg) -> vadis_core::Nano {
         let Some(store) = &self.store else {
             return vadis_core::Nano(0);
         };
         let month_start_us = month_start_us(now_us());
-        let route = format!("{}/{}", policy.overflow.provider, policy.overflow.model);
-        match store.query(Query::OverflowSpend {
-            family_route: &route,
-            month_start_us,
-        }) {
-            Ok(QueryRow::Count(n)) => vadis_core::Nano(n.max(0) as u64),
-            _ => vadis_core::Nano(0),
+        let routes: Vec<String> = metered_walk(&self.config, policy)
+            .iter()
+            .map(|r| format!("{}/{}", r.provider, r.model))
+            .collect();
+        let mut total: i64 = 0;
+        for route in &routes {
+            match store.query(Query::OverflowSpend {
+                family_route: route,
+                month_start_us,
+            }) {
+                Ok(QueryRow::Count(n)) => total += n,
+                _ => {}
+            }
         }
+        vadis_core::Nano(total.max(0) as u64)
     }
 
     fn provider(&self, route: &RouteSpec) -> Option<&ProviderCfg> {
@@ -2185,7 +2241,8 @@ impl Forwarder {
     ) -> Option<vadis_core::EventId> {
         let store = self.store.as_ref()?;
         let tier = plan_tier(&self.config, policy);
-        let reason = displacement_reason(policy, &tier, from, to);
+        let metered = metered_walk(&self.config, policy);
+        let reason = displacement_reason(policy, &tier, &metered, from, to);
         let from_account = account_of_route(&tier, from).as_str();
         let from_route = format!("{}/{}", from.provider, from.model);
         let to_route = format!("{}/{}", to.provider, to.model);

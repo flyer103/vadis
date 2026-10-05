@@ -348,6 +348,16 @@ pub struct PlanSwitchRec {
     /// of another currency, the switch's price and the record's own cost
     /// are in different units.
     pub cost_currency: Currency,
+    /// spec §6 / ADR-049 §5.6: the resolved metered ranking the walk
+    /// took, one `"<provider>/<model>"` string per candidate **in rank
+    /// order**. Present only under `overflow_selection: cheapest`
+    /// (frozen by CONF-94/CONF-95); `None` under `declared` and whenever
+    /// no policy displaced the request — the key set never changes shape
+    /// for one mode (the mirror of `configured: false`).
+    pub candidates: Option<Vec<String>>,
+    /// The candidate the walk settled on (`"<provider>/<model>"`),
+    /// present exactly when `candidates` is.
+    pub chosen: Option<String>,
 }
 
 /// spec §6 "failure details": the internal failure record — several

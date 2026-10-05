@@ -56,11 +56,12 @@ use vadis_protocol::sse::{SseUsageExtractor, SseUsageOutcome};
 
 use crate::accounting::{AccountCtx, Accountant, RouteAccounting};
 use crate::forward::{
-    resolve_session_key, rewrite_outbound_model, turn_index_for, ForwardFailure, Forwarder,
-    RequestFacts, REASON_PRIMARY_COOLING_DOWN,
+    metered_candidates_field, resolve_session_key, rewrite_outbound_model, turn_index_for,
+    ForwardFailure, Forwarder, RequestFacts, REASON_PRIMARY_COOLING_DOWN,
 };
 use vadis_core::plan::{
-    account_of_route, displacement_reason, plan_tier, route_in_family, REASON_PRIMARY_RECOVERED,
+    account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family,
+    REASON_PRIMARY_RECOVERED,
 };
 use vadis_core::trace::PlanSwitchRec;
 
@@ -362,16 +363,19 @@ impl Forwarder {
                     // account state.
                     if let Some(policy) = plan_policy.as_ref() {
                         let tier = plan_tier(&self.config, policy);
+                        let metered = metered_walk(&self.config, policy);
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(policy, &tier, &primary, &g.route),
+                            reason: displacement_reason(policy, &tier, &metered, &primary, &g.route),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
                             // §4.8: the destination route's unit (the buffered
                             // path's twin writes the same value).
                             cost_currency: self.route_currency(&g.route),
+                            candidates: metered_candidates_field(&self.config, policy),
+                            chosen: Some(g.route.to_string()),
                         });
                     }
                 } else if g.probe {
@@ -389,6 +393,8 @@ impl Forwarder {
                             reprefill_tokens: None,
                             switch_cost_nano: Some(0),
                             cost_currency: self.route_currency(&policy.primary),
+                            candidates: metered_candidates_field(&self.config, policy),
+                            chosen: Some(policy.primary.to_string()),
                         });
                     }
                 }
@@ -685,7 +691,8 @@ impl Forwarder {
             let mut routes: Vec<RouteSpec> = vec![primary.clone()];
             if let Some(policy) = &plan_policy {
                 let tier = plan_tier(&self.config, policy);
-                if route_in_family(policy, &tier, &primary) {
+                let metered = metered_walk(&self.config, policy);
+                if route_in_family(&tier, &metered, &primary) {
                     if let Some(active_pos) = tier.iter().position(|r| r == &primary) {
                         for member in tier.iter().skip(active_pos + 1) {
                             if !routes.contains(member) {
@@ -693,8 +700,14 @@ impl Forwarder {
                             }
                         }
                     }
-                    if !routes.contains(&policy.overflow) {
-                        routes.push(policy.overflow.clone());
+                    // §5.7 (the buffered path's twin): the metered tier
+                    // in walk order — the policy's `overflow` alone
+                    // under `declared`, the §5.6 ranking under
+                    // `cheapest`.
+                    for member in &metered {
+                        if !routes.contains(member) {
+                            routes.push(member.clone());
+                        }
                     }
                 }
             }
@@ -888,6 +901,10 @@ impl Forwarder {
                             reprefill_tokens: reprefill,
                             switch_cost_nano: cost_nano,
                             cost_currency: self.route_currency(&cand.route),
+                            candidates: plan_policy
+                                .as_ref()
+                                .and_then(|p| metered_candidates_field(&self.config, p)),
+                            chosen: Some(cand.route.to_string()),
                         });
                     }
                 }
@@ -981,6 +998,11 @@ impl Forwarder {
                                                 reprefill_tokens: None,
                                                 switch_cost_nano: Some(0),
                                                 cost_currency: self.route_currency(&policy.primary),
+                                                candidates: metered_candidates_field(
+                                                    &self.config,
+                                                    policy,
+                                                ),
+                                                chosen: Some(policy.primary.to_string()),
                                             });
                                         }
                                         self.plan_probe_succeeded(
@@ -1124,6 +1146,7 @@ impl Forwarder {
                             if cls.class.demotes_provider() {
                                 if let Some(policy) = plan_policy.as_ref() {
                                     let tier = plan_tier(&self.config, policy);
+                                    let metered = metered_walk(&self.config, policy);
                                     if tier.contains(&cand.route) {
                                         let from = cand.route.clone();
                                         let next_plan = tier
@@ -1131,9 +1154,12 @@ impl Forwarder {
                                             .position(|r| r == &cand.route)
                                             .and_then(|pos| tier.get(pos + 1))
                                             .cloned();
-                                        let to = next_plan
-                                            .clone()
-                                            .unwrap_or_else(|| policy.overflow.clone());
+                                        let to = next_plan.clone().unwrap_or_else(|| {
+                                            metered
+                                                .first()
+                                                .cloned()
+                                                .unwrap_or_else(|| policy.overflow.clone())
+                                        });
                                         let to_account =
                                             account_of_route(&tier, &to).as_str().to_string();
                                         self.record_plan_switch(
@@ -1178,12 +1204,17 @@ impl Forwarder {
                                                 from: from.to_string(),
                                                 to: to.to_string(),
                                                 reason: displacement_reason(
-                                                    policy, &tier, &from, &to,
+                                                    policy, &tier, &metered, &from, &to,
                                                 ),
                                                 probe: false,
                                                 reprefill_tokens: reprefill,
                                                 switch_cost_nano: cost_nano,
                                                 cost_currency: self.route_currency(&to),
+                                                candidates: metered_candidates_field(
+                                                    &self.config,
+                                                    policy,
+                                                ),
+                                                chosen: Some(to.to_string()),
                                             });
                                         }
                                     }

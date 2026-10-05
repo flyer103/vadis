@@ -1,5 +1,7 @@
 use serde_json::{json, Map, Value};
-use vadis_core::config::{PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig};
+use vadis_core::config::{
+    OverflowSelection, PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig,
+};
 use vadis_core::cost::Nano;
 use vadis_core::plan::{
     plan_tier, PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy,
@@ -184,6 +186,10 @@ pub(crate) struct PlanHealthInputs {
     /// The family's plan tier, head-first (ADR-049 §5.1) — the set
     /// `account` is derived against and the probe's head comes from.
     pub tier: Vec<RouteSpec>,
+    /// The family's metered candidate set in §5.6 rank order — `None`
+    /// under `declared` (nothing was ranked; spec §9.1's
+    /// `metered_candidates` is absent for a mode that has no order).
+    pub metered: Option<Vec<vadis_core::plan::MeteredCandidate>>,
     pub since_us: i64,
     pub now_us: i64,
     /// ADR-011's answer for the tier's head route right now.
@@ -268,6 +274,16 @@ fn gather_plan_inputs(
     PlanHealthInputs {
         route,
         tier,
+        // ADR-049 §5.6 / spec §9.1: the resolved ranking the walk will
+        // take, one entry per candidate in rank order — read from the
+        // same single owner the walk uses, so the surface cannot drift
+        // from the serving path. Absent under `declared`.
+        metered: match policy.overflow_selection {
+            OverflowSelection::Cheapest => {
+                Some(vadis_core::plan::ranked_metered_candidates(config, policy))
+            }
+            OverflowSelection::Declared => None,
+        },
         since_us,
         now_us: now,
         primary_allowed: !crate::availability::provider_in_cooldown(
@@ -302,19 +318,46 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
         "probe"
     };
     let common = |account: &str, since: Value, probe: Value| {
-        json!({
-            "configured": true,
-            "family": policy.family,
-            "primary": route_str(&policy.primary),
-            "overflow": route_str(&policy.overflow),
-            "recover": recover,
-            "account": account,
-            // ADR-049 §7(b): the specific route the family is currently
-            // on, from which `account` is derived.
-            "route": route_str(&i.route),
-            "since": since,
-            "probe": probe,
-        })
+        // spec §9.1 `metered_candidates` (ADR-049 §5.6): present only
+        // under `cheapest` — the resolved ranking the walk will take,
+        // one entry per candidate in rank order, each carrying the exact
+        // pair §5.6 ordered on so the order is checkable by hand against
+        // the roster. Absent under `declared` (nothing was ranked).
+        let mut section = Map::new();
+        section.insert("configured".into(), json!(true));
+        section.insert("family".into(), json!(policy.family));
+        section.insert("primary".into(), json!(route_str(&policy.primary)));
+        section.insert("overflow".into(), json!(route_str(&policy.overflow)));
+        section.insert("recover".into(), json!(recover));
+        section.insert("account".into(), json!(account));
+        // ADR-049 §7(b): the specific route the family is currently
+        // on, from which `account` is derived.
+        section.insert("route".into(), json!(route_str(&i.route)));
+        section.insert("since".into(), since);
+        section.insert("probe".into(), probe);
+        if let Some(metered) = &i.metered {
+            section.insert(
+                "metered_candidates".into(),
+                Value::Array(
+                    metered
+                        .iter()
+                        .enumerate()
+                        .map(|(rank, c)| {
+                            json!({
+                                "route": format!("{}/{}", c.route.provider, c.route.model),
+                                "currency": c.currency.as_code(),
+                                "rank_key": {
+                                    "input_miss": c.rank_key.input_miss,
+                                    "output": c.rank_key.output,
+                                },
+                                "rank": rank,
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        Value::Object(section)
     };
     if account == PlanAccount::Primary {
         // A family on its plan tier has nothing to probe back to (§4.6
@@ -481,6 +524,8 @@ mod tests {
         PlanHealthInputs {
             route,
             tier: single_tier(p),
+            // §9.1: absent under `declared` (the unit fixtures' mode).
+            metered: None,
             since_us,
             now_us: since_us + 60 * 1_000_000, // a minute past the transition
             primary_allowed: true,

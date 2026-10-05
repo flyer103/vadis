@@ -19,7 +19,8 @@
 use vadis_conformance::testkit;
 
 /// Three metered mocks. Declaration order is `mid`, `cheap`, `dear` while
-/// price order is `cheap` < `mid` < `dear`, so the two orders disagree.
+/// price order is `cheap` < `mid` < `dear` (input_miss 0.001 / 0.003 /
+/// 0.005, all output 0.002), so the two orders disagree.
 struct Rig {
     plan: testkit::MockUpstream,
     mid: testkit::MockUpstream,
@@ -38,8 +39,12 @@ async fn rig(tag: &str) -> Rig {
     let listen_addr = format!("127.0.0.1:{listen_port}");
     let dir = testkit::tempdir(tag);
 
-    for n in ["CONF94_PLAN", "CONF94_MID", "CONF94_CHEAP", "CONF94_DEAR"] {
-        std::env::set_var(n, "sk-fixture");
+    // The entries reference `CONF94_{name.to_uppercase()}` — set exactly
+    // those names (a hyphen survives `to_uppercase`, so the loop derives
+    // them the same way the entry does rather than hand-writing a second
+    // spelling that can drift).
+    for n in ["p-plan", "p-mid", "p-cheap", "p-dear"] {
+        std::env::set_var(format!("CONF94_{}", n.to_uppercase()), "sk-fixture");
     }
 
     let entry = |name: &str, port: u16, account: &str, input_miss: &str| {
@@ -117,9 +122,10 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
     out
 }
 
-/// The walk order is the price order: cheap → dear → mid, never declaration
-/// order.
-#[ignore = "CONF-94: depends on overflow_selection: cheapest and the ranking function"]
+/// The walk order is the price order: cheap → mid → dear (ascending
+/// `input_miss` 0.001 < 0.003 < 0.005; `output` is uniform at 0.002, so
+/// the declared prices leave the rank fully decided by `input_miss`),
+/// never declaration order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_94_cheapest_first_and_the_walk_follows_the_ranking() {
     let r = rig("conf94-rank").await;
@@ -130,7 +136,7 @@ async fn conf_94_cheapest_first_and_the_walk_follows_the_ranking() {
         "Internal Server Error",
         br#"{"error":{"message":"upstream boom"}}"#,
     ));
-    r.dear.queue(testkit::plan_ok("served-by-dear"));
+    r.mid.queue(testkit::plan_ok("served-by-mid"));
 
     let cfg = r.dir.join("config.yaml").to_string_lossy().into_owned();
     let task = tokio::task::spawn(async move { vadis_cli::serve(&cfg).await });
@@ -148,14 +154,14 @@ async fn conf_94_cheapest_first_and_the_walk_follows_the_ranking() {
         "the cheapest was attempted first"
     );
     assert_eq!(
-        r.dear.requests().len(),
+        r.mid.requests().len(),
         1,
         "the second-cheapest followed — not the declaration-order neighbour"
     );
     assert_eq!(
-        r.mid.requests().len(),
+        r.dear.requests().len(),
         0,
-        "the mid-priced provider was never reached: the walk is the ranking"
+        "the dearest provider was never reached: the walk is the ranking"
     );
 
     task.abort();
@@ -171,10 +177,10 @@ async fn conf_94_cheapest_first_and_the_walk_follows_the_ranking() {
         cands,
         &vec![
             serde_json::json!("p-cheap/m"),
-            serde_json::json!("p-dear/m"),
             serde_json::json!("p-mid/m"),
+            serde_json::json!("p-dear/m"),
         ],
         "the resolved ranking, ascending input_miss"
     );
-    assert_eq!(rec["result"]["plan_switch"]["chosen"], "p-dear/m");
+    assert_eq!(rec["result"]["plan_switch"]["chosen"], "p-mid/m");
 }
