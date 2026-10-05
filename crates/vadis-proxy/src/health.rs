@@ -187,11 +187,33 @@ pub(crate) struct PlanHealthInputs {
 }
 
 fn plan_section_value(state: &AppState, rev: &crate::revision::Revision) -> Value {
-    let Some(policy) = rev.forwarder.config.plan_policy.as_ref() else {
-        return json!({ "configured": false });
-    };
-    let inputs = gather_plan_inputs(state, &rev.forwarder.config, policy);
-    plan_section(policy, &inputs)
+    // ADR-049 §7(c): the section's shape follows the key that was
+    // written — today's object under `plan_policy` (every existing
+    // reader untouched), a list of the same objects under
+    // `plan_policies`, one per declared family in declaration order.
+    // The spelling is unambiguous because exactly one of the two is
+    // written (the load-time ladder). No policy at all — or a written
+    // empty list — is `{"configured": false}` and nothing else.
+    let config = &rev.forwarder.config;
+    match (&config.plan_policy, &config.plan_policies) {
+        // Exactly one spelling is written on a validated config, so
+        // `(Some, Some)` cannot reach here; it would fall to the
+        // single-policy arm below and report that policy.
+        (None, None) => json!({ "configured": false }),
+        (None, Some(list)) if list.is_empty() => json!({ "configured": false }),
+        (None, Some(list)) => Value::Array(
+            list.iter()
+                .map(|policy| {
+                    let inputs = gather_plan_inputs(state, config, policy);
+                    plan_section(policy, &inputs)
+                })
+                .collect(),
+        ),
+        (Some(policy), _) => {
+            let inputs = gather_plan_inputs(state, config, policy);
+            plan_section(policy, &inputs)
+        }
+    }
 }
 
 /// Read the projections the section reports (spec §9.1's per-key semantics):

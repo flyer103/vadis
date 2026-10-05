@@ -767,9 +767,14 @@ impl Forwarder {
         // family's account state says — primary while it lasts, overflow
         // after a spill, primary again when an admitted probe won. The
         // guard may also refuse (block mode, overflow cap). Outside a
-        // family (or with no policy) the request is untouched.
+        // family (or with no policy) the request is untouched. The
+        // family key is the resolution's own tag (§4.8) — the policy
+        // that names it is this request's family policy (ADR-049 §4).
         let mut plan_guard_out: Option<PlanGuardOutcome> = None;
+        let plan_policy: Option<PlanPolicyCfg> =
+            self.config.family_policy_for_route(&primary).cloned();
         match self.plan_guard(
+            plan_policy.as_ref(),
             &primary,
             session.as_deref(),
             turn_index,
@@ -787,9 +792,7 @@ impl Forwarder {
                     // input: on the spill round itself both arms read
                     // `primary`, and every post-spill state displacement
                     // reads `overflow` whichever way it goes.
-                    let to_overflow = self
-                        .config
-                        .plan_policy
+                    let to_overflow = plan_policy
                         .as_ref()
                         .is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
@@ -1107,7 +1110,7 @@ impl Forwarder {
         // whole — its other routes are not attempted either (ADR-011
         // item 4's in-request form).
         let mut candidates: Vec<RouteSpec> = vec![primary.clone()];
-        if let Some(policy) = &self.config.plan_policy {
+        if let Some(policy) = &plan_policy {
             if route_in_family(policy, &primary) && !candidates.contains(&policy.overflow) {
                 candidates.insert(1, policy.overflow.clone());
             }
@@ -1145,7 +1148,7 @@ impl Forwarder {
                 // names it, exactly like a failed attempt would.
                 failover_origin(&mut facts.failover_from, candidate);
                 skipped.push((candidate.clone(), SKIP_DEMOTED));
-                if let Some(policy) = &self.config.plan_policy {
+                if let Some(policy) = &plan_policy {
                     if candidate == &policy.primary {
                         cooling_abandoned = Some(candidate.clone());
                     }
@@ -1366,7 +1369,7 @@ impl Forwarder {
                             // flips the family back and records it — the
                             // probe's success *is* the transition.
                             if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
-                                if let Some(policy) = self.config.plan_policy.as_ref() {
+                                if let Some(policy) = plan_policy.as_ref() {
                                     // The return trip's trace row (spec §6:
                                     // "the family's account state returning
                                     // to `primary` | `failover_from`: null |
@@ -1542,7 +1545,7 @@ impl Forwarder {
                         // continues per `on_primary_exhausted`: spill walks
                         // into the overflow candidate below; block refuses.
                         if cls.class.demotes_provider() {
-                            if let Some(policy) = self.config.plan_policy.as_ref() {
+                            if let Some(policy) = plan_policy.as_ref() {
                                 if candidate == &policy.primary {
                                     self.record_plan_switch(
                                         request_id,
@@ -1759,22 +1762,26 @@ impl Forwarder {
 
     /// The plan policy's Guard stage (spec §4.6, evaluated before the
     /// allowance rule): for a request inside the family, where does it
-    /// go? `Ok(None)` when the config has no `plan_policy` or the route
-    /// is outside the family — the caller proceeds untouched. Shared by
-    /// both forwarding paths (the same request, the same
-    /// guard, whichever medium carries it).
+    /// go? `Ok(None)` when there is no family policy for this
+    /// request's resolution or the route is outside the family — the
+    /// caller proceeds untouched. Shared by both forwarding paths (the
+    /// same request, the same guard, whichever medium carries it).
+    /// The policy is the caller's own resolution
+    /// ([`VadisConfig::family_policy_for_route`], the single owner) —
+    /// the guard itself is family-agnostic.
     pub(crate) fn plan_guard(
         &self,
+        policy: Option<&PlanPolicyCfg>,
         resolved: &RouteSpec,
         session: Option<&str>,
         turn_index: u32,
         now_epoch_s: u64,
         now_us: i64,
     ) -> Result<Option<PlanGuardOutcome>, ForwardFailure> {
-        let Some(policy) = self.config.plan_policy.clone() else {
+        let Some(policy) = policy else {
             return Ok(None);
         };
-        if !route_in_family(&policy, resolved) {
+        if !route_in_family(policy, resolved) {
             return Ok(None);
         }
         // The state read (projection; absent ⇒ the family never switched).
@@ -1825,10 +1832,10 @@ impl Forwarder {
             deferred_by_window: crate::availability::probe_deferred_by_window(
                 self.store.as_ref(),
                 &self.config,
-                &policy,
+                policy,
                 now_epoch_s,
             ),
-            overflow_spend: self.overflow_spend(&policy),
+            overflow_spend: self.overflow_spend(policy),
         };
         match rule.decide(&req) {
             PlanMove::Pass { route, probe } => Ok(Some(PlanGuardOutcome { route, probe })),

@@ -1104,8 +1104,10 @@ pub struct VadisConfig {
     pub plan_policy: Option<PlanPolicyCfg>,
     /// spec §4.6.1 (ADR-049 §4): the list spelling — N families, one
     /// policy each. Exactly one of `plan_policy` and `plan_policies` is
-    /// written (both/neither is a load error naming both keys, §4.14's
-    /// ladder one layer up); a present `plan_policies: null` is refused
+    /// written (both written is a load error naming both keys, §4.14's
+    /// ladder one layer up; **neither written is the no-plan
+    /// configuration and loads** — spec §4.6's "at most one policy");
+    /// a present `plan_policies: null` is refused
     /// by `plan_policies:` itself (the roster's own presence rule).
     #[serde(default, deserialize_with = "de_plan_policies_presence")]
     pub plan_policies: Option<Vec<PlanPolicyCfg>>,
@@ -1330,11 +1332,15 @@ impl RootFile {
             (None, Some(_), Some(roster)) => Ok(roster.providers),
         }?;
         // The ladder one layer up (ADR-049 §4): exactly one of the two
-        // policy spellings is written — both/neither is a load error
+        // policy spellings is written — both written is a load error
         // naming both keys, so no hand-edited file can hold an
-        // ambiguous family set. A `plan_policies: []` is a written
-        // empty list, not an absent key: it is the declared "no
-        // family" state and loads exactly like an absent mapping does.
+        // ambiguous family set. Neither written is NOT an error: it is
+        // the no-plan configuration §4.6 itself freezes ("at most one
+        // policy"), and it loads unchanged (ADR-049 §4 rule 4 — a plan
+        // account named by no policy is a legal, ordinary entry). A
+        // `plan_policies: []` is a written empty list, not an absent
+        // key: it is the declared "no family" state and loads exactly
+        // like an absent mapping does.
         let (plan_policy, plan_policies) = match (plan_policy, plan_policies) {
             (Some(_), Some(_)) => {
                 return Err(ConfigError::new(
@@ -1726,10 +1732,44 @@ impl VadisConfig {
     /// The family tag a route's model entry carries (§4.8): the written
     /// tag, or the model's own id when none was written — the one place
     /// the default lives. `None` when the route is not on the roster.
-    fn family_tag_of(&self, route: &RouteSpec) -> Option<String> {
+    pub fn family_tag_of(&self, route: &RouteSpec) -> Option<String> {
         let provider = self.provider(&route.provider)?;
         let model = provider.models.iter().find(|m| m.id == route.model)?;
         Some(model.family.clone().unwrap_or_else(|| model.id.clone()))
+    }
+
+    /// Every declared family policy, in declaration order, whichever
+    /// spelling named it (ADR-049 §4): the one-key spelling's single
+    /// mapping, then each entry of the list. Exactly one spelling is
+    /// written on a validated config (the load-time ladder), so the
+    /// order is the written order. The serving path, `/health` and the
+    /// metrics surface all consume families through this one owner —
+    /// no consumer indexes `plan_policy`/`plan_policies` directly.
+    pub fn family_policies(&self) -> Vec<&PlanPolicyCfg> {
+        let mut out = Vec::new();
+        if let Some(policy) = &self.plan_policy {
+            out.push(policy);
+        }
+        if let Some(list) = &self.plan_policies {
+            out.extend(list.iter());
+        }
+        out
+    }
+
+    /// The family policy a route is served under, if any (ADR-049 §4
+    /// rules 2/3): the request's resolution names a model entry; that
+    /// entry's family tag (§4.8 — written, or the model's own id) is
+    /// the family key; the answer is the declared policy whose
+    /// `family` equals it. `None` — the ordinary path, unchanged —
+    /// when the route is off-roster or no policy names its tag (rule
+    /// 4: a plan account named by no policy is a legal, ordinary
+    /// entry). A tag resolves to at most one model per provider
+    /// (§4.8's uniqueness rule) and a tag appears at most once as a
+    /// policy key (the duplicate-family load refusal), so the answer
+    /// is unique by construction.
+    pub fn family_policy_for_route(&self, route: &RouteSpec) -> Option<&PlanPolicyCfg> {
+        let tag = self.family_tag_of(route)?;
+        self.family_policies().into_iter().find(|p| p.family == tag)
     }
 
     /// The spec §4.6 checks on `plan_policy` (DESIGN §12.10.2's row). They are
@@ -1768,6 +1808,24 @@ impl VadisConfig {
         policy: &PlanPolicyCfg,
         prefix: &str,
     ) -> Result<(), ConfigError> {
+        // `overflow_selection: cheapest` (ADR-049 §5.5/§5.6) names a
+        // ranking that is not implemented yet — accepting it would be
+        // the silent-ignore shape this round refuses: parsed, validated,
+        // then served as `declared`. It is a load error naming the key
+        // until R66-1d lands the ranking (and removes this refusal in
+        // the same commit); `declared` — the default, today's
+        // behaviour — keeps loading byte-identically.
+        if policy.overflow_selection == OverflowSelection::Cheapest {
+            return Err(ConfigError::new(
+                format!("{prefix}.overflow_selection"),
+                "'cheapest' is not implemented yet: the §5.6 ranking of the metered \
+                 candidate set does not exist, so the value could only be silently \
+                 ignored — write 'declared' (the default, today's behaviour) until \
+                 the ranking ships (ADR-049 §5.5)"
+                    .to_string(),
+            ));
+        }
+
         // A route is a plan route only if the roster has it: `provider/model`
         // with the model actually declared by that provider.
         let resolve = |key: &str, route: &RouteSpec| -> Result<&ProviderCfg, ConfigError> {
@@ -3502,6 +3560,146 @@ mod tests {
             cfg.providers[1].key_pool(),
             ["ZAI_A", "ZAI_B", "ZAI_C"],
             "declaration order is rotation order"
+        );
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.6.1 / ADR-049 §4: the family list at runtime — the
+    // single-owner resolution every serving-path consumer goes through,
+    // and the `cheapest` fail-closed refusal (the ranking is R66-1d's).
+    // -------------------------------------------------------------
+
+    #[test]
+    fn cheapest_is_refused_at_load_until_the_ranking_exists() {
+        // The same silent-ignore shape the list itself had: parsed,
+        // validated, then unread. `cheapest` is a load error naming the
+        // key (whichever spelling wrote it); `declared` — the default —
+        // keeps loading byte-identically.
+        let err = validate_err(&planned_with(|p| {
+            p.overflow_selection = OverflowSelection::Cheapest;
+        }));
+        assert!(
+            err.contains("plan_policy.overflow_selection"),
+            "the refusal names the key, got: {err}"
+        );
+        assert!(
+            err.contains("'cheapest' is not implemented yet"),
+            "the refusal names the unimplemented ranking, got: {err}"
+        );
+
+        let mut cfg = planned();
+        cfg.plan_policies = Some(vec![planned().plan_policy.clone().unwrap()]);
+        cfg.plan_policy = None;
+        let list = cfg.plan_policies.as_mut().unwrap();
+        list[0].overflow_selection = OverflowSelection::Cheapest;
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policies[0].overflow_selection"),
+            "the list spelling names its own entry's key, got: {err}"
+        );
+
+        planned().validate().expect("declared (the default) loads");
+    }
+
+    #[test]
+    fn family_policy_for_route_answers_by_the_routes_own_tag() {
+        // The resolution rule (ADR-049 §4): the request's resolution
+        // names a model entry; that entry's family tag (§4.8 — written,
+        // or the model's own id) is the family key; the answer is the
+        // declared policy whose `family` equals it. PLANNED's two
+        // glm-5.3 entries carry no written tag, so their effective tag
+        // is the id "glm-5.3" — exactly the policy's family.
+        let cfg = planned();
+        let policy = cfg
+            .family_policy_for_route(&RouteSpec {
+                provider: "zai-plan".into(),
+                model: "glm-5.3".into(),
+            })
+            .expect("the primary's own policy");
+        assert_eq!(policy.family, "glm-5.3");
+
+        // The moonshot entry's tag is its own id and no policy names it:
+        // the ordinary path (ADR-049 §4 rule 4 — a plan account named
+        // by no policy is a legal, ordinary entry).
+        assert!(
+            cfg.family_policy_for_route(&RouteSpec {
+                provider: "moonshot".into(),
+                model: "kimi-k3".into(),
+            })
+            .is_none(),
+            "an untagged, unnamed route is policy-less, not refused"
+        );
+
+        // A written tag is the key even when it differs from the id:
+        // tag both glm-5.3 entries "fam" and the policy follows.
+        let inner = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        // After the first splice only the zai entry's anchor remains
+        // plain, so it is occurrence 0 of the inner string.
+        let s = replace_nth(
+            &inner,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let mut cfg: VadisConfig = serde_json::from_str(&s).expect("parses");
+        cfg.plan_policy.as_mut().unwrap().family = "fam".into();
+        cfg.validate().expect("a tagged family validates");
+        let policy = cfg
+            .family_policy_for_route(&RouteSpec {
+                provider: "zai".into(),
+                model: "glm-5.3".into(),
+            })
+            .expect("the tag is the key, on either route");
+        assert_eq!(policy.family, "fam");
+    }
+
+    #[test]
+    fn family_policies_lists_every_declared_family_in_written_order() {
+        // The list spelling: both entries, in declaration order — the
+        // order /health's array and the metrics loop consume. The
+        // one-key spelling answers its single policy (the first test
+        // above already exercised it).
+        let one = planned().plan_policy.clone().unwrap();
+        // The roster's own second family: moonshot-plan (coding_plan)
+        // paired with moonshot (api), both carrying the kimi-k3 tag.
+        let two = PlanPolicyCfg {
+            family: "kimi-k3".into(),
+            primary: RouteSpec {
+                provider: "moonshot-plan".into(),
+                model: "kimi-k3".into(),
+            },
+            overflow: RouteSpec {
+                provider: "moonshot".into(),
+                model: "kimi-k3".into(),
+            },
+            ..one.clone()
+        };
+        let mut cfg = planned();
+        cfg.plan_policy = None;
+        cfg.plan_policies = Some(vec![one, two]);
+        cfg.validate().expect("both families validate");
+        let fams: Vec<&str> = cfg.family_policies().iter().map(|p| p.family.as_str()).collect();
+        assert_eq!(fams, ["glm-5.3", "kimi-k3"], "declaration order");
+
+        // The empty list is the declared "no family" state: no policy
+        // for any route, exactly like the absent key.
+        let mut cfg = planned();
+        cfg.plan_policy = None;
+        cfg.plan_policies = Some(vec![]);
+        cfg.validate().expect("the empty list loads");
+        assert!(cfg.family_policies().is_empty());
+        assert!(
+            cfg.family_policy_for_route(&RouteSpec {
+                provider: "zai-plan".into(),
+                model: "glm-5.3".into(),
+            })
+            .is_none(),
+            "the empty list serves the ordinary path"
         );
     }
 }

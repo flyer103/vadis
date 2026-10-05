@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures::stream::{unfold, Stream};
 use serde_json::{json, Value};
-use vadis_core::config::{ProviderCfg, RouteSpec, WireApi};
+use vadis_core::config::{PlanPolicyCfg, ProviderCfg, RouteSpec, WireApi};
 use vadis_core::error::ErrorCode;
 use vadis_core::error_class::{classify_upstream_error, ErrorEvidence, TransportCause};
 use vadis_core::prefix::{attribute_tokens, extract_prefix_blocks, PrefixBlock};
@@ -335,9 +335,14 @@ impl Forwarder {
         facts.turn_index = turn_index;
         facts.sticky_hit = sticky_hit;
         // The plan policy's Guard stage (spec §4.6) — the same rule the
-        // buffered path runs, before any attempt.
+        // buffered path runs, before any attempt. The family key is the
+        // resolution's own tag (§4.8; ADR-049 §4) — the buffered path's
+        // twin resolves it the same way.
         let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
+        let plan_policy: Option<PlanPolicyCfg> =
+            self.config.family_policy_for_route(&primary).cloned();
         match self.plan_guard(
+            plan_policy.as_ref(),
             &primary,
             session.as_deref(),
             turn_index,
@@ -352,9 +357,7 @@ impl Forwarder {
                     // twin): a move to the family's overflow route is an
                     // exhaustion displacement, a move to the primary is
                     // a recovery — never the pre-request account state.
-                    let to_overflow = self
-                        .config
-                        .plan_policy
+                    let to_overflow = plan_policy
                         .as_ref()
                         .is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
@@ -377,7 +380,7 @@ impl Forwarder {
                     // same record the buffered path writes — the
                     // displacement is from the STATE's route (overflow),
                     // the way back costs 0 (in-plan destination).
-                    if let Some(policy) = self.config.plan_policy.as_ref() {
+                    if let Some(policy) = plan_policy.as_ref() {
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: policy.overflow.to_string(),
                             to: policy.primary.to_string(),
@@ -672,7 +675,7 @@ impl Forwarder {
         let mut chain_pos: usize = 0;
         {
             let mut routes: Vec<RouteSpec> = vec![primary.clone()];
-            if let Some(policy) = &self.config.plan_policy {
+            if let Some(policy) = &plan_policy {
                 if route_in_family(policy, &primary) && !routes.contains(&policy.overflow) {
                     routes.insert(1, policy.overflow.clone());
                 }
@@ -837,7 +840,7 @@ impl Forwarder {
                         pos: cand.chain_pos,
                         skip: (cand.route.clone(), crate::forward::SKIP_DEMOTED),
                     });
-                    if let Some(policy) = &self.config.plan_policy {
+                    if let Some(policy) = &plan_policy {
                         if cand.route == policy.primary {
                             cooling_abandoned = Some(cand.route.clone());
                         }
@@ -945,7 +948,7 @@ impl Forwarder {
                                 // the primary while the family was on overflow
                                 // flips the family back and records it.
                                 if plan_guard_out.as_ref().is_some_and(|g| g.probe) {
-                                    if let Some(policy) = self.config.plan_policy.as_ref() {
+                                    if let Some(policy) = plan_policy.as_ref() {
                                         // The return trip's trace row (spec §6),
                                         // the buffered path's twin: set HERE —
                                         // only a 2xx head is a recovery — with
@@ -1094,7 +1097,7 @@ impl Forwarder {
                             // family's primary flips the family to overflow and
                             // records `plan.switched` before the next intent.
                             if cls.class.demotes_provider() {
-                                if let Some(policy) = self.config.plan_policy.as_ref() {
+                                if let Some(policy) = plan_policy.as_ref() {
                                     if cand.route == policy.primary {
                                         self.record_plan_switch(
                                             request_id,

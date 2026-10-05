@@ -1169,7 +1169,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     f.reprefill_tokens = 11;
     f.reprefill_cost_nano.insert("USD".to_string(), 12);
 
-    let text = vadis_cli::metrics::exposition(&f, 2, Some("fam-x"), None);
+    let text = vadis_cli::metrics::exposition(&f, 2, &["fam-x"], None);
     let (samples, comments) = parse_exposition(&text);
 
     let at = |name: &str, labels: &[(&str, &str)]| value_of(&samples, name, labels);
@@ -1279,7 +1279,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     // No policy ⇒ no plan series at all, even with switch figures in the
     // input: the series set is the CONFIG's, and the formatter is handed
     // the family, never the config.
-    let text = vadis_cli::metrics::exposition(&f, 2, None, None);
+    let text = vadis_cli::metrics::exposition(&f, 2, &[], None);
     let (samples, _c) = parse_exposition(&text);
     for plan_series in [
         "vadis_plan_switches",
@@ -1299,7 +1299,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
     let text = vadis_cli::metrics::exposition(
         &vadis_cli::stats::TraceFigures::default(),
         0,
-        None,
+        &[],
         Some("a test-given reason"),
     );
     let (samples, comments) = parse_exposition(&text);

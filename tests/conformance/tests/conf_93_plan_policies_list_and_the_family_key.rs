@@ -47,7 +47,7 @@ async fn rig(tag: &str) -> Rig {
         std::env::set_var(name, "sk-fixture");
     }
 
-    let entry = |name: &str, port: u16, account: &str, mid: &str, price: &str| {
+    let entry = |name: &str, port: u16, account: &str, mid: &str, family: &str, price: &str| {
         format!(
             r#"  - name: {name}
     urls:
@@ -59,6 +59,7 @@ async fn rig(tag: &str) -> Rig {
     models:
       - id: {mid}
         context: 128k
+        family: {family}
         price:
           input_miss: {price}
           input_hit: 0.0001
@@ -97,10 +98,10 @@ plan_policies:
     recover: probe
     cooldown: 0s
 "#,
-        ap = entry("pa", a_plan.addr.port(), "coding_plan", "ma", "0.001"),
-        aa = entry("na", a_api.addr.port(), "api", "ma", "0.002"),
-        bp = entry("pb", b_plan.addr.port(), "coding_plan", "mb", "0.001"),
-        ba = entry("nb", b_api.addr.port(), "api", "mb", "0.002"),
+        ap = entry("pa", a_plan.addr.port(), "coding_plan", "ma", "fa", "0.001"),
+        aa = entry("na", a_api.addr.port(), "api", "ma", "fa", "0.002"),
+        bp = entry("pb", b_plan.addr.port(), "coding_plan", "mb", "fb", "0.001"),
+        ba = entry("nb", b_api.addr.port(), "api", "mb", "fb", "0.002"),
     );
     std::fs::write(dir.join("config.yaml"), config).unwrap();
     Rig {
@@ -133,7 +134,6 @@ fn events(dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
 }
 
 /// A's spill does not move B; the list's two families are independent.
-#[ignore = "CONF-93: depends on the plan_policies list and per-family guard resolution"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_93_two_families_spill_independently() {
     let r = rig("conf93-two").await;
@@ -181,4 +181,51 @@ async fn conf_93_two_families_spill_independently() {
         .collect();
     assert_eq!(switches.len(), 1, "one transition, in family A");
     assert_eq!(switches[0].1["family"], "fa");
+}
+
+/// The refusal arms, each naming its own key: two list entries naming
+/// one tag (`plan_policies[i].family`), and `plan_policy` AND
+/// `plan_policies` both written (both keys). Both are asserted on the
+/// loader's own reason (the same string `serve` prints before exiting
+/// 2), so the message and the key path are both pinned verbatim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_93_refusals_name_their_keys() {
+    // (a) duplicate family: the same rig's config with both entries
+    // naming `fa`.
+    let r = rig("conf93-dup").await;
+    let config = std::fs::read_to_string(r.dir.join("config.yaml")).unwrap();
+    let dup = config.replace("  - family: fb", "  - family: fa");
+    assert_ne!(dup, config, "the patch landed");
+    std::fs::write(r.dir.join("config.yaml"), &dup).unwrap();
+    let err = vadis_cli::config_load::load(&r.dir.join("config.yaml"))
+        .expect_err("the duplicate-family list refuses at load");
+    assert!(
+        err.contains("plan_policies[1].family"),
+        "the refusal names the second entry's family key, got: {err}"
+    );
+    assert!(
+        err.contains("already carried by an earlier entry"),
+        "the refusal states the two-writers reason, got: {err}"
+    );
+
+    // (b) both spellings written: the one-key policy is prepended to
+    // the same config (the rig's own routes are valid, so the arm is
+    // about the ladder alone — the ladder is checked before any
+    // per-family rule).
+    let r = rig("conf93-both").await;
+    let config = std::fs::read_to_string(r.dir.join("config.yaml")).unwrap();
+    let both = format!(
+        "plan_policy:\n  family: fa\n  primary: pa/ma\n  overflow: na/ma\n\n{config}"
+    );
+    std::fs::write(r.dir.join("config.yaml"), &both).unwrap();
+    let err = vadis_cli::config_load::load(&r.dir.join("config.yaml"))
+        .expect_err("both spellings written refuse at load");
+    assert!(
+        err.contains("plan_policy") && err.contains("plan_policies"),
+        "the refusal names both keys, got: {err}"
+    );
+    assert!(
+        err.contains("both keys are written"),
+        "the ladder's own wording, got: {err}"
+    );
 }
