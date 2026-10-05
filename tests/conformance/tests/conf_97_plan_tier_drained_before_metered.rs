@@ -160,7 +160,6 @@ fn events(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 /// The three phases, in one run: drain A→B, exhaust B→metered, probe back to A.
-#[ignore = "CONF-97: depends on the plan tier (drain) and the generalized plan_state"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_97_plan_tier_is_drained_before_any_metered_spend() {
     let r = rig("conf97-tier").await;
@@ -242,8 +241,8 @@ async fn conf_97_plan_tier_is_drained_before_any_metered_spend() {
     let sw = events(&r.dir);
     assert_eq!(sw.len(), 3, "one plan.switched per transition");
     assert_eq!(sw[0]["reason"], "plan_exhausted", "in-plan move");
-    assert_eq!(sw[0]["from"], "p-a/m");
-    assert_eq!(sw[0]["to"], "p-b/m");
+    assert_eq!(sw[0]["from_route"], "p-a/m");
+    assert_eq!(sw[0]["to_route"], "p-b/m");
     assert_eq!(sw[0]["to_account"], "primary", "still in-plan");
     assert_eq!(
         sw[1]["reason"], "primary_exhausted",
@@ -252,5 +251,5 @@ async fn conf_97_plan_tier_is_drained_before_any_metered_spend() {
     assert_eq!(sw[1]["to_account"], "overflow");
     assert_eq!(sw[2]["reason"], "primary_recovered", "the way back");
     assert_eq!(sw[2]["from_account"], "overflow");
-    assert_eq!(sw[2]["to"], "p-a/m");
+    assert_eq!(sw[2]["to_route"], "p-a/m");
 }

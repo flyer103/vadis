@@ -27,7 +27,7 @@ use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::plan::{PlanFirstRule, PlanRequest, PlanStateRow};
 
 async fn rig(tag: &str) -> PlanRig {
     let (plan, api, dir, listen_addr) =
@@ -446,12 +446,12 @@ fn guard_word(
     now_us: i64,
     primary_allowed: bool,
 ) -> Option<String> {
-    let rule = PlanFirstRule::new(p.clone());
+    let rule = PlanFirstRule::new(p.clone(), vec![p.primary.clone()]);
     let req = PlanRequest {
         session: Some("conf-44"),
         turn_index: 1,
         state: PlanStateRow {
-            account: PlanAccount::Overflow,
+            route: p.overflow.clone(),
             since_us,
         },
         now_us,

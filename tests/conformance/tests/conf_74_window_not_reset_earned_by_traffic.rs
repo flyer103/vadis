@@ -26,7 +26,7 @@ use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::plan::{PlanFirstRule, PlanRequest, PlanStateRow};
 
 /// A plan whose allowance is exactly one request (105 chargeable tokens),
 /// so one served in-plan request exhausts it (CONF-35's fixture).
@@ -58,12 +58,12 @@ fn guard_answer(
     since_us: i64,
     deferred_by_window: bool,
 ) -> (bool, Option<String>) {
-    let rule = PlanFirstRule::new(p.clone());
+    let rule = PlanFirstRule::new(p.clone(), vec![p.primary.clone()]);
     let req = PlanRequest {
         session: Some("conf-74"),
         turn_index: 1,
         state: PlanStateRow {
-            account: PlanAccount::Overflow,
+            route: p.overflow.clone(),
             since_us,
         },
         now_us: i64::MAX / 2, // far past any cooldown; the arm under test is the window's
