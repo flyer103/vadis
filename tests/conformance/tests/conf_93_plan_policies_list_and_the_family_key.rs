@@ -214,9 +214,8 @@ async fn conf_93_refusals_name_their_keys() {
     // per-family rule).
     let r = rig("conf93-both").await;
     let config = std::fs::read_to_string(r.dir.join("config.yaml")).unwrap();
-    let both = format!(
-        "plan_policy:\n  family: fa\n  primary: pa/ma\n  overflow: na/ma\n\n{config}"
-    );
+    let both =
+        format!("plan_policy:\n  family: fa\n  primary: pa/ma\n  overflow: na/ma\n\n{config}");
     std::fs::write(r.dir.join("config.yaml"), &both).unwrap();
     let err = vadis_cli::config_load::load(&r.dir.join("config.yaml"))
         .expect_err("both spellings written refuse at load");

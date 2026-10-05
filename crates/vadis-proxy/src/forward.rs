@@ -792,9 +792,7 @@ impl Forwarder {
                     // input: on the spill round itself both arms read
                     // `primary`, and every post-spill state displacement
                     // reads `overflow` whichever way it goes.
-                    let to_overflow = plan_policy
-                        .as_ref()
-                        .is_some_and(|p| p.overflow == g.route);
+                    let to_overflow = plan_policy.as_ref().is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
                         from: primary.to_string(),
                         to: g.route.to_string(),

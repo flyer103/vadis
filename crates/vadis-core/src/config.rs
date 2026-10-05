@@ -3683,7 +3683,11 @@ mod tests {
         cfg.plan_policy = None;
         cfg.plan_policies = Some(vec![one, two]);
         cfg.validate().expect("both families validate");
-        let fams: Vec<&str> = cfg.family_policies().iter().map(|p| p.family.as_str()).collect();
+        let fams: Vec<&str> = cfg
+            .family_policies()
+            .iter()
+            .map(|p| p.family.as_str())
+            .collect();
         assert_eq!(fams, ["glm-5.3", "kimi-k3"], "declaration order");
 
         // The empty list is the declared "no family" state: no policy

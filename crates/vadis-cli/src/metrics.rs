@@ -396,12 +396,7 @@ pub fn snapshot(state: &vadis_proxy::AppState) -> String {
             let figures = crate::stats::aggregate(&records);
             exposition(&figures, files_read, &plan_families, None)
         }
-        Err(reason) => exposition(
-            &TraceFigures::default(),
-            0,
-            &plan_families,
-            Some(&reason),
-        ),
+        Err(reason) => exposition(&TraceFigures::default(), 0, &plan_families, Some(&reason)),
     }
 }
 

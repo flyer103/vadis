@@ -357,9 +357,7 @@ impl Forwarder {
                     // twin): a move to the family's overflow route is an
                     // exhaustion displacement, a move to the primary is
                     // a recovery — never the pre-request account state.
-                    let to_overflow = plan_policy
-                        .as_ref()
-                        .is_some_and(|p| p.overflow == g.route);
+                    let to_overflow = plan_policy.as_ref().is_some_and(|p| p.overflow == g.route);
                     facts.plan_switch = Some(PlanSwitchRec {
                         from: primary.to_string(),
                         to: g.route.to_string(),
