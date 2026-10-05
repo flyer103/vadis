@@ -1,7 +1,5 @@
 use serde_json::{json, Map, Value};
-use vadis_core::config::{
-    OverflowSelection, PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig,
-};
+use vadis_core::config::{OverflowSelection, PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig};
 use vadis_core::cost::Nano;
 use vadis_core::plan::{
     plan_tier, PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy,
