@@ -84,7 +84,6 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 }
 
 /// (a) The pool's presence, per key, and the provider's disjunction.
-#[ignore = "CONF-92: depends on the credential pool (api_keys) and /health's keys[]"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_92_pool_presence_is_reported_per_key() {
     let (_p, listen_addr, dir) = rig("conf92-presence").await;
@@ -122,7 +121,6 @@ async fn conf_92_pool_presence_is_reported_per_key() {
 }
 
 /// (b) The canary: no surface this case can read carries a key value.
-#[ignore = "CONF-92: depends on the credential pool (api_keys) and /health's keys[]"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_92_no_key_value_reaches_any_readable_surface() {
     let (p, listen_addr, dir) = rig("conf92-canary").await;

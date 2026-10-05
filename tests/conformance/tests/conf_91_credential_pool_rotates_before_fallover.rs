@@ -147,7 +147,6 @@ fn body() -> String {
 
 /// (a) A `401` on the pool's first key advances to the second, within the
 /// provider, and narrates the rotation by index.
-#[ignore = "CONF-91: depends on the credential pool (api_keys) and its rotation arm"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_91_pool_rotates_on_a_credential_failure() {
     let (p1, p2, listen_addr, dir) = rig("conf91-rotate", POLICY).await;
@@ -211,7 +210,6 @@ async fn conf_91_pool_rotates_on_a_credential_failure() {
 
 /// (b) The negative: a `403 quota_exhausted` moves the **account** and never
 /// the key.
-#[ignore = "CONF-91: depends on the credential pool (api_keys) and its rotation arm"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_91_quota_exhausted_moves_the_account_not_the_key() {
     let (p1, p2, listen_addr, dir) = rig("conf91-quota", POLICY).await;
