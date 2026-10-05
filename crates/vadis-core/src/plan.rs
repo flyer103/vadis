@@ -35,7 +35,8 @@
 //! same inputs always give the same answer.
 
 use crate::config::{
-    AccountKind, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig,
+    AccountKind, OnPrimaryExhausted, OverflowSelection, PlanPolicyCfg, RecoveryMode, RouteSpec,
+    VadisConfig,
 };
 use crate::cost::Nano;
 use crate::error::ErrorCode;
@@ -157,6 +158,138 @@ pub struct PlanStateRow {
     pub since_us: i64,
 }
 
+/// One member of the family's metered candidate set (ADR-049 §5.4),
+/// carrying the exact pair §5.6 ordered on — so `/health`'s
+/// `metered_candidates[]` and the trace's `plan_switch.candidates[]` are
+/// checkable by hand against the roster (the audit-evidence property
+/// §7(b) demands).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeteredCandidate {
+    pub route: RouteSpec,
+    /// The candidate's provider-entry currency (§4.8) — read, never
+    /// derived; a mixed-currency set is refused at load (§5.6 rule 3).
+    pub currency: crate::cost::Currency,
+    /// The §5.6 rank key: the as-written per-1K prices (`price.tiers`
+    /// models by their **first band** — the lowest ceiling's prices, the
+    /// one band every entry has, and no estimate).
+    pub rank_key: RankKey,
+}
+
+/// The ranking's key pair (§5.6 rule 1): ascending `input_miss`, then
+/// ascending `output`. `input_miss` leads because a route change is paid
+/// as a re-prefill — an input event; `output` breaks ties because it is
+/// the same request's other real charge. As-written f64 values from the
+/// sourced price table (constraint 5: no conversion, no estimate).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RankKey {
+    pub input_miss: f64,
+    pub output: f64,
+}
+
+/// The family's metered candidate set (ADR-049 §5.4): every roster route
+/// whose provider is `account: api` and whose model entry carries the
+/// family tag (§4.8's tag *is* the set), **in roster declaration order**
+/// — the tie-break of §5.6 rule 1 and the order `rank_metered`'s stable
+/// sort preserves. Adding a metered provider is a roster edit and
+/// nothing else; no config key names the set.
+pub fn metered_candidates(config: &VadisConfig, policy: &PlanPolicyCfg) -> Vec<MeteredCandidate> {
+    let mut out: Vec<MeteredCandidate> = Vec::new();
+    for p in &config.providers {
+        if p.account != AccountKind::Api {
+            continue;
+        }
+        for m in &p.models {
+            let tag = m.family.clone().unwrap_or_else(|| m.id.clone());
+            if tag != policy.family {
+                continue;
+            }
+            // §5.6 rule 4: a `price.tiers` model ranks by its FIRST band
+            // (the smallest `up_to` — the loader enforces ascending
+            // ceilings with the unceiled band last, so `tiers[0]` is it).
+            // Every band states all four prices and the flat shape states
+            // all four scalars (`quad_to_table` refuses anything else at
+            // load), so the `INFINITY` arms are unreachable through a
+            // validated config — answered, never unwrapped.
+            let (input_miss, output) = match &m.price.tiers {
+                Some(tiers) => match tiers.first() {
+                    Some(band) => (
+                        band.input_miss.map(|v| v.0).unwrap_or(f64::INFINITY),
+                        band.output.map(|v| v.0).unwrap_or(f64::INFINITY),
+                    ),
+                    None => (f64::INFINITY, f64::INFINITY),
+                },
+                None => (
+                    m.price.input_miss.map(|v| v.0).unwrap_or(f64::INFINITY),
+                    m.price.output.map(|v| v.0).unwrap_or(f64::INFINITY),
+                ),
+            };
+            out.push(MeteredCandidate {
+                route: RouteSpec {
+                    provider: p.name.clone(),
+                    model: m.id.clone(),
+                },
+                currency: p.currency,
+                rank_key: RankKey { input_miss, output },
+            });
+        }
+    }
+    out
+}
+
+/// The §5.6 ranking, a **pure function of (roster, config)** (AGENTS
+/// constraint 2): ascending `input_miss`, then ascending `output`, then
+/// roster declaration order — the stable sort keeps the set's own
+/// declaration order on full ties, and nothing here reads a clock, a
+/// turn number or an RNG. Two evaluations on one revision give one
+/// order. The ranking orders only; per-wire eligibility (§4.2/ADR-022)
+/// is the walk's own rule and resolves after it.
+pub fn rank_metered(candidates: &[MeteredCandidate]) -> Vec<MeteredCandidate> {
+    let mut ranked = candidates.to_vec();
+    ranked.sort_by(|a, b| {
+        a.rank_key
+            .input_miss
+            .total_cmp(&b.rank_key.input_miss)
+            .then_with(|| a.rank_key.output.total_cmp(&b.rank_key.output))
+    });
+    ranked
+}
+
+/// The ranked candidate set (§5.4 set + §5.6 order) — the one
+/// composition every consumer (the walk, `/health`, the trace) calls,
+/// so no second implementation can drift.
+pub fn ranked_metered_candidates(
+    config: &VadisConfig,
+    policy: &PlanPolicyCfg,
+) -> Vec<MeteredCandidate> {
+    rank_metered(&metered_candidates(config, policy))
+}
+
+/// The ranking's head (§5.7): the route a spilled request attempts
+/// first under `cheapest`. `None` when the set is empty — the load-time
+/// rule (spec §8's last row) refuses that config before it can serve,
+/// so a miss here is defensive only and callers keep the policy's
+/// `overflow`.
+pub fn metered_head(config: &VadisConfig, policy: &PlanPolicyCfg) -> Option<RouteSpec> {
+    ranked_metered_candidates(config, policy)
+        .first()
+        .map(|c| c.route.clone())
+}
+
+/// The metered tier's walk order (§5.7): under `cheapest` the ranked
+/// candidate routes (§5.6), under `declared` the policy's `overflow`
+/// alone — today's behaviour, byte-identical. One owner for the guard's
+/// `Downgrade` answer, the walk's chain segment and the 403 handler's
+/// move target, so no consumer can order the tier a second way.
+pub fn metered_walk(config: &VadisConfig, policy: &PlanPolicyCfg) -> Vec<RouteSpec> {
+    match policy.overflow_selection {
+        OverflowSelection::Cheapest => ranked_metered_candidates(config, policy)
+            .into_iter()
+            .map(|c| c.route)
+            .collect(),
+        OverflowSelection::Declared => vec![policy.overflow.clone()],
+    }
+}
+
 /// The family's plan candidate set (ADR-049 §5.1): every roster route
 /// whose provider is `account: coding_plan` and whose model entry carries
 /// the family tag (§4.8's tag *is* the set), in roster declaration order
@@ -208,6 +341,11 @@ pub struct PlanFirstRule {
     /// The family's plan tier (§5.1), head-first. A single-member tier is
     /// exactly the pre-ADR-049 shape.
     tier: Vec<RouteSpec>,
+    /// The family's metered tier in walk order (ADR-049 §5.7): the
+    /// policy's `overflow` under `declared`, the §5.6 ranking under
+    /// `cheapest`. The `Downgrade` answer names its head, so the guard
+    /// and the walk cannot disagree about where a spill starts.
+    metered: Vec<RouteSpec>,
 }
 
 /// The per-request inputs, gathered by the caller from the projections:
@@ -238,13 +376,45 @@ pub struct PlanRequest<'a> {
 }
 
 impl PlanFirstRule {
+    /// Built from the validated config **and the two tiers derived from
+    /// it** (§5.1 plan tier, §5.7 metered walk); `decide` reads
+    /// projections only. Callers that hold only the policy (the unit
+    /// fixtures) keep the single-member shapes today's code walked.
     pub fn new(policy: PlanPolicyCfg, tier: Vec<RouteSpec>) -> Self {
-        Self { policy, tier }
+        Self {
+            metered: vec![policy.overflow.clone()],
+            policy,
+            tier,
+        }
+    }
+
+    /// The full-tiers constructor (ADR-049 §5.7): the guard that knows
+    /// its revision's config derives both tiers once — the walk, the
+    /// `Downgrade` answer and `/health` then consume the same order.
+    pub fn with_metered(
+        policy: PlanPolicyCfg,
+        tier: Vec<RouteSpec>,
+        metered: Vec<RouteSpec>,
+    ) -> Self {
+        Self {
+            metered: if metered.is_empty() {
+                vec![policy.overflow.clone()]
+            } else {
+                metered
+            },
+            policy,
+            tier,
+        }
     }
 
     /// The family's plan tier, head-first (§5.1).
     pub fn tier(&self) -> &[RouteSpec] {
         &self.tier
+    }
+
+    /// The family's metered tier in walk order (§5.7).
+    pub fn metered(&self) -> &[RouteSpec] {
+        &self.metered
     }
 
     /// Is this route one of the tier's plan routes?
@@ -344,7 +514,15 @@ impl PlanFirstRule {
             },
             PlanAccount::Overflow => match self.policy.on_primary_exhausted {
                 OnPrimaryExhausted::Spill => PlanMove::Downgrade {
-                    route: self.policy.overflow.clone(),
+                    // §5.7 under `cheapest`: the metered tier's HEAD —
+                    // the ranking's cheapest (the pure §5.6 order, never
+                    // re-decided per request); under `declared` the head
+                    // IS the policy's `overflow`, today's answer.
+                    route: self
+                        .metered
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| self.policy.overflow.clone()),
                 },
                 // `block` refuses while the whole plan tier is exhausted
                 // (§5.2: the operator's "fail rather than spend" over
@@ -383,9 +561,12 @@ pub fn account_of_route(tier: &[RouteSpec], route: &RouteSpec) -> PlanAccount {
 /// Is this route one of the family's routes? (ADR-014 item 4: a request
 /// whose resolution lands on one of the family's routes is inside the
 /// family; everything else is untouched. ADR-049 §5.1: the family now
-/// spans the whole tier, not only the policy's `primary`.)
-pub fn route_in_family(policy: &PlanPolicyCfg, tier: &[RouteSpec], route: &RouteSpec) -> bool {
-    route == &policy.overflow || tier.contains(route)
+/// spans the whole plan tier, not only the policy's `primary`; §5.4:
+/// `metered` is the family's metered tier in walk order — under
+/// `cheapest` the whole candidate set (§4.8's tag), under `declared` the
+/// policy's `overflow` alone.)
+pub fn route_in_family(tier: &[RouteSpec], metered: &[RouteSpec], route: &RouteSpec) -> bool {
+    tier.contains(route) || metered.contains(route)
 }
 
 /// The `plan.switched` payload's reason words (ADR-014 item 8; ADR-049
@@ -403,13 +584,18 @@ pub const REASON_PLAN_EXHAUSTED: &str = "plan_exhausted";
 /// `primary_exhausted`; a plan-to-plan move is `plan_exhausted`; a move
 /// back into the tier is `primary_recovered`. One owner for the walk and
 /// the writer side, so the event and the trace cannot disagree.
+/// `metered` is the family's metered tier in §5.7 walk order — under
+/// `cheapest` the whole candidate set, under `declared` the policy's
+/// `overflow` alone (so the `declared` arm is today's answer,
+/// byte-identical).
 pub fn displacement_reason(
-    policy: &PlanPolicyCfg,
+    _policy: &PlanPolicyCfg,
     tier: &[RouteSpec],
+    metered: &[RouteSpec],
     from: &RouteSpec,
     to: &RouteSpec,
 ) -> &'static str {
-    if to == &policy.overflow {
+    if metered.contains(to) && !metered.contains(from) {
         REASON_PRIMARY_EXHAUSTED
     } else if tier.contains(to) && tier.contains(from) {
         REASON_PLAN_EXHAUSTED
@@ -628,11 +814,14 @@ mod tests {
     #[test]
     fn same_tier_move_is_plan_exhausted_tier_leave_is_primary_exhausted() {
         let p = tiered_policy();
-        let tier = plan_tier(&tiered_config(&p), &p);
+        let cfg = tiered_config(&p);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
         assert_eq!(
             displacement_reason(
                 &p,
                 &tier,
+                &metered,
                 &route("plan-a", "glm-5.3"),
                 &route("plan-b", "glm-5.3")
             ),
@@ -640,12 +829,24 @@ mod tests {
             "plan → plan stays in-plan"
         );
         assert_eq!(
-            displacement_reason(&p, &tier, &route("plan-b", "glm-5.3"), &p.overflow),
+            displacement_reason(
+                &p,
+                &tier,
+                &metered,
+                &route("plan-b", "glm-5.3"),
+                &p.overflow
+            ),
             REASON_PRIMARY_EXHAUSTED,
             "plan → metered leaves the tier"
         );
         assert_eq!(
-            displacement_reason(&p, &tier, &p.overflow, &route("plan-a", "glm-5.3")),
+            displacement_reason(
+                &p,
+                &tier,
+                &metered,
+                &p.overflow,
+                &route("plan-a", "glm-5.3")
+            ),
             REASON_PRIMARY_RECOVERED,
             "metered → plan is the way back"
         );
@@ -881,20 +1082,232 @@ mod tests {
     #[test]
     fn family_membership_spans_the_tier() {
         let p = tiered_policy();
-        let tier = plan_tier(&tiered_config(&p), &p);
-        assert!(route_in_family(&p, &tier, &route("plan-b", "glm-5.3"),));
-        assert!(route_in_family(&p, &tier, &p.overflow));
+        let cfg = tiered_config(&p);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        assert!(route_in_family(
+            &tier,
+            &metered,
+            &route("plan-b", "glm-5.3"),
+        ));
+        assert!(route_in_family(&tier, &metered, &p.overflow));
         assert!(
-            !route_in_family(&p, &tier, &route("plan-c", "glm-5.3"),),
+            !route_in_family(&tier, &metered, &route("plan-c", "glm-5.3"),),
             "another family's plan route is not this family's"
         );
-        assert!(!route_in_family(&p, &tier, &route("p-api", "other-model")));
+        assert!(!route_in_family(
+            &tier,
+            &metered,
+            &route("p-api", "other-model")
+        ));
     }
 
     #[test]
     fn account_kind_words() {
         assert_eq!(AccountKind::CodingPlan.as_str(), "coding_plan");
         assert_eq!(AccountKind::Api.as_str(), "api");
+    }
+
+    // ------------------------------------------------------------------
+    // ADR-049 §5.3–§5.6 — the metered tier's set, rank and walk
+    // ------------------------------------------------------------------
+
+    /// A `cheapest` policy over `tiered_config`'s roster (one metered
+    /// member, `p-api`) — the base for the ranking fixtures below.
+    fn cheapest_policy() -> PlanPolicyCfg {
+        let mut p = tiered_policy();
+        p.overflow_selection = OverflowSelection::Cheapest;
+        p
+    }
+
+    /// `tiered_config` plus N metered providers carrying the family tag,
+    /// declared in the given order — the §5.4 set builder for the rank
+    /// tests. Prices are flat unless `tiers` is given.
+    fn metered_config(policy: &PlanPolicyCfg, metered: &[(&str, f64, f64)]) -> VadisConfig {
+        let mut cfg = tiered_config(policy);
+        for (name, input_miss, output) in metered {
+            let mut api = cfg
+                .providers
+                .iter()
+                .find(|p| p.name == "p-api")
+                .cloned()
+                .expect("the fixture's api entry");
+            api.name = name.to_string();
+            api.models[0].price.input_miss = Some(crate::config::PriceVal(*input_miss));
+            api.models[0].price.output = Some(crate::config::PriceVal(*output));
+            cfg.providers.push(api);
+        }
+        cfg
+    }
+
+    #[test]
+    fn metered_set_is_the_tag_and_rank_orders_on_input_miss_then_output_then_declaration() {
+        let p = cheapest_policy();
+        // Declaration order mid, cheap, dear — deliberately NOT the price
+        // order (CONF-94's own shape): mid and dear tie on input_miss, so
+        // output decides; cheap leads on input_miss alone.
+        let cfg = metered_config(
+            &p,
+            &[
+                ("p-mid", 0.003, 0.002),
+                ("p-cheap", 0.001, 0.009),
+                ("p-dear", 0.003, 0.005),
+            ],
+        );
+        let set = metered_candidates(&cfg, &p);
+        // The SET keeps roster declaration order (the tie-break's input).
+        let names: Vec<&str> = set.iter().map(|c| c.route.provider.as_str()).collect();
+        assert_eq!(names, ["p-api", "p-mid", "p-cheap", "p-dear"]);
+        // The RANK is the §5.6 order: cheap's 0.001 leads, the
+        // fixture's own p-api (0.002) follows, then the 0.003 tie
+        // broken by output (mid 0.002 < dear 0.005).
+        let ranked_vec = rank_metered(&set);
+        let ranked: Vec<&str> = ranked_vec
+            .iter()
+            .map(|c| c.route.provider.as_str())
+            .collect();
+        assert_eq!(
+            ranked,
+            ["p-cheap", "p-api", "p-mid", "p-dear"],
+            "ascending input_miss, then output, then declaration order"
+        );
+        // The walk under `cheapest` is the rank; under `declared` it is
+        // the policy's `overflow` alone (§5.7).
+        let walk_vec = metered_walk(&cfg, &p);
+        let walk: Vec<&str> = walk_vec.iter().map(|r| r.provider.as_str()).collect();
+        assert_eq!(walk, ranked, "the walk IS the ranking under cheapest");
+        let mut d = p.clone();
+        d.overflow_selection = OverflowSelection::Declared;
+        assert_eq!(
+            metered_walk(&cfg, &d),
+            vec![d.overflow.clone()],
+            "declared keeps today's single-route walk"
+        );
+    }
+
+    #[test]
+    fn a_full_tie_is_decided_by_roster_declaration_order() {
+        let p = cheapest_policy();
+        // p-late ties p-api exactly (the fixture's own prices); being
+        // declared later it follows (§5.6 rule 1's final tie-break).
+        let cfg = metered_config(&p, &[("p-late", 0.002, 0.004)]);
+        let ranked_vec = ranked_metered_candidates(&cfg, &p);
+        let ranked: Vec<&str> = ranked_vec
+            .iter()
+            .map(|c| c.route.provider.as_str())
+            .collect();
+        let pos_api = ranked.iter().position(|n| *n == "p-api").unwrap();
+        let pos_late = ranked.iter().position(|n| *n == "p-late").unwrap();
+        assert!(
+            pos_api < pos_late,
+            "an exact tie keeps roster order: {ranked:?}"
+        );
+    }
+
+    #[test]
+    fn a_banded_model_ranks_on_its_first_band() {
+        let p = cheapest_policy();
+        let mut cfg = metered_config(&p, &[]);
+        // Replace p-api's flat price with a banded block whose FIRST
+        // band undercuts p-late's flat price and whose second band
+        // exceeds it — §5.6 rule 4: the first band is the rank key, so
+        // the banded entry ranks FIRST, not last.
+        let api = cfg
+            .providers
+            .iter_mut()
+            .find(|pr| pr.name == "p-api")
+            .unwrap();
+        api.models[0].price.tiers = Some(vec![
+            crate::config::TierCfg {
+                up_to: Some(crate::config::CeilingVal(32_000.0)),
+                input_miss: Some(crate::config::PriceVal(0.0005)),
+                input_hit: Some(crate::config::PriceVal(0.0001)),
+                cache_write: Some(crate::config::PriceVal(0.0)),
+                output: Some(crate::config::PriceVal(0.006)),
+            },
+            crate::config::TierCfg {
+                up_to: None,
+                input_miss: Some(crate::config::PriceVal(0.009)),
+                input_hit: Some(crate::config::PriceVal(0.0001)),
+                cache_write: Some(crate::config::PriceVal(0.0)),
+                output: Some(crate::config::PriceVal(0.012)),
+            },
+        ]);
+        let late = metered_config(&p, &[("p-late", 0.002, 0.004)])
+            .providers
+            .pop()
+            .expect("the late entry");
+        // `pop` returns the LAST provider — which is `p-late` itself
+        // (the fixture appends); re-attach it to the banded cfg.
+        cfg.providers.push(late);
+        let ranked_vec = ranked_metered_candidates(&cfg, &p);
+        let ranked: Vec<&str> = ranked_vec
+            .iter()
+            .map(|c| c.route.provider.as_str())
+            .collect();
+        assert_eq!(
+            ranked.first(),
+            Some(&"p-api"),
+            "the banded entry ranks on its first band (0.0005), not its last (0.009): {ranked:?}"
+        );
+    }
+
+    #[test]
+    fn two_evaluations_on_one_revision_are_identical() {
+        // §5.6 rule 5 / AGENTS constraint 2: the ranking is a pure
+        // function of (roster, config). Two evaluations of the same
+        // revision give one order, element for element — the mechanism:
+        // `rank_metered` only copies and stable-sorts the candidate set
+        // it was handed; it reads no clock, no counter and no RNG, so
+        // there is nothing between two calls that could differ.
+        let p = cheapest_policy();
+        let cfg = metered_config(
+            &p,
+            &[
+                ("p-mid", 0.003, 0.002),
+                ("p-cheap", 0.001, 0.009),
+                ("p-dear", 0.003, 0.005),
+            ],
+        );
+        let a = ranked_metered_candidates(&cfg, &p);
+        let b = ranked_metered_candidates(&cfg, &p);
+        assert_eq!(a, b, "purity: two evaluations, one order");
+    }
+
+    #[test]
+    fn the_guard_downgrades_to_the_metered_heads_and_403_moves_follow_the_walk() {
+        // §5.7: the guard's `Downgrade` and the 403 handler's move both
+        // take the metered tier's HEAD — the ranking's cheapest under
+        // `cheapest`, the policy's `overflow` under `declared`.
+        let p = cheapest_policy();
+        let cfg = metered_config(&p, &[("p-dear", 0.005, 0.006)]);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        let rule = PlanFirstRule::with_metered(p.clone(), tier.clone(), metered.clone());
+        let mut r = req(&p);
+        r.session = None; // no probe to consider
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => {
+                assert_eq!(
+                    route.provider, "p-api",
+                    "the ranking's head (0.002 input_miss)"
+                );
+            }
+            other => panic!("expected a downgrade to the ranking's head, got {other:?}"),
+        }
+        // A plan-to-metered move's reason is primary_exhausted to ANY
+        // member of the metered walk (the tier, not the one route).
+        assert_eq!(
+            displacement_reason(
+                &p,
+                &tier,
+                &metered,
+                &route("plan-a", "glm-5.3"),
+                &route("p-dear", "glm-5.3")
+            ),
+            REASON_PRIMARY_EXHAUSTED,
+            "leaving the plan tier for any metered candidate"
+        );
     }
 
     // ------------------------------------------------------------------

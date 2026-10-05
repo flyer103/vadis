@@ -1808,24 +1808,6 @@ impl VadisConfig {
         policy: &PlanPolicyCfg,
         prefix: &str,
     ) -> Result<(), ConfigError> {
-        // `overflow_selection: cheapest` (ADR-049 §5.5/§5.6) names a
-        // ranking that is not implemented yet — accepting it would be
-        // the silent-ignore shape this round refuses: parsed, validated,
-        // then served as `declared`. It is a load error naming the key
-        // until R66-1d lands the ranking (and removes this refusal in
-        // the same commit); `declared` — the default, today's
-        // behaviour — keeps loading byte-identically.
-        if policy.overflow_selection == OverflowSelection::Cheapest {
-            return Err(ConfigError::new(
-                format!("{prefix}.overflow_selection"),
-                "'cheapest' is not implemented yet: the §5.6 ranking of the metered \
-                 candidate set does not exist, so the value could only be silently \
-                 ignored — write 'declared' (the default, today's behaviour) until \
-                 the ranking ships (ADR-049 §5.5)"
-                    .to_string(),
-            ));
-        }
-
         // A route is a plan route only if the roster has it: `provider/model`
         // with the model actually declared by that provider.
         let resolve = |key: &str, route: &RouteSpec| -> Result<&ProviderCfg, ConfigError> {
@@ -1942,6 +1924,86 @@ impl VadisConfig {
                         policy.overflow, overflow.name, overflow.currency
                     ),
                 ));
+            }
+        }
+
+        // ADR-049 §5.6 rule 3 / spec §8's rows: under `cheapest` the
+        // family's metered candidate set (§5.4) must be one currency and
+        // rankable — a ranking *is* a comparison, and two currencies are
+        // never compared (§4.8). `declared` keeps today's single-route
+        // rules above and nothing else. The set itself is §4.8's tag —
+        // this loop is the only place the §5.4 membership conditions are
+        // re-stated, because a refusal must name what it found.
+        if policy.overflow_selection == OverflowSelection::Cheapest {
+            let mut candidates: Vec<(&str, Currency)> = Vec::new();
+            for p in &self.providers {
+                if p.account != AccountKind::Api {
+                    continue;
+                }
+                for m in &p.models {
+                    let tag = m.family.as_deref().unwrap_or(&m.id);
+                    if tag == policy.family {
+                        candidates.push((p.name.as_str(), p.currency));
+                    }
+                }
+            }
+            let first = candidates.first().map(|(_, c)| *c);
+            if let Some(first) = first {
+                if let Some((offender, found)) = candidates
+                    .iter()
+                    .find(|(_, c)| *c != first)
+                    .map(|(n, c)| (*n, *c))
+                {
+                    let currencies: Vec<String> = {
+                        let mut seen = vec![first.as_code().to_string()];
+                        for (_, c) in &candidates {
+                            let code = c.as_code().to_string();
+                            if !seen.contains(&code) {
+                                seen.push(code);
+                            }
+                        }
+                        seen
+                    };
+                    return Err(ConfigError::new(
+                        format!("{prefix}.overflow_selection"),
+                        format!(
+                            "family '{}' mixes currencies across its metered candidate set: \
+                             provider '{}' is currency {} while the set also holds {} — \
+                             a ranking is a comparison, and two currencies are never compared \
+                             (spec 4.8, ADR-049 5.6 rule 3)",
+                            policy.family,
+                            offender,
+                            found.as_code(),
+                            currencies.join(" and ")
+                        ),
+                    ));
+                }
+            }
+            // §5.8 / spec §8's last-but-one row: the cap is USD by its own
+            // name and under `cheapest` its subject is the WHOLE metered
+            // candidate set's spend, so any non-USD candidate is refused
+            // naming the cap and the currency.
+            if policy.overflow_monthly_cap_usd.is_some() {
+                if let Some((offender, found)) = candidates
+                    .iter()
+                    .find(|(_, c)| *c != Currency::Usd)
+                    .map(|(n, c)| (*n, *c))
+                {
+                    return Err(ConfigError::new(
+                        format!("{prefix}.overflow_monthly_cap_usd"),
+                        format!(
+                            "under overflow_selection: cheapest the cap's subject is the \
+                             family's whole metered candidate set, and provider '{}' of \
+                             family '{}' is currency {}: comparing a USD ceiling with a \
+                             spend in another currency is the silent mixing spec 4.8 \
+                             forbids — remove the cap or rank USD candidates only \
+                             (spec 4.6/4.8, ADR-049 5.8)",
+                            offender,
+                            policy.family,
+                            found.as_code()
+                        ),
+                    ));
+                }
             }
         }
 
@@ -2986,6 +3048,17 @@ mod tests {
         cfg
     }
 
+    /// The PLANNED policy's family tag — the cloned-provider fixtures
+    /// below must carry it to be inside the metered candidate set.
+    fn policy_family_of_planned() -> String {
+        planned()
+            .plan_policy
+            .as_ref()
+            .expect("a policy")
+            .family
+            .clone()
+    }
+
     /// Mutate the parsed policy (the cross-field checks are a function of the
     /// typed config, so a mutation states the illegal combination directly).
     fn planned_with(f: impl FnOnce(&mut PlanPolicyCfg)) -> VadisConfig {
@@ -3570,35 +3643,83 @@ mod tests {
     // -------------------------------------------------------------
 
     #[test]
-    fn cheapest_is_refused_at_load_until_the_ranking_exists() {
-        // The same silent-ignore shape the list itself had: parsed,
-        // validated, then unread. `cheapest` is a load error naming the
-        // key (whichever spelling wrote it); `declared` — the default —
-        // keeps loading byte-identically.
-        let err = validate_err(&planned_with(|p| {
-            p.overflow_selection = OverflowSelection::Cheapest;
-        }));
-        assert!(
-            err.contains("plan_policy.overflow_selection"),
-            "the refusal names the key, got: {err}"
-        );
-        assert!(
-            err.contains("'cheapest' is not implemented yet"),
-            "the refusal names the unimplemented ranking, got: {err}"
-        );
-
+    fn cheapest_loads_and_its_refusals_name_their_keys() {
+        // The R66-1b fail-closed refusal is gone: `cheapest` now names a
+        // real ranking (ADR-049 §5.6) and the mode loads — the positive
+        // control, on both spellings.
+        planned_with(|p| p.overflow_selection = OverflowSelection::Cheapest)
+            .validate()
+            .expect("cheapest loads now that the ranking exists");
         let mut cfg = planned();
-        cfg.plan_policies = Some(vec![planned().plan_policy.clone().unwrap()]);
+        let list_policy = planned().plan_policy.clone().unwrap();
         cfg.plan_policy = None;
-        let list = cfg.plan_policies.as_mut().unwrap();
-        list[0].overflow_selection = OverflowSelection::Cheapest;
+        cfg.plan_policies = Some(vec![list_policy]);
+        cfg.plan_policies.as_mut().unwrap()[0].overflow_selection = OverflowSelection::Cheapest;
+        cfg.validate().expect("the list spelling loads too");
+
+        // A mixed-currency metered candidate set is refused naming the
+        // family and the currencies found (spec §8's row, ADR-049 §5.6
+        // rule 3): point the moonshot api entry (USD) at a CNY entry
+        // carrying the same tag.
+        let mut cfg = planned_with(|p| p.overflow_selection = OverflowSelection::Cheapest);
+        let cny = VadisConfig::provider(&cfg, "moonshot").unwrap();
+        let mut cny = cny.clone();
+        cny.name = "moonshot-cny".to_string();
+        cny.currency = Currency::Cny;
+        // The family tag is what puts the entry in the candidate set
+        // (§4.8) — the cloned model id stays whatever it was.
+        cny.models[0].family = Some(policy_family_of_planned());
+        cfg.providers.push(cny);
         let err = validate_err(&cfg);
         assert!(
-            err.contains("plan_policies[0].overflow_selection"),
-            "the list spelling names its own entry's key, got: {err}"
+            err.contains("plan_policy.overflow_selection"),
+            "the refusal names the selection key, got: {err}"
+        );
+        assert!(
+            err.contains("glm-5.3"),
+            "the refusal names the family, got: {err}"
+        );
+        assert!(
+            err.contains("USD") && err.contains("CNY"),
+            "the refusal names the currencies found, got: {err}"
         );
 
-        planned().validate().expect("declared (the default) loads");
+        // `cheapest` + a cap + a non-USD candidate is refused naming the
+        // cap and the currency (spec §8's last-but-one row, §5.8). The
+        // set must be UNIFORMLY non-USD — a mixed set is the refusal
+        // above's, and it fires first.
+        let mut cfg = planned_with(|p| {
+            p.overflow_selection = OverflowSelection::Cheapest;
+            p.overflow_monthly_cap_usd = Some(CapUsdVal(20.0));
+        });
+        let api = VadisConfig::provider(&cfg, "zai").unwrap();
+        let mut all_cny = api.clone();
+        all_cny.name = "zai-cny".to_string();
+        all_cny.currency = Currency::Cny;
+        all_cny.models[0].family = Some(policy_family_of_planned());
+        cfg.providers.push(all_cny);
+        let zai_pos = cfg
+            .providers
+            .iter()
+            .position(|p| p.name == "zai")
+            .expect("the api entry");
+        cfg.providers.remove(zai_pos);
+        // The policy's overflow pointed at the removed entry: move it to
+        // the surviving one so the policy itself stays loadable.
+        if let Some(p) = cfg.plan_policy.as_mut() {
+            p.overflow.provider = "zai-cny".to_string();
+        }
+        // And so did the fallback list's one entry.
+        cfg.fallback[0].provider = "zai-cny".to_string();
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.overflow_monthly_cap_usd"),
+            "the refusal names the cap, got: {err}"
+        );
+        assert!(
+            err.contains("CNY"),
+            "the refusal names the currency, got: {err}"
+        );
     }
 
     #[test]
