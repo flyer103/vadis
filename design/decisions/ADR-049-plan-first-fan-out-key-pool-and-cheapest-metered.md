@@ -199,9 +199,11 @@ narrated and priced exactly like the account move it resembles: `error.classifie
 additive future key (the `state:` / `retention` precedent), never a reshaped section"* (spec §4.6,
 `docs/spec.md:587`).
 
-**This ADR is that additive key.** `plan_policies:` is a **list** of the same policy objects; exactly one of
-`plan_policy` (one family, today's mapping) and `plan_policies` (N families) is written, both/neither a
-load error naming both keys — §4.14's ladder again, one layer up.
+**This ADR is that additive key.** `plan_policies:` is a **list** of the same policy objects; both
+`plan_policy` (one family, today's mapping) and `plan_policies` (N families) written is a load error
+naming both keys — §4.14's ladder again, one layer up. **Neither written is not an error**: it is the
+no-plan configuration §4.6 itself freezes ("at most one policy in v0.1"), and it loads unchanged
+(rule 4 below depends on exactly that — a plan account named by no policy is a legal, ordinary entry).
 
 ```yaml
 plan_policies:
@@ -475,7 +477,7 @@ Both are additive; `plan_switch` stays present-and-null as always when no displa
 | neither written | load error | both keys |
 | `api_keys` with a duplicate or empty name | load error | `providers[i].api_keys[j]` |
 | both `plan_policy` and `plan_policies` written | load error | both keys |
-| neither written (`plan_policies` present-but-null included) | load error | both keys, or `plan_policies:` for the written null |
+| neither written | **loads** — the no-plan configuration (§4.6's "at most one policy"; rule 4 above). Only a written explicit `plan_policies: null` is refused, by `plan_policies:` itself | `plan_policies:` |
 | two `plan_policies[i]` naming one family tag | load error | `plan_policies[i].family` |
 | `overflow_selection` is neither `declared` nor `cheapest` | load error | `plan_policies[i].overflow_selection` |
 | `cheapest` and the candidate set's currencies differ | load error | the family + the currencies found |

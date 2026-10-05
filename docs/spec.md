@@ -732,7 +732,7 @@ two rows).
 | the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
 | the month's metered spend has reached `overflow_monthly_cap_usd` | `cost_cap_exceeded` (403, §8) | the family and the cap |
 | **ADR-049**: both `api_key_env` and `api_keys` written, or neither | load error | both keys |
-| **ADR-049**: both `plan_policy` and `plan_policies` written, or neither | load error | both keys (or `plan_policies:` for a written null) |
+| **ADR-049**: both `plan_policy` and `plan_policies` written | load error | both keys. **Neither written is not an error** — it is the no-plan configuration (§4.6's "at most one policy", above), and it loads; only a written explicit `plan_policies: null` is refused, by `plan_policies:` itself |
 | **ADR-049**: two `plan_policies[i]` naming one family tag | load error | `plan_policies[i].family` |
 | **ADR-049**: `overflow_selection` is neither `declared` nor `cheapest` | load error | `plan_policies[i].overflow_selection` |
 | **ADR-049**: `cheapest` and the candidate set's currencies differ | load error | the family + the currencies found |
