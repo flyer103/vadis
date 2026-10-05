@@ -41,8 +41,10 @@ pub use error_class::{
 };
 pub use peak::{PeakTable, PeakWindow, Timestamp, Tz, Weekdays};
 pub use plan::{
-    route_in_family, PlanAccount, PlanFirstRule, PlanMove, PlanRequest, PlanStateRow,
-    ProbeBlockedBy, REASON_PRIMARY_EXHAUSTED, REASON_PRIMARY_RECOVERED,
+    displacement_reason, metered_candidates, metered_head, metered_walk, plan_tier, rank_metered,
+    ranked_metered_candidates, route_in_family, MeteredCandidate, PlanAccount, PlanFirstRule,
+    PlanMove, PlanRequest, PlanStateRow, ProbeBlockedBy, RankKey, REASON_PRIMARY_EXHAUSTED,
+    REASON_PRIMARY_RECOVERED,
 };
 pub use prefix::{
     attribute_tokens, body_sha16, extract_prefix_blocks, prefix_continuity, BlockKind, PrefixBlock,

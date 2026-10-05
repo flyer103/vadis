@@ -696,8 +696,10 @@ pub(crate) fn print_text(
         f.inferred_savings_tokens
     );
     let _ = writeln!(w);
-    // A family nobody configured is not reported, never fabricated.
-    if let Some(policy) = &rc.vadis.plan_policy {
+    // A family nobody configured is not reported, never fabricated;
+    // under the list spelling every declared family gets its own block
+    // (ADR-049 §4 rule 2: every §9.2 rule is per family).
+    for policy in rc.vadis.family_policies() {
         let _ = writeln!(w, "plan family '{}'", policy.family);
         let _ = writeln!(
             w,
@@ -813,7 +815,7 @@ pub fn report_json(
         },
         "overhead_ms_p99": p99(&mut f.overhead_ms.clone()),
     });
-    if let Some(policy) = &rc.vadis.plan_policy {
+    for policy in rc.vadis.family_policies() {
         let mut pf = serde_json::json!({
             "family": policy.family,
             "switches": f.switches,
@@ -838,7 +840,20 @@ pub fn report_json(
             pf["reprefill_cost_nano_inferred_by_currency"] =
                 serde_json::to_value(&f.reprefill_cost_nano).unwrap_or_default();
         }
-        v["plan_family"] = pf;
+        // Under the list spelling there is one block per family under a
+        // `plan_families` array (ADR-049 §4 rule 2); the one-key
+        // spelling keeps today's single-object shape byte-for-byte.
+        if rc.vadis.plan_policies.is_some() {
+            if !v.get("plan_families").is_some() {
+                v["plan_families"] = serde_json::json!([]);
+            }
+            v["plan_families"]
+                .as_array_mut()
+                .expect("just created")
+                .push(pf);
+        } else {
+            v["plan_family"] = pf;
+        }
     }
     if e.log_was_read {
         v["unknown_outcome_requests"] = serde_json::json!(e.unknown_outcome_requests);

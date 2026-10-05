@@ -81,6 +81,17 @@ impl ErrorClass {
     pub const fn demotes_provider(self) -> bool {
         matches!(self, Self::QuotaExhausted)
     }
+
+    /// Is this a **credential-class** failure (ADR-011 item 7 / ADR-049
+    /// §3 rule 3): the class whose remedy is the next key of the same
+    /// provider's pool, before any fallover? `401`/`403`-auth and `429`
+    /// — the failures that name the credential, not the account.
+    /// `QuotaExhausted` is deliberately absent: it is a fact about the
+    /// **account**, and a plan with three keys is still one exhausted
+    /// plan (ADR-049 §3 rule 4 — the negative CONF-91 pins).
+    pub const fn is_credential_class(self) -> bool {
+        matches!(self, Self::Auth | Self::RateLimit)
+    }
 }
 
 /// The demotion a classification may order (ADR-011 items 4–5). The scope

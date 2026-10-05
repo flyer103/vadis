@@ -121,6 +121,14 @@ pub struct DecisionRec {
     pub plugin_chain: Vec<String>,
     /// Decision time in milliseconds (selector + guards).
     pub decision_ms: u32,
+    /// ADR-049 §3 / spec §6: the credential of the provider's pool that
+    /// served — an integer index into the entry's `api_keys`. `None`
+    /// (serialized `null`) when the provider holds one credential
+    /// (`api_key_env`, the single-key spelling) and on records no
+    /// upstream attempt served (the no_available_route refusal). The
+    /// key's *value* is never a trace field (spec §4.7's rule, at N
+    /// names — CONF-92's boundary).
+    pub key_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -340,6 +348,31 @@ pub struct PlanSwitchRec {
     /// of another currency, the switch's price and the record's own cost
     /// are in different units.
     pub cost_currency: Currency,
+    /// spec §6 / ADR-049 §5.6: the resolved metered ranking the walk
+    /// took, one `"<provider>/<model>"` string per candidate **in rank
+    /// order**. Present only under `overflow_selection: cheapest`
+    /// (frozen by CONF-94/CONF-95); `None` under `declared` and whenever
+    /// no policy displaced the request — the key set never changes shape
+    /// for one mode (the mirror of `configured: false`).
+    pub candidates: Option<Vec<String>>,
+    /// The candidate the walk settled on (`"<provider>/<model>"`),
+    /// present exactly when `candidates` is.
+    pub chosen: Option<String>,
+}
+
+impl PlanSwitchRec {
+    /// ADR-049 §5.6 (spec §6): `chosen` is the candidate the walk
+    /// **settled on**, not the head of the ranking. The pre-walk
+    /// writers can only name the route the guard moved to — the
+    /// ranking's head — because the outcome is not known yet; the
+    /// site whose attempt answered calls this to record the
+    /// settlement before the trace line is written. The event row is
+    /// untouched by construction: it is written before the walk and
+    /// carries `from_route`/`to_route` (DESIGN §12.10.5 row 15), so
+    /// this method has no effect on it.
+    pub fn settled_on(&mut self, route: &str) {
+        self.chosen = Some(route.to_string());
+    }
 }
 
 /// spec §6 "failure details": the internal failure record — several
@@ -528,6 +561,7 @@ mod tests {
                 requested_model: Some("zai/glm-5.3".into()),
                 selection_source: "explicit".into(),
                 plugin_chain: Vec::new(),
+                key_index: None,
                 decision_ms: 0,
             },
             state: StateRec {

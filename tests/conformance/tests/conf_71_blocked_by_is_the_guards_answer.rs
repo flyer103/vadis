@@ -36,7 +36,7 @@ use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::plan::{PlanFirstRule, PlanRequest, PlanStateRow};
 use vadis_core::store::{EventKind, NewEvent, ProjectionWrite};
 use vadis_core::store::{Query, QueryRow, Store as _};
 
@@ -66,6 +66,7 @@ fn policy(recover: RecoveryMode) -> PlanPolicyCfg {
         recover,
         cooldown: DurationVal(0),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+        overflow_selection: vadis_core::config::OverflowSelection::Declared,
     }
 }
 
@@ -79,7 +80,7 @@ fn guard_answer(
     primary_allowed: bool,
     deferred_by_window: bool,
 ) -> (bool, Option<String>) {
-    let rule = PlanFirstRule::new(p.clone());
+    let rule = PlanFirstRule::new(p.clone(), vec![p.primary.clone()]);
     let req = PlanRequest {
         session: Some("conf-71"),
         turn_index: 1,
@@ -88,6 +89,9 @@ fn guard_answer(
         primary_allowed,
         deferred_by_window,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     match rule.probe_admitted(&req) {
         Ok(()) => (true, None),
@@ -147,6 +151,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
             .project(ProjectionWrite::PlanSwitched {
                 family: "m1",
                 account: "overflow",
+                to_route: "p-api/m1",
                 cooldown_us: 0,
                 last_event: ev,
             })
@@ -220,7 +225,7 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
     let (admitted, blocked_by) = guard_answer(
         &p,
         PlanStateRow {
-            account: PlanAccount::Overflow,
+            route: p.overflow.clone(),
             since_us,
         },
         now_us_test(),

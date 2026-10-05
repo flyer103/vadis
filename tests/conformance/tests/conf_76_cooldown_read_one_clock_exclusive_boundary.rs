@@ -110,6 +110,7 @@ fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
         .project(ProjectionWrite::PlanSwitched {
             family: "m1",
             account: "overflow",
+            to_route: "p-api/m1",
             cooldown_us: 0,
             last_event: ev,
         })

@@ -781,6 +781,33 @@ impl Watcher {
                         }
                     }
                     ready.store(true, Ordering::Relaxed);
+                    // The registration window's catch-up look: an event
+                    // that landed between the process's startup pair and
+                    // this instant is one the backend cannot deliver —
+                    // FSEvents' stream start is slow (measured ~1.7 s
+                    // first-in-process on this machine) and the loop has
+                    // not seen it. D12.6's "the next look is the next
+                    // event" assumed the miss was rare (a mid-run race);
+                    // the startup window is not rare, it is certain for
+                    // any landing inside it — and a test rig (or an
+                    // operator's scripted edit) that rewrites the pair
+                    // right after boot lands exactly there. One look at
+                    // readiness closes it: `NoChange` emits nothing
+                    // (D1), so a config that did not move costs one
+                    // file read on the watcher's own thread, off the
+                    // request path.
+                    let mut startup_reporter = Reporter::new();
+                    startup_reporter.burst_started();
+                    one_look(
+                        &LookTarget {
+                            root_path: root_path.clone(),
+                            roster_path: roster_path.clone(),
+                        },
+                        &publisher,
+                        &mut startup_reporter,
+                        &sink,
+                        &looks,
+                    );
                     let target = LookTarget {
                         root_path,
                         roster_path,
@@ -1658,9 +1685,22 @@ fallback: []
         std::thread::sleep(Duration::from_millis(
             3 * COALESCE_WINDOW.as_millis() as u64 + 300,
         ));
+        // The baseline is the watcher's own readiness catch-up look
+        // (ADR-040 D12.6's startup-window close, R66-1e): it runs once
+        // at registration, before any noise exists, and `NoChange`
+        // emits nothing. D12.4's measured point is the DELTA — the
+        // noise above must not have produced one further look.
+        let baseline = watcher.look_count();
+        assert_eq!(
+            baseline, 1,
+            "the readiness catch-up is exactly one look (no noise yet)"
+        );
+        std::thread::sleep(Duration::from_millis(
+            3 * COALESCE_WINDOW.as_millis() as u64 + 300,
+        ));
         assert_eq!(
             watcher.look_count(),
-            0,
+            baseline,
             "hot-directory noise must not trigger a look (D12.4)"
         );
         assert!(lines.lock().unwrap().is_empty(), "and no line: {lines:?}");
@@ -1747,6 +1787,48 @@ fallback: []
         assert!(
             lines.lock().unwrap().is_empty(),
             "a no-change look is nothing observable (D1)"
+        );
+        drop(watcher);
+    }
+
+    /// R66-1e: a landing inside the registration window — before the
+    /// backend's stream start could deliver it — is caught by the
+    /// readiness catch-up look, not lost to "the next look is the next
+    /// event" (D12.6's boundary, closed for the startup window). The
+    /// rig is the watcher's own: start it, land the new bytes BEFORE
+    /// waiting for readiness (the event may or may not be delivered —
+    /// the backend's stream start is slow on this platform), and the
+    /// digest on the revision cell must still move. Without the
+    /// catch-up this test is a coin flip on the stream-start latency;
+    /// with it, the landing is caught deterministically either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_landing_inside_the_registration_window_is_caught_by_the_catchup_look() {
+        let (_g, root) = tempdir("startup-window");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let identity = load_identity(&root);
+
+        let (sink, _lines) = capture();
+        let (publisher, _store, cell, _sink_handle) = publisher_for(&root, &sink);
+        let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
+        // The landing races the registration deliberately: no
+        // readiness wait first. Whether the backend delivers the event
+        // is exactly the window this test pins.
+        land(&root, &MINIMAL.replace("ttl: 12h", "ttl: 6h"));
+        let expected = load_identity(&root).config_digest;
+        assert_ne!(
+            expected, identity.config_digest,
+            "the landing moved the bytes"
+        );
+
+        // The switch may arrive by the delivered event OR by the
+        // catch-up look — both end at the same publish.
+        until(
+            || {
+                let revision = cell.capture();
+                revision.config_identity.config_digest == expected
+            },
+            Duration::from_secs(15),
+            "the startup-window landing to reach the publish",
         );
         drop(watcher);
     }

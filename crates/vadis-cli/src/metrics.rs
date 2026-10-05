@@ -34,7 +34,7 @@ pub const WINDOW_MS: i64 = 900_000;
 pub fn exposition(
     figures: &TraceFigures,
     files_read: usize,
-    plan_family: Option<&str>,
+    plan_families: &[&str],
     read_error: Option<&str>,
 ) -> String {
     let f = figures;
@@ -250,10 +250,12 @@ pub fn exposition(
         }
     }
 
-    // #15–#19 — the plan series, only when the loaded config declares a
-    // `plan_policy` (§9.1's no-fabricated-plan-section rule, applied to
-    // this surface); `family` is that policy's family verbatim.
-    if let Some(fam) = plan_family {
+    // #15–#19 — the plan series, once per declared family (ADR-049
+    // §7(d): the `if let Some(fam)` guard becomes a loop; no series is
+    // added, renamed or re-labelled). `plan_family` is every declared
+    // family in declaration order, whichever spelling named it — the
+    // single owner's answer, never a second resolution here.
+    for fam in plan_families {
         series(
             &mut out,
             "vadis_plan_switches",
@@ -372,14 +374,18 @@ pub fn exposition(
 /// policy); touches no request byte, no store, and no file outside the
 /// process's own trace directory.
 pub fn snapshot(state: &vadis_proxy::AppState) -> String {
-    let plan_family = state
+    // Every declared family, in declaration order (ADR-049 §7(d)) — the
+    // single owner's answer; the exposition never re-resolves.
+    let plan_families: Vec<String> = state
         .revision
         .capture()
         .forwarder
         .config
-        .plan_policy
-        .as_ref()
-        .map(|p| p.family.clone());
+        .family_policies()
+        .iter()
+        .map(|p| p.family.clone())
+        .collect();
+    let plan_families: Vec<&str> = plan_families.iter().map(String::as_str).collect();
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -388,14 +394,9 @@ pub fn snapshot(state: &vadis_proxy::AppState) -> String {
     match crate::stats::read_window_records(Path::new(&state.trace_dir), start_ms, now_ms) {
         Ok((records, files_read)) => {
             let figures = crate::stats::aggregate(&records);
-            exposition(&figures, files_read, plan_family.as_deref(), None)
+            exposition(&figures, files_read, &plan_families, None)
         }
-        Err(reason) => exposition(
-            &TraceFigures::default(),
-            0,
-            plan_family.as_deref(),
-            Some(&reason),
-        ),
+        Err(reason) => exposition(&TraceFigures::default(), 0, &plan_families, Some(&reason)),
     }
 }
 

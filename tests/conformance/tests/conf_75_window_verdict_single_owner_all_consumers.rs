@@ -33,7 +33,7 @@ use std::net::TcpStream;
 use vadis_conformance::testkit::{self, PlanRig};
 use vadis_core::config::{CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg};
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::plan::{PlanFirstRule, PlanRequest, PlanStateRow};
 use vadis_core::store::{Query, QueryRow, Store as _};
 
 /// A plan whose allowance is exactly one request (105 chargeable
@@ -56,6 +56,7 @@ fn policy() -> PlanPolicyCfg {
         recover: vadis_core::config::RecoveryMode::Probe,
         cooldown: DurationVal(0),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+        overflow_selection: vadis_core::config::OverflowSelection::Declared,
     }
 }
 
@@ -169,18 +170,21 @@ async fn conf_75_window_verdict_agreed_by_projection_report_and_request_path() {
     // (4) The guard agrees the deferral was the right call: fed the
     // deferral input derived independently in (1), the probe gate
     // answers `DeferredByWindow` for the surface's reduced request.
-    let rule = PlanFirstRule::new(p);
+    let rule = PlanFirstRule::new(p.clone(), vec![p.primary.clone()]);
     let req = PlanRequest {
         session: Some("conf-75"),
         turn_index: 1,
         state: PlanStateRow {
-            account: PlanAccount::Overflow,
+            route: p.overflow.clone(),
             since_us: 0, // cooldown 0s: the arm under test is the window's
         },
         now_us: now_us(),
         primary_allowed: true,
         deferred_by_window: deferred,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     assert_eq!(
         rule.probe_admitted(&req),

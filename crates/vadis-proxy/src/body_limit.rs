@@ -94,6 +94,9 @@ pub fn too_large_record(
             selection_source: "explicit".to_string(),
             plugin_chain: Vec::new(),
             decision_ms: 0,
+            // Refused before any walk began: no credential served
+            // (ADR-049 §3; spec §6's null class).
+            key_index: None,
         },
         state: StateRec {
             stateful_inbound: false,

@@ -893,7 +893,18 @@ pub struct ProviderCfg {
     /// verbatim — it appends no path, trims no slash and normalizes nothing.
     /// The key set must equal the declared cells ([`VadisConfig::validate`]).
     pub urls: BTreeMap<WireApi, String>,
-    pub api_key_env: String,
+    /// spec §4: the one-key spelling of this provider's credential.
+    /// Exactly one of `api_key_env` and `api_keys` is written (ADR-049 §3's
+    /// ladder, validated in [`VadisConfig::validate`]); absent here means
+    /// the pool spelling is the one that was written.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// spec §4.6.1 (ADR-049 §3): the pool spelling — N credential env
+    /// names, in rotation order (the *present* subset at runtime, §12.10.2
+    /// unchanged: an absent name is one fewer credential, never a startup
+    /// failure). Exactly one of `api_key_env` and `api_keys` is written.
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
     pub wire_api: WireApi,
     pub supports: Vec<WireApi>,
     /// spec §4.6; absent ⇒ [`AccountKind::Api`].
@@ -905,6 +916,19 @@ pub struct ProviderCfg {
 }
 
 impl ProviderCfg {
+    /// The effective credential pool (ADR-049 §3 rule 1): the written
+    /// spelling's names, in declaration order. Exactly one spelling is
+    /// written on a validated config, so the impossible arms answer the
+    /// empty pool — keyless, which the availability rules already know
+    /// how to report — instead of panicking on a hand-built fixture.
+    pub fn key_pool(&self) -> &[String] {
+        match (&self.api_key_env, &self.api_keys) {
+            (Some(one), None) => std::slice::from_ref(one),
+            (None, Some(many)) => many.as_slice(),
+            _ => &[],
+        }
+    }
+
     /// The URL this entry POSTs to for `wire` (spec §4.9). `None` means the
     /// entry does not declare that cell at all, which
     /// [`VadisConfig::validate`] refuses at load — so a `None` here is a
@@ -958,11 +982,13 @@ fn default_cooldown() -> DurationVal {
 pub struct PlanPolicyCfg {
     /// The model id both routes carry — and the key of the family's state.
     pub family: String,
-    /// The subscription route: a roster route whose provider is
-    /// `account: coding_plan`.
+    /// The subscription route the plan tier's walk starts from: a roster
+    /// route whose provider is `account: coding_plan` (ADR-049 §5.1).
     pub primary: RouteSpec,
     /// The metered route: a roster route, distinct from `primary`, whose
-    /// provider is `account: api`.
+    /// provider is `account: api`. Required in both selection modes —
+    /// the `block` anchor, the cap's subject, the family's canonical
+    /// metered name (ADR-049 §5.5).
     pub overflow: RouteSpec,
     #[serde(default)]
     pub on_primary_exhausted: OnPrimaryExhausted,
@@ -971,9 +997,29 @@ pub struct PlanPolicyCfg {
     #[serde(default = "default_cooldown")]
     pub cooldown: DurationVal,
     /// Optional guardrail on the family's metered spend in a UTC calendar
-    /// month; absent = no cap.
+    /// month; absent = no cap. Under `cheapest` the subject is the whole
+    /// metered candidate set's spend (ADR-049 §5.8).
     #[serde(default)]
     pub overflow_monthly_cap_usd: Option<CapUsdVal>,
+    /// ADR-049 §5.5: how a spilled request picks its metered route.
+    /// `declared` (the default): the family's `overflow` route, exactly
+    /// today's behaviour. `cheapest`: the family's metered candidate set
+    /// (§4.8's tag) walked in the §5.6 ranking — the plan tier is drained
+    /// first in both modes.
+    #[serde(default)]
+    pub overflow_selection: OverflowSelection,
+}
+
+/// spec §4.6.1 `overflow_selection` (ADR-049 §5.5): the ranking mode of a
+/// family's metered tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverflowSelection {
+    /// The `overflow` route is what a spill attempts (today's behaviour).
+    #[default]
+    Declared,
+    /// The metered candidate set, ranked by price (ADR-049 §5.6).
+    Cheapest,
 }
 
 impl PlanPolicyCfg {
@@ -1056,6 +1102,15 @@ pub struct VadisConfig {
     /// policy is a legal, ordinary entry).
     #[serde(default)]
     pub plan_policy: Option<PlanPolicyCfg>,
+    /// spec §4.6.1 (ADR-049 §4): the list spelling — N families, one
+    /// policy each. Exactly one of `plan_policy` and `plan_policies` is
+    /// written (both written is a load error naming both keys, §4.14's
+    /// ladder one layer up; **neither written is the no-plan
+    /// configuration and loads** — spec §4.6's "at most one policy");
+    /// a present `plan_policies: null` is refused
+    /// by `plan_policies:` itself (the roster's own presence rule).
+    #[serde(default, deserialize_with = "de_plan_policies_presence")]
+    pub plan_policies: Option<Vec<PlanPolicyCfg>>,
     // Never serializes: a present `state:` key refuses the load, so the
     // value is always None — and `StateKeyForbidden` deliberately has no
     // `Serialize` (its one job is to fail deserialization).
@@ -1088,6 +1143,19 @@ where
     D: Deserializer<'de>,
 {
     de_roster_key_presence(d, "providers")
+}
+
+/// `plan_policies` presence, exact (ADR-049 §4): the same shape rule the
+/// roster's `providers` key has — a written `plan_policies: null` is a
+/// present key with no value and is refused by `plan_policies:` itself,
+/// never collapsed into "neither written". The exactly-one-of rule with
+/// `plan_policy` is then checked in [`VadisConfig::validate`], where both
+/// keys can be named.
+fn de_plan_policies_presence<'de, D>(d: D) -> Result<Option<Vec<PlanPolicyCfg>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    de_roster_key_presence(d, "plan_policies")
 }
 
 /// `providers_file` presence **and type**, exact (R43-2b F1, closed by
@@ -1183,6 +1251,11 @@ pub struct RootFile {
     pub fallback: Vec<RouteSpec>,
     #[serde(default)]
     pub plan_policy: Option<PlanPolicyCfg>,
+    /// The list spelling, as on [`VadisConfig`] (ADR-049 §4): a present
+    /// null is refused by `plan_policies:` itself; the exactly-one-of
+    /// rule with `plan_policy` is validated after the join.
+    #[serde(default, deserialize_with = "de_plan_policies_presence")]
+    pub plan_policies: Option<Vec<PlanPolicyCfg>>,
     // As on VadisConfig: never serialized (`StateKeyForbidden` has no
     // `Serialize`; a present key refuses the load).
     #[serde(default, skip_serializing)]
@@ -1224,6 +1297,7 @@ impl RootFile {
             plugins,
             fallback,
             plan_policy,
+            plan_policies,
             state,
         } = self;
         let providers = match (providers, providers_file, roster) {
@@ -1257,6 +1331,48 @@ impl RootFile {
             )),
             (None, Some(_), Some(roster)) => Ok(roster.providers),
         }?;
+        // The ladder one layer up (ADR-049 §4): exactly one of the two
+        // policy spellings is written — both written is a load error
+        // naming both keys, so no hand-edited file can hold an
+        // ambiguous family set. Neither written is NOT an error: it is
+        // the no-plan configuration §4.6 itself freezes ("at most one
+        // policy"), and it loads unchanged (ADR-049 §4 rule 4 — a plan
+        // account named by no policy is a legal, ordinary entry). A
+        // `plan_policies: []` is a written empty list, not an absent
+        // key: it is the declared "no family" state and loads exactly
+        // like an absent mapping does.
+        let (plan_policy, plan_policies) = match (plan_policy, plan_policies) {
+            (Some(_), Some(_)) => {
+                return Err(ConfigError::new(
+                    "plan_policy / plan_policies",
+                    "both keys are written — exactly one of `plan_policy:` (one family) \
+                     and `plan_policies:` (the family list) is written (spec §4.6.1, \
+                     ADR-049 §4)"
+                        .to_string(),
+                ))
+            }
+            (None, Some(list)) => {
+                // One writer per state row (ADR-049 §4 rule 1): two
+                // list entries naming one family tag would be two
+                // writers of one `plan_state` row.
+                for (li, later) in list.iter().enumerate() {
+                    let dup = list[..li].iter().any(|prev| prev.family == later.family);
+                    if dup {
+                        return Err(ConfigError::new(
+                            format!("plan_policies[{li}].family"),
+                            format!(
+                                "family '{}' is already carried by an earlier entry: \
+                                 two policies on one tag would be two writers of one \
+                                 plan_state row (spec §4.6.1, ADR-049 §4 rule 1)",
+                                later.family
+                            ),
+                        ));
+                    }
+                }
+                (None, Some(list))
+            }
+            (one, None) => (one, None),
+        };
         Ok(VadisConfig {
             server,
             session,
@@ -1267,6 +1383,7 @@ impl RootFile {
             plugins,
             fallback,
             plan_policy,
+            plan_policies,
             state,
         })
     }
@@ -1615,10 +1732,44 @@ impl VadisConfig {
     /// The family tag a route's model entry carries (§4.8): the written
     /// tag, or the model's own id when none was written — the one place
     /// the default lives. `None` when the route is not on the roster.
-    fn family_tag_of(&self, route: &RouteSpec) -> Option<String> {
+    pub fn family_tag_of(&self, route: &RouteSpec) -> Option<String> {
         let provider = self.provider(&route.provider)?;
         let model = provider.models.iter().find(|m| m.id == route.model)?;
         Some(model.family.clone().unwrap_or_else(|| model.id.clone()))
+    }
+
+    /// Every declared family policy, in declaration order, whichever
+    /// spelling named it (ADR-049 §4): the one-key spelling's single
+    /// mapping, then each entry of the list. Exactly one spelling is
+    /// written on a validated config (the load-time ladder), so the
+    /// order is the written order. The serving path, `/health` and the
+    /// metrics surface all consume families through this one owner —
+    /// no consumer indexes `plan_policy`/`plan_policies` directly.
+    pub fn family_policies(&self) -> Vec<&PlanPolicyCfg> {
+        let mut out = Vec::new();
+        if let Some(policy) = &self.plan_policy {
+            out.push(policy);
+        }
+        if let Some(list) = &self.plan_policies {
+            out.extend(list.iter());
+        }
+        out
+    }
+
+    /// The family policy a route is served under, if any (ADR-049 §4
+    /// rules 2/3): the request's resolution names a model entry; that
+    /// entry's family tag (§4.8 — written, or the model's own id) is
+    /// the family key; the answer is the declared policy whose
+    /// `family` equals it. `None` — the ordinary path, unchanged —
+    /// when the route is off-roster or no policy names its tag (rule
+    /// 4: a plan account named by no policy is a legal, ordinary
+    /// entry). A tag resolves to at most one model per provider
+    /// (§4.8's uniqueness rule) and a tag appears at most once as a
+    /// policy key (the duplicate-family load refusal), so the answer
+    /// is unique by construction.
+    pub fn family_policy_for_route(&self, route: &RouteSpec) -> Option<&PlanPolicyCfg> {
+        let tag = self.family_tag_of(route)?;
+        self.family_policies().into_iter().find(|p| p.family == tag)
     }
 
     /// The spec §4.6 checks on `plan_policy` (DESIGN §12.10.2's row). They are
@@ -1628,10 +1779,35 @@ impl VadisConfig {
     /// a tag both routes' model entries carry → the primary's declared plan
     /// covers the family → the cap is a readable amount in a comparable unit.
     fn validate_plan_policy(&self) -> Result<(), ConfigError> {
-        let Some(policy) = &self.plan_policy else {
-            return Ok(());
-        };
+        // Every family, whichever spelling named it (ADR-049 §4): the
+        // one-key spelling validates its single mapping, the list
+        // spelling validates each entry with the same rules and the
+        // same key paths — `plan_policies[i].<key>` — so a refusal
+        // names the entry that broke the rule.
+        let mut policies: Vec<(&PlanPolicyCfg, String)> = Vec::new();
+        if let Some(policy) = &self.plan_policy {
+            policies.push((policy, "plan_policy".to_string()));
+        }
+        if let Some(list) = &self.plan_policies {
+            for (i, policy) in list.iter().enumerate() {
+                policies.push((policy, format!("plan_policies[{i}]")));
+            }
+        }
+        for (policy, prefix) in &policies {
+            self.validate_one_plan_policy(policy, prefix)?;
+        }
+        Ok(())
+    }
 
+    /// The §4.6 cross-field rules, one policy at a time (ADR-049 §4 rule
+    /// 2: every rule is per family and unchanged). `prefix` is the
+    /// policy's own key path — `plan_policy` or `plan_policies[i]` — so
+    /// every refusal below names the entry that broke the rule.
+    fn validate_one_plan_policy(
+        &self,
+        policy: &PlanPolicyCfg,
+        prefix: &str,
+    ) -> Result<(), ConfigError> {
         // A route is a plan route only if the roster has it: `provider/model`
         // with the model actually declared by that provider.
         let resolve = |key: &str, route: &RouteSpec| -> Result<&ProviderCfg, ConfigError> {
@@ -1639,9 +1815,9 @@ impl VadisConfig {
                 .filter(|p| p.models.iter().any(|m| m.id == route.model))
                 .ok_or_else(|| {
                     ConfigError::new(
-                        format!("plan_policy.{key}"),
+                        format!("{prefix}.{key}"),
                         format!(
-                            "unknown route '{route}': plan_policy.{key} must be a \
+                            "unknown route '{route}': {prefix}.{key} must be a \
                              <provider>/<model> route in the roster (spec §4.6)"
                         ),
                     )
@@ -1652,9 +1828,9 @@ impl VadisConfig {
 
         if policy.primary == policy.overflow {
             return Err(ConfigError::new(
-                "plan_policy.overflow",
+                format!("{prefix}.overflow"),
                 format!(
-                    "must differ from plan_policy.primary ('{}'): the two accounts are distinct \
+                    "must differ from {prefix}.primary ('{}'): the two accounts are distinct \
                      routes (spec §4.6)",
                     policy.primary
                 ),
@@ -1663,9 +1839,9 @@ impl VadisConfig {
 
         if primary.account != AccountKind::CodingPlan {
             return Err(ConfigError::new(
-                "plan_policy.primary",
+                format!("{prefix}.primary"),
                 format!(
-                    "provider '{}' is account: {}; plan_policy.primary must be a route of a \
+                    "provider '{}' is account: {}; {prefix}.primary must be a route of a \
                      provider declaring account: coding_plan (spec §4.6)",
                     primary.name, primary.account
                 ),
@@ -1674,9 +1850,9 @@ impl VadisConfig {
 
         if overflow.account != AccountKind::Api {
             return Err(ConfigError::new(
-                "plan_policy.overflow",
+                format!("{prefix}.overflow"),
                 format!(
-                    "provider '{}' is account: {}; plan_policy.overflow must be a route of a \
+                    "provider '{}' is account: {}; {prefix}.overflow must be a route of a \
                      provider declaring account: api (spec §4.6)",
                     overflow.name, overflow.account
                 ),
@@ -1691,9 +1867,9 @@ impl VadisConfig {
                 Some(tag) if tag == policy.family => {}
                 Some(tag) => {
                     return Err(ConfigError::new(
-                        "plan_policy.family",
+                        format!("{prefix}.family"),
                         format!(
-                            "family '{}' must equal the family tag plan_policy.{key}'s model entry \
+                            "family '{}' must equal the family tag {prefix}.{key}'s model entry \
                              carries ('{tag}'): both routes serve the family (spec §4.6/§4.8)",
                             policy.family
                         ),
@@ -1719,7 +1895,7 @@ impl VadisConfig {
                 .flat_map(|q| q.models.iter().map(String::as_str))
                 .collect();
             return Err(ConfigError::new(
-                "plan_policy.family",
+                format!("{prefix}.family"),
                 format!(
                     "family '{}' is not covered by provider '{}'s quota.models {declared:?}: a \
                      provider that declares a plan must include the model id the primary route \
@@ -1735,11 +1911,11 @@ impl VadisConfig {
         // serves — a load error, never a silent cross-currency compare.
         if let Some(cap) = policy.overflow_monthly_cap_usd {
             cap.to_nano().map_err(|reason| {
-                ConfigError::new("plan_policy.overflow_monthly_cap_usd", reason)
+                ConfigError::new(format!("{prefix}.overflow_monthly_cap_usd"), reason)
             })?;
             if overflow.currency != Currency::Usd {
                 return Err(ConfigError::new(
-                    "plan_policy.overflow_monthly_cap_usd",
+                    format!("{prefix}.overflow_monthly_cap_usd"),
                     format!(
                         "the cap is denominated in USD by its own name, but the overflow route \
                          '{}''s provider '{}' is currency {}: comparing a USD ceiling with a \
@@ -1748,6 +1924,86 @@ impl VadisConfig {
                         policy.overflow, overflow.name, overflow.currency
                     ),
                 ));
+            }
+        }
+
+        // ADR-049 §5.6 rule 3 / spec §8's rows: under `cheapest` the
+        // family's metered candidate set (§5.4) must be one currency and
+        // rankable — a ranking *is* a comparison, and two currencies are
+        // never compared (§4.8). `declared` keeps today's single-route
+        // rules above and nothing else. The set itself is §4.8's tag —
+        // this loop is the only place the §5.4 membership conditions are
+        // re-stated, because a refusal must name what it found.
+        if policy.overflow_selection == OverflowSelection::Cheapest {
+            let mut candidates: Vec<(&str, Currency)> = Vec::new();
+            for p in &self.providers {
+                if p.account != AccountKind::Api {
+                    continue;
+                }
+                for m in &p.models {
+                    let tag = m.family.as_deref().unwrap_or(&m.id);
+                    if tag == policy.family {
+                        candidates.push((p.name.as_str(), p.currency));
+                    }
+                }
+            }
+            let first = candidates.first().map(|(_, c)| *c);
+            if let Some(first) = first {
+                if let Some((offender, found)) = candidates
+                    .iter()
+                    .find(|(_, c)| *c != first)
+                    .map(|(n, c)| (*n, *c))
+                {
+                    let currencies: Vec<String> = {
+                        let mut seen = vec![first.as_code().to_string()];
+                        for (_, c) in &candidates {
+                            let code = c.as_code().to_string();
+                            if !seen.contains(&code) {
+                                seen.push(code);
+                            }
+                        }
+                        seen
+                    };
+                    return Err(ConfigError::new(
+                        format!("{prefix}.overflow_selection"),
+                        format!(
+                            "family '{}' mixes currencies across its metered candidate set: \
+                             provider '{}' is currency {} while the set also holds {} — \
+                             a ranking is a comparison, and two currencies are never compared \
+                             (spec 4.8, ADR-049 5.6 rule 3)",
+                            policy.family,
+                            offender,
+                            found.as_code(),
+                            currencies.join(" and ")
+                        ),
+                    ));
+                }
+            }
+            // §5.8 / spec §8's last-but-one row: the cap is USD by its own
+            // name and under `cheapest` its subject is the WHOLE metered
+            // candidate set's spend, so any non-USD candidate is refused
+            // naming the cap and the currency.
+            if policy.overflow_monthly_cap_usd.is_some() {
+                if let Some((offender, found)) = candidates
+                    .iter()
+                    .find(|(_, c)| *c != Currency::Usd)
+                    .map(|(n, c)| (*n, *c))
+                {
+                    return Err(ConfigError::new(
+                        format!("{prefix}.overflow_monthly_cap_usd"),
+                        format!(
+                            "under overflow_selection: cheapest the cap's subject is the \
+                             family's whole metered candidate set, and provider '{}' of \
+                             family '{}' is currency {}: comparing a USD ceiling with a \
+                             spend in another currency is the silent mixing spec 4.8 \
+                             forbids — remove the cap or rank USD candidates only \
+                             (spec 4.6/4.8, ADR-049 5.8)",
+                            offender,
+                            policy.family,
+                            found.as_code()
+                        ),
+                    ));
+                }
             }
         }
 
@@ -1799,6 +2055,38 @@ impl VadisConfig {
 
         for (pi, p) in self.providers.iter().enumerate() {
             let ppath = format!("providers[{pi}] ({})", p.name);
+
+            // The credential ladder (ADR-049 §3 / spec §4.6.1 :734): a
+            // provider entry names its credential with exactly one of
+            // the two spellings — `api_key_env:` (one key) or
+            // `api_keys:` (the pool, in rotation order). Both written
+            // is an ambiguous credential; neither written is a keyless
+            // provider that would silently answer every request with a
+            // transport-less refusal (§12.10.2). Same convention as the
+            // `providers/providers_file` and `plan_policy/plan_policies`
+            // ladders: the error names both keys, so a hand-edited file
+            // has the exact paths to act on.
+            match (&p.api_key_env, &p.api_keys) {
+                (Some(_), Some(_)) => {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.api_key_env / {ppath}.api_keys"),
+                        "both keys are written — exactly one of `api_key_env:` (one \
+                         credential) and `api_keys:` (the pool, in rotation order) \
+                         is written (spec §4.6.1, ADR-049 §3)"
+                            .to_string(),
+                    ));
+                }
+                (None, None) => {
+                    return Err(ConfigError::new(
+                        format!("{ppath}.api_key_env / {ppath}.api_keys"),
+                        "neither key is written — exactly one of `api_key_env:` (one \
+                         credential) and `api_keys:` (the pool, in rotation order) \
+                         names this provider's credential (spec §4.6.1, ADR-049 §3)"
+                            .to_string(),
+                    ));
+                }
+                _ => {}
+            }
 
             if !p.supports.contains(&p.wire_api) {
                 let supports: Vec<&str> = p.supports.iter().map(|w| w.as_str()).collect();
@@ -2760,6 +3048,17 @@ mod tests {
         cfg
     }
 
+    /// The PLANNED policy's family tag — the cloned-provider fixtures
+    /// below must carry it to be inside the metered candidate set.
+    fn policy_family_of_planned() -> String {
+        planned()
+            .plan_policy
+            .as_ref()
+            .expect("a policy")
+            .family
+            .clone()
+    }
+
     /// Mutate the parsed policy (the cross-field checks are a function of the
     /// typed config, so a mutation states the illegal combination directly).
     fn planned_with(f: impl FnOnce(&mut PlanPolicyCfg)) -> VadisConfig {
@@ -3268,5 +3567,264 @@ mod tests {
         let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0)));
         cfg.validate().expect("a zero cap is legal");
         assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), Nano(500_000_000));
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.6.1 / ADR-049 §3: the credential ladder — a provider
+    // entry names its credential with exactly one of `api_key_env`
+    // (one key) and `api_keys` (the pool). The two spellings are
+    // probed on the parsed config (typed mutations, like the policy
+    // cross-field checks above) so the refusal is stated directly.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn both_credential_spellings_written_is_a_load_error_naming_both_keys() {
+        let mut cfg = planned();
+        // zai already writes the one-key spelling; adding the pool
+        // spelling to the same entry is the ambiguous credential.
+        cfg.providers[1].api_keys = Some(vec!["ZAI_A".into(), "ZAI_B".into()]);
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("both keys are written"),
+            "the ladder's own wording, got: {err}"
+        );
+        assert!(
+            err.contains("api_key_env") && err.contains("api_keys"),
+            "the refusal names both keys, got: {err}"
+        );
+        assert!(
+            err.contains("providers[1] (zai)"),
+            "the refusal names the entry, got: {err}"
+        );
+    }
+
+    #[test]
+    fn neither_credential_spelling_written_is_a_load_error_naming_both_keys() {
+        let mut cfg = planned();
+        cfg.providers[1].api_key_env = None;
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("neither key is written"),
+            "the ladder's own wording, got: {err}"
+        );
+        assert!(
+            err.contains("api_key_env") && err.contains("api_keys"),
+            "the refusal names both keys (the fix is to write one of \
+             them), got: {err}"
+        );
+        assert!(
+            err.contains("providers[1] (zai)"),
+            "the refusal names the entry, got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_pool_spelling_alone_is_the_legal_alternative() {
+        // The positive control: the pool spelling replaces the one-key
+        // spelling on the same entry and the config validates, with
+        // `key_pool()` answering the pool's names in declaration order
+        // (ADR-049 §3 rule 1) — the ladder refuses the ambiguity, not
+        // the pool.
+        let mut cfg = planned();
+        cfg.providers[1].api_key_env = None;
+        cfg.providers[1].api_keys = Some(vec!["ZAI_A".into(), "ZAI_B".into(), "ZAI_C".into()]);
+        cfg.validate().expect("the pool spelling alone is legal");
+        assert_eq!(
+            cfg.providers[1].key_pool(),
+            ["ZAI_A", "ZAI_B", "ZAI_C"],
+            "declaration order is rotation order"
+        );
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.6.1 / ADR-049 §4: the family list at runtime — the
+    // single-owner resolution every serving-path consumer goes through,
+    // and the `cheapest` fail-closed refusal (the ranking is R66-1d's).
+    // -------------------------------------------------------------
+
+    #[test]
+    fn cheapest_loads_and_its_refusals_name_their_keys() {
+        // The R66-1b fail-closed refusal is gone: `cheapest` now names a
+        // real ranking (ADR-049 §5.6) and the mode loads — the positive
+        // control, on both spellings.
+        planned_with(|p| p.overflow_selection = OverflowSelection::Cheapest)
+            .validate()
+            .expect("cheapest loads now that the ranking exists");
+        let mut cfg = planned();
+        let list_policy = planned().plan_policy.clone().unwrap();
+        cfg.plan_policy = None;
+        cfg.plan_policies = Some(vec![list_policy]);
+        cfg.plan_policies.as_mut().unwrap()[0].overflow_selection = OverflowSelection::Cheapest;
+        cfg.validate().expect("the list spelling loads too");
+
+        // A mixed-currency metered candidate set is refused naming the
+        // family and the currencies found (spec §8's row, ADR-049 §5.6
+        // rule 3): point the moonshot api entry (USD) at a CNY entry
+        // carrying the same tag.
+        let mut cfg = planned_with(|p| p.overflow_selection = OverflowSelection::Cheapest);
+        let cny = VadisConfig::provider(&cfg, "moonshot").unwrap();
+        let mut cny = cny.clone();
+        cny.name = "moonshot-cny".to_string();
+        cny.currency = Currency::Cny;
+        // The family tag is what puts the entry in the candidate set
+        // (§4.8) — the cloned model id stays whatever it was.
+        cny.models[0].family = Some(policy_family_of_planned());
+        cfg.providers.push(cny);
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.overflow_selection"),
+            "the refusal names the selection key, got: {err}"
+        );
+        assert!(
+            err.contains("glm-5.3"),
+            "the refusal names the family, got: {err}"
+        );
+        assert!(
+            err.contains("USD") && err.contains("CNY"),
+            "the refusal names the currencies found, got: {err}"
+        );
+
+        // `cheapest` + a cap + a non-USD candidate is refused naming the
+        // cap and the currency (spec §8's last-but-one row, §5.8). The
+        // set must be UNIFORMLY non-USD — a mixed set is the refusal
+        // above's, and it fires first.
+        let mut cfg = planned_with(|p| {
+            p.overflow_selection = OverflowSelection::Cheapest;
+            p.overflow_monthly_cap_usd = Some(CapUsdVal(20.0));
+        });
+        let api = VadisConfig::provider(&cfg, "zai").unwrap();
+        let mut all_cny = api.clone();
+        all_cny.name = "zai-cny".to_string();
+        all_cny.currency = Currency::Cny;
+        all_cny.models[0].family = Some(policy_family_of_planned());
+        cfg.providers.push(all_cny);
+        let zai_pos = cfg
+            .providers
+            .iter()
+            .position(|p| p.name == "zai")
+            .expect("the api entry");
+        cfg.providers.remove(zai_pos);
+        // The policy's overflow pointed at the removed entry: move it to
+        // the surviving one so the policy itself stays loadable.
+        if let Some(p) = cfg.plan_policy.as_mut() {
+            p.overflow.provider = "zai-cny".to_string();
+        }
+        // And so did the fallback list's one entry.
+        cfg.fallback[0].provider = "zai-cny".to_string();
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.overflow_monthly_cap_usd"),
+            "the refusal names the cap, got: {err}"
+        );
+        assert!(
+            err.contains("CNY"),
+            "the refusal names the currency, got: {err}"
+        );
+    }
+
+    #[test]
+    fn family_policy_for_route_answers_by_the_routes_own_tag() {
+        // The resolution rule (ADR-049 §4): the request's resolution
+        // names a model entry; that entry's family tag (§4.8 — written,
+        // or the model's own id) is the family key; the answer is the
+        // declared policy whose `family` equals it. PLANNED's two
+        // glm-5.3 entries carry no written tag, so their effective tag
+        // is the id "glm-5.3" — exactly the policy's family.
+        let cfg = planned();
+        let policy = cfg
+            .family_policy_for_route(&RouteSpec {
+                provider: "zai-plan".into(),
+                model: "glm-5.3".into(),
+            })
+            .expect("the primary's own policy");
+        assert_eq!(policy.family, "glm-5.3");
+
+        // The moonshot entry's tag is its own id and no policy names it:
+        // the ordinary path (ADR-049 §4 rule 4 — a plan account named
+        // by no policy is a legal, ordinary entry).
+        assert!(
+            cfg.family_policy_for_route(&RouteSpec {
+                provider: "moonshot".into(),
+                model: "kimi-k3".into(),
+            })
+            .is_none(),
+            "an untagged, unnamed route is policy-less, not refused"
+        );
+
+        // A written tag is the key even when it differs from the id:
+        // tag both glm-5.3 entries "fam" and the policy follows.
+        let inner = replace_nth(
+            PLANNED,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        // After the first splice only the zai entry's anchor remains
+        // plain, so it is occurrence 0 of the inner string.
+        let s = replace_nth(
+            &inner,
+            GLM,
+            "\"id\": \"glm-5.3\", \"family\": \"fam\", \"context\"",
+            0,
+        );
+        let mut cfg: VadisConfig = serde_json::from_str(&s).expect("parses");
+        cfg.plan_policy.as_mut().unwrap().family = "fam".into();
+        cfg.validate().expect("a tagged family validates");
+        let policy = cfg
+            .family_policy_for_route(&RouteSpec {
+                provider: "zai".into(),
+                model: "glm-5.3".into(),
+            })
+            .expect("the tag is the key, on either route");
+        assert_eq!(policy.family, "fam");
+    }
+
+    #[test]
+    fn family_policies_lists_every_declared_family_in_written_order() {
+        // The list spelling: both entries, in declaration order — the
+        // order /health's array and the metrics loop consume. The
+        // one-key spelling answers its single policy (the first test
+        // above already exercised it).
+        let one = planned().plan_policy.clone().unwrap();
+        // The roster's own second family: moonshot-plan (coding_plan)
+        // paired with moonshot (api), both carrying the kimi-k3 tag.
+        let two = PlanPolicyCfg {
+            family: "kimi-k3".into(),
+            primary: RouteSpec {
+                provider: "moonshot-plan".into(),
+                model: "kimi-k3".into(),
+            },
+            overflow: RouteSpec {
+                provider: "moonshot".into(),
+                model: "kimi-k3".into(),
+            },
+            ..one.clone()
+        };
+        let mut cfg = planned();
+        cfg.plan_policy = None;
+        cfg.plan_policies = Some(vec![one, two]);
+        cfg.validate().expect("both families validate");
+        let fams: Vec<&str> = cfg
+            .family_policies()
+            .iter()
+            .map(|p| p.family.as_str())
+            .collect();
+        assert_eq!(fams, ["glm-5.3", "kimi-k3"], "declaration order");
+
+        // The empty list is the declared "no family" state: no policy
+        // for any route, exactly like the absent key.
+        let mut cfg = planned();
+        cfg.plan_policy = None;
+        cfg.plan_policies = Some(vec![]);
+        cfg.validate().expect("the empty list loads");
+        assert!(cfg.family_policies().is_empty());
+        assert!(
+            cfg.family_policy_for_route(&RouteSpec {
+                provider: "zai-plan".into(),
+                model: "glm-5.3".into(),
+            })
+            .is_none(),
+            "the empty list serves the ordinary path"
+        );
     }
 }

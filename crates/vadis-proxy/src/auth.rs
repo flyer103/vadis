@@ -173,6 +173,9 @@ pub fn refused_record(
             selection_source: "explicit".to_string(),
             plugin_chain: Vec::new(),
             decision_ms: 0,
+            // The auth guard's refusal precedes any upstream attempt:
+            // no credential served (ADR-049 §3; spec §6's null class).
+            key_index: None,
         },
         state: StateRec {
             stateful_inbound: false,

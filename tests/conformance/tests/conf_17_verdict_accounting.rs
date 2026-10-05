@@ -107,6 +107,7 @@ fn empty_record() -> DecisionRecord {
             selection_source: "explicit".into(),
             plugin_chain: Vec::new(),
             decision_ms: 0,
+            key_index: None,
         },
         state: StateRec {
             stateful_inbound: false,

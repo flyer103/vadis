@@ -163,7 +163,10 @@ providers:                             # §4.14: the roster, written inline here
                                        #   key outside `supports`, or a non-http(s) value = a load error
       chat:      https://api.deepseek.com/chat/completions
       responses: https://api.deepseek.com/responses
-    api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only
+    api_key_env: DEEPSEEK_API_KEY      # secrets are read from env only. **The one-key spelling.**
+                                       #   A provider holding several credentials writes the pool instead
+                                       #   (§4.6, ADR-049) — exactly one of the two keys, §4.14's ladder:
+    # api_keys: [DEEPSEEK_API_KEY_A, DEEPSEEK_API_KEY_B]   # a credential pool, in rotation order
     wire_api: chat                     # chat | responses | anthropic
     supports: [chat, responses]        # inbound protocols this provider can be translated to
     account: api                       # coding_plan | api (absent ⇒ api): the metered account (§4.6)
@@ -584,17 +587,19 @@ provider entry *is* — the account its key, endpoint and allowance belong to. A
 allowance is not published is still a plan, and §4.6's rules must not be reachable only by operators who can
 supply a number nobody has (GAP-Q1).
 
-**`plan_policy` (one top-level section, optional).** At most one policy in v0.1; a second family is an additive
+**`plan_policy` (one top-level section, optional) and `plan_policies` (several).** At most one policy in
+v0.1; a second family is an additive
 future key (the `state:` / `retention` precedent), never a reshaped section.
 
 | Key | Type | Default | Semantics |
 |---|---|---|---|
 | `family` | string | required | The **family tag** both routes' model entries carry (§4.8) — and the key of the state: the account state, the probe deadline and the switch records are per family. Load error unless a model entry of `primary`'s provider and a model entry of `overflow`'s provider both carry that tag. A model entry with no `family` key carries its own `id` as its tag, so a policy written when the two routes shared one model id keeps working unchanged. |
-| `primary` | `provider/model` | required | The subscription route. Load error unless it is a roster route whose provider is `account: coding_plan`, and — when that provider declares a `quota` — unless **the model id the route resolves to** is covered by `quota.models` (§4.0's own-provider rule; `quota.models` names ids, never tags). |
+| `primary` | `provider/model` | required | The subscription route the **plan tier's** walk starts from (ADR-049 §5.1: the tier is every roster route whose provider is `account: coding_plan` and whose model entry carries the family tag, walked from here in **roster declaration order** — so several plans, of several providers, are drained before anything is spent; the tier is a singleton in every config written before ADR-049). Load error unless it is a roster route whose provider is `account: coding_plan`, and — when that provider declares a `quota` — unless **the model id the route resolves to** is covered by `quota.models` (§4.0's own-provider rule; `quota.models` names ids, never tags). |
 | `overflow` | `provider/model` | required | The metered route. Load error unless it is a roster route, distinct from `primary`, whose provider is `account: api`, whose model entry carries the same family tag (its native `id` may differ from `primary`'s — that is what the tag is for, §4.8). It need not appear in `fallback`: for a request inside a family it is the first candidate after `primary` (§4.2). |
 | `on_primary_exhausted` | `spill` \| `block` | `spill` | `spill`: the family continues on `overflow` at its real price. `block`: the request is refused with a **readable** reason (§8 `quota_exceeded`, 429) instead of being served from the metered account — the mode for an operator who would rather fail than spend. |
 | `recover` | `probe` \| `none` | `probe` | `probe`: after `cooldown`, the next session's first request is admitted as a probe on `primary`; success switches the family back and is recorded. `none`: no automatic probe — the family returns at the plan's own window boundary when one is declared, and otherwise only by an operator action. |
 | `cooldown` | duration | `15m` | The minimum interval between the move away from `primary` and the first admitted probe. A floor, not a schedule: ADR-011's cooldown for that provider must also allow the attempt, and rule 3 below may defer the probe further. |
+| `overflow_selection` | `declared` \| `cheapest` | `declared` | **ADR-049.** `declared`: a spill attempts the policy's `overflow` route — today's behaviour, byte-identical. `cheapest`: the family's **metered candidate set** — every roster route whose provider is `account: api` and whose model entry carries the family tag (§4.8's tag is the set; adding a metered provider is a roster edit and nothing else) — is walked in **ascending `price.input_miss`, then `price.output`, then roster declaration order**. A route change is paid as a re-prefill, an input event, so the ranking orders on that term first. All candidates must share one `currency` (§4.8: a ranking *is* a comparison, and two currencies are never compared — a mixed family is a load error naming the family and the currencies). A `price.tiers` model ranks by its first band (§4.10; the same convention §6's own infeasibility figures use, and no estimate). The order is a pure function of (roster, config) and is **resolved once and pinned to the session** — a later reload re-ranks new sessions only (ADR-014 constraint 1: a route change is a cache event). The ranking resolves **after** per-wire eligibility (§4.2/ADR-022): the mode changes the order, never the eligibility rules |
 | `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative or non-finite value is a load error, and so is setting it on a family whose `overflow` route's provider is of a currency other than USD: the cap is denominated in **USD** (its own name), and comparing a USD ceiling with a spend in another currency is the silent mixing §4.8 forbids — so the policy refuses to load instead (message names `plan_policy.overflow_monthly_cap_usd` and the currency it found). |
 
 **Hard rules** (the parts an implementation may not improvise; ADR-014 items 1–11 are normative):
@@ -632,6 +637,77 @@ config that produced the event — and events are never rewritten, so a later `c
 change what the row said when it was written. The serving path itself always recomputes the probe gate
 from the *current* config against `since_us`.
 
+#### 4.6.1 The fan-out (ADR-049): the pool, the list, and the ranking
+
+Three additive surfaces, each with its own refusal ladder (§8's last rows) and none of which reshapes a
+frozen key. **Every rule of §4.6 above is unchanged and per family.**
+
+**The credential pool.** A provider entry writes **exactly one of** `api_key_env` (one credential — the
+existing spelling) and `api_keys: [ENV, …]` (a pool, in rotation order). The pool's *present* subset is
+what the process holds; an absent name is one fewer credential, not a startup failure (§12.10.2's stance).
+Availability is pool-wide: a provider is available iff **at least one** name is present.
+
+Rotation is **within the provider and only on a credential-class failure** (`401`-auth / `429`, ADR-011
+item 7): the next present key is tried, and the walk leaves the provider only when the pool is exhausted
+(`FallbackProvider`). **An upstream `403 quota_exhausted` never rotates** — it is a fact about the
+**account** (§4.6 rule 3), and a plan with three keys is still one exhausted plan; it moves the family, not
+the key. Each key holds its own cooldown (a projection keyed `(provider, key_index)`, rebuildable per
+§4.5), at most one attempt is made per key per request, and where a record must name the credential it
+names the **index** — never the value (spec §4.7's own rule, at N names). A key switch may change the
+upstream cache namespace, so it is narrated and priced exactly as an account move is
+(`error.classified.action: "rotate_credential"`). The pool touches **no body byte** (AGENTS constraint 1):
+it is a header.
+
+**The family list.** `plan_policies:` is a list of the policy objects above; exactly one of `plan_policy`
+(one family) and `plan_policies` (N) is written (§4.14's ladder). Families are **independent**: one family's
+spill or probe never moves another, and the `plan_state` key stays the family tag (ADR-014 item 8 — the
+projection is unchanged). Two list entries naming one tag is a load error.
+
+**The plan tier — every plan drained before anything is spent.** The family's **plan candidate set** is every
+roster route whose provider is `account: coding_plan` and whose model entry carries the family tag; the walk
+starts at the policy's `primary` and continues through the tier's remaining members in **roster declaration
+order**. Price cannot order this tier — inside a plan the marginal price is **0** (§4.6 rule 4) — so the order
+is the operator's own preference, expressed by the roster's order and the explicit `primary` for the head; no
+config key orders it. A provider contributes at most one route to the tier by construction (§4.8: at most one
+model entry per tag per provider), so "several plans" means several provider entries. This is what makes the
+capability usable: a plan has a quota, and exceeding it means waiting, which interrupts work — so the gateway
+holds **several** plan accounts, drains them, and only then spends.
+
+**The state machine, and the moves.** The family's state records the **route it is currently on** (not a bare
+two-valued word), from which its tier follows; the wire words `primary` (the active route is in the plan
+tier) and `overflow` (it is in the metered tier) are **unchanged**, so every existing reader is untouched, and
+`/health` gains `route` (§9.1). A displacement's `reason` is decided by direction (§6), and with two tiers one
+same-tier move appears, so exactly one word is added: **`plan_exhausted`** — the family moved from one plan
+member to the next and **stayed in-plan** (the metered tier was not reached, and its `account` is still
+`primary`). `primary_exhausted` keeps its meaning (*the plan tier was left*), `primary_recovered` is still the
+only way back, and the **probe** is generalized by one clause: it is admitted when the active route is **not**
+in the plan tier, and it attempts the **tier's head** (`primary`) — still one attempt on a free account, still
+at a session boundary only (ADR-014 items 2–3). `on_primary_exhausted: block` now refuses while the **whole
+plan tier** is exhausted.
+
+**One coherence rule the tier cannot work without.** The guard's `Pass` (`spec §3`'s existing vocabulary)
+returns **the family's active route** whenever that route is in the plan tier — not the policy's `primary`
+unconditionally. Without it a tier would thrash: the request after a plan moved A→B would be sent back to A,
+which is the per-request flip ADR-014 constraint 1 forbids. So **a plan that has answered `403
+quota_exhausted` is retired for that family until the whole plan tier is exhausted and a probe re-admits the
+tier's head**; a family with no state row passes `primary` exactly as before.
+
+**The ranking (`overflow_selection: cheapest`).** The family's metered candidate set is every roster route
+whose provider is `account: api` and whose model entry carries the family tag (§4.8's tag *is* the set);
+the walk is `[the plan tier, in declaration order] → [the metered candidates in rank order] → the global
+`fallback` list`, the family's own candidates
+keeping their existing precedence over `fallback` (§4.2). The rank order is
+`(price.input_miss, price.output, roster declaration order)` ascending, with a single
+`currency` required across the set (§4.8) and `price.tiers` models ranked by their first band (§4.10). The
+order is a pure function of (roster, stable config) — never of turn number, wall clock or RNG (AGENTS
+constraint 2) — and it is **resolved once at the decision point and pinned to the session** by the existing
+sticky binding: a reload that re-ranks moves new sessions only, so one session never pays a second
+re-prefill (ADR-014's Background constraint 1, which is this rule's whole reason for existing). A ranking
+resolves **after** per-wire eligibility, so the mode changes the *order* and never the eligibility rules
+(ADR-022/023). Under `cheapest` the `overflow_monthly_cap_usd` subject is the family's **whole** metered
+spend — every candidate's, summed from `cost.computed` rows — so every candidate's currency must be USD
+(the cap's own name); under `declared` that rule is unchanged.
+
 **Illegal combinations: what each one fails as.** The load-time checks are refusals at startup — the process does
 not come up and the message names the config path and the reason (§4.5: there is no partially-started process).
 They are deliberately **not** `error.type` values of §8: those describe the outcome of a request, and a config that
@@ -655,6 +731,12 @@ two rows).
 | any key inside `plan_policy` that §4.6 does not define | load error | `plan_policy` |
 | the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
 | the month's metered spend has reached `overflow_monthly_cap_usd` | `cost_cap_exceeded` (403, §8) | the family and the cap |
+| **ADR-049**: both `api_key_env` and `api_keys` written, or neither | load error | both keys |
+| **ADR-049**: both `plan_policy` and `plan_policies` written | load error | both keys. **Neither written is not an error** — it is the no-plan configuration (§4.6's "at most one policy", above), and it loads; only a written explicit `plan_policies: null` is refused, by `plan_policies:` itself |
+| **ADR-049**: two `plan_policies[i]` naming one family tag | load error | `plan_policies[i].family` |
+| **ADR-049**: `overflow_selection` is neither `declared` nor `cheapest` | load error | `plan_policies[i].overflow_selection` |
+| **ADR-049**: `cheapest` and the candidate set's currencies differ | load error | the family + the currencies found |
+| **ADR-049**: `cheapest` + `overflow_monthly_cap_usd` and any candidate's currency is not USD | load error | `plan_policies[i].overflow_monthly_cap_usd` + the currency |
 
 The `block` refusal is a property of the **state**, not only of the spill trigger: any request inside a family
 whose account state is `overflow` — including a request of a session that was already in flight when the
@@ -1815,7 +1897,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | config | `config_digest` — a **top-level** field beside `schema_version`, not a nested group (the byte digest of the root file and the roster, §4.14; see below) |
 | identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
 | protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
-| decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms` |
+| decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms`, `key_index` (**ADR-049**: the credential of the provider's pool that served — an integer index into the entry's `api_keys`, `null` when the entry holds one credential; the key's *value* is never a trace field, §4.6.1) |
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | `transform_mode` (`passthrough` \| `transform`; always present — the mode in effect for **this request's outbound body**, §2.1), and `transforms[]`: one entry per step **that changed the payload**, each `plugin` (the rule id), `edited_paths[]` (`{ path, bytes_in, bytes_out }`, where the two byte counts are the **payload text's** length before and after the step — the length of the spliced JSON string span differs by its escaping and is not claimed here), `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1). **Every step must report its token delta**: a step that cannot is not admissible as one |
@@ -2047,8 +2129,12 @@ first is read from the route, the second from the inbound bytes.
 
 **`result.plan_switch`** (an object, or `null` when the plan policy of §4.6 did not displace the request's
 account — the field is always present). Shape:
-`{ from, to, reason, probe, reprefill_tokens, switch_cost_nano, cost_currency }`: `from` / `to` are
-`provider/model` routes; `reason ∈ {primary_exhausted, primary_cooling_down, primary_recovered}`; `probe` is a
+`{ from, to, reason, probe, reprefill_tokens, switch_cost_nano, cost_currency, candidates, chosen }` (the
+last two are §4.6.1/ADR-049's and are **present only under `overflow_selection: cheapest`**, `null`
+otherwise so the key set never changes shape): `from` / `to` are
+`provider/model` routes; `reason ∈ {primary_exhausted, plan_exhausted, primary_cooling_down, primary_recovered}`
+(`plan_exhausted` is §4.6.1/ADR-049's: the family moved from one **plan** member of its plan tier to the next
+and stayed in-plan — `account` is still `primary`); `probe` is a
 boolean (this switch was the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the
 switch's cache price under §7's convention, and `cost_currency` is the unit `switch_cost_nano` is denominated in
 — the **destination** route's currency (§4.8), present whenever `plan_switch` is not null. The two money
@@ -2400,11 +2486,14 @@ and while the family is on the metered account:
 
 | Key | Type | Semantics |
 |---|---|---|
-| `configured` | bool | whether the loaded config declares a `plan_policy` at all. `false` ⇒ **no other key is present** (`"plan": {"configured": false}`): with no policy there is no family to name, and inventing one would be the "a state nobody can see" error in reverse |
+| `configured` | bool | whether the loaded config declares a `plan_policy` or a `plan_policies` at all. `false` ⇒ **no other key is present** (`"plan": {"configured": false}`): with no policy there is no family to name, and inventing one would be the "a state nobody can see" error in reverse |
+| **the shape of `plan`** | object \| array | **ADR-049**: with `plan_policy` written it is **this object** (every existing reader unchanged); with `plan_policies` written it is an **array of these objects**, one per declared family, in declaration order. The shape follows the key that was written, which is unambiguous because exactly one of the two is written (§4.6) |
+| `metered_candidates` | array \| absent | **ADR-049, present only under `overflow_selection: cheapest`**: the resolved ranking the walk will take, one entry per candidate in rank order — `{ route, currency, rank_key: { input_miss, output }, rank }`. `rank_key` names the exact pair §4.6.1 ordered on, so the order is checkable by hand against the roster. Absent under `declared` (nothing was ranked; inventing an order for a mode that has none is the mirror of the `configured: false` rule above). The candidate set is the family tag's metered routes (§4.8), so it moves with the roster and with no other knob |
 | `family` | string | the policy's `family` — the family tag both routes' model entries carry (§4.8; for a same-id pair it is that id) |
 | `primary` / `overflow` | string | the policy's two routes, verbatim, in the `provider/model` wire form `failover_from` and `plan_switch` use |
 | `recover` | `probe` \| `none` | the policy's value. Printed because it decides whether a probe exists at all (§4.6) |
-| `account` | `primary` \| `overflow` | the family's current account state. Read from the `plan_state` projection; **an absent row means `primary`** (a family that has never switched, §4.6) |
+| `account` | `primary` \| `overflow` | the family's current account state — the **tier** its active route belongs to: `primary` ⇔ the active route is in the plan tier (ADR-049 §4.6.1), `overflow` ⇔ it is in the metered tier. Read from the `plan_state` projection; **an absent row means `primary`** (a family that has never switched, §4.6) |
+| `route` | string | **ADR-049**: the specific route (`provider/model`) the family is currently on — the `plan_state` projection's active route, from which `account` is derived. For a family that never switched it is the policy's `primary`. This is what makes "which plan am I draining right now?" answerable across a tier of several plans |
 | `since` | string \| null | the last transition's instant (RFC3339 UTC, millisecond precision) — the `ts` of the `plan.switched` row that produced the current state. `null` for a family that never switched |
 | `probe` | object \| null | **`null` unless `account` is `overflow`**: a family on its primary has nothing to probe back to (§4.6 rule 2 — the probe *is* the way back from `overflow`) |
 | `probe.deadline` | string | `since + cooldown`, with `cooldown` from the **currently loaded config** — the same recomputation the serving path does (ADR-014 item 10's mid-flight clause), so a knob change moves a future deadline rather than rewriting history. It is not the stored informational column, which a rebuild may have derived from a cooldown that has since changed. **Always computable when `probe` is present** |

@@ -51,7 +51,7 @@ use vadis_core::config::{
     CapUsdVal, DurationVal, OnPrimaryExhausted, PlanPolicyCfg, RecoveryMode, RouteSpec,
 };
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow};
+use vadis_core::plan::{PlanFirstRule, PlanRequest, PlanStateRow};
 use vadis_core::store::{Query, QueryRow, Store as _};
 
 const POLICY_700MS: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m1\n  on_primary_exhausted: spill\n  recover: probe\n  cooldown: 700ms";
@@ -71,6 +71,7 @@ fn policy() -> PlanPolicyCfg {
         recover: RecoveryMode::Probe,
         cooldown: DurationVal(700),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+        overflow_selection: vadis_core::config::OverflowSelection::Declared,
     }
 }
 
@@ -85,18 +86,21 @@ fn guard_word(
     now_us: i64,
     primary_allowed: bool,
 ) -> Option<String> {
-    let rule = PlanFirstRule::new(p.clone());
+    let rule = PlanFirstRule::new(p.clone(), vec![p.primary.clone()]);
     let req = PlanRequest {
         session: Some("conf-73"),
         turn_index: 1,
         state: PlanStateRow {
-            account: PlanAccount::Overflow,
+            route: p.overflow.clone(),
             since_us,
         },
         now_us,
         primary_allowed,
         deferred_by_window: false,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     rule.probe_admitted(&req)
         .err()

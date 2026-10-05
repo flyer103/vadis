@@ -105,6 +105,7 @@ fn seed_and_read_used(
         .project(ProjectionWrite::PlanSwitched {
             family: "m1",
             account: "overflow",
+            to_route: "p-api/m1",
             cooldown_us: 0,
             last_event: ev,
         })

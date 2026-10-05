@@ -240,21 +240,31 @@ pub enum ProjectionWrite<'a> {
         last_event: EventId,
     },
     /// Upsert the family's account state from a `plan.switched` event
-    /// (ADR-014 item 8 / DESIGN §12.10.8). `since_us` is that event
-    /// row's own `ts_us` — the store reads it from `last_event`, so the
-    /// incremental path and the rebuild compute identical values
-    /// (CONF-21's rule) and no write depends on a second clock read.
-    /// `cooldown_us` (0 on 'primary') yields the informational
-    /// `until_us = since_us + cooldown_us`; the serving path recomputes
-    /// the probe gate from the *current* config against `since_us`
-    /// (ADR-014 item 10's mid-flight clause), so a knob change moves a
-    /// future deadline without rewriting anything.
+    /// (ADR-014 item 8 / DESIGN §12.10.8, generalized by ADR-049 §5.2:
+    /// the state records **the active route**; `account` —
+    /// 'primary' | 'overflow' — is the two-valued word derived from that
+    /// route against the revision's plan tier, kept in the row so every
+    /// existing reader of the wire word is untouched). `since_us` is
+    /// that event row's own `ts_us` — the store reads it from
+    /// `last_event`, so the incremental path and the rebuild compute
+    /// identical values (CONF-21's rule) and no write depends on a
+    /// second clock read. `cooldown_us` (0 on 'primary') yields the
+    /// informational `until_us = since_us + cooldown_us`; the serving
+    /// path recomputes the probe gate from the *current* config against
+    /// `since_us` (ADR-014 item 10's mid-flight clause), so a knob
+    /// change moves a future deadline without rewriting anything.
     PlanSwitched {
         family: &'a str,
-        /// 'primary' | 'overflow' (the `to_account` of the event).
+        /// 'primary' | 'overflow' — the caller's own derivation of the
+        /// active route against the tier (`account_of_route`, the one
+        /// owner; never re-derived here).
         account: &'a str,
+        /// The route the family is now on (`provider/model` — the
+        /// event's own `to_route`). Empty ⇒ a legacy write; the rebuild
+        /// falls back to the event payload's `to_route`.
+        to_route: &'a str,
         /// The cooldown that was current at the write; 0 ⇒ `until_us`
-        /// NULL (a family on its primary has no probe deadline).
+        /// NULL (a family on its plan tier has no probe deadline).
         cooldown_us: i64,
         last_event: EventId,
     },
@@ -332,16 +342,24 @@ pub struct LedgerBlock {
     pub hash: String,
 }
 
-/// The `plan_state` projection row (ADR-014, DESIGN §12.10.8): the
-/// family's routing intent. `until_us` is the stored informational
-/// deadline (`since_us +` the cooldown that was current at the write);
-/// the probe gate the serving path compares against is recomputed from
-/// the *current* config (ADR-014 item 10's mid-flight clause).
+/// The `plan_state` projection row (ADR-014, DESIGN §12.10.8; ADR-049
+/// §5.2 generalizes the value to **the active route**): the family's
+/// routing intent. `route` is the route the family is currently on
+/// (`provider/model`); `account` is the two-valued wire word derived
+/// from that route against the revision's plan tier — the derivation is
+/// the writer's (`account_of_route`), persisted so every existing
+/// consumer of the word is untouched. `until_us` is the stored
+/// informational deadline (`since_us +` the cooldown that was current
+/// at the write); the probe gate the serving path compares against is
+/// recomputed from the *current* config (ADR-014 item 10's mid-flight
+/// clause).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanStateProjRow {
     pub family: String,
-    /// 'primary' | 'overflow'.
+    /// 'primary' | 'overflow' (derived from `route` against the tier).
     pub account: String,
+    /// The active route, `provider/model`.
+    pub route: String,
     pub since_us: i64,
     pub until_us: Option<i64>,
     pub last_event: i64,

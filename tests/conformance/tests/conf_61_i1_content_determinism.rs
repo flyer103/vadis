@@ -133,7 +133,7 @@ fn forwarder(
     Forwarder {
         config: rc.vadis.clone(),
         transports,
-        api_keys: HashMap::from([("p1".into(), "k".into())]),
+        api_keys: HashMap::from([("p1".into(), vec!["k".to_string()])]),
         store: None,
         trace: None,
         transform_engine: Some(Arc::new(NoiseTrimmer)),

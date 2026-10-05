@@ -1,7 +1,9 @@
 use serde_json::{json, Map, Value};
-use vadis_core::config::{PlanPolicyCfg, RecoveryMode, VadisConfig};
+use vadis_core::config::{OverflowSelection, PlanPolicyCfg, RecoveryMode, RouteSpec, VadisConfig};
 use vadis_core::cost::Nano;
-use vadis_core::plan::{PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy};
+use vadis_core::plan::{
+    plan_tier, PlanAccount, PlanFirstRule, PlanRequest, PlanStateRow, ProbeBlockedBy,
+};
 use vadis_core::store::{Query, QueryRow, Store};
 
 /// What `serve` actually loaded from one config file (CONF-25): built by
@@ -52,6 +54,9 @@ pub struct ConfigIdentity {
 /// One provider entry's operator-facing facts (spec §9.1's provider list,
 /// §4.8's two new members): name, key variable, key presence, and the
 /// declared region and currency — all reads of the loaded config.
+/// ADR-049 §7(a): the pool is reported per credential name — `api_key_env`
+/// keeps the one-key spelling's own facts (the pool's first name), and
+/// `keys[]` carries one entry per declared name in order.
 #[derive(Clone)]
 pub struct ProviderKeyFacts {
     pub name: String,
@@ -59,6 +64,20 @@ pub struct ProviderKeyFacts {
     pub present: bool,
     pub region: vadis_core::config::Region,
     pub currency: vadis_core::Currency,
+    /// One entry per declared credential name, in declaration order
+    /// (ADR-049 §3 rule 1). `None` when the entry writes the one-key
+    /// spelling — the provider-level fields above already say everything
+    /// there is to say, and no existing reader moves.
+    pub keys: Option<Vec<KeyFact>>,
+}
+
+/// One credential's presence fact (ADR-049 §7(a)): the env **name** and
+/// whether the environment holds it. The value never travels here (spec
+/// §4.7's own sentence, at N names).
+#[derive(Clone)]
+pub struct KeyFact {
+    pub env: String,
+    pub present: bool,
 }
 
 /// `/health` reports what was actually loaded (DESIGN §12.10.2): the plugin set with `disabled` shown as disabled, each
@@ -88,7 +107,10 @@ pub fn health_json(state: &AppState) -> Value {
         .provider_keys
         .iter()
         .map(|f| {
-            json!({
+            // ADR-049 §7(a): `keys[]` appears only for a pool entry —
+            // the one-key spelling's body is unchanged byte-for-byte,
+            // so every existing reader of `providers[]` is untouched.
+            let mut v = json!({
                 "name": f.name,
                 "api_key_env": f.api_key_env,
                 "api_key_present": f.present,
@@ -99,7 +121,15 @@ pub fn health_json(state: &AppState) -> Value {
                 // or from each other.
                 "region": f.region.as_str(),
                 "currency": f.currency.as_code(),
-            })
+            });
+            if let Some(keys) = &f.keys {
+                v["keys"] = Value::Array(
+                    keys.iter()
+                        .map(|k| json!({ "env": k.env, "present": k.present }))
+                        .collect(),
+                );
+            }
+            v
         })
         .collect();
 
@@ -148,28 +178,59 @@ pub fn health_json(state: &AppState) -> Value {
 /// projection read or a clock read, none is computed here (the same purity
 /// stance as `PlanFirstRule`, AGENTS constraint 2).
 pub(crate) struct PlanHealthInputs {
-    pub account: PlanAccount,
-    /// The last transition's instant; 0 for a family that never switched.
+    /// The family's ACTIVE ROUTE (ADR-049 §5.2) — `account` is derived
+    /// from it against the revision's tier.
+    pub route: RouteSpec,
+    /// The family's plan tier, head-first (ADR-049 §5.1) — the set
+    /// `account` is derived against and the probe's head comes from.
+    pub tier: Vec<RouteSpec>,
+    /// The family's metered candidate set in §5.6 rank order — `None`
+    /// under `declared` (nothing was ranked; spec §9.1's
+    /// `metered_candidates` is absent for a mode that has no order).
+    pub metered: Option<Vec<vadis_core::plan::MeteredCandidate>>,
     pub since_us: i64,
     pub now_us: i64,
-    /// ADR-011's answer for the primary route right now.
+    /// ADR-011's answer for the tier's head route right now.
     pub primary_allowed: bool,
     /// The local counter's only influence (spec §4.6 rule 3).
     pub deferred_by_window: bool,
 }
 
 fn plan_section_value(state: &AppState, rev: &crate::revision::Revision) -> Value {
-    let Some(policy) = rev.forwarder.config.plan_policy.as_ref() else {
-        return json!({ "configured": false });
-    };
-    let inputs = gather_plan_inputs(state, &rev.forwarder.config, policy);
-    plan_section(policy, &inputs)
+    // ADR-049 §7(c): the section's shape follows the key that was
+    // written — today's object under `plan_policy` (every existing
+    // reader untouched), a list of the same objects under
+    // `plan_policies`, one per declared family in declaration order.
+    // The spelling is unambiguous because exactly one of the two is
+    // written (the load-time ladder). No policy at all — or a written
+    // empty list — is `{"configured": false}` and nothing else.
+    let config = &rev.forwarder.config;
+    match (&config.plan_policy, &config.plan_policies) {
+        // Exactly one spelling is written on a validated config, so
+        // `(Some, Some)` cannot reach here; it would fall to the
+        // single-policy arm below and report that policy.
+        (None, None) => json!({ "configured": false }),
+        (None, Some(list)) if list.is_empty() => json!({ "configured": false }),
+        (None, Some(list)) => Value::Array(
+            list.iter()
+                .map(|policy| {
+                    let inputs = gather_plan_inputs(state, config, policy);
+                    plan_section(policy, &inputs)
+                })
+                .collect(),
+        ),
+        (Some(policy), _) => {
+            let inputs = gather_plan_inputs(state, config, policy);
+            plan_section(policy, &inputs)
+        }
+    }
 }
 
 /// Read the projections the section reports (spec §9.1's per-key semantics):
-/// the `plan_state` row (absent ⇒ `primary`, §4.6), ADR-011's cooldown for
-/// the primary provider, and the quota counter's window verdict. The last
-/// two are `availability`'s single-owner reads (ADR-016 §13.3 L1c/L1d,
+/// the `plan_state` row (absent ⇒ the family never switched: its active
+/// route is the tier's head, §4.6), ADR-011's cooldown for the tier's
+/// head provider, and the quota counter's window verdict. The last two
+/// are `availability`'s single-owner reads (ADR-016 §13.3 L1c/L1d,
 /// fixed R10) — this surface consumes them, it does not re-derive them —
 /// both evaluated against the section's one clock read below.
 fn gather_plan_inputs(
@@ -178,23 +239,49 @@ fn gather_plan_inputs(
     policy: &PlanPolicyCfg,
 ) -> PlanHealthInputs {
     let now = now_us();
-    let (account, since_us) = match state.store.as_ref().map(|s| {
+    // ADR-049 §5.1/§5.2: the tier decides membership; the row carries
+    // the active route. A legacy row with no route falls back to the
+    // word it stored (a pre-tier database migrating forward); no row at
+    // all is the family that never switched — the tier's head.
+    let tier = plan_tier(config, policy);
+    let row = state.store.as_ref().and_then(|s| {
         s.query(Query::PlanState {
             family: &policy.family,
         })
-    }) {
-        Some(Ok(QueryRow::PlanState(Some(row)))) => (
-            if row.account == "overflow" {
-                PlanAccount::Overflow
-            } else {
-                PlanAccount::Primary
-            },
-            row.since_us,
-        ),
-        _ => (PlanAccount::Primary, 0),
+        .ok()
+    });
+    let row = match row {
+        Some(QueryRow::PlanState(Some(row))) => Some(row),
+        _ => None,
     };
+    let route = match &row {
+        Some(row) if !row.route.is_empty() => match row.route.split_once('/') {
+            Some((provider, model)) => RouteSpec {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            },
+            None => policy.primary.clone(),
+        },
+        Some(row) => match row.account.as_str() {
+            "overflow" => policy.overflow.clone(),
+            _ => policy.primary.clone(),
+        },
+        None => policy.primary.clone(),
+    };
+    let since_us = row.as_ref().map(|r| r.since_us).unwrap_or(0);
     PlanHealthInputs {
-        account,
+        route,
+        tier,
+        // ADR-049 §5.6 / spec §9.1: the resolved ranking the walk will
+        // take, one entry per candidate in rank order — read from the
+        // same single owner the walk uses, so the surface cannot drift
+        // from the serving path. Absent under `declared`.
+        metered: match policy.overflow_selection {
+            OverflowSelection::Cheapest => {
+                Some(vadis_core::plan::ranked_metered_candidates(config, policy))
+            }
+            OverflowSelection::Declared => None,
+        },
         since_us,
         now_us: now,
         primary_allowed: !crate::availability::provider_in_cooldown(
@@ -216,31 +303,68 @@ fn gather_plan_inputs(
 /// (`since + cooldown`); no figure here is an estimate (spec §9.1's closing
 /// rule, AGENTS constraint 5).
 pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Value {
-    let rule = PlanFirstRule::new(policy.clone());
+    // ADR-049 §5.2: `account` is derived from the active route against
+    // the tier (the same single-owner derivation the guard uses), and
+    // the section carries `route` — the specific `provider/model` the
+    // family is currently on — so "which plan am I draining right now?"
+    // is answerable across a tier.
+    let rule = PlanFirstRule::new(policy.clone(), i.tier.clone());
+    let account = rule.account_of(&i.route);
     let recover = if policy.recover == RecoveryMode::None {
         "none"
     } else {
         "probe"
     };
     let common = |account: &str, since: Value, probe: Value| {
-        json!({
-            "configured": true,
-            "family": policy.family,
-            "primary": route_str(&policy.primary),
-            "overflow": route_str(&policy.overflow),
-            "recover": recover,
-            "account": account,
-            "since": since,
-            "probe": probe,
-        })
+        // spec §9.1 `metered_candidates` (ADR-049 §5.6): present only
+        // under `cheapest` — the resolved ranking the walk will take,
+        // one entry per candidate in rank order, each carrying the exact
+        // pair §5.6 ordered on so the order is checkable by hand against
+        // the roster. Absent under `declared` (nothing was ranked).
+        let mut section = Map::new();
+        section.insert("configured".into(), json!(true));
+        section.insert("family".into(), json!(policy.family));
+        section.insert("primary".into(), json!(route_str(&policy.primary)));
+        section.insert("overflow".into(), json!(route_str(&policy.overflow)));
+        section.insert("recover".into(), json!(recover));
+        section.insert("account".into(), json!(account));
+        // ADR-049 §7(b): the specific route the family is currently
+        // on, from which `account` is derived.
+        section.insert("route".into(), json!(route_str(&i.route)));
+        section.insert("since".into(), since);
+        section.insert("probe".into(), probe);
+        if let Some(metered) = &i.metered {
+            section.insert(
+                "metered_candidates".into(),
+                Value::Array(
+                    metered
+                        .iter()
+                        .enumerate()
+                        .map(|(rank, c)| {
+                            json!({
+                                "route": format!("{}/{}", c.route.provider, c.route.model),
+                                "currency": c.currency.as_code(),
+                                "rank_key": {
+                                    "input_miss": c.rank_key.input_miss,
+                                    "output": c.rank_key.output,
+                                },
+                                "rank": rank,
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        Value::Object(section)
     };
-    if i.account == PlanAccount::Primary {
-        // A family on its primary has nothing to probe back to (§4.6 rule 2:
-        // the probe IS the way back from `overflow`). `since` is the ts of
-        // the `plan.switched` row that produced the CURRENT state (§9.1's
-        // letter): null only for a family that never switched (the absent
-        // `plan_state` row above) — a recovered family keeps the recovery
-        // row's ts, not a reset to null.
+    if account == PlanAccount::Primary {
+        // A family on its plan tier has nothing to probe back to (§4.6
+        // rule 2: the probe IS the way back from the metered tier).
+        // `since` is the ts of the `plan.switched` row that produced the
+        // CURRENT state (§9.1's letter): null only for a family that
+        // never switched (the absent `plan_state` row above) — a
+        // recovered family keeps the recovery row's ts, not a reset to
+        // null.
         let since = if i.since_us > 0 {
             rfc3339_millis(i.since_us)
                 .map(Value::String)
@@ -250,12 +374,13 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
         };
         return common("primary", since, Value::Null);
     }
-    // Overflow: `probe.deadline` is recomputed from the **currently loaded**
-    // cooldown against `since_us` — the same recomputation the serving path
-    // does (ADR-014 item 10's mid-flight clause) — never the stored
-    // informational `until_us`, which a rebuild may have derived from a
-    // cooldown that has since changed. Always computable when `probe` is
-    // present, so no unprintable number exists here.
+    // The metered tier: `probe.deadline` is recomputed from the
+    // **currently loaded** cooldown against `since_us` — the same
+    // recomputation the serving path does (ADR-014 item 10's mid-flight
+    // clause) — never the stored informational `until_us`, which a
+    // rebuild may have derived from a cooldown that has since changed.
+    // Always computable when `probe` is present, so no unprintable
+    // number exists here.
     let deadline_us = i.since_us.saturating_add(policy.cooldown_us());
     // `blocked_by` is the guard's own answer, not a re-derivation here
     // (ADR-016 §13.3 L1a: `PlanFirstRule::probe_admitted` is the single
@@ -301,13 +426,18 @@ fn surface_request(i: &PlanHealthInputs) -> PlanRequest<'_> {
         session: Some(""),
         turn_index: 1,
         state: PlanStateRow {
-            account: i.account,
+            route: i.route.clone(),
             since_us: i.since_us,
         },
         now_us: i.now_us,
         primary_allowed: i.primary_allowed,
         deferred_by_window: i.deferred_by_window,
         overflow_spend: Nano(0),
+        // §6 rule 1: `/health` describes the family, not a request —
+        // no session, so no pin; the surface's answer is the ranking a
+        // NEW session would take (the surface names no session of
+        // record).
+        pinned: None,
     }
 }
 
@@ -380,17 +510,50 @@ mod tests {
             recover,
             cooldown: DurationVal(cooldown_ms),
             overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
+            overflow_selection: vadis_core::config::OverflowSelection::Declared,
         }
     }
 
-    fn inputs(account: PlanAccount, since_us: i64) -> PlanHealthInputs {
+    /// The single-member tier every pre-ADR-049 policy walked.
+    fn single_tier(p: &PlanPolicyCfg) -> Vec<vadis_core::config::RouteSpec> {
+        vec![p.primary.clone()]
+    }
+
+    fn inputs(
+        p: &PlanPolicyCfg,
+        route: vadis_core::config::RouteSpec,
+        since_us: i64,
+    ) -> PlanHealthInputs {
         PlanHealthInputs {
-            account,
+            route,
+            tier: single_tier(p),
+            // §9.1: absent under `declared` (the unit fixtures' mode).
+            metered: None,
             since_us,
             now_us: since_us + 60 * 1_000_000, // a minute past the transition
             primary_allowed: true,
             deferred_by_window: false,
         }
+    }
+
+    /// `route` naming the active plan route (ADR-049 §7(b)) at the word
+    /// the derivation says — the surface's own witness of "which plan am
+    /// I draining right now?".
+    #[test]
+    fn route_member_names_the_active_plan_route() {
+        let p = policy(900_000, RecoveryMode::Probe);
+        // The tier's second member: `account` stays `primary`, `route`
+        // names it — the tier's own case.
+        let second = vadis_core::config::RouteSpec {
+            provider: "p-plan-b".into(),
+            model: "m1".into(),
+        };
+        let mut i = inputs(&p, second.clone(), 0);
+        i.tier.push(second.clone());
+        let v = plan_section(&p, &i);
+        assert_eq!(v["account"], "primary", "the second plan is still the plan");
+        assert_eq!(v["route"], "p-plan-b/m1", "the drained-to plan is named");
+        assert_eq!(v["probe"], Value::Null, "nothing to probe back to in-plan");
     }
 
     /// An AppState fixture around a `RevisionCell` — the shape `serve`
@@ -470,7 +633,7 @@ mod tests {
     #[test]
     fn primary_account_has_null_probe_and_null_since() {
         let p = policy(900_000, RecoveryMode::Probe);
-        let v = plan_section(&p, &inputs(PlanAccount::Primary, 0));
+        let v = plan_section(&p, &inputs(&p, p.primary.clone(), 0));
         assert_eq!(v["configured"], true);
         assert_eq!(v["family"], "m1");
         assert_eq!(v["primary"], "p-plan/m1");
@@ -490,7 +653,7 @@ mod tests {
     fn recovered_primary_keeps_the_recovery_row_ts_and_null_probe() {
         let p = policy(900_000, RecoveryMode::Probe);
         let recovery_ts_us = 1_760_000_000_000_000i64;
-        let v = plan_section(&p, &inputs(PlanAccount::Primary, recovery_ts_us));
+        let v = plan_section(&p, &inputs(&p, p.primary.clone(), recovery_ts_us));
         assert_eq!(v["account"], "primary");
         let since = v["since"].as_str().expect("since is the recovery row's ts");
         assert_eq!(
@@ -510,7 +673,7 @@ mod tests {
     fn deadline_is_since_plus_current_cooldown() {
         let since_us = 1_760_000_000_000_000i64; // arbitrary instant
         let p = policy(15 * 60 * 1_000, RecoveryMode::Probe);
-        let v = plan_section(&p, &inputs(PlanAccount::Overflow, since_us));
+        let v = plan_section(&p, &inputs(&p, p.overflow.clone(), since_us));
         assert_eq!(v["account"], "overflow");
         let since = v["since"].as_str().expect("since is a string on overflow");
         let deadline = v["probe"]["deadline"].as_str().expect("deadline");
@@ -529,29 +692,29 @@ mod tests {
         let since_us = 1_760_000_000_000_000i64;
         // Cooldown elapsed, but ADR-011 refuses the primary.
         let p = policy(0, RecoveryMode::Probe);
-        let mut i = inputs(PlanAccount::Overflow, since_us);
+        let mut i = inputs(&p, p.overflow.clone(), since_us);
         i.primary_allowed = false;
         let v = plan_section(&p, &i);
         assert_eq!(v["probe"]["blocked_by"], "primary_cooling_down");
         // Primary healthy, but the plan's window has not reset.
-        let mut i = inputs(PlanAccount::Overflow, since_us);
+        let mut i = inputs(&p, p.overflow.clone(), since_us);
         i.deferred_by_window = true;
         let v = plan_section(&p, &i);
         assert_eq!(v["probe"]["blocked_by"], "window_not_reset");
         // Everything holds: admitted, blocked_by null.
-        let v = plan_section(&p, &inputs(PlanAccount::Overflow, since_us));
+        let v = plan_section(&p, &inputs(&p, p.overflow.clone(), since_us));
         assert_eq!(v["probe"]["admitted"], true);
         assert_eq!(v["probe"]["blocked_by"], Value::Null);
         // recover: none wins over everything (evaluation order's first arm).
         let p_none = policy(0, RecoveryMode::None);
-        let v = plan_section(&p_none, &inputs(PlanAccount::Overflow, since_us));
+        let v = plan_section(&p_none, &inputs(&p, p.overflow.clone(), since_us));
         assert_eq!(v["recover"], "none");
         assert_eq!(v["probe"]["blocked_by"], "recovery_disabled");
         // And cooldown precedes primary_cooling_down: a demoted primary
         // inside the cooldown still reports `cooldown` (the first failing
         // condition is the honest answer).
         let p15 = policy(15 * 60 * 1_000, RecoveryMode::Probe);
-        let mut i = inputs(PlanAccount::Overflow, since_us);
+        let mut i = inputs(&p, p.overflow.clone(), since_us);
         i.primary_allowed = false;
         let v = plan_section(&p15, &i);
         assert_eq!(v["probe"]["blocked_by"], "cooldown");
@@ -640,6 +803,7 @@ mod tests {
             plugins: Vec::<PluginCfg>::new(),
             fallback: Vec::new(),
             plan_policy: None,
+            plan_policies: None,
             state: None,
         }
     }

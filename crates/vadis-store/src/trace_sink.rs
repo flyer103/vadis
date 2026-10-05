@@ -192,6 +192,7 @@ mod tests {
                 requested_model: Some("zai/glm-5.3".into()),
                 selection_source: "explicit".into(),
                 plugin_chain: Vec::new(),
+                key_index: None,
                 decision_ms: 0,
             },
             state: StateRec {
