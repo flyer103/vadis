@@ -433,6 +433,11 @@ fn surface_request(i: &PlanHealthInputs) -> PlanRequest<'_> {
         primary_allowed: i.primary_allowed,
         deferred_by_window: i.deferred_by_window,
         overflow_spend: Nano(0),
+        // §6 rule 1: `/health` describes the family, not a request —
+        // no session, so no pin; the surface's answer is the ranking a
+        // NEW session would take (the surface names no session of
+        // record).
+        pinned: None,
     }
 }
 

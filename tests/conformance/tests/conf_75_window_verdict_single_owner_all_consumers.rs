@@ -182,6 +182,9 @@ async fn conf_75_window_verdict_agreed_by_projection_report_and_request_path() {
         primary_allowed: true,
         deferred_by_window: deferred,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     assert_eq!(
         rule.probe_admitted(&req),

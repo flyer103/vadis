@@ -98,6 +98,9 @@ fn guard_word(
         primary_allowed,
         deferred_by_window: false,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     rule.probe_admitted(&req)
         .err()

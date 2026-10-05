@@ -373,6 +373,16 @@ pub struct PlanRequest<'a> {
     /// priced by the config table); compared against
     /// `overflow_monthly_cap_usd` only on the overflow route.
     pub overflow_spend: Nano,
+    /// **The session pin** (ADR-049 §6 rule 1, ADR-014 Background
+    /// constraint 1 restated for `cheapest`): the route the request's
+    /// session is already bound to, when that binding names one of the
+    /// revision's metered routes. A session that has already spilled
+    /// stays on the route it spilled to — one re-prefill, not two — so
+    /// a later reload that re-ranks the metered tier re-ranks **new
+    /// sessions only**. `None` when there is no session, no binding, or
+    /// the binding names a route the revision's roster no longer
+    /// carries (a removed provider is not a pin; the walk re-ranks).
+    pub pinned: Option<RouteSpec>,
 }
 
 impl PlanFirstRule {
@@ -513,17 +523,46 @@ impl PlanFirstRule {
                 probe: false,
             },
             PlanAccount::Overflow => match self.policy.on_primary_exhausted {
-                OnPrimaryExhausted::Spill => PlanMove::Downgrade {
-                    // §5.7 under `cheapest`: the metered tier's HEAD —
-                    // the ranking's cheapest (the pure §5.6 order, never
-                    // re-decided per request); under `declared` the head
-                    // IS the policy's `overflow`, today's answer.
-                    route: self
-                        .metered
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| self.policy.overflow.clone()),
-                },
+                OnPrimaryExhausted::Spill => {
+                    // **The session pin** (§6 rule 1): a session that has
+                    // already spilled onto a metered route stays on it.
+                    // The pin is consulted before the ranking so a reload
+                    // that re-ranks the metered tier re-ranks NEW
+                    // sessions only — the spilled session pays one
+                    // re-prefill, not two. Two scope limits, both from
+                    // the rule's own subject (THE RANKING): under
+                    // `declared` there is no ranking to pin and today's
+                    // per-request displacement shape stands (CONF-44
+                    // freezes it); and only a route the revision's
+                    // metered walk still carries is a pin — a plan-tier
+                    // route is never one (the 403 walk retires those for
+                    // the family) and a removed provider re-ranks like a
+                    // new session.
+                    let pin_eligible = self.policy.overflow_selection
+                        == OverflowSelection::Cheapest
+                        && req
+                            .pinned
+                            .as_ref()
+                            .is_some_and(|r| self.metered.contains(r));
+                    if let Some(pinned) = req.pinned.as_ref().filter(|_| pin_eligible) {
+                        PlanMove::Pass {
+                            route: pinned.clone(),
+                            probe: false,
+                        }
+                    } else {
+                        PlanMove::Downgrade {
+                            // §5.7 under `cheapest`: the metered tier's HEAD —
+                            // the ranking's cheapest (the pure §5.6 order, never
+                            // re-decided per request); under `declared` the head
+                            // IS the policy's `overflow`, today's answer.
+                            route: self
+                                .metered
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| self.policy.overflow.clone()),
+                        }
+                    }
+                }
                 // `block` refuses while the whole plan tier is exhausted
                 // (§5.2: the operator's "fail rather than spend" over
                 // every plan, not only the first) — and reaching this
@@ -741,6 +780,9 @@ mod tests {
             primary_allowed: true,
             deferred_by_window: false,
             overflow_spend: Nano(0),
+            // §6 rule 1: no prior binding by default — the fixtures that
+            // exercise the pin set it explicitly.
+            pinned: None,
         }
     }
 
@@ -1274,6 +1316,144 @@ mod tests {
         assert_eq!(a, b, "purity: two evaluations, one order");
     }
 
+    // ------------------------------------------------------------------
+    // ADR-049 §6 rule 1 — the session pin
+    // ------------------------------------------------------------------
+
+    /// A spilled session whose binding names a metered route of this
+    /// revision's walk PASSES on that route — even when the ranking's
+    /// head is a different candidate. The pin is consulted before the
+    /// ranking, so a reload that re-ranks re-ranks new sessions only.
+    #[test]
+    fn a_pinned_session_passes_on_its_metered_route_not_the_new_head() {
+        let p = cheapest_policy();
+        // Two metered candidates; the ranking's head is p-cheap (0.002).
+        let cfg = metered_config(&p, &[("p-cheap", 0.002, 0.003), ("p-dear", 0.005, 0.006)]);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        assert_eq!(metered.first().unwrap().provider, "p-cheap");
+        let rule = PlanFirstRule::with_metered(p.clone(), tier, metered.clone());
+        let mut r = req(&p);
+        // Mid-session (turn 2): the probe gate is closed, the pin is
+        // the live question — the spilled session's own shape.
+        r.turn_index = 2;
+        // The session spilled onto p-cheap; the revision now ranks
+        // p-cheap first anyway — the pin must return the SAME route the
+        // ranking would (not a new displacement).
+        r.pinned = Some(route("p-cheap", "glm-5.3"));
+        match rule.decide(&r) {
+            PlanMove::Pass { route, probe } => {
+                assert_eq!(route.provider, "p-cheap");
+                assert!(!probe, "a pinned pass is not a probe");
+            }
+            other => panic!("expected a pinned pass, got {other:?}"),
+        }
+        // The discriminating half: the pin wins over a DIFFERENT head.
+        // Same revision, but the session is bound to p-dear (it spilled
+        // there under an earlier ranking) — the pass names p-dear, not
+        // the ranking's head p-cheap.
+        let mut r2 = req(&p);
+        r2.turn_index = 2;
+        r2.pinned = Some(route("p-dear", "glm-5.3"));
+        match rule.decide(&r2) {
+            PlanMove::Pass { route, .. } => {
+                assert_eq!(route.provider, "p-dear", "the pin, not the head");
+            }
+            other => panic!("expected a pinned pass, got {other:?}"),
+        }
+    }
+
+    /// Only a metered route of THIS revision's walk is a pin: a binding
+    /// naming a plan-tier route or an off-roster route (a provider the
+    /// reload removed) re-ranks like a new session — the Downgrade names
+    /// the ranking's head.
+    #[test]
+    fn an_off_walk_or_off_roster_binding_is_not_a_pin() {
+        let p = cheapest_policy();
+        let cfg = metered_config(&p, &[("p-cheap", 0.002, 0.003), ("p-dear", 0.005, 0.006)]);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        let rule = PlanFirstRule::with_metered(p.clone(), tier, metered);
+        // A plan-tier route is never a pin (the 403 walk retires those
+        // for the family; re-admission is the probe's job).
+        let mut r = req(&p);
+        r.turn_index = 2;
+        r.pinned = Some(route("plan-a", "glm-5.3"));
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => {
+                assert_eq!(route.provider, "p-cheap", "re-ranked: the head");
+            }
+            other => panic!("expected a downgrade, got {other:?}"),
+        }
+        // A route off this revision's roster entirely (removed by the
+        // reload) re-ranks the same way.
+        let mut r2 = req(&p);
+        r2.turn_index = 2;
+        r2.pinned = Some(route("p-gone", "glm-5.3"));
+        match rule.decide(&r2) {
+            PlanMove::Downgrade { route } => {
+                assert_eq!(route.provider, "p-cheap", "re-ranked: the head");
+            }
+            other => panic!("expected a downgrade, got {other:?}"),
+        }
+    }
+
+    /// `recover: probe` re-admission still wins over the pin: the probe
+    /// predicate (rule 1) is evaluated before the pin (rules 3/4), so a
+    /// session at its boundary whose family is off-plan attempts the
+    /// tier's head — the pin does not trap a family on the metered tier
+    /// forever.
+    #[test]
+    fn an_admitted_probe_wins_over_the_pin() {
+        let p = cheapest_policy();
+        let cfg = metered_config(&p, &[("p-cheap", 0.002, 0.003), ("p-dear", 0.005, 0.006)]);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        let rule = PlanFirstRule::with_metered(p.clone(), tier, metered);
+        // `req` is a session at turn 1, well past cooldown, on the
+        // overflow route: the probe gate admits it.
+        let mut r = req(&p);
+        r.pinned = Some(route("p-cheap", "glm-5.3"));
+        match rule.decide(&r) {
+            PlanMove::Pass { route, probe } => {
+                assert!(probe, "the admitted probe, not the pin");
+                assert_eq!(route.provider, "plan-a", "the tier's head");
+            }
+            other => panic!("expected an admitted probe, got {other:?}"),
+        }
+    }
+
+    /// Under `declared` there is no ranking to pin: the pin never
+    /// fires and the pre-ADR-049 per-request displacement shape stands
+    /// (CONF-44's frozen subject). A spilled session's binding names
+    /// the only metered route — and the answer is still the
+    /// Downgrade, with its record, exactly as before this ADR.
+    #[test]
+    fn under_declared_there_is_no_pin() {
+        let mut p = cheapest_policy();
+        p.overflow_selection = OverflowSelection::Declared;
+        let cfg = metered_config(&p, &[("p-cheap", 0.002, 0.003)]);
+        let tier = plan_tier(&cfg, &p);
+        let metered = metered_walk(&cfg, &p);
+        let rule = PlanFirstRule::with_metered(p.clone(), tier, metered);
+        let mut r = req(&p);
+        r.turn_index = 2;
+        // The session's binding names the added metered provider —
+        // under `cheapest` this would be a pin; under `declared` the
+        // answer ignores it and names the policy's `overflow` (p-api,
+        // the fixture's base api provider), as it always has.
+        r.pinned = Some(route("p-cheap", "glm-5.3"));
+        match rule.decide(&r) {
+            PlanMove::Downgrade { route } => {
+                assert_eq!(
+                    route.provider, "p-api",
+                    "the declared overflow, not the pin"
+                );
+            }
+            other => panic!("expected the declared downgrade, got {other:?}"),
+        }
+    }
+
     #[test]
     fn the_guard_downgrades_to_the_metered_heads_and_403_moves_follow_the_walk() {
         // §5.7: the guard's `Downgrade` and the 403 handler's move both
@@ -1333,6 +1513,9 @@ mod tests {
             primary_allowed: true,
             deferred_by_window: false,
             overflow_spend: Nano(0),
+            // §6 rule 1: the surface names no session of record — no
+            // pin; it renders the answer a NEW session would take.
+            pinned: None,
         }
     }
 

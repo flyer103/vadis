@@ -295,6 +295,27 @@ pub(crate) fn month_start_us(now_us: i64) -> i64 {
 pub(crate) struct PlanGuardOutcome {
     pub route: RouteSpec,
     pub probe: bool,
+    /// §6 rule 1's pin fired: the route is the session's own prior
+    /// binding, read back from the walk — a continuation, not a
+    /// displacement. The callers write no `plan_switch` record for it
+    /// (the session did not move; the one displacement it paid is the
+    /// spill that created the binding).
+    pub pinned: bool,
+}
+
+/// The per-request inputs `plan_guard` reads besides the policy and the
+/// resolved route, bundled so the signature stays at arity 3 (one
+/// object, not a growing positional list). Built once per request by
+/// each medium from the same one-read session resolution.
+pub(crate) struct GuardCtx<'a> {
+    pub session: Option<&'a str>,
+    pub turn_index: u32,
+    pub now_epoch_s: u64,
+    pub now_us: i64,
+    /// §6 rule 1's pin input: the route this session is already bound
+    /// to (the ONE sticky read's row), if any. The rule filters; the
+    /// caller never guesses.
+    pub session_pin: Option<&'a RouteSpec>,
 }
 
 /// Session key resolution (spec §4 key_sources), shared by both forwarding
@@ -793,17 +814,27 @@ impl Forwarder {
         let mut plan_guard_out: Option<PlanGuardOutcome> = None;
         let plan_policy: Option<PlanPolicyCfg> =
             self.config.family_policy_for_route(&primary).cloned();
-        match self.plan_guard(
-            plan_policy.as_ref(),
-            &primary,
-            session.as_deref(),
+        // The pin input (ADR-049 §6 rule 1): the route this session is
+        // already bound to, read from the ONE sticky read above — never
+        // a second read after any write this request makes. The guard
+        // itself decides whether the binding names a metered route of
+        // this revision's walk (a stale or off-roster binding re-ranks
+        // like a new session).
+        let session_pin = prior_binding.as_ref().map(|b| RouteSpec {
+            provider: b.provider.clone(),
+            model: b.model.clone(),
+        });
+        let guard_ctx = GuardCtx {
+            session: session.as_deref(),
             turn_index,
             now_epoch_s,
-            facts.now_us,
-        ) {
+            now_us: facts.now_us,
+            session_pin: session_pin.as_ref(),
+        };
+        match self.plan_guard(plan_policy.as_ref(), &primary, &guard_ctx) {
             Ok(None) => {}
             Ok(Some(g)) => {
-                if g.route != primary {
+                if g.route != primary && !g.pinned {
                     // Reason by DIRECTION — the destination account
                     // (spec §6's producer table, extended by ADR-049
                     // §5.2's reason-by-direction rule): a move to the
@@ -1884,10 +1915,7 @@ impl Forwarder {
         &self,
         policy: Option<&PlanPolicyCfg>,
         resolved: &RouteSpec,
-        session: Option<&str>,
-        turn_index: u32,
-        now_epoch_s: u64,
-        now_us: i64,
+        ctx: &GuardCtx<'_>,
     ) -> Result<Option<PlanGuardOutcome>, ForwardFailure> {
         let Some(policy) = policy else {
             return Ok(None);
@@ -1943,14 +1971,14 @@ impl Forwarder {
         // walk cannot disagree about where a spill starts.
         let rule = PlanFirstRule::with_metered(policy.clone(), tier.clone(), metered.clone());
         let req = PlanRequest {
-            session,
-            turn_index,
+            session: ctx.session,
+            turn_index: ctx.turn_index,
             state: state.clone(),
             // The µs word of the same read `/health` clocks itself with
             // Deriving it back from the truncated seconds
             // word made the guard refuse for up to ~1s after the
             // surface already said `admitted: true`.
-            now_us,
+            now_us: ctx.now_us,
             // ADR-011's route-availability answer for the tier's head
             // (the two constraints are read together, merged nowhere).
             // The read lives in `availability` — the single owner both
@@ -1959,7 +1987,7 @@ impl Forwarder {
             primary_allowed: !crate::availability::provider_in_cooldown(
                 self.store.as_ref(),
                 &policy.primary.provider,
-                now_us,
+                ctx.now_us,
             ),
             // The local counter's only influence (spec §4.6 rule 3): it
             // may defer a probe until the plan's declared window
@@ -1971,15 +1999,32 @@ impl Forwarder {
                 self.store.as_ref(),
                 &self.config,
                 policy,
-                now_epoch_s,
+                ctx.now_epoch_s,
             ),
             overflow_spend: self.overflow_spend(policy),
+            // §6 rule 1's session pin: `None` (re-rank) when there is no
+            // session, no binding, or the binding is off this revision's
+            // metered walk — the rule filters, the caller never guesses.
+            pinned: ctx.session_pin.cloned(),
         };
-        match rule.decide(&req) {
-            PlanMove::Pass { route, probe } => Ok(Some(PlanGuardOutcome { route, probe })),
+        let mv = rule.decide(&req);
+        // The pin discriminator, from the SAME evaluation (decide is
+        // pure over (rule, req); a second call could only drift): the
+        // only `Pass { probe: false }` that names a metered route is
+        // the pin arm's — the Primary arm's route is a tier route by
+        // construction and the probe arm's carries `probe: true`.
+        let pinned =
+            matches!(&mv, PlanMove::Pass { route, probe: false } if ctx.session_pin == Some(route));
+        match mv {
+            PlanMove::Pass { route, probe } => Ok(Some(PlanGuardOutcome {
+                route,
+                probe,
+                pinned,
+            })),
             PlanMove::Downgrade { route } => Ok(Some(PlanGuardOutcome {
                 route,
                 probe: false,
+                pinned: false,
             })),
             PlanMove::Reject { code, message } => Err(ForwardFailure {
                 status: code.http_status(),

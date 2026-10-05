@@ -70,6 +70,9 @@ fn guard_answer(
         primary_allowed: true,
         deferred_by_window,
         overflow_spend: Nano(0),
+        // R66-1e's field, absent here: no prior binding (this fixture
+        // evaluates the probe gate, which the pin never feeds).
+        pinned: None,
     };
     match rule.probe_admitted(&req) {
         Ok(()) => (true, None),

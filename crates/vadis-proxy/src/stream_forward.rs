@@ -342,17 +342,25 @@ impl Forwarder {
         let mut plan_guard_out: Option<crate::forward::PlanGuardOutcome> = None;
         let plan_policy: Option<PlanPolicyCfg> =
             self.config.family_policy_for_route(&primary).cloned();
-        match self.plan_guard(
-            plan_policy.as_ref(),
-            &primary,
-            session.as_deref(),
+        // The pin input (ADR-049 §6 rule 1), the buffered path's twin:
+        // the binding's route from the ONE sticky read above. The rule
+        // filters (a metered route of this revision's walk is a pin; a
+        // stale or off-roster binding re-ranks like a new session).
+        let session_pin = prior_binding.as_ref().map(|b| RouteSpec {
+            provider: b.provider.clone(),
+            model: b.model.clone(),
+        });
+        let guard_ctx = crate::forward::GuardCtx {
+            session: session.as_deref(),
             turn_index,
             now_epoch_s,
-            facts.now_us,
-        ) {
+            now_us: facts.now_us,
+            session_pin: session_pin.as_ref(),
+        };
+        match self.plan_guard(plan_policy.as_ref(), &primary, &guard_ctx) {
             Ok(None) => {}
             Ok(Some(g)) => {
-                if g.route != primary {
+                if g.route != primary && !g.pinned {
                     // Reason by DIRECTION — the destination account
                     // (spec §6's producer table, extended by ADR-049
                     // §5.2's reason-by-direction rule; the buffered
