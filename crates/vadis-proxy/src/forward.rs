@@ -25,9 +25,8 @@ use vadis_core::error_class::{
     classify_upstream_error, Classification, ErrorClass, ErrorEvidence, TransportCause,
 };
 use vadis_core::plan::{
-    account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family,
-    PlanFirstRule, PlanMove,
-    PlanRequest, PlanStateRow, REASON_PRIMARY_RECOVERED,
+    account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family, PlanFirstRule,
+    PlanMove, PlanRequest, PlanStateRow, REASON_PRIMARY_RECOVERED,
 };
 use vadis_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
 use vadis_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
@@ -821,7 +820,9 @@ impl Forwarder {
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(policy, &tier, &metered, &primary, &g.route),
+                            reason: displacement_reason(
+                                policy, &tier, &metered, &primary, &g.route,
+                            ),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
@@ -1445,7 +1446,10 @@ impl Forwarder {
                                             reprefill_tokens: None,
                                             switch_cost_nano: Some(0),
                                             cost_currency: self.route_currency(&policy.primary),
-                                            candidates: metered_candidates_field(&self.config, policy),
+                                            candidates: metered_candidates_field(
+                                                &self.config,
+                                                policy,
+                                            ),
                                             chosen: Some(candidate.to_string()),
                                         });
                                     }
@@ -1461,6 +1465,19 @@ impl Forwarder {
                                 attribute_tokens(&mut blocks, u);
                             }
                             facts.blocks = blocks.clone();
+                            // ADR-049 §5.6: `chosen` is the candidate the
+                            // walk SETTLED ON — this answering attempt, not
+                            // the ranking's head the pre-walk writer named
+                            // (the guard's move target) before the outcome
+                            // was known. Settled here, before the trace
+                            // line is written; the event row predates the
+                            // walk and is untouched.
+                            if let Some(ps) = facts.plan_switch.as_mut() {
+                                ps.settled_on(&format!(
+                                    "{}/{}",
+                                    candidate.provider, candidate.model
+                                ));
+                            }
                             let route_acc =
                                 crate::accounting::route_accounting(&self.config, candidate);
                             let accountant = crate::accounting::Accountant {
@@ -1619,9 +1636,12 @@ impl Forwarder {
                                         .position(|r| r == candidate)
                                         .and_then(|pos| tier.get(pos + 1))
                                         .cloned();
-                                    let to = next_plan
-                                        .clone()
-                                        .unwrap_or_else(|| metered.first().cloned().unwrap_or_else(|| policy.overflow.clone()));
+                                    let to = next_plan.clone().unwrap_or_else(|| {
+                                        metered
+                                            .first()
+                                            .cloned()
+                                            .unwrap_or_else(|| policy.overflow.clone())
+                                    });
                                     let to_account =
                                         account_of_route(&tier, &to).as_str().to_string();
                                     self.record_plan_switch(
@@ -1674,7 +1694,10 @@ impl Forwarder {
                                             reprefill_tokens: reprefill,
                                             switch_cost_nano: cost_nano,
                                             cost_currency: self.route_currency(&to),
-                                            candidates: metered_candidates_field(&self.config, policy),
+                                            candidates: metered_candidates_field(
+                                                &self.config,
+                                                policy,
+                                            ),
                                             chosen: Some(to.to_string()),
                                         });
                                     }
@@ -1988,12 +2011,11 @@ impl Forwarder {
             .collect();
         let mut total: i64 = 0;
         for route in &routes {
-            match store.query(Query::OverflowSpend {
+            if let Ok(QueryRow::Count(n)) = store.query(Query::OverflowSpend {
                 family_route: route,
                 month_start_us,
             }) {
-                Ok(QueryRow::Count(n)) => total += n,
-                _ => {}
+                total += n;
             }
         }
         vadis_core::Nano(total.max(0) as u64)

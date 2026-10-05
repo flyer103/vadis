@@ -360,6 +360,21 @@ pub struct PlanSwitchRec {
     pub chosen: Option<String>,
 }
 
+impl PlanSwitchRec {
+    /// ADR-049 §5.6 (spec §6): `chosen` is the candidate the walk
+    /// **settled on**, not the head of the ranking. The pre-walk
+    /// writers can only name the route the guard moved to — the
+    /// ranking's head — because the outcome is not known yet; the
+    /// site whose attempt answered calls this to record the
+    /// settlement before the trace line is written. The event row is
+    /// untouched by construction: it is written before the walk and
+    /// carries `from_route`/`to_route` (DESIGN §12.10.5 row 15), so
+    /// this method has no effect on it.
+    pub fn settled_on(&mut self, route: &str) {
+        self.chosen = Some(route.to_string());
+    }
+}
+
 /// spec §6 "failure details": the internal failure record — several
 /// possible, distinct from the single §8 client-facing error body (the two
 /// share the kind vocabulary). Always an array on the wire; never omitted.

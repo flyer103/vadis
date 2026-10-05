@@ -367,7 +367,9 @@ impl Forwarder {
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(policy, &tier, &metered, &primary, &g.route),
+                            reason: displacement_reason(
+                                policy, &tier, &metered, &primary, &g.route,
+                            ),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
@@ -881,6 +883,16 @@ impl Forwarder {
                 attempted.push(cand.route.provider.clone());
                 let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
                 facts.attempted_route = Some(cand.route.clone());
+                // ADR-049 §5.6, the streaming twin of the buffered walk's
+                // settle: `chosen` is the candidate the walk settles on.
+                // The pre-walk writer (the guard's move) can only name the
+                // ranking's head; this loop knows the route each attempt
+                // opens on, so the label is captured per attempt and the
+                // settle happens at the 2xx head / the zero-byte failover's
+                // answering head — before the ctx (and the trace line it
+                // writes) is built. The event row predates the walk and is
+                // untouched.
+                let settled_label = route_label.clone();
 
                 // The cooling displacement's record (spec §6's producer table,
                 // CONF-42), the streaming twin of the buffered walk's fill:
@@ -1073,6 +1085,13 @@ impl Forwarder {
                                     key_index: cand.key_index,
                                     multi_key: cand.api_keys.len() > 1,
                                 };
+                                // ADR-049 §5.6 (the buffered path's twin):
+                                // this 2xx head is where the walk settled —
+                                // the settle runs before the ctx (which the
+                                // relay's trace line reads) is moved below.
+                                if let Some(ps) = facts.plan_switch.as_mut() {
+                                    ps.settled_on(&settled_label);
+                                }
                                 facts.failover_from = failover_from.clone();
                                 let relay =
                                     relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
@@ -1600,55 +1619,60 @@ fn relay_stream(
     init: RelayState,
     cleaned: Bytes,
 ) -> impl Stream<Item = Bytes> + Send + 'static {
-    unfold((ctx, init, cleaned), |(ctx, mut st, cleaned)| async move {
-        loop {
-            match vadis_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
-                vadis_providers::stream::StreamRead::Chunk(b) => {
-                    if !b.is_empty() {
-                        // §12.10.3 R2 write-through: this chunk is the item; the
-                        // tap reads a copy (§12.10.3 R7).
-                        st.tap.feed(&b);
-                        st.relayed = true;
-                        // The cache's recording copy (spec §4.17): kept only
-                        // within the store's byte bound — a body past it is
-                        // never a candidate, so the buffer is dropped rather
-                        // than held (fail-closed, ADR-042 §3.4).
-                        if let Some(buf) = &mut st.record_buf {
-                            if buf.len() as u64 + b.len() as u64
-                                <= vadis_core::response_cache::MAX_STORED_BYTES
-                            {
-                                buf.extend_from_slice(&b);
-                            } else {
-                                st.record_buf = None;
+    unfold(
+        (ctx, init, cleaned),
+        |(mut ctx, mut st, cleaned)| async move {
+            loop {
+                match vadis_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
+                    vadis_providers::stream::StreamRead::Chunk(b) => {
+                        if !b.is_empty() {
+                            // §12.10.3 R2 write-through: this chunk is the item; the
+                            // tap reads a copy (§12.10.3 R7).
+                            st.tap.feed(&b);
+                            st.relayed = true;
+                            // The cache's recording copy (spec §4.17): kept only
+                            // within the store's byte bound — a body past it is
+                            // never a candidate, so the buffer is dropped rather
+                            // than held (fail-closed, ADR-042 §3.4).
+                            if let Some(buf) = &mut st.record_buf {
+                                if buf.len() as u64 + b.len() as u64
+                                    <= vadis_core::response_cache::MAX_STORED_BYTES
+                                {
+                                    buf.extend_from_slice(&b);
+                                } else {
+                                    st.record_buf = None;
+                                }
                             }
+                            return Some((b, (ctx, st, cleaned)));
                         }
-                        return Some((b, (ctx, st, cleaned)));
+                        // An empty keep-alive chunk: nothing to relay,
+                        // poll again within this same call.
                     }
-                    // An empty keep-alive chunk: nothing to relay,
-                    // poll again within this same call.
-                }
-                vadis_providers::stream::StreamRead::Ended => {
-                    record_terminal(&ctx, &st, None);
-                    return None;
-                }
-                vadis_providers::stream::StreamRead::Failed { message, timed_out } => {
-                    // R6: after the first relayed byte, failover is
-                    // impossible — truncate, record, never retry.
-                    if !st.relayed && failover_zero_byte(&ctx, &mut st, &cleaned, &message).await {
-                        continue;
+                    vadis_providers::stream::StreamRead::Ended => {
+                        record_terminal(&ctx, &st, None);
+                        return None;
                     }
-                    let reason = if timed_out {
-                        format!("idle bound exceeded: {message}")
-                    } else {
-                        message
-                    };
-                    record_classified(&ctx, st.attempted.len() as u32 - 1, &reason);
-                    record_terminal(&ctx, &st, Some(reason));
-                    return None;
+                    vadis_providers::stream::StreamRead::Failed { message, timed_out } => {
+                        // R6: after the first relayed byte, failover is
+                        // impossible — truncate, record, never retry.
+                        if !st.relayed
+                            && failover_zero_byte(&mut ctx, &mut st, &cleaned, &message).await
+                        {
+                            continue;
+                        }
+                        let reason = if timed_out {
+                            format!("idle bound exceeded: {message}")
+                        } else {
+                            message
+                        };
+                        record_classified(&ctx, st.attempted.len() as u32 - 1, &reason);
+                        record_terminal(&ctx, &st, Some(reason));
+                        return None;
+                    }
                 }
             }
-        }
-    })
+        },
+    )
 }
 
 /// R6's zero-byte branch: with no byte relayed the client's output is not
@@ -1656,7 +1680,7 @@ fn relay_stream(
 /// exclusion §4.2 + cooldown state). Mutates `st` in place on success;
 /// returns false when the chain is exhausted (the caller truncates).
 async fn failover_zero_byte(
-    ctx: &RelayCtx,
+    ctx: &mut RelayCtx,
     st: &mut RelayState,
     cleaned: &[u8],
     reason: &str,
@@ -1726,6 +1750,14 @@ async fn failover_zero_byte(
             OpenHead::Head(h) if (200..300).contains(&h.status) => {
                 if st.failover_from.is_none() {
                     st.failover_from = Some(st_route_spec(&st.route_label));
+                }
+                // ADR-049 §5.6, the zero-byte failover's arm of the
+                // streaming twin: this head is where the walk settled.
+                // `ctx.plan_switch` is a clone of the writer-side record
+                // the relay owns, so the settle mutates the copy the
+                // terminal trace line (record_terminal → acc_ctx) reads.
+                if let Some(ps) = ctx.plan_switch.as_mut() {
+                    ps.settled_on(&route_label);
                 }
                 st.route_label = route_label;
                 st.head = h;
