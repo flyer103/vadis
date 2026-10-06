@@ -251,8 +251,9 @@ async fn arm_exhausted() {
 }
 
 /// One ID, one case file, one test function (DESIGN §12.8's own rule): both
-/// arms run under one `#[ignore]`, so the register's occupancy moves by
-/// exactly one case, not two.
+/// arms run inside this one test function — the case carries no `#[ignore]`
+/// since R69 un-parked it (ADR-051 §2.7) — so the register's occupancy moves
+/// by exactly one id, not two.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_101_walk_discriminant_is_the_declared_cell() {
     arm_served().await;
