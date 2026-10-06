@@ -303,6 +303,35 @@ pub(crate) struct PlanGuardOutcome {
     pub pinned: bool,
 }
 
+/// ADR-051 §2.4's re-entry answer for one walk commitment point: the
+/// offered candidate (a `fallback` entry, a family tier member, or a
+/// mid-walk landing point) has just re-entered `family_policy_for_route`
+/// and then `plan_guard`. The guard decides *which route this family
+/// wants*; the walk still decides *whether that route may be attempted
+/// now* — so only an answer that is a **different** route AND passes the
+/// walk's own in-request exclusions is a redirect, and an answer that
+/// fails one is skipped in the class that condition already owns (the
+/// cooldown class is the one that narrates, CONF-42's shape).
+pub(crate) enum GuardReentry {
+    /// Attempt the guard's route instead of the offered candidate: the
+    /// family's state moved this commitment point elsewhere (a plan
+    /// tier re-entry, a pinned metered route, an admitted probe).
+    Redirect {
+        policy: PlanPolicyCfg,
+        outcome: PlanGuardOutcome,
+    },
+    /// The answer is a route ADR-011's cooldown projection refuses: the
+    /// answer is skipped `demoted` (CONF-42's shape) and the offered
+    /// candidate stands.
+    Cooling { route: RouteSpec },
+    /// The offered candidate stands: no family policy for it, it is
+    /// outside every family, the guard confirmed it, or the answer
+    /// failed a walk condition the class owns silently (an
+    /// already-attempted provider is not re-attempted) or a serving
+    /// condition (off-roster, undeclared inbound cell).
+    Stand,
+}
+
 /// The per-request inputs `plan_guard` reads besides the policy and the
 /// resolved route, bundled so the signature stays at arity 3 (one
 /// object, not a growing positional list). Built once per request by
@@ -1214,6 +1243,65 @@ impl Forwarder {
             if attempted_providers.iter().any(|p| p == &candidate.provider) {
                 continue;
             }
+            // ADR-051 §2.4: the guard re-enters at EVERY commitment
+            // point, this candidate included — a `fallback` entry, a
+            // family tier member or a mid-walk landing point that
+            // carries a family tag is routed by that family's state
+            // (plan tier → metered tier → global `fallback`, the
+            // existing order), by the same two owners the resolved
+            // route went through. The head's commitment point IS the
+            // guard's own evaluation above (same route, same state
+            // read, one commitment), so the head needs no second pass;
+            // state can only move later in THIS loop, at an upstream
+            // 403 the head already answered.
+            let mut redirected: Option<RouteSpec> = None;
+            match self.family_guard_reentry(candidate, &guard_ctx, &attempted_providers, proto_in) {
+                GuardReentry::Stand => {}
+                GuardReentry::Cooling { route, .. } => {
+                    // The guard's answer failed a walk condition the
+                    // cooldown class owns: the answer is skipped
+                    // `demoted` (CONF-42's shape) and the offered
+                    // candidate stands.
+                    skipped.push((route, SKIP_DEMOTED));
+                }
+                GuardReentry::Redirect { policy, outcome } => {
+                    let tier = plan_tier(&self.config, &policy);
+                    let metered = metered_walk(&self.config, &policy);
+                    if facts.plan_switch.is_none() {
+                        let (reprefill, cost_nano) =
+                            self.failover_cost(session.as_deref(), &outcome.route);
+                        facts.plan_switch = Some(PlanSwitchRec {
+                            from: candidate.to_string(),
+                            to: outcome.route.to_string(),
+                            // The direction word the existing single
+                            // owner picks for THIS move (§2.4: the
+                            // displacement's reason is decided by
+                            // direction, unchanged in spelling and
+                            // meaning).
+                            reason: displacement_reason(
+                                &policy,
+                                &tier,
+                                &metered,
+                                candidate,
+                                &outcome.route,
+                            ),
+                            probe: outcome.probe,
+                            reprefill_tokens: reprefill,
+                            switch_cost_nano: cost_nano,
+                            cost_currency: self.route_currency(&outcome.route),
+                            candidates: metered_candidates_field(&self.config, &policy),
+                            chosen: Some(outcome.route.to_string()),
+                        });
+                    }
+                    // §2.4 boundary 4: the settled route is the single
+                    // truth for the attempt — the walk continues from
+                    // the family's own answer, and the probe flag stays
+                    // current for the answering arm below.
+                    redirected = Some(outcome.route.clone());
+                    plan_guard_out = Some(outcome);
+                }
+            }
+            let candidate: &RouteSpec = redirected.as_ref().unwrap_or(candidate);
             if self.provider_in_cooldown(&candidate.provider) {
                 // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
                 // `failover_from` table, row 2): the projection refused
@@ -1903,6 +1991,56 @@ impl Forwarder {
     }
 
     // -- helpers -----------------------------------------------------------
+
+    /// ADR-051 §2.4: the guard is evaluated at **every commitment
+    /// point**, not only the resolved route. The walks call this for a
+    /// candidate they are about to consider: it re-enters the two
+    /// existing owners (`family_policy_for_route`, then `plan_guard`
+    /// unchanged) for the offered route, a projection read of the same
+    /// `plan_state` `/health` reads — no new state, no new config key,
+    /// no new event kind. The walk's own in-request exclusions (an
+    /// already-attempted provider; ADR-011's cooldown) layer **on top**
+    /// of the guard's answer, exactly as the boundary requires: an
+    /// answer whose provider was already attempted this request is
+    /// silently not re-attempted, an answer the cooldown projection
+    /// refuses is skipped `demoted` (CONF-42's shape), an answer whose
+    /// entry declares no inbound cell cannot serve, and only a
+    /// different route that passes all of it redirects the attempt.
+    pub(crate) fn family_guard_reentry(
+        &self,
+        offered: &RouteSpec,
+        ctx: &GuardCtx<'_>,
+        attempted_providers: &[String],
+        proto_in: WireApi,
+    ) -> GuardReentry {
+        let Some(policy) = self.config.family_policy_for_route(offered).cloned() else {
+            return GuardReentry::Stand;
+        };
+        let Ok(Some(outcome)) = self.plan_guard(Some(&policy), offered, ctx) else {
+            return GuardReentry::Stand;
+        };
+        if outcome.route == *offered {
+            return GuardReentry::Stand;
+        }
+        if attempted_providers
+            .iter()
+            .any(|p| p == &outcome.route.provider)
+        {
+            return GuardReentry::Stand;
+        }
+        if self.provider_in_cooldown(&outcome.route.provider) {
+            return GuardReentry::Cooling {
+                route: outcome.route,
+            };
+        }
+        let declares = self
+            .provider(&outcome.route)
+            .is_some_and(|p| p.supports.contains(&proto_in));
+        if !declares {
+            return GuardReentry::Stand;
+        }
+        GuardReentry::Redirect { policy, outcome }
+    }
 
     /// The plan policy's Guard stage (spec §4.6, evaluated before the
     /// allowance rule): for a request inside the family, where does it

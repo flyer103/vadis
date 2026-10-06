@@ -57,7 +57,7 @@ use vadis_protocol::sse::{SseUsageExtractor, SseUsageOutcome};
 use crate::accounting::{AccountCtx, Accountant, RouteAccounting};
 use crate::forward::{
     metered_candidates_field, resolve_session_key, rewrite_outbound_model, turn_index_for,
-    ForwardFailure, Forwarder, RequestFacts, REASON_PRIMARY_COOLING_DOWN,
+    ForwardFailure, Forwarder, GuardReentry, RequestFacts, REASON_PRIMARY_COOLING_DOWN,
 };
 use vadis_core::plan::{
     account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family,
@@ -877,6 +877,112 @@ impl Forwarder {
             {
                 if attempted.iter().any(|p| p == &cand.route.provider) {
                     continue;
+                }
+                // ADR-051 §2.4, the buffered path's twin: the guard
+                // re-enters at EVERY commitment point — each candidate
+                // the walk reaches (a `fallback` entry, a family tier
+                // member, a mid-walk landing point) is routed by its
+                // family's state through the same two owners, and the
+                // walk's own conditions layer on top of the answer. A
+                // Redirect swaps the offered candidate for the family's
+                // answer; an answer the cooldown projection refuses is
+                // skipped `demoted` (CONF-42's shape) and the offered
+                // candidate stands. The head's commitment point is the
+                // guard's own evaluation above (same route, same state
+                // read — the answer is idempotent), so its re-entry
+                // pass is the same no-op every confirmed candidate
+                // costs: one projection read.
+                let mut redirected: Option<Candidate> = None;
+                match self.family_guard_reentry(&cand.route, &guard_ctx, &attempted, proto_in) {
+                    GuardReentry::Stand => {}
+                    GuardReentry::Cooling { route: answer } => {
+                        walk_skipped.push(ChainSkipped {
+                            pos: cand.chain_pos,
+                            skip: (answer, crate::forward::SKIP_DEMOTED),
+                        });
+                    }
+                    GuardReentry::Redirect { policy, outcome } => {
+                        let offered = cand.route.clone();
+                        let tier = plan_tier(&self.config, &policy);
+                        let metered = metered_walk(&self.config, &policy);
+                        if facts.plan_switch.is_none() {
+                            let (reprefill, cost_nano) =
+                                self.failover_cost(session.as_deref(), &outcome.route);
+                            facts.plan_switch = Some(PlanSwitchRec {
+                                from: offered.to_string(),
+                                to: outcome.route.to_string(),
+                                // The direction word the existing
+                                // single owner picks for THIS move —
+                                // the same owner, the same spelling.
+                                reason: displacement_reason(
+                                    &policy,
+                                    &tier,
+                                    &metered,
+                                    &offered,
+                                    &outcome.route,
+                                ),
+                                probe: outcome.probe,
+                                reprefill_tokens: reprefill,
+                                switch_cost_nano: cost_nano,
+                                cost_currency: self.route_currency(&outcome.route),
+                                candidates: metered_candidates_field(&self.config, &policy),
+                                chosen: Some(outcome.route.to_string()),
+                            });
+                        }
+                        // §2.4 boundary 4: the settled route is the
+                        // single truth for the attempt; the probe flag
+                        // stays current for the answering arm below.
+                        plan_guard_out = Some(outcome.clone());
+                        // The substitute must clear the construction
+                        // conditions the offered chain cleared (the
+                        // re-entry helper already read provider entry
+                        // and the declared inbound cell). A provider
+                        // with no URL or no key cannot serve: it
+                        // narrates the keyless skip and the offered
+                        // candidate stands.
+                        let sub = (|| {
+                            let cfg = self
+                                .config
+                                .providers
+                                .iter()
+                                .find(|p| p.name == outcome.route.provider)?;
+                            let url = cfg.url_for(proto_in)?;
+                            let keys = self.api_keys.get(&cfg.name)?;
+                            Some(Candidate {
+                                route: outcome.route.clone(),
+                                chain_pos: cand.chain_pos,
+                                // ADR-051 §2.1: the wire is the
+                                // inbound protocol — a declared cell is
+                                // a native cell.
+                                wire: proto_in,
+                                url: url.to_string(),
+                                api_keys: keys.clone(),
+                                key_index: 0,
+                            })
+                        })();
+                        match sub {
+                            Some(sub) => {
+                                if !accounting.contains_key(&sub.route.provider) {
+                                    if let Some(a) = crate::accounting::route_accounting(
+                                        &self.config,
+                                        &sub.route,
+                                    ) {
+                                        accounting.insert(sub.route.provider.clone(), a);
+                                    }
+                                }
+                                redirected = Some(sub);
+                            }
+                            None => {
+                                walk_skipped.push(ChainSkipped {
+                                    pos: cand.chain_pos,
+                                    skip: (outcome.route.clone(), crate::forward::SKIP_KEYLESS),
+                                });
+                            }
+                        }
+                    }
+                }
+                if let Some(sub) = redirected {
+                    cand = sub;
                 }
                 if self.provider_in_cooldown(&cand.route.provider) {
                     // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's

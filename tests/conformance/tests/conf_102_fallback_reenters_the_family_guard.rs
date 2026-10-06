@@ -189,7 +189,6 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-102: depends on R69-1"]
 async fn conf_102_fallback_jump_reenters_the_family_guard() {
     let r = rig("conf102").await;
     r.outside.queue(CannedResponse::json(
