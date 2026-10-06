@@ -98,6 +98,11 @@ A few things worth knowing before you run it:
   pages, and they are yours to edit by hand ([`providers.example.yaml`](../providers.example.yaml),
   [`docs/spec.md` §4](../docs/spec.md)). `aliases`, `fallback` and `plugins` entries — anything whose edit would
   mean *adding* or *removing* a line — are shown for reference and edited in the file too.
+- **Holding more than one plan, or several keys for one provider?** That is the fan-out: every coding-plan
+  account of a family is drained before anything is metered, a provider's keys rotate when one is refused,
+  and the metered accounts can be ranked by their own published prices. It is configured by the **tag** your
+  roster already carries — not by a new file — and the whole story is
+  [Cost and caching § Several keys, several plans](cost-and-caching.md#several-keys-several-plans-drain-them-all-then-spend).
 
 ### Where the file lands, and what is inside it
 
