@@ -1164,17 +1164,20 @@ where a group coincides with a file block it takes that block's name.
 | `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's | the root config file |
 | `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same | the root config file |
 | `providers` | `providers[name=<entry>].api_key_env`, for each entry that **writes that key**, and a **display-only pool row** `providers[name=<entry>].api_keys` (§4.6.1) for each entry that **writes the pool instead** — never both for one entry, which §4.6.1's exactly-one-of ladder refuses | value / shown | same | the **roster file** — one the root names with `providers_file:` (§4.14), or one this run creates by moving the root's inline block (the *shape step* below, ADR-038) |
-| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_selection`, `.overflow_monthly_cap_usd` | value / enabled | same | the root config file |
+| `routing` | over a `plan_policy:` root: `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_selection`, `.overflow_monthly_cap_usd`; over a `plan_policies:` root: the same eight keys **per declared entry**, `plan_policies[i].<key>` (ADR-052) | value / enabled | same | the root config file |
 | `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same | the root config file |
 
-**Two spellings the key set now reaches, and what the run does with each (ADR-049).** §4.6.1 gave a config
-two shapes the wizard's key set did not know: a credential **pool** (`api_keys:` in place of
-`api_key_env`) and a **family list** (`plan_policies:` in place of `plan_policy`). Both are shapes of the
-**file**, not new questions, and neither is editable by an anchored edit: a pool's membership is a flow
-sequence (DESIGN §12.14's locator rule 6 — a value inside a flow collection is not settable) and a
-`plan_policies[i]` entry is a multi-line mapping, which the anchor grammar's `a.b[i]` form reaches only
-when the entry is a **single-line scalar**. The run's rule is therefore uniform, and it is decided by **the
-file the run is holding** — never by whether the shipped template happens to carry that entry's name:
+**Two spellings the key set now reaches, and what the run does with each (ADR-049; the list spelling
+amended by ADR-052).** §4.6.1 gave a config two shapes the wizard's key set did not know: a credential
+**pool** (`api_keys:` in place of `api_key_env`) and a **family list** (`plan_policies:` in place of
+`plan_policy`). Both are shapes of the **file**, not new questions. One of them is not editable by an
+anchored edit: a pool's membership is a flow sequence (DESIGN §12.14's locator rule 6 — a value inside a
+flow collection is not settable). The other one is: a `plan_policies[i]` entry is a multi-line mapping, so
+the **terminal** form `a.b[i]` does not reach it, while the grammar's `a.b[i].k` form does — each of the
+eight policy keys resolves on its own line inside the entry, a commented-out key included, so both a
+`set-value` and a `set-enabled` edit reach it (ADR-052 §2.1; measured). The run's rule is therefore
+uniform, and it is decided by **the file the run is holding** — never by whether the shipped template
+happens to carry that entry's name:
 
 - **A pool entry is shown, never asked.** An entry that writes `api_keys:` contributes a **display-only**
   row (the pool's names, in rotation order) and **no** `api_key_env` row; the run writes nothing for it, and
@@ -1182,22 +1185,44 @@ file the run is holding** — never by whether the shipped template happens to c
   `aliases` and `fallback` are (the *what is deliberately not a section* list below). It is displayed on
   `--print` and on the run's own section listing; `--check` is unaffected by it, because `--check` already
   emits one row per name for a pool (the *secret boundary* bullet below).
-- **A `plan_policies:` root is shown, never edited.** Over a root that writes the list, the `routing`
-  section builds **none** of the eight `plan_policy.*` rows and prints one line per declared family
-  instead (its family tag and its `overflow_selection`), because the list is a membership structure and the
-  keys inside a `plan_policies[i]` mapping are not reachable by an anchor. Nothing is prompted and nothing
-  is written there. This is the one place the section table's own row set follows the file's shape, and it
-  is stated so that no run may report `no change` to a user whose file it never read (a run that silently
-  treats a `plan_policies:` root as a no-op is the failure this sentence exists to prevent).
+- **A `plan_policies:` root is edited, one family at a time.** Over a root that writes the list, the
+  `routing` section builds the eight policy rows of the section table **for each declared entry**, in
+  declaration order — family-major, so one family is one block of questions — with the paths
+  `plan_policies[<i>].<key>`. The row set is a function of **the file**: it follows the entries the file
+  writes, so a third family added by hand moves the questions with it, and no source in the wizard names a
+  family. A key whose answer differs from the value at its anchor becomes one edit on that family's own
+  line, exactly as the single spelling's rows do, and a value the loader refuses (an unknown route, a
+  duplicate family tag, `cheapest` over a mixed-currency candidate set) is refused at step 8 below with
+  nothing written.
+- **The list's membership is shown, never edited.** One display line per declared family —
+  `plan_policies[<i>] — family <tag>` — states that adding, dropping or reordering a family is a hand
+  edit, and is printed beside the section's ordinary display lines (`aliases` and `fallback`, which a
+  list root shows too: the section's display is the file's own facts, and a surface that hid a
+  spelling-independent line because of the policy's shape would repeat the defect the two bullets above
+  remove). Nothing is prompted for it and nothing is written there — the writer has no insert and no
+  delete (the *what is deliberately not a section* list below).
+- **Two paths are not reachable by any row, and this is stated so no row may invent one.** The list's
+  header `plan_policies` is a block value (`NotSettable`), and the entry as a whole —
+  `plan_policies[i]`, or any terminal `[name=]`/`[id=]` selector on a mapping entry — is not a
+  single-line scalar: the locator refuses it rather than answering with the entry's own dash line
+  (ADR-052 §2.1). A row built on either would rewrite structure rather than a value, which the write
+  strategy below forbids in every other case.
 
 Both behaviours are witnessed by the **section table's own unit tests** (`setup/sections.rs`'s test
-module — the rows built for a fixture roster that writes `api_keys:`, and for a fixture root that writes
-`plan_policies:`) rather than by a conformance case: the shipped pair cannot witness either shape (neither shape appears in
-the shipped pair as a **live key** — R68's example-file freezes carry both only inside comments, so both
-files keep loading unchanged), and this round allocates no new `CONF` id (DESIGN §12.8's occupancy paragraph: `CONF-01…CONF-97`
-is the heading at HEAD and the parked `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`). **Dated
-note (2026-10-06, R69):** the heading has since moved to `CONF-01…CONF-104` and R69 took `100…104` (DESIGN
-§12.8's allocation paragraph for ADR-051) — this round allocated none, which is what the sentence above states.
+module — the rows built for a fixture roster that writes `api_keys:`) rather than by a conformance case,
+and since **ADR-052** the list spelling's half needs **no fixture at all**: the shipped root writes
+`plan_policies:` (the shipped template is a list root from R70 on), so the same module asserts the row set
+**over the shipped file itself**, and the table↔example relation is the ordinary one every static row
+already carries. The pool's half stays a fixture, because the shipped roster still names `api_keys:` only
+inside a comment (R68's example-file freezes carry both spellings as prose, so both files keep loading
+unchanged), and no `CONF` id is allocated for either half (ADR-052 §2.6: the strongest witness for the
+list spelling is the shipped root, and the interactive half an on-wire case could not reach is pinned to a
+PTY by this section). **Dated note (2026-10-06, R69):** the heading has since moved to `CONF-01…CONF-104`
+and R69 took `100…104` (DESIGN §12.8's allocation paragraph for ADR-051) — this round allocated none,
+which is what the sentence above states. **Dated note (2026-10-06, R70):** ADR-052 rewrote the second
+bullet this paragraph names: the list spelling is now **edited**, one family at a time, and R70 allocates
+no id either — its reasons are ADR-052 §2.6 (the shipped root is the witness; `CONF-98`/`CONF-99` remain
+the parked `round/67-abandoned-attempt` branch's, and `CONF-105` stays free).
 
 **The target file, and why exactly one section has two of them.** The command writes a key **in the file
 that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
@@ -1475,7 +1500,12 @@ the non-interactive file is byte-identical to the template and loads (G1); one o
 line (G2); the refusal ladder — an unresolvable anchor, an ambiguous anchor, a not-settable key with a requested
 change — leaves the target untouched (G4); idempotence (G3); the secret canary
 (G5); `--check`'s three exit codes and the token's absent-versus-empty distinction; and the interactive path
-driven by a **PTY** script rather than by a Rust test harness.
+driven by a **PTY** script rather than by a Rust test harness. **And, since ADR-052**, the list spelling's
+row set: over the shipped root — which is itself a `plan_policies:` root from R70 on — every
+`plan_policies[i].<key>` row of **every declared family** resolves and is built, in declaration order and
+family-major; `--print` over it prints one row per key per family beside the membership lines and builds
+no `plan_policy.*` row; a commented-out key inside an entry is reached by a `set-enabled` edit; and
+`--check`'s stdout is unchanged (the policy spelling names no environment variable).
 
 The **rule-file lane** (ADR-046) adds its own assertions to that list, all in-crate: the file the base names is
 **created** when absent, its bytes equal the embedded template's (one hash comparison), and the `rules/`
