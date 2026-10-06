@@ -957,7 +957,7 @@ Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a sessi
 `X-Vadis-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-97`)
+### 12.8 conformance case table (`CONF-01…CONF-104`)
 
 Location: the workspace member `vadis-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1060,6 +1060,11 @@ not written).
 | CONF-95 | ADR-049 §5.3·the total order, the purity arm, and the currency refusal | **the tie-break is the stated one, and the refusal is at load.** Three arms constructed so each disagrees with the others: (a) two candidates equal on `input_miss` but differing on `output` → the lower `output` ranks first; (b) two equal on both → **roster declaration order** decides; (c) a `price.tiers` candidate is ranked by its **first band** (`up_to` smallest) on the same footing as a flat price. Then the refusals: a mixed-currency candidate set is a **load error naming the family and the currencies** (§4.8/constraint 5 — a ranking is a comparison), and `cheapest` + a non-USD candidate + `overflow_monthly_cap_usd` refuses naming the cap. The purity arm: two evaluations of the ranking on one revision are **identical** (no turn number, no clock, no RNG — constraint 2) | the ranking function + its load-time validation (`vadis-core`), §4.8's currency rule, §4.10's band semantics |
 | CONF-96 | ADR-049 §6 rule 1·the ranking is pinned to the session, and the pin's limit | **one session never pays a second re-prefill for a ranking change.** A session spills onto the cheaper candidate; a **reload** changes the prices so a different candidate is now cheapest; the **same** session's next turn stays on its pinned route (the second candidate's mock receives nothing, the session's record shows no second `plan_switch`, and the ledger reconciles — one re-prefill, not two), while a **new** session takes the new ranking. This is ADR-014's Background constraint 1 pinned as a case: the capability must not reintroduce the per-request flip the design exists to refuse | the existing sticky binding and session projection (`vadis-proxy/src/forward.rs`, `vadis-store`), the ranking resolved at the decision point, the reload's revision switch (ADR-040) |
 | CONF-97 | ADR-049 §5.1/§5.2·the **plan tier** is drained before any metered spend, and the state machine across it (`plan_exhausted` + `/health`'s `route`) | **two plan accounts, one family, drained in declaration order — then metered, then back.** Two `account: coding_plan` providers carry one family tag, declared so that roster order *is* the intended preference. The first plan mock answers `403 quota_exhausted`: the walk moves to the **second plan** and the family **stays in-plan** — `plan.switched.reason == "plan_exhausted"`, `/health`'s `plan.account` still `primary`, `/health`'s `plan.route` naming the **second** plan, and the metered mock receiving **nothing** (the discriminating assertion: a naive implementation spills at the first 403). Only when the second plan 403s too does the walk reach the metered tier (`reason: primary_exhausted`, `account: overflow`). Then the recovery: after the cooldown a **new** session's boundary probe reaches the **tier's head**, and on a 200 an `overflow → plan` move is recorded (`primary_recovered`) with the metered mock falling silent. Every step is asserted from the mocks' own request logs plus the events, so no arm can pass vacuously | the plan tier's discovery and the walk (`vadis-proxy/src/forward.rs`, `vadis-core/src/plan.rs`), the generalized `plan_state` projection (`vadis-store`), the `plan_exhausted` reason word and `/health`'s `route` member |
+| CONF-100 | ADR-051 §2.1·a **declared cell is a native cell**, and an undeclared one is the `400` | **the declared-cell rule, both directions, red first.** One entry declaring `supports: [chat, responses, anthropic]` (three `urls`) and naming `responses` as its `wire_api`, hit by a **chat** request through the real `serve` assembly: the mock receives the client's own chat bytes modulo mutations (a)/(b) **at the `urls.chat` path**, the record says `protocol.protocol_in == protocol.protocol_out == "chat"` and `translated == false`, and the entry's responses URL receives nothing. **Reverse arm:** an entry declaring `supports: [chat]` hit by a responses request ⇒ `400 capability_unsupported` with the §8 body and `details.supports` naming the declared set. Red at the base: the first arm is a `501` today (the entry's `wire_api` is not the inbound protocol). Depends on: the walk's and the resolved route's discriminant moving from `wire_api == proto_in` to `supports ∋ proto_in` (`vadis-proxy/src/forward.rs`, `stream_forward.rs`), and the two `501` branches being deleted | the declared-cell rule (§12.10.9, ADR-051) |
+| CONF-101 | ADR-051 §2.1/§2.3·the walk's discriminant is the **declared set**, not the entry's `wire_api` | **one chain, one skip, one service, and the two fields allowed to disagree.** A chat request whose resolved route is keyless; `fallback` entry #1 declares `supports: [responses]` while naming `chat` as its `wire_api` (the fields *disagree* on purpose — the case is vacuous otherwise) ⇒ it is skipped, and `details.skipped[]` carries `{"route": "<#1>", "reason": "wire_mismatch"}`, whose meaning is now *this entry's `supports` does not declare this inbound protocol*; entry #2 declares `[chat, responses]` ⇒ served, with the mock receiving `urls.chat` and nothing at any `urls.responses`. The negative half: an entry that declares the inbound cell and names a **different** `wire_api` is **never** skipped and **never** answered `501` — the assertion the old rule could not pass. Depends on: the same discriminant, plus the `url_for` argument becoming the inbound protocol | the walk's eligibility and narration predicates (§12.10.9, ADR-051) |
+| CONF-102 | ADR-051 §2.4·a **fallback jump re-enters the family guard** | **a candidate inside a family is routed by that family's state, not by the jump that reached it.** The resolved route is outside every family and its mock answers a retryable failure (429); the `fallback` entry carries the family's tag and is the family's **metered** route, while the family's state says `primary` (its plan mock answers 200): the request is served by the **plan** route, `result.plan_switch.reason == "primary_recovered"` (the direction word the existing single owner picks), the metered mock receives **0** requests, and `cost.currency` is the settled route's entry currency. Negative limb: the same rig with the family's state already `overflow` serves the metered route and writes no second `plan_switch`. Red at the base: the walk attempts the metered route with no guard call at all (`forward.rs`'s candidate loop). Depends on: the guard being evaluated at every commitment point (§12.10.9, ADR-051 §2.4) |
+| CONF-103 | ADR-051 §2.5·the **corrected roster** serves three lines, and the declaration stays consistent | **the pages' cells are the cells that serve.** The three entries the correction touches are mirrored as a fixture (one mock per entry, three `urls` on that mock, so the mock's recorded **path** is the evidence): `zai-cn-plan` with its `wire_api` flipped to `responses`, and `kimi-cn-plan` / `kimi-plan` each declaring the added `responses` cell. All three inbound protocols are driven against each entry — nine requests — and each must answer `200` with its own cell's path in the mock's log and the client's own bytes on the wire. Red at the base: every off-diagonal cell is a `501` (`forward.rs:902-911`, `stream_forward.rs:440-453`), so nine assertions collapse to three; driven instead over the **shipped pair** it is red one step earlier — a declared cell with no `urls` row refuses to load (spec §4.9), which is what makes the two added rows mandatory rather than cosmetic. Plus the invariants the edit must not break, each a load-time refusal when broken: `wire_api ∈ supports`, `set(urls) == set(supports)`, no repeated (provider, model) | the roster edit landing with the parser it needs (R69-1), plus the declared-cell rule |
+| CONF-104 | ADR-051 §2.3 + **ADR-022 decision 3**·the frozen refusal still holds under the new discriminant | **a chain nothing may serve, with the discriminant as the only arm that moves.** A chat request whose chain offers four candidates, none attemptable: the resolved `keyless-a/m` and the same provider's second model `keyless-a/m2` (⇒ `keyless`, the provider-level exclusion may not swallow the second model — ADR-023 decision 3); `deaf/m`, which **declares `chat`** (`supports: [chat, responses]`) while naming `responses` as its `wire_api` and is unkeyed ⇒ **`keyless`** — the discriminating arm, `wire_mismatch` on the base tree; and the **keyed** `nocell/m`, which declares no `chat` cell ⇒ `wire_mismatch`. Both media: `502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `details.skipped[]` holding one entry per offered candidate in the chain's order each with a reason from `{unknown_provider, keyless, wire_mismatch, demoted}`, `upstream_status` / `error_class` both `null`, the two `details` objects equal element for element modulo the streaming arm's pre-existing `"stream": true`, **no** `upstream.submitted` row, `usage_missing: true` and nothing charged. Red at the base on exactly one line — `deaf/m`'s reason — which is what makes the case prove ADR-022 decision 3 was not reopened | the eligibility predicate on both forwarding paths only; the refusal body is ADR-022 decision 3's, **byte-identical** |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1558,12 +1563,38 @@ six arms, `CONF-87`'s series set, `CONF-88/89`'s arms and every other case file 
 the seven new files are **added**. Nothing here moves a gate definition, a threshold, the corpus, the loop
 replay contract or the L1 envelope (AGENTS 9 / ADR-012).
 
+**Allocation of `CONF-100…104` (R69 — a declared cell is a native cell, and the fallback re-enters the family
+guard, ADR-051) — recorded 2026-10-06 by the round's contract card, the
+R9/R10/R17/R22/R28/R29/R32/R43/R50/R51/R65/R66 precedent.** The allocation is the **owner's act** of
+2026-10-06 (quoted verbatim in ADR-051 §1.1) — a human decision, not a loop outcome (AGENTS constraint 9 /
+ADR-012) — and it **adds** five assertions and moves no existing one. The occupancy check is a **measurement**
+of the real directory at this card's HEAD: case files present are `01–47`, `53–66`, `71–78`, `80–97`; the
+register's accumulated **spent** set is `01–47`, `52–70`, `71–78`, `79`, `80–97`; `48–51` stay reserved
+exactly as the paragraphs above leave them; `CONF-98`/`CONF-99` are **promised by the parked branch
+`round/67-abandoned-attempt`** and are neither allocated nor read here (that branch is never switched, merged
+or deleted by this round); **the next free ID above both the tree's maximum and that promise is `CONF-100`**,
+and this round takes `100–104`. Each case lands with the implementation it witnesses (`R69-1`) and is parked
+`#[ignore = "CONF-NN: depends on R69-1"]` until then (the CONF-20…25 parking rule). **Two registry repairs
+ride with this paragraph, both forced by the measurement and neither a new decision**: (i) this section's
+**heading** moves from `` `CONF-01…CONF-97` `` to `` `CONF-01…CONF-104` `` — the heading was already stale
+(`CONF-98/99` are not files in this tree, and the five rows below would otherwise sit under a title that
+excludes them), the same drift this section forbids (R50's and R66's precedent, above); and (ii) the five rows
+above carry `ADR-051` in place of a §10 number where the clause is the ADR's own. No existing assertion is
+touched: `CONF-57`'s two `wire_mismatch` arms and `forward.rs`'s two unit tests are rewritten **only** under
+the owner's explicit authorisation (ADR-051 §5.3, quoted verbatim there), and every other case file —
+`CONF-45`'s six arms, `CONF-58/59/64/65`'s `skipped[]` assertions (whose rigs already omit the inbound
+protocol from the candidate's `supports`, so their reason word and order are unchanged), `CONF-87`'s series
+set, `CONF-88/89`'s arms, `CONF-91…97`'s — stays **byte-identical**, with the five new files **added**.
+Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract or the L1 envelope
+(AGENTS 9 / ADR-012).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
 
 **Failover-chain note — the failover chain walks routes, but never re-attempts a provider (spec §4.2),
-never crosses the 3×3 matrix (§12.10.9, ADR-022), and never narrates a displacement onto a candidate it cannot
+never crosses the 3×3 matrix (§12.10.9, ADR-022, ADR-051 — a candidate is attempted only on a cell its entry
+declares), and never narrates a displacement onto a candidate it cannot
 serve (§12.10.9, ADR-023 — the narration predicate *is* the eligibility predicate).** The
 chain walks "the next route **not yet attempted**" in list order, skipping routes of a provider
 already attempted in this request (the in-request form of ADR-011 item 4's provider-level demotion:
@@ -1638,6 +1669,16 @@ historical register)**
 | landed in `design/DESIGN.md` | §12.4 (which signal may refuse — the refinement of the local verdict), §12.5 (the parsing rules + `PlanPolicyCfg`), §12.6 (`ResultRec.plan_switch` / `PlanSwitchRec`, no `schema_version` move), §12.8 (the allocation owed by the implementing round), §12.10.2 (the load-time validations), §12.10.4 (`plan_state` is DDL version 2), §12.10.5 (row 15 + note R5), §12.10.8 (the landing) |
 | newly registered by this round | Q15 (the config keys and the parser land together with ADR-014's implementation), Q16 (the local verdict may not gate) |
 | book | `book/cost-and-caching.md` gains the user-facing section (how to configure plan-first, when it spills, what a spill costs, and what a switch does to the upstream prefix cache) |
+
+**Write-back record (2026-10-06, the ADR-051 contract; the spec has been changed, the table above stays a
+historical register)**
+
+| Disposition | Items |
+|---|---|
+| written into `docs/spec.md` | §2 (the declared-cell selection rule, the lossy table labelled as describing a mapper this build does not have), §4 (the `wire_api` / `supports` key comments), §4.2 (the walk's new discriminant **and** the rule that every candidate re-enters the family guard), §6 (`protocol_out == protocol_in` restated as true **by construction**; the `501`-class removal from the `null` list), §8 (the `not_implemented` row marked producer-less; the `upstream_error` row's wording) |
+| landed in `design/DESIGN.md` | §12.8 (the heading to `CONF-01…CONF-104`, the five rows, the allocation paragraph), §12.9 (this record), §12.10.9 (the discriminant change and the two forwarding paths' obligation) |
+| newly registered by this round (gaps this round **deliberately does not close**) | **cross-protocol content translation** — option C, refused as scope (ADR-051 §1.3): a mapper is a lossy, determinism-critical content step with its own contract, its own lossy register and six already-allocated unwitnessed cells (`CONF-04…09`); **`wire_api: native` as a second declaration layer** — option B, refused because it would state one fact twice (ADR-051 §3); **the plan's ToS/allowance semantics** — whether a coding-plan allowance is *consumed* by gateway traffic is vendor policy and unobservable from here (ADR-051 §2.6, `R69-0-F3`); **`zai`'s metered `responses` cell** — no page documents one for a metered key, so it is not added (§4.0's better-missing-than-guessed rule; `R69-0-F1`); **`wire_api`/`supports` in §4.11's askable key set** — absent today and reachable by no anchor rule, so adding either is a §4.11 contract change with its own witness, outside this card's write set (`R69-0-F4`) |
+| not written back, and why | the `501` row's *text* is annotated in place rather than deleted (a client parses `error.type`; the vocabulary is contract); ADR-022 is **not edited** (append-only — ADR-051 §2.3 states the supersede clause by clause) |
 
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
@@ -2657,6 +2698,29 @@ provider `:979-981` and no transport `:982-988`). Config validation already requ
 (`vadis-core/src/config.rs:1551`), so the wire test subsumes "declared in `supports`": **one condition, not
 two**, and the two paths answer "which candidates may serve" identically.
 
+**The discriminant moved (2026-10-06, ADR-051; spec §2, §4.2, §6, §8).** The third condition is no longer
+`provider.wire_api == proto_in` but **`provider.supports` declares the inbound protocol** — and the two are not
+the same test any more: `wire_api` now names the entry's native protocol (the diagonal cell) and **gates
+nothing**, while reachability is the declared cell set. The two conditions coincided only because config
+validation requires `wire_api ∈ supports` (`crates/vadis-core/src/config.rs:2091`, unchanged): an entry that
+declares three cells and names one of them as its `wire_api` is *served* by the new rule and was *`501`'d* or
+*skipped* by the old one. Everything downstream of the predicate keeps its shape — the skip's class (keyless,
+no intent row, no `error.classified`, no `failover.triggered`, no `failover_from`, no `plan_switch`, no
+`errors[]` member), the refusal shape decision 3 freezes, and the `skipped[]` reason word `wire_mismatch`
+(spelled the same, meaning *this entry's `supports` does not declare this inbound protocol*). **Both forwarding
+paths must move together, and they are one contract**: the buffered walk's eligibility and narration predicates
+(`crates/vadis-proxy/src/forward.rs:1248`, `:2258`), the `url_for` argument and the `protocol_out` producers
+(`forward.rs:963`, `:1316`), and the streaming chain's construction filter and its own `url_for`/`protocol_out`
+sites (`crates/vadis-proxy/src/stream_forward.rs:752`, `:770`, `:505`). The two resolved-route `501` branches
+(`forward.rs:902-911`, `stream_forward.rs:440-453`) are **deleted**, because a client-named cell is now either
+natively served or the `400` of an undeclared cell; after that no producer reachable from a request writes
+`501 not_implemented` in this build (the remaining helper, `crates/vadis-proxy/src/stubs.rs:7`, is registered
+on no route). The **second** change landing with it is the guard's placement (ADR-051 §2.4): the candidate loop
+passes each route it is about to attempt through `family_policy_for_route` + `plan_guard`
+(`forward.rs:816`/`:834`, `stream_forward.rs:344`/`:360` are today the only call sites, both on the resolved
+route), so a `fallback` jump onto a family re-enters that family's own order. `CONF-100…104` (§12.8) witness
+all of it.
+
 **Eligibility is a skip, and it is the keyless class.** No intent row, no `error.classified`, no
 `failover.triggered`, no **`failover_from`**, no `plan_switch`, no `errors[]` member: nothing failed and nothing
 moved, so nothing is narrated (ADR-010's vocabulary has no row for a fact that never happened). `failover_from`
@@ -3254,7 +3318,9 @@ states. **The witness is `setup/sections.rs`'s own test module** over two fixtur
 `api_keys:` for one entry, and a root that writes `plan_policies:` — both shapes the shipped pair names only
 inside comments, never as live keys (spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
 reason spec §4.11's assertion list gives: §12.8's occupancy is `CONF-01…CONF-97` at HEAD and the parked
-`round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`.
+`round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`. **Dated note (2026-10-06, R69):** the heading
+has since moved to `CONF-01…CONF-104` (the allocation paragraph for ADR-051 above); this round allocated none,
+which is what this sentence states, and `CONF-98`/`CONF-99` remain the parked branch's.
 
 **Types** (sketch; the shapes whose *stability* matters, not the bodies):
 

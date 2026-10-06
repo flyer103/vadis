@@ -28,23 +28,34 @@ upstream semantics per protocol:
 
 | Inbound | Endpoint | Outbound native condition |
 |---|---|---|
-| OpenAI chat completions | `POST /v1/chat/completions` | provider `wire_api: chat` |
-| OpenAI responses | `POST /v1/responses` | provider `wire_api: responses` |
-| Anthropic messages | `POST /v1/messages` | provider `wire_api: anthropic` |
+| OpenAI chat completions | `POST /v1/chat/completions` | the entry declares `chat` in `supports` |
+| OpenAI responses | `POST /v1/responses` | the entry declares `responses` in `supports` |
+| Anthropic messages | `POST /v1/messages` | the entry declares `anthropic` in `supports` |
 
-**Outbound selection rule** (3×3): inbound protocol equal to the provider's `wire_api` → **native
-passthrough** (byte-faithful); different → **deterministic translation** (the same content always yields
-the same upstream bytes, keeping the prefix cache stable). Every provider must declare its supported
-capabilities in config; every translation cell must explicitly mark its lossy points.
+**Outbound selection rule: a declared cell is a native cell.** The rule is binary, and its subject is the
+entry's **declared cell set** (`supports`), not the entry's `wire_api`:
 
-**Only the native diagonal is served in v0.1, and the failover walk never crosses it.** Two different questions
-share this rule and must not be merged: for the route the **client named**, a cell that needs translation is
-answered (`501 not_implemented`, §8 — the client asked for that cell and is told what is missing); for a
-**candidate the client did not name** — the plan family's `overflow` route or an entry of the `fallback` list
-(§4.2) — an entry whose `wire_api` is not the inbound protocol is **skipped**, exactly as an entry this process
-holds no key for is skipped, and the walk continues. A candidate can therefore only ever be served on a wire
-equal to the inbound protocol, which is why a served request's `protocol_out` equals `protocol_in` (§6); when no
-candidate at all may serve, the request is refused in the one shape §8 freezes.
+- **inbound protocol ∈ the entry's `supports`** → **native passthrough**: the client's own bytes are POSTed to
+  `urls[inbound]` — the complete URL §4.9 fixes, used verbatim (ADR-020) — and the body carries only the two
+  byte-level mutations below. Nothing is translated, re-encoded or re-ordered.
+- **inbound protocol ∉ the entry's `supports`** → the cell does not exist, and the answer depends on **who
+  asked for it** (the two questions below).
+
+Every provider declares its cells in config (`supports`, §4), and every declared cell carries its own complete
+endpoint (`urls`, §4.9: `set(urls) == set(supports)`); `wire_api` names the entry's **native protocol** (the
+diagonal cell) and **gates nothing** (ADR-051). There is no translation in this build, so **no cell is produced
+by a translation step** and the lossy list below describes a mapper this build does not have — it is kept
+because it is the contract a mapper would have to satisfy (AGENTS constraint 1; ADR-004, ADR-019).
+
+**The two questions a missing cell answers, and they must not be merged.** For the route the **client named**, a
+protocol its entry does not declare is answered `400 capability_unsupported` (§8 — the client asked for that
+cell and is told it does not exist). For a **candidate the client did not name** — the plan family's routes or
+an entry of the `fallback` list (§4.2) — an entry whose `supports` does not declare the inbound protocol is
+**skipped**, exactly as an entry this process holds no key for is skipped, and the walk continues (its
+`skipped[]` reason is `wire_mismatch`, whose meaning is *this entry's `supports` does not declare this inbound
+protocol*). A candidate can therefore only ever be served on a cell it declares, which is why a served request's
+`protocol_out` equals `protocol_in` (§6) **by construction**; when no candidate at all may serve, the request is
+refused in the one shape §8 freezes.
 
 **The outbound `model` is the provider-native model id.** Routing is resolved **before** anything leaves
 the process: the client's `model` string is a **route name** (`provider/model` or an alias, §3), never a
@@ -68,7 +79,10 @@ replacement, not a re-encoding, precisely because a round trip would rewrite eve
 invalidate the upstream prompt cache for the whole conversation and destroy the meaning of
 `body_hash` / `prefix_blocks[]`.
 
-List of lossy points (each must be handled one by one when translating — not "best effort"):
+List of lossy points (each must be handled one by one when translating — not "best effort"). **No line of this
+table is produced by this build**: v1 serves only the cells an entry declares (above), so no request is
+translated and `protocol.lossy` stays `[]` on every record (§6). The list is the contract a mapper would have to
+satisfy, and it is kept for exactly that reason (ADR-004, ADR-019, ADR-051).
 
 | Semantics | chat | responses | anthropic | Handling |
 |---|---|---|---|---|
@@ -167,8 +181,12 @@ providers:                             # §4.14: the roster, written inline here
                                        #   A provider holding several credentials writes the pool instead
                                        #   (§4.6, ADR-049) — exactly one of the two keys, §4.14's ladder:
     # api_keys: [DEEPSEEK_API_KEY_A, DEEPSEEK_API_KEY_B]   # a credential pool, in rotation order
-    wire_api: chat                     # chat | responses | anthropic
-    supports: [chat, responses]        # inbound protocols this provider can be translated to
+    wire_api: chat                     # chat | responses | anthropic — this entry's **native** protocol (the
+                                       #   diagonal cell). It gates nothing: reachability is `supports` below
+                                       #   (ADR-051). Config validation requires `wire_api ∈ supports`
+    supports: [chat, responses]        # the cells this provider serves **natively** — each one carries its own
+                                       #   complete URL above (ADR-020/ADR-051); an inbound protocol outside
+                                       #   this set is not a cell of this entry at all
     account: api                       # coding_plan | api (absent ⇒ api): the metered account (§4.6)
     models:
       - id: <unique model id within the provider>   # the provider-native id; this is what goes upstream (§2)
@@ -197,7 +215,7 @@ providers:                             # §4.14: the roster, written inline here
       responses: <the plan's Responses endpoint, in full>
       anthropic: <the plan's Anthropic endpoint, in full>
     api_key_env: CODING_PLAN_KEY
-    wire_api: anthropic                # chat | responses | anthropic
+    wire_api: anthropic                # chat | responses | anthropic — the native protocol, as above
     supports: [chat, responses, anthropic]
     account: coding_plan               # coding_plan | api (absent ⇒ api): the subscription account (§4.6)
     models:
@@ -395,12 +413,13 @@ cost (§6 "result"). Chain exhausted → `502 upstream_error` (upstream attempt 
 in fallback). For a request covered by `plan_policy` (§4.6), the family's `overflow` route is tried **before**
 this list's own entries: the family's designated spill target does not have to be repeated here.
 
-**A candidate can serve only on its own wire.** Eligibility is one rule for both forwarding paths, and it
+**A candidate can serve only on a cell it declares.** Eligibility is one rule for both forwarding paths, and it
 includes the protocol: a candidate is attempted only if its provider entry exists in the roster, this process
-holds a key and a transport for it, and its `wire_api` equals the **inbound** protocol (validation already
-requires `wire_api ∈ supports`, §4, so the wire condition is the whole of it). A candidate that fails the wire
-condition is skipped in the same class as a keyless one — not attempted, no `failover_from`, no switch cost, no
-trace event — and the chain continues; a skip is **not** a refusal of the request, and it is not the `501` of a
+holds a key and a transport for it, and **its provider's `supports` declares the inbound protocol** (ADR-051:
+the discriminant is the declared cell set, not the candidate's `wire_api` — `wire_api ∈ supports` holds by
+validation, §4, so the declared set is the whole of it). A candidate that does not declare the inbound protocol
+is skipped in the same class as a keyless one — not attempted, no `failover_from`, no switch cost, no
+trace event — and the chain continues; a skip is **not** a refusal of the request, and it is not the `400` of a
 route the client named (§2). **The walk names a destination only if that candidate could serve this request**
 (the narration predicate *is* the eligibility predicate, stated once for both paths): `failover_from` and the
 `failover.triggered` event are written only when the request moves onto a candidate the walk will actually
@@ -410,6 +429,21 @@ freezes (`details.stage: "no_available_route"`), and the trace records the termi
 **was** attempted and the walk then had nothing left to try, the refusal is §8's attempt-exhausted shape
 instead: the walk's refusal has **two conditions, one shape each**, and both paths produce each shape
 identically (§8).
+
+**Every candidate re-enters the family guard before it is attempted.** A candidate's route — the one the request
+resolved to, or any entry of the chain the walk reaches, whether reached on the first decision or by a
+re-decision mid-walk — is passed through the family's policy lookup and the guard (§4.6) before the walk
+attempts it. A candidate that lands **inside a family** is therefore routed by that family's **state** in the
+existing order (the plan tier, then the metered tier, then this `fallback` list), and the move is recorded with
+`reason` chosen by direction (`result.plan_switch`, §6) — so a request that would otherwise be stranded on
+whatever route a `fallback` jump selected is returned to the family's own order. A candidate outside every
+family is attempted as before. The guard's input is the `plan_state` projection (§4.5) — **no new state and no
+new config key** — the walk's own in-request exclusions (a provider already attempted in this request, ADR-011's
+cooldown) apply **on top of** its answer, ADR-014's session-boundary probe rule decides *probe admission* while
+this rule decides only *route*, and the answer is a pure function of (route, family state, stable config) — no
+turn number, no clock, no RNG. The route the guard settles on is the **single source** of the record's
+`protocol.protocol_out` and `cost.currency` (§6). This is ADR-051 §2.4; it adds no re-ranking and cannot
+reintroduce a per-request flip (ADR-014's Background constraint 1, §4.6.1's pin).
 
 **The classification's evidence is the upstream's own answer, on both forwarding paths.** An upstream error is
 classified from the answer's own material and from nothing else: its status, its headers (`Retry-After`) and
@@ -1161,7 +1195,9 @@ module — the rows built for a fixture roster that writes `api_keys:`, and for 
 `plan_policies:`) rather than by a conformance case: the shipped pair cannot witness either shape (neither shape appears in
 the shipped pair as a **live key** — R68's example-file freezes carry both only inside comments, so both
 files keep loading unchanged), and this round allocates no new `CONF` id (DESIGN §12.8's occupancy paragraph: `CONF-01…CONF-97`
-is the heading at HEAD and the parked `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`).
+is the heading at HEAD and the parked `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`). **Dated
+note (2026-10-06, R69):** the heading has since moved to `CONF-01…CONF-104` and R69 took `100…104` (DESIGN
+§12.8's allocation paragraph for ADR-051) — this round allocated none, which is what the sentence above states.
 
 **The target file, and why exactly one section has two of them.** The command writes a key **in the file
 that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
@@ -1461,7 +1497,9 @@ neither shape as a **live key** — R68's example comments name both, so the shi
 either, while a live key would move the default bundle (and, for `cheapest`, refuse to load). **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
 paragraph: the heading at HEAD is `CONF-01…CONF-97`, and the parked `round/67-abandoned-attempt` branch
 promises `conf_98`/`conf_99`): a `vadis-cli` unit test is the witness, and it lands with the code it
-witnesses.
+witnesses. **Dated note (2026-10-06, R69):** the heading has since moved to `CONF-01…CONF-104` (DESIGN §12.8's
+allocation paragraph for ADR-051); this round allocated none, and `CONF-98`/`CONF-99` remain the parked
+branch's.
 
 ### 4.12 The config file's location, and the paths inside it
 
@@ -1959,11 +1997,12 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound) |
 
 **`protocol` records what left the process outbound, and `translated` records an event — never a comparison.**
-`protocol_out` names the wire the request's bytes actually went out on. Because only a candidate whose
-`wire_api` equals the inbound protocol may be attempted (§2, §4.2), it equals `protocol_in` on every record of
-an attempt and **may never name another protocol**; it is `null` only in the classes where no route was
-selected (the pre-route rows below, the resolved route's `400`/`501`) — **and in a third class, added by
-§4.17: a response-cache hit, where a route *was* selected and no bytes left the process.** That third class
+`protocol_out` names the wire the request's bytes actually went out on. Because only a route that **declares the
+inbound protocol** may be attempted (§2, §4.2 — ADR-051: the discriminant is the entry's declared cell set),
+it equals `protocol_in` **by construction** on every record of an attempt and **may never name another
+protocol**; it is `null` only in the classes where no route was selected (the pre-route rows below, the resolved
+route's `400`) — **and in a third class, added by §4.17: a response-cache hit, where a route *was* selected and
+no bytes left the process.** That third class
 changes no existing record: the field names the wire the request's bytes actually went out on, and on a hit none
 went out. `translated` is true only when the
 attempt that carried the request re-encoded the body through a mapper; v0.1 ships no mapper, so it is **`false`
@@ -2342,9 +2381,9 @@ rely on each upstream's own error shape):
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
 | `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
-| `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not native for the inbound protocol** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
+| `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not declaring the inbound protocol in its `supports`** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | a capability declared in the roadmap but not implemented in this build (currently: cross-protocol **translation** cells — native passthrough of all three protocols is implemented; the cell's message names what is missing). It answers the cell the **client named**; it is not the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` below) |
+| `not_implemented` | 501 | **no producer reachable from a request in this build (ADR-051).** The row is kept because a client parses `error.type` and the vocabulary is not deleted for a build in which it is unreachable: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a session was resolved),
@@ -2364,8 +2403,9 @@ Behavior clauses:
   `errors[].kind = transform_error`, and the request is forwarded as usual.
 - upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
   cache, so `failover_from` and the resulting re-prefill cost must be recorded).
-- **no candidate may serve this request at all** (every entry of the chain demoted, keyless or not native for
-  the inbound protocol, §4.2) → the same `502 upstream_error`, taken **before any upstream is contacted**: the
+- **no candidate may serve this request at all** (every entry of the chain demoted, keyless or not declaring the
+  inbound protocol in its `supports`, §4.2) → the same `502 upstream_error`, taken **before any upstream is
+  contacted**: the
   record is a terminal failure (`usage_missing`, nothing charged) and the client gets the shape frozen at the
   end of these clauses. What decides this branch is **whether the walk attempted anything**, not how long the
   chain was: the moment one candidate is submitted, the request is no longer "nothing may serve", and its
