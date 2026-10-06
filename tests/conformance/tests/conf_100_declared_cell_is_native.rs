@@ -132,7 +132,6 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-100: depends on R69-1"]
 async fn conf_100_declared_cell_is_native() {
     let (mock, listen_addr, dir) = rig("conf100").await;
     mock.queue(CannedResponse::json(200, "OK", CHAT_OK.as_bytes()));

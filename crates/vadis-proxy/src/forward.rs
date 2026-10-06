@@ -614,9 +614,11 @@ pub(crate) struct RequestFacts<'a> {
 
 impl Forwarder {
     /// Forwards one buffered request. `proto_in` is the inbound endpoint's
-    /// protocol; a native route (proto_in == the provider's `wire_api`)
-    /// forwards the client's bytes minus vadis-owned top-level keys,
-    /// everything else byte-identical. `headers` feed the session key
+    /// protocol; a route that declares the inbound cell in `supports`
+    /// (ADR-051 §2.1 — a declared cell is a native cell, whatever the
+    /// entry's `wire_api` names) forwards the client's bytes minus
+    /// vadis-owned top-level keys, everything else byte-identical.
+    /// `headers` feed the session key
     /// sources (`header:<name>`); the body's `prompt_cache_key` wins when
     /// present (spec §4 key_sources order).
     ///
@@ -881,8 +883,9 @@ impl Forwarder {
         };
         // Capability: an inbound protocol outside the provider's declared
         // `supports` is a 400, never a best-effort translation (spec §8).
-        // Translation between wire shapes is not implemented in v0.1, so a
-        // declared-but-different cell is refused below with a 501.
+        // ADR-051 §2.1: a declared cell IS a native cell — the request is
+        // served on `urls[inbound]` below, so the resolved route has no
+        // `501` branch left to take.
         if !provider.supports.contains(&proto_in) {
             let supports: Vec<&str> = provider.supports.iter().map(|w| w.as_str()).collect();
             return ForwardOutcome::Failure(ForwardFailure {
@@ -898,16 +901,6 @@ impl Forwarder {
                     "supports": supports,
                 })),
             });
-        }
-        if provider.wire_api != proto_in {
-            return ForwardOutcome::Failure(ForwardFailure::new(
-                501,
-                ErrorCode::NotImplemented,
-                format!(
-                    "translation {} -> {} is not implemented in v0.1; only native routes are served",
-                    proto_in, provider.wire_api
-                ),
-            ));
         }
 
         // The outbound base (DESIGN §12.10.7): the client's bytes minus
@@ -960,7 +953,11 @@ impl Forwarder {
         );
         let decision_ms = decision_start.elapsed().as_millis() as u32;
         facts.decision_ms = decision_ms;
-        facts.proto_out = Some(provider.wire_api);
+        // ADR-051 §2.1: `protocol_out` is the inbound protocol by
+        // construction — a route is attempted only if it declares the
+        // inbound cell, so the wire the bytes leave on *is* the inbound
+        // protocol. `wire_api` names the diagonal and gates nothing.
+        facts.proto_out = Some(proto_in);
         self.append_event(
             EventKind::DecisionMade,
             request_id,
@@ -970,7 +967,7 @@ impl Forwarder {
                 "model": primary.model,
                 "requested_model": model,
                 "selection_source": selection_source,
-                "protocol_out": provider.wire_api.as_str(),
+                "protocol_out": proto_in.as_str(),
                 "decision_ms": decision_ms,
             }),
             session.as_deref(),
@@ -1028,7 +1025,7 @@ impl Forwarder {
                     request_id,
                     received_event: facts.received_event,
                     proto_in: proto_in.as_str(),
-                    proto_out: Some(provider.wire_api.as_str()),
+                    proto_out: Some(proto_in.as_str()),
                     session: session.as_deref(),
                     turn_index,
                     selection_source,
@@ -1238,14 +1235,14 @@ impl Forwarder {
                 skipped.push((candidate.clone(), SKIP_UNKNOWN_PROVIDER));
                 continue;
             };
-            // The wire gate (ADR-022 / DESIGN §12.10.9): a candidate may
-            // only be served on its own wire. `wire_api ∈ supports` holds
-            // by config validation, so this one condition subsumes the
-            // inbound protocol being a declared cell. The skip is in the
-            // keyless class — no attempt, no intent row, no
+            // The declared-cell gate (ADR-051 §2.1 / DESIGN §12.10.9): a
+            // candidate may be served iff its `supports` declares the
+            // inbound protocol — a declared cell is a native cell, whatever
+            // the entry's `wire_api` names as its diagonal. The skip is in
+            // the keyless class — no attempt, no intent row, no
             // classification, no `failover_from` (nothing failed and
             // nothing moved), narrated only at the walk's end.
-            if cand_provider.wire_api != proto_in {
+            if !cand_provider.supports.contains(&proto_in) {
                 skipped.push((candidate.clone(), SKIP_WIRE_MISMATCH));
                 continue;
             }
@@ -1309,18 +1306,20 @@ impl Forwarder {
             let multi_key = pool.len() > 1;
             let mut key_cursor: usize = 0;
             // spec §4.9 / ADR-020: the entry states the URL for the wire this
-            // attempt uses, and it is used verbatim. `validate` refused any
+            // attempt uses, and it is used verbatim. ADR-051 §2.1: that wire
+            // is the **inbound** protocol — the cell the request came in on —
+            // and never the entry's `wire_api`. `validate` refused any
             // config whose declared cell has no URL, so a miss here is an
             // internal error to answer — not a case to paper over by sending
             // the request to a guessed endpoint.
-            let Some(url) = cand_provider.url_for(cand_provider.wire_api) else {
+            let Some(url) = cand_provider.url_for(proto_in) else {
                 return ForwardOutcome::Failure(ForwardFailure::new(
                     500,
                     ErrorCode::Internal,
                     format!(
-                        "provider '{}' declares '{}' but carries no URL for it",
+                        "provider '{}' declares no URL for the inbound protocol '{}'",
                         cand_provider.name,
-                        cand_provider.wire_api.as_str()
+                        proto_in.as_str()
                     ),
                 ));
             };
@@ -1334,7 +1333,7 @@ impl Forwarder {
                 let plan = UpstreamPlan {
                     provider: &candidate.provider,
                     model: &candidate.model,
-                    protocol_out: cand_provider.wire_api,
+                    protocol_out: proto_in,
                     url,
                     api_key: &api_key,
                     attempt: attempt_index,
@@ -1382,7 +1381,7 @@ impl Forwarder {
                         payload: json!({
                             "route": format!("{}/{}", candidate.provider, candidate.model),
                             "attempt_index": attempt_index,
-                            "protocol_out": cand_provider.wire_api.as_str(),
+                            "protocol_out": proto_in.as_str(),
                             "prefix_blocks": blocks_now.iter().map(|b| json!({
                                 "index": b.index, "kind": b.kind.as_str(),
                                 "tokens": b.tokens, "hash": b.hash,
@@ -1429,7 +1428,10 @@ impl Forwarder {
                         facts.last_upstream_status = Some(resp.status);
                         // Row 6 — the outcome, FULL. `wrote_full_request` is
                         // true by construction on the answered path.
-                        let usage = normalize_usage(cand_provider.wire_api, &resp.body);
+                        // ADR-051 §2.1: the wire the attempt went out on is
+                        // the inbound protocol — usage is read in that
+                        // encoding.
+                        let usage = normalize_usage(proto_in, &resp.body);
                         self.append_event(
                             EventKind::UpstreamResponded,
                             request_id,
@@ -1526,7 +1528,7 @@ impl Forwarder {
                                 request_id,
                                 received_event: facts.received_event,
                                 proto_in: proto_in.as_str(),
-                                proto_out: Some(cand_provider.wire_api.as_str()),
+                                proto_out: Some(proto_in.as_str()),
                                 session: session.as_deref(),
                                 turn_index,
                                 selection_source,
@@ -2254,8 +2256,8 @@ impl Forwarder {
                 !attempted_providers.contains(&c.provider)
                 && !self.provider_in_cooldown(&c.provider)
                 // The provider check doubles as existence: no entry, no
-                // wire to compare, no candidate.
-                && self.provider(c).is_some_and(|p| p.wire_api == proto_in)
+                // `supports` to consult, no candidate.
+                && self.provider(c).is_some_and(|p| p.supports.contains(&proto_in))
                 && self.transports.contains_key(&c.provider)
             })
             .cloned()
@@ -2624,11 +2626,13 @@ fn normalize_usage(wire: WireApi, body: &[u8]) -> Option<Usage> {
 
 #[cfg(test)]
 mod walk_tests {
-    //! The buffered candidate walk's wire gate (ADR-022 / DESIGN §12.10.9):
-    //! a candidate whose provider's `wire_api` differs from the inbound
-    //! protocol is skipped in the keyless class — never attempted, never a
-    //! displacement — and the walk-end refusal reports it as `wire_mismatch`.
-    //! The mock-upstream proof of the same relations is CONF-57.
+    //! The buffered candidate walk's declared-cell gate (ADR-051 §2.1 /
+    //! DESIGN §12.10.9, superseding ADR-022 decision 1's clause): a
+    //! candidate whose `supports` does not declare the inbound protocol is
+    //! skipped in the keyless class — never attempted, never a
+    //! displacement — and the walk-end refusal reports it as
+    //! `wire_mismatch` (now meaning *undeclared*, not *foreign wire*).
+    //! The mock-upstream proof of the same relations is CONF-101.
 
     use super::*;
     use std::collections::BTreeMap;
@@ -2661,14 +2665,25 @@ mod walk_tests {
     }
 
     fn provider(name: &str, wire: WireApi) -> ProviderCfg {
+        provider_with(name, wire, vec![wire])
+    }
+
+    /// The ADR-051 §5.3 shape: an entry that declares the inbound cell in
+    /// `supports` while naming another `wire_api` as its diagonal. Under
+    /// both rules `wire_api ∈ supports` holds at load, so the entry is
+    /// legal — only the new discriminant serves it.
+    fn provider_with(name: &str, wire: WireApi, supports: Vec<WireApi>) -> ProviderCfg {
         // A minimal legal entry: validate() is not run here, but the shape
         // matches what load() produces for a keyed provider.
         serde_json::from_value(serde_json::json!({
             "name": name,
-            "urls": { wire.as_str(): format!("http://{name}.example/v1/{wire}") },
+            "urls": {
+                wire.as_str(): format!("http://{name}.example/v1/{wire}"),
+                "chat": format!("http://{name}.example/v1/chat"),
+            },
             "api_key_env": format!("UNIT_{name}_KEY"),
             "wire_api": wire.as_str(),
-            "supports": [wire.as_str()],
+            "supports": supports.iter().map(|w| w.as_str()).collect::<Vec<_>>(),
             "models": [{
                 "id": "m",
                 "context": "128k",
@@ -2722,15 +2737,19 @@ mod walk_tests {
         }
     }
 
-    /// The gate's positive: a candidate whose wire matches the inbound
-    /// protocol is still served after wire-incompatible candidates were
+    /// The gate's positive: a candidate whose `supports` declares the
+    /// inbound protocol is still served after undeclared candidates were
     /// skipped — the foreign provider's transport is never handed a
-    /// request.
+    /// request. Includes ADR-051 §5.3's arm: an entry that declares the
+    /// inbound cell while naming another `wire_api` also serves (a
+    /// declared cell is a native cell), which the old discriminant would
+    /// have answered `501`.
     #[tokio::test]
     async fn wire_matching_candidate_still_serves_after_the_gate_skips_foreign_ones() {
         let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
         let foreign_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let native_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let diagonal_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         transports.insert(
             "foreign".into(),
             Arc::new(RecordingTransport {
@@ -2743,6 +2762,12 @@ mod walk_tests {
                 seen: native_seen.clone(),
             }),
         );
+        transports.insert(
+            "diagonal".into(),
+            Arc::new(RecordingTransport {
+                seen: diagonal_seen.clone(),
+            }),
+        );
         let config = VadisConfig {
             server: server_cfg(),
             session: session_cfg(),
@@ -2752,6 +2777,14 @@ mod walk_tests {
                 provider("keyless", WireApi::Chat),
                 provider("foreign", WireApi::Responses),
                 provider("native", WireApi::Chat),
+                // `wire_api: responses` (its diagonal) while `supports`
+                // declares `chat` — legal at load, served only under the
+                // declared-cell rule.
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
             ],
             aliases: BTreeMap::new(),
             plugins: Vec::new(),
@@ -2762,6 +2795,10 @@ mod walk_tests {
                 },
                 RouteSpec {
                     provider: "native".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "diagonal".into(),
                     model: "m".into(),
                 },
             ],
@@ -2775,7 +2812,7 @@ mod walk_tests {
 
         assert_eq!(
             status, 200,
-            "the wire-matching candidate serves the request"
+            "the declared-cell candidate serves the request"
         );
         assert_eq!(
             foreign_seen.lock().unwrap().len(),
@@ -2783,11 +2820,70 @@ mod walk_tests {
             "the responses-wire transport was never handed the chat request"
         );
         assert_eq!(native_seen.lock().unwrap().len(), 1);
+        assert_eq!(
+            diagonal_seen.lock().unwrap().len(),
+            0,
+            "the diagonal entry is behind the native one in the chain and never \
+             needed — but the arm proves the walk did not stall on it"
+        );
     }
 
-    /// The gate's negative: with no wire-matching candidate in the chain,
-    /// the walk ends in the frozen refusal and the wire-incompatible
-    /// entry is reported as `wire_mismatch`, never attempted.
+    /// ADR-051 §5.3's serving arm in isolation: with the plain-native
+    /// candidate absent, the entry that declares the inbound cell under a
+    /// foreign `wire_api` is the one that serves — the declared-cell rule's
+    /// whole point, and a `501` under the old discriminant.
+    #[tokio::test]
+    async fn declared_cell_with_foreign_wire_api_serves() {
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        let diagonal_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transports.insert(
+            "diagonal".into(),
+            Arc::new(RecordingTransport {
+                seen: diagonal_seen.clone(),
+            }),
+        );
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("keyless", WireApi::Chat),
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
+            ],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: vec![RouteSpec {
+                provider: "diagonal".into(),
+                model: "m".into(),
+            }],
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let f = forwarder(config, transports);
+
+        let (status, _details) = forward(&f, "keyless/m").await;
+
+        assert_eq!(
+            status, 200,
+            "an entry that declares the inbound cell serves it, whatever its wire_api"
+        );
+        assert_eq!(diagonal_seen.lock().unwrap().len(), 1);
+    }
+
+    /// The gate's negative: with no candidate that declares the inbound
+    /// cell anywhere in the chain, the walk ends in the frozen refusal and
+    /// the undeclared entry is reported as `wire_mismatch` — whose meaning
+    /// since ADR-051 §2.3 is *this entry's `supports` does not declare
+    /// this inbound protocol*, never attempted. Includes §5.3's arm
+    /// (CONF-104's `deaf` shape): an entry that declares the inbound cell
+    /// under a foreign `wire_api` passes the wire test and is refused by
+    /// the key test instead — `keyless`, not `wire_mismatch`.
     #[tokio::test]
     async fn wire_mismatch_candidate_never_serves_and_reports_the_reason() {
         let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
@@ -2806,11 +2902,30 @@ mod walk_tests {
             providers: vec![
                 provider("keyless", WireApi::Chat),
                 provider("foreign", WireApi::Responses),
+                // The discriminating arm (ADR-051 §5.3, CONF-104's `deaf`
+                // shape): `wire_api: responses` while `supports` declares
+                // the inbound `chat` cell — legal at load — and the entry
+                // holds no key (no transport inserted above). Under the
+                // old discriminant it is skipped as `wire_mismatch`
+                // (`responses != chat`); under the declared-cell rule the
+                // wire test passes and the key test is what refuses it:
+                // `keyless`.
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
             ],
-            fallback: vec![RouteSpec {
-                provider: "foreign".into(),
-                model: "m".into(),
-            }],
+            fallback: vec![
+                RouteSpec {
+                    provider: "foreign".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "diagonal".into(),
+                    model: "m".into(),
+                },
+            ],
             aliases: BTreeMap::new(),
             plugins: Vec::new(),
             plan_policy: None,
@@ -2825,11 +2940,17 @@ mod walk_tests {
         let details = details.expect("the refusal carries details");
         assert_eq!(details["stage"], "no_available_route");
         let skipped = details["skipped"].as_array().expect("skipped[]");
-        assert_eq!(skipped.len(), 2, "the resolved route and the one fallback");
+        assert_eq!(skipped.len(), 3, "the resolved route and the two fallbacks");
         assert_eq!(skipped[0]["route"], "keyless/m");
         assert_eq!(skipped[0]["reason"], "keyless");
         assert_eq!(skipped[1]["route"], "foreign/m");
         assert_eq!(skipped[1]["reason"], "wire_mismatch");
+        assert_eq!(skipped[2]["route"], "diagonal/m");
+        assert_eq!(
+            skipped[2]["reason"], "keyless",
+            "the entry declares the chat cell, so the wire test passes and the \
+             key test is what refuses it"
+        );
         assert_eq!(
             foreign_seen.lock().unwrap().len(),
             0,

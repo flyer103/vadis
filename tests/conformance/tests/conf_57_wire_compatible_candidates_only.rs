@@ -1,16 +1,24 @@
-//! CONF-57 (spec §2 / §4.2 / §8, ADR-022, DESIGN §12.10.9): **a candidate
-//! may only be served on its own wire.** The failover walk never crosses the
-//! 3×3 matrix: a chat request whose resolved route is keyless walks a chain
-//! whose first entry speaks responses and whose second is chat-native — the
-//! foreign mock's request log must stay empty while the chat-native
-//! candidate serves, and when no native candidate exists anywhere both media
-//! get one frozen exhausted shape. All assertions are relations over the
-//! rig's own construction (which mock received what, one entry per offered
+//! CONF-57 (spec §2 / §4.2 / §8, ADR-022 / ADR-051 §2.1, DESIGN §12.10.9):
+//! **a candidate may only be served on a cell it declares.** The failover
+//! walk never crosses the declared-cell boundary: a chat request whose
+//! resolved route is keyless walks a chain whose first entry does not
+//! declare `chat` and whose second does — the foreign mock's request log
+//! must stay empty while the declaring candidate serves, and when no
+//! declaring candidate exists anywhere both media get one frozen exhausted
+//! shape. Per ADR-051 §5.3 (the owner's approval of 2026-10-06) the two
+//! `wire_mismatch` arms are rewritten to the **undeclared-cell** rule: the
+//! rig's serving candidate deliberately declares `chat` while naming
+//! `responses` as its `wire_api`, so the two fields disagree and the case
+//! cannot pass vacuously — under the old discriminant the serving arm is a
+//! `501` and the exhausted arm's reason word is unchanged only by
+//! coincidence. All assertions are relations over the rig's own
+//! construction (which mock received what, one entry per offered
 //! candidate, one reason each) — no snapshot numbers.
 //!
 //! Rig shape (the shipped roster's own defect shape, R11-F1): three
 //! providers — `keyless-chat` (chat wire, no key in env), `foreign`
-//! (responses wire, keyed) and `native` (chat wire, keyed) — with
+//! (does not declare chat, keyed) and `native` (declares `chat` and
+//! `responses`, `wire_api: responses`, keyed) — with
 //! `fallback: [foreign/model, native/model]`. A chat request naming the
 //! keyless entry's model walks `keyless-chat` → `foreign` → `native`.
 
@@ -67,9 +75,10 @@ async fn rig(
   - name: native
     urls:
       chat: http://127.0.0.1:{native_port}/v1/chat/completions
+      responses: http://127.0.0.1:{native_port}/v1/responses
     api_key_env: CONF57_NATIVE_KEY
-    wire_api: chat
-    supports: [chat]
+    wire_api: responses
+    supports: [chat, responses]
     account: api
     models:
       - id: m
@@ -344,7 +353,7 @@ async fn conf_57_no_native_candidate_is_the_frozen_exhausted_shape() {
         assert_eq!(skipped[1]["route"], "foreign/m");
         assert_eq!(
             skipped[1]["reason"], "wire_mismatch",
-            "{medium}: the responses-wire entry cannot serve a chat request"
+            "{medium}: an entry whose supports does not declare chat cannot serve a chat request"
         );
         for entry in skipped {
             let reason = entry["reason"].as_str().expect("reason string");

@@ -185,7 +185,6 @@ fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-104: depends on R69-1"]
 async fn conf_104_no_available_route_still_holds() {
     let r = rig("conf104").await;
     let task = serve(&r.dir, &r.listen_addr).await;

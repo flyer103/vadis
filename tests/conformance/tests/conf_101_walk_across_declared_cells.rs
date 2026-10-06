@@ -12,9 +12,10 @@
 //!
 //! Rig: a **chat** request whose resolved route is `keyless-chat/m` (its key
 //! is named but never set, so the walk skips it), then a `fallback` chain of
-//! * `disagree/m` — `supports: [responses]`, `wire_api: chat`: it does **not**
-//!   declare `chat`, so it is skipped even though its `wire_api` *is* `chat`
-//!   (the old rule's discriminant would have served it);
+//! * `disagree/m` — `supports: [responses]`, `wire_api: responses` (the
+//!   legal shape of a foreign entry, CONF-57's own): it does **not** declare
+//!   `chat`, so it is skipped — an entry that does not declare the cell
+//!   cannot serve it, whatever its `wire_api` names;
 //! * `both/m` — `supports: [chat, responses]`, `wire_api: responses`: it
 //!   declares `chat`, so it serves — even though its `wire_api` is not `chat`
 //!   (the old rule's discriminant would have answered `501`).
@@ -129,7 +130,7 @@ providers:
     urls:
       responses: http://127.0.0.1:{disagree_port}/v1/responses
     api_key_env: CONF101_DISAGREE_KEY
-    wire_api: chat
+    wire_api: responses
     supports: [responses]
     account: api
     models:
@@ -253,7 +254,6 @@ async fn arm_exhausted() {
 /// arms run under one `#[ignore]`, so the register's occupancy moves by
 /// exactly one case, not two.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-101: depends on R69-1"]
 async fn conf_101_walk_discriminant_is_the_declared_cell() {
     arm_served().await;
     arm_exhausted().await;
