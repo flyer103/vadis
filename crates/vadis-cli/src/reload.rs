@@ -94,6 +94,14 @@ pub struct Coalescer {
     window_ms: u64,
     burst_start_ms: Option<u64>,
     last_event_ms: Option<u64>,
+    /// Whether the open burst saw any event after its leading one. The
+    /// trailing look's trigger as a FACT, not an inference from
+    /// `last_event_ms > burst_start_ms`: an event can land in the same
+    /// millisecond as the burst's start (inotify's registration is that
+    /// fast), and a follow-on the leading look may have raced must still
+    /// get its trailing look — `last > start` would see "no follow-on"
+    /// and the raced bytes would wait for the next event forever.
+    saw_follow_on: bool,
 }
 
 impl Coalescer {
@@ -102,6 +110,7 @@ impl Coalescer {
             window_ms,
             burst_start_ms: None,
             last_event_ms: None,
+            saw_follow_on: false,
         }
     }
 
@@ -110,11 +119,13 @@ impl Coalescer {
         match self.burst_start_ms {
             Some(start) if t_ms < start + self.window_ms => {
                 self.last_event_ms = Some(t_ms);
+                self.saw_follow_on = true;
                 EventDecision::Folded
             }
             _ => {
                 self.burst_start_ms = Some(t_ms);
                 self.last_event_ms = Some(t_ms);
+                self.saw_follow_on = false;
                 EventDecision::LookNow
             }
         }
@@ -124,8 +135,36 @@ impl Coalescer {
     /// open and it saw more than its leading event.
     pub fn trailing_due_at_ms(&self) -> Option<u64> {
         match (self.burst_start_ms, self.last_event_ms) {
-            (Some(start), Some(last)) if last > start => Some(last + self.window_ms),
+            (Some(_), Some(last)) if self.saw_follow_on => Some(last + self.window_ms),
             _ => None,
+        }
+    }
+
+    /// The registration-window catch-up (R66-FIX), fed at `t_ms` the
+    /// instant the loop takes it off the channel. Same rule as
+    /// [`Self::on_event`] with one strengthening: a burst an earlier
+    /// event already opened can absorb the catch-up no matter how long
+    /// the loop was starved — the catch-up NEVER opens a second burst.
+    /// Without this, a loop starved past the window would treat the
+    /// sentinel as a new burst's leading edge, reset the reporter, and
+    /// re-report a landing the first burst's look already reported (the
+    /// CI-red duplicate). With it, the starved interleaving skips the
+    /// reset at worst; it can never duplicate.
+    pub fn on_startup_catchup(&mut self, t_ms: u64) -> EventDecision {
+        if self.burst_start_ms.is_some() {
+            // An event the loop saw before the sentinel already ran the
+            // startup window's look; the trailing edge of that burst
+            // (which the sentinel's arrival re-anchors, below) covers
+            // anything the look raced. The sentinel itself counts as a
+            // follow-on: the burst's leading look ran BEFORE the
+            // registration finished, so a landing inside the window is
+            // exactly what that look raced and the trailing look exists
+            // to read (the same-millisecond fold is the CI shape).
+            self.last_event_ms = Some(t_ms);
+            self.saw_follow_on = true;
+            EventDecision::Folded
+        } else {
+            self.on_event(t_ms)
         }
     }
 
@@ -134,6 +173,7 @@ impl Coalescer {
     pub fn burst_closed(&mut self) {
         self.burst_start_ms = None;
         self.last_event_ms = None;
+        self.saw_follow_on = false;
     }
 }
 
@@ -691,11 +731,18 @@ impl WatchFilter {
 // above inside.
 // ---------------------------------------------------------------------
 
-/// The watcher's own channel: a platform event, or the shutdown sentinel.
-/// One channel (rather than a flag polled beside `recv`) keeps the loop
-/// asleep until there is something to do — no wake-up cadence of its own.
+/// The watcher's own channel: a platform event, the startup catch-up
+/// sentinel, or the shutdown sentinel. One channel (rather than a flag
+/// polled beside `recv`) keeps the loop asleep until there is something
+/// to do — no wake-up cadence of its own.
 enum Msg {
     Event(notify::Result<notify::Event>),
+    /// The registration-window catch-up, delivered as the loop's own
+    /// first message (see [`Watcher::start`]): it opens the burst a
+    /// queued landing event would otherwise duplicate, and the trailing
+    /// edge of that burst closes the startup window exactly as it
+    /// closes any other.
+    StartupCatchup,
     Shutdown,
 }
 
@@ -762,6 +809,7 @@ impl Watcher {
                 let looks = looks.clone();
                 let ready = ready.clone();
                 let events = tx.clone();
+                let startup = tx.clone();
                 let root_path = identity.root_path.clone();
                 let roster_path = identity.roster_path.clone();
                 move || {
@@ -780,7 +828,6 @@ impl Watcher {
                             return;
                         }
                     }
-                    ready.store(true, Ordering::Relaxed);
                     // The registration window's catch-up look: an event
                     // that landed between the process's startup pair and
                     // this instant is one the backend cannot deliver —
@@ -791,28 +838,37 @@ impl Watcher {
                     // the startup window is not rare, it is certain for
                     // any landing inside it — and a test rig (or an
                     // operator's scripted edit) that rewrites the pair
-                    // right after boot lands exactly there. One look at
-                    // readiness closes it: `NoChange` emits nothing
-                    // (D1), so a config that did not move costs one
-                    // file read on the watcher's own thread, off the
-                    // request path.
-                    let mut startup_reporter = Reporter::new();
-                    startup_reporter.burst_started();
-                    one_look(
-                        &LookTarget {
-                            root_path: root_path.clone(),
-                            roster_path: roster_path.clone(),
+                    // right after boot lands exactly there.
+                    //
+                    // R66-FIX: the catch-up is NOT a second look running
+                    // beside the loop (that shape double-reports — CI
+                    // run 37332708961: on Linux the registration is
+                    // instant, a landing raced the catch-up read, and
+                    // both the catch-up's reporter and the loop's
+                    // reporter emitted the identical refusal line). It
+                    // is the loop's own first burst: a synthetic
+                    // message through the same channel, coalesced by
+                    // the same policy, reported by the same reporter.
+                    // A landing's event that was queued ahead of it
+                    // opens the burst and its look reads the new bytes;
+                    // the synthetic then FOLDS (no second look). A
+                    // quiet startup runs it as the leading look. Either
+                    // interleaving is one burst: one look-count, one
+                    // report. `is_ready` flips only when the loop has
+                    // handled it, so a rig that waits for readiness
+                    // lands strictly after a look that already saw the
+                    // startup bytes.
+                    let _ = startup.send(Msg::StartupCatchup);
+                    let ctx = LoopCtx {
+                        target: LookTarget {
+                            root_path,
+                            roster_path,
                         },
-                        &publisher,
-                        &mut startup_reporter,
-                        &sink,
-                        &looks,
-                    );
-                    let target = LookTarget {
-                        root_path,
-                        roster_path,
+                        publisher,
+                        sink,
+                        looks,
                     };
-                    run(rx, imp, filter, target, publisher, sink, looks);
+                    run(rx, imp, filter, ctx, ready);
                 }
             })
             .map_err(|e| unavailable(format!("cannot spawn the watcher thread: {e}")))?;
@@ -830,11 +886,14 @@ impl Watcher {
         self.looks.load(Ordering::Relaxed)
     }
 
-    /// The registration is live. A diagnostic for the rigs (they wait
-    /// for it before performing a landing — an event that arrives before
-    /// registration is one the backend cannot deliver); production never
-    /// reads it, because a missed event's next look is the next event
-    /// (D12.6).
+    /// The registration is live AND the registration-window catch-up
+    /// look has run (R66-FIX: the sentinel's look completes before this
+    /// flips). A diagnostic for the rigs (they wait for it before
+    /// performing a landing — a rig that waits for readiness lands
+    /// strictly after a look that already saw the startup bytes, so its
+    /// landing cannot be double-reported by the catch-up); production
+    /// never reads it, because a missed event's next look is the next
+    /// event (D12.6).
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Relaxed)
     }
@@ -866,15 +925,38 @@ struct LookTarget {
 /// The `notify` handle is owned here (see [`Watcher`]'s doc): the
 /// registration lives exactly as long as the loop, and the backend's
 /// teardown runs in this thread's own exit, never in the caller's.
-fn run(
-    rx: std::sync::mpsc::Receiver<Msg>,
-    _imp: notify::RecommendedWatcher,
-    filter: WatchFilter,
+///
+/// The loop's FIRST burst is the startup catch-up ([`Msg::StartupCatchup`]
+/// — the registration-window look, R66-FIX). `ready` flips only when that
+/// look has run: `is_ready` means "the registration is live AND the
+/// startup window is closed", so a rig (or operator) that waits for it
+/// lands strictly after a look that already saw the startup bytes and
+/// strictly before any look its own landing triggers.
+///
+/// What the loop serves with, fixed for its lifetime: the pair's
+/// resolved paths, the publish, the sink and the shared counters. One
+/// struct (rather than a long parameter list) because every arm of the
+/// loop reads the same set.
+struct LoopCtx {
     target: LookTarget,
     publisher: Arc<Publisher>,
     sink: Arc<dyn Fn(String) + Send + Sync>,
     looks: Arc<AtomicU64>,
+}
+
+fn run(
+    rx: std::sync::mpsc::Receiver<Msg>,
+    _imp: notify::RecommendedWatcher,
+    filter: WatchFilter,
+    ctx: LoopCtx,
+    ready: Arc<AtomicBool>,
 ) {
+    let LoopCtx {
+        target,
+        publisher,
+        sink,
+        looks,
+    } = ctx;
     let base = Instant::now();
     let rel_ms = || base.elapsed().as_millis() as u64;
     let window_ms = COALESCE_WINDOW.as_millis() as u64;
@@ -904,12 +986,45 @@ fn run(
                 one_look(&target, &publisher, &mut reporter, &sink, &looks);
             }
             Some(Msg::Shutdown) => break,
+            // The registration-window catch-up as the loop's own first
+            // event (R66-FIX; see [`Watcher::start`]). It enters the
+            // same coalescer as every platform event: a landing queued
+            // ahead of it opened the burst (its leading look already
+            // read the new bytes) and the sentinel then FOLDS — no
+            // second look, no burst reset, no duplicate line. A quiet
+            // startup runs it as the burst's leading look. And because
+            // it can never OPEN a burst that an earlier event did not
+            // already open, the worst a starved loop can do is SKIP the
+            // catch-up look's burst reset — it can never create a
+            // second one. `ready` flips once the sentinel has been
+            // handled: a rig waiting on readiness lands strictly after
+            // a look that already saw the startup bytes.
+            Some(Msg::StartupCatchup) => {
+                if coalescer.on_startup_catchup(rel_ms()) == EventDecision::LookNow {
+                    reporter.burst_started();
+                    one_look(&target, &publisher, &mut reporter, &sink, &looks);
+                }
+                ready.store(true, Ordering::Relaxed);
+            }
             // A notify error names no path fact worth a look; the next
             // look is the next event on the registration — D12.6's
             // stated boundary, no reconciliation pass.
             Some(Msg::Event(Err(_))) => continue,
             Some(Msg::Event(Ok(event))) => {
                 if !filter.matches(&event) {
+                    continue;
+                }
+                // A reader's footprint is not a change. The inotify
+                // backend subscribes OPEN/CLOSE, so every look's own
+                // read of the pair re-enters the loop as an
+                // `Access(..)` event naming the target — without this
+                // gate each look self-triggers one further look on
+                // Linux (CI run 37332708961's hot-directory red; the
+                // FSEvents backend maps no flag to `Access`, so the
+                // gate is inert there). Create/Modify/Remove — and the
+                // imprecise `Any`/`Other` kinds a backend may use for a
+                // change it cannot classify — still look.
+                if matches!(event.kind, notify::EventKind::Access(_)) {
                     continue;
                 }
                 if coalescer.on_event(rel_ms()) == EventDecision::LookNow {
@@ -1102,6 +1217,52 @@ fallback: []
         let mut narrow = Coalescer::new(50);
         assert_eq!(narrow.on_event(1_000), EventDecision::LookNow);
         assert_eq!(narrow.on_event(1_050), EventDecision::LookNow);
+    }
+
+    #[test]
+    fn the_startup_catchup_folds_into_an_open_burst_no_matter_how_late() {
+        // The quiet startup: no event yet, the catch-up IS the burst's
+        // leading look (R66-FIX's other arm — the registration-window
+        // look a rig waits for readiness to see).
+        let mut c = Coalescer::new(200);
+        assert_eq!(c.on_startup_catchup(1_000), EventDecision::LookNow);
+        assert_eq!(c.trailing_due_at_ms(), None);
+
+        // The starved loop: an event opened the burst, the loop could
+        // not schedule the sentinel until past the whole window — the
+        // catch-up still FOLDS and never opens a second burst. This is
+        // the interleaving that produced CI 37332708961's duplicate
+        // line in the old shape; the invariant here is what removes it.
+        let mut c = Coalescer::new(200);
+        assert_eq!(c.on_event(1_000), EventDecision::LookNow);
+        assert_eq!(c.on_startup_catchup(2_000), EventDecision::Folded);
+        // The folded catch-up re-anchors the trailing edge at the
+        // sentinel's own time (it was, at latest, the burst's last
+        // event), so the burst still closes.
+        assert_eq!(c.trailing_due_at_ms(), Some(2_200));
+        c.burst_closed();
+        assert_eq!(c.trailing_due_at_ms(), None);
+
+        // The same-millisecond fold (R66-FIX's Linux shape, CI run
+        // 37332708961's environment): the landing's events arrive in the
+        // same millisecond as the burst's start — instant inotify
+        // registration — and the follow-on fact must still arm the
+        // trailing look, or the raced bytes wait for the next event
+        // forever (`last > start` misread "same ms" as "no follow-on").
+        let mut c = Coalescer::new(200);
+        assert_eq!(c.on_startup_catchup(1_000), EventDecision::LookNow);
+        assert_eq!(c.on_event(1_000), EventDecision::Folded);
+        assert_eq!(c.trailing_due_at_ms(), Some(1_200));
+        c.burst_closed();
+        assert_eq!(c.trailing_due_at_ms(), None);
+
+        // A catch-up that arrives after a burst fully closed (the loop
+        // was starved past even the trailing edge) is a fresh burst's
+        // leading look — nothing is open to duplicate.
+        let mut c = Coalescer::new(200);
+        assert_eq!(c.on_event(1_000), EventDecision::LookNow);
+        c.burst_closed();
+        assert_eq!(c.on_startup_catchup(2_000), EventDecision::LookNow);
     }
 
     // -------------------------------------------------------------
@@ -1629,6 +1790,17 @@ fallback: []
         }
     }
 
+    /// The rigs' readiness budget (F-R66-1e-1's deliberate decision):
+    /// what a rig may spend waiting for `is_ready` — the backend's
+    /// stream start PLUS the registration-window catch-up look — or for
+    /// a startup-window landing to reach the publish. 15 s was the old
+    /// value and measured too small on this machine's fseventsd under
+    /// test parallelism (F-R66-1e-1: a stalled stream start outlived
+    /// it); 30 s is the same order with the observed stall inside it.
+    /// It bounds a diagnostic wait only — no serving-path behaviour
+    /// reads it.
+    const READINESS_BUDGET: Duration = Duration::from_secs(30);
+
     /// The card's hot-directory rig arm: store and trace writes in the
     /// watched directory produce **no look and no line** (ADR-040 D12.4's
     /// measured point — the macOS backend delivers sub-directory events,
@@ -1649,7 +1821,7 @@ fallback: []
         // genuinely delivered to the filter, not lost before it.
         until(
             || watcher.is_ready(),
-            Duration::from_secs(15),
+            READINESS_BUDGET,
             "the watcher registration",
         );
 
@@ -1723,7 +1895,7 @@ fallback: []
         let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
         until(
             || watcher.is_ready(),
-            Duration::from_secs(15),
+            READINESS_BUDGET,
             "the watcher registration",
         );
 
@@ -1776,7 +1948,7 @@ fallback: []
         let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
         until(
             || watcher.is_ready(),
-            Duration::from_secs(15),
+            READINESS_BUDGET,
             "the watcher registration",
         );
 
@@ -1827,8 +1999,66 @@ fallback: []
                 let revision = cell.capture();
                 revision.config_identity.config_digest == expected
             },
-            Duration::from_secs(15),
+            READINESS_BUDGET,
             "the startup-window landing to reach the publish",
+        );
+        drop(watcher);
+    }
+
+    /// R66-FIX: the same startup-window landing, refused — and the
+    /// report is still **exactly one line**. This is the CI-red shape
+    /// (run 37332708961, both attempts): on Linux the registration is
+    /// instant, so a landing races the readiness catch-up, and when the
+    /// catch-up read and the delivered event BOTH saw the illegal
+    /// bytes the old shape reported it twice — two byte-identical
+    /// refusal lines from two reporters. The fix makes the catch-up the
+    /// loop's own first coalesced event, so whichever of the two reads
+    /// the new bytes first opens the burst and the other folds: one
+    /// landing, one look-count, one line, deterministically on either
+    /// platform and either interleaving.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_landing_inside_the_registration_window_reports_exactly_one_line() {
+        let (_g, root) = tempdir("startup-window-refused");
+        std::fs::write(&root, MINIMAL).unwrap();
+        let identity = load_identity(&root);
+
+        let (sink, lines) = capture();
+        let (publisher, _store, _cell, _sink_handle) = publisher_for(&root, &sink);
+        let watcher = Watcher::start(&identity, sink, publisher).expect("watcher starts");
+        // The illegal landing races the registration deliberately (no
+        // readiness wait first): whether the backend delivers its event
+        // is exactly the interleaving this test pins — the line count
+        // must not depend on it.
+        land(&root, "server: [oops");
+
+        // The line is guaranteed (either the sentinel's look reads the
+        // illegal bytes, or the delivered event's look does — the watch
+        // registration is synchronous before the sentinel is sent), but
+        // WHICH one reports, and when the loop gets scheduled under test
+        // parallelism, is not fixed: poll for the first line like every
+        // other rig polls, then sit past the burst's trailing edge so a
+        // duplicate that lost the race inside the window still had time
+        // to appear. The pinned invariant is unchanged: exactly one.
+        until(
+            || !lines.lock().unwrap().is_empty(),
+            READINESS_BUDGET,
+            "the startup-window refusal's first line",
+        );
+        std::thread::sleep(Duration::from_millis(
+            3 * COALESCE_WINDOW.as_millis() as u64 + 300,
+        ));
+
+        let lines = lines.lock().unwrap();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one landing inside the window, one line: {lines:?}"
+        );
+        let line = &lines[0];
+        assert!(line.starts_with("vadis: reload refused ("), "got: {line}");
+        assert!(
+            line.contains("does not parse"),
+            "the loader's reason, verbatim: {line}"
         );
         drop(watcher);
     }
