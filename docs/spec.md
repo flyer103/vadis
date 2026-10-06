@@ -621,9 +621,10 @@ provider entry *is* — the account its key, endpoint and allowance belong to. A
 allowance is not published is still a plan, and §4.6's rules must not be reachable only by operators who can
 supply a number nobody has (GAP-Q1).
 
-**`plan_policy` (one top-level section, optional) and `plan_policies` (several).** At most one policy in
-v0.1; a second family is an additive
-future key (the `state:` / `retention` precedent), never a reshaped section.
+**`plan_policy` (one top-level section, optional) and `plan_policies` (several).** Exactly one of the two is
+written: `plan_policy` carries one family, `plan_policies` N entries. Writing both, or writing neither, is
+handled by §4.6.1's table — both is a load refusal, and neither is the no-plan configuration, which is legal.
+Neither spelling is a reshaped section (the `state:` / `retention` precedent).
 
 | Key | Type | Default | Semantics |
 |---|---|---|---|
@@ -767,7 +768,7 @@ two rows).
 | the state is `overflow` and `on_primary_exhausted: block` | `quota_exceeded` (429, §8) | the family, the account state and the reason |
 | the month's metered spend has reached `overflow_monthly_cap_usd` | `cost_cap_exceeded` (403, §8) | the family and the cap |
 | **ADR-049**: both `api_key_env` and `api_keys` written, or neither | load error | both keys |
-| **ADR-049**: both `plan_policy` and `plan_policies` written | load error | both keys. **Neither written is not an error** — it is the no-plan configuration (§4.6's "at most one policy", above), and it loads; only a written explicit `plan_policies: null` is refused, by `plan_policies:` itself |
+| **ADR-049**: both `plan_policy` and `plan_policies` written | load error | both keys. **Neither written is not an error** — it is the no-plan configuration (§4.6's exactly-one-of spelling rule, above), and it loads; only a written explicit `plan_policies: null` is refused, by `plan_policies:` itself |
 | **ADR-049**: two `plan_policies[i]` naming one family tag | load error | `plan_policies[i].family` |
 | **ADR-049**: `overflow_selection` is neither `declared` nor `cheapest` | load error | `plan_policies[i].overflow_selection` |
 | **ADR-049**: `cheapest` and the candidate set's currencies differ | load error | the family + the currencies found |
