@@ -596,6 +596,18 @@ pub fn resolve_typed(text: &str, path: &str) -> Result<Anchor, AnchorError> {
                             "a flow collection is not a single-line scalar",
                         ));
                     }
+                    // ADR-052 §2.1: the documented form is `- <scalar>`.
+                    // An entry that is a **block mapping** (its first key
+                    // riding its own dash line, `- family: x`, or a key on
+                    // a following line) is structure, never a value: the
+                    // terminal selector is refused rather than answered
+                    // with the dash line's own text, whose extent a
+                    // `set-value` edit would splice as if it were a value.
+                    if parse_key(after).is_some() {
+                        return Err(AnchorError::NotSettable(
+                            "a mapping list entry is not a single-line scalar",
+                        ));
+                    }
                     let mut e = ln.full.len();
                     let b = ln.full.as_bytes();
                     let mut i = off;
@@ -904,6 +916,32 @@ plan_policy:
         );
     }
 
+    /// ADR-052 §2.1: a **terminal** selector whose entry is a block
+    /// mapping is *not settable* — the entry as a whole is structure,
+    /// never a single-line scalar, and the dash line's own text is not a
+    /// value the wizard may splice. The scalar-entry form is unchanged.
+    #[test]
+    fn terminal_selector_on_a_mapping_entry_is_not_settable() {
+        for path in [
+            "providers[0]",
+            "providers[name=deepseek]",
+            "plugins[id=cache-guard]",
+        ] {
+            assert_eq!(
+                resolve_typed(DOC, path),
+                Err(AnchorError::NotSettable(
+                    "a mapping list entry is not a single-line scalar"
+                )),
+                "{path} must be refused, never answered with the dash line's text"
+            );
+        }
+        // A `- <scalar>` entry still resolves to the scalar itself.
+        assert_eq!(
+            resolve_typed(DOC, "fallback[0]").unwrap().value,
+            "deepseek/deepseek-v4-pro"
+        );
+    }
+
     #[test]
     fn block_mapping_keys_and_duplication_refusals() {
         assert_eq!(
@@ -1058,18 +1096,42 @@ plan_policy:
             "cache.breakeven.safety_factor",
             "trace.dir",
             "trace.rollover",
-            "plan_policy.family",
-            "plan_policy.primary",
-            "plan_policy.overflow",
-            "plan_policy.on_primary_exhausted",
-            "plan_policy.recover",
-            "plan_policy.cooldown",
-            "plan_policy.overflow_monthly_cap_usd",
         ] {
             assert!(
                 resolve(&example, path).is_ok(),
                 "the section table's `{path}` must resolve in config.example.yaml"
             );
+        }
+        // ADR-052 §2.3(b): the shipped root writes the **list** spelling, so
+        // the property is read over the list — for **each declared index** of
+        // the shipped root and each of the eight policy keys,
+        // `plan_policies[i].<key>` must resolve. The index list comes from the
+        // file itself (`entry_names`-style enumeration), never from a constant:
+        // a third family added by hand moves this test with it, and the eight
+        // keys are the section table's own set (a commented-out cap included,
+        // which is what keeps the per-family `set-enabled` edit reachable).
+        let declared = entry_names(&example, "plan_policies", "family");
+        assert!(
+            !declared.is_empty(),
+            "the shipped root declares a plan family (ADR-052's flip)"
+        );
+        for i in 0..declared.len() {
+            for key in [
+                "family",
+                "primary",
+                "overflow",
+                "on_primary_exhausted",
+                "recover",
+                "cooldown",
+                "overflow_selection",
+                "overflow_monthly_cap_usd",
+            ] {
+                let path = format!("plan_policies[{i}].{key}");
+                assert!(
+                    resolve(&example, &path).is_ok(),
+                    "the section table's `{path}` must resolve in config.example.yaml"
+                );
+            }
         }
         for name in entry_names(&roster, "providers", "name") {
             let p = format!("providers[name={name}].api_key_env");

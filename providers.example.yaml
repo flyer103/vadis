@@ -424,11 +424,12 @@ providers:
           peak: { multiplier: 1.0, windows: [] }
         source: "https://platform.kimi.ai/docs/pricing/chat-k26 @2026-09-21"
         # general-purpose; text/image/video in, 256k context
-  # The second subscription account, configured like zai-plan above — with one
-  # difference that is the point of spec §4.6: v0.1 carries **at most one**
-  # `plan_policy`, so this plan account is a legal roster entry that no policy
-  # routes yet. Point `plan_policy` at it (family: the tag below) to make it the
-  # preferred account instead of zai-plan.
+  # The second subscription account, configured like zai-plan above. It is a legal
+  # roster entry that no policy routes yet: to point a family at it, set that
+  # family's `primary` to this route in the root's `plan_policies:` list — or, in a
+  # file that writes the single `plan_policy` section instead, set
+  # `plan_policy.primary`. The two spellings are exactly one of the pair
+  # (spec §4.6.1); the family tag is the one below.
   - name: kimi-plan
     region: intl                           # §4.8: the international deployment's Kimi Code account
     currency: USD

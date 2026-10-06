@@ -118,15 +118,17 @@ pub struct KeySpec {
 
 impl KeySpec {
     /// A duration-valued row (the answer is validated against the §12.5
-    /// grammar before it is encoded — spec §4.11 step 2).
+    /// grammar before it is encoded — spec §4.11 step 2). The `cooldown`
+    /// row is matched by **shape**, because it exists in two spellings:
+    /// `plan_policy.cooldown` and `plan_policies[i].cooldown` (ADR-052
+    /// §2.7 item 3 — an equality list of literal paths would let a
+    /// per-family duration answer be encoded unvalidated).
     pub fn is_duration(&self) -> bool {
         matches!(
             self.path,
-            "server.upstream_attempt_timeout"
-                | "server.request_timeout"
-                | "session.ttl"
-                | "plan_policy.cooldown"
-        )
+            "server.upstream_attempt_timeout" | "server.request_timeout" | "session.ttl"
+        ) || self.path == "plan_policy.cooldown"
+            || (self.path.starts_with("plan_policies[") && self.path.ends_with("].cooldown"))
     }
 }
 
@@ -215,67 +217,26 @@ const STATIC_ROWS: &[KeySpec] = &[
         ask: Ask::Show,
         note: "hourly is the only value spec §4.1 defines; edit the file by hand to change it",
     },
-    // routing
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.family",
-        kind: EditKind::SetValue,
-        ask: Ask::Line,
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.primary",
-        kind: EditKind::SetValue,
-        ask: Ask::Line,
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.overflow",
-        kind: EditKind::SetValue,
-        ask: Ask::Line,
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.on_primary_exhausted",
-        kind: EditKind::SetValue,
-        ask: Ask::Enum(&["spill", "block"]),
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.recover",
-        kind: EditKind::SetValue,
-        ask: Ask::Enum(&["probe", "none"]),
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.cooldown",
-        kind: EditKind::SetValue,
-        ask: Ask::Line,
-        note: "",
-    },
+];
+
+/// The eight policy keys of a family, in spec §4.11's order, with the
+/// question each asks. The **paths** are not here: they are built per
+/// spelling (`plan_policy.<key>` or `plan_policies[i].<key>`), so the
+/// routing rows are built rows rather than static ones (ADR-052 F2) and
+/// the list spelling's row set follows the file's own entries.
+const ROUTING_KEYS: [(&str, Ask); 8] = [
+    ("family", Ask::Line),
+    ("primary", Ask::Line),
+    ("overflow", Ask::Line),
+    ("on_primary_exhausted", Ask::Enum(&["spill", "block"])),
+    ("recover", Ask::Enum(&["probe", "none"])),
+    ("cooldown", Ask::Line),
     // spec §4.6.1 / ADR-049 §5.5: how a spilled request picks its metered
     // route — the tag's declared order, or the price ranking. The row sits
     // between `.cooldown` and `.overflow_monthly_cap_usd` (spec §4.11's
     // amended section table).
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.overflow_selection",
-        kind: EditKind::SetValue,
-        ask: Ask::Enum(&["declared", "cheapest"]),
-        note: "",
-    },
-    KeySpec {
-        section: Section::Routing,
-        path: "plan_policy.overflow_monthly_cap_usd",
-        kind: EditKind::SetValue,
-        ask: Ask::Line,
-        note: "",
-    },
+    ("overflow_selection", Ask::Enum(&["declared", "cheapest"])),
+    ("overflow_monthly_cap_usd", Ask::Line),
 ];
 
 /// The `Enabled` rows of `auth` and `routing`: the keys the template ships
@@ -300,27 +261,69 @@ pub const ENABLE_ROWS: &[KeySpec] = &[
 ];
 
 /// The rows of one section, static value rows first, then the entry rows
-/// the file itself determines (`providers`/`plugins`), then `Enabled`
-/// rows. The section table is the single place the wizard's key set is
-/// written — no other module decides what is askable.
+/// the file itself determines (`providers`/`plugins`/`routing`), then
+/// `Enabled` rows. The section table is the single place the wizard's key
+/// set is written — no other module decides what is askable.
 pub fn rows_for(section: Section, file_text: &str) -> Vec<KeySpec> {
     use crate::setup::anchor;
-    // The list spelling (spec §4.6.1 / ADR-049 §4): over a root that
-    // writes `plan_policies:`, none of the `plan_policy.*` rows is
-    // askable — the single-family keys live inside a multi-line mapping
-    // the anchor grammar cannot reach, and a run that quietly reports
-    // `no change` over them is the silent no-op this rule removes
-    // (R68-0 §2.4). The declared families are shown instead, one line
-    // per family, by `show_entries`.
-    if section == Section::Routing && top_key_present(file_text, "plan_policies") {
-        return Vec::new();
-    }
     let mut rows: Vec<KeySpec> = STATIC_ROWS
         .iter()
         .filter(|r| r.section == section)
         .cloned()
         .collect();
     match section {
+        Section::Routing => {
+            // The two spellings (spec §4.6.1 / ADR-049 §4, amended by
+            // ADR-052 §2.2). Over a root that writes `plan_policies:`, the
+            // eight policy rows are built **per declared entry**,
+            // family-major — one family is one block of questions, and the
+            // index in a question stays constant for its whole block. Over
+            // a root that writes the single spelling, or neither key, the
+            // eight singleton rows are built, exactly as before. Both are
+            // built (the `Box::leak` shape the `providers`/`plugins` rows
+            // use), so the row set is a function of **the file** — a third
+            // family added by hand moves the questions with it, and no
+            // source here names a family.
+            let families = plan_family_tags(file_text).len();
+            if families > 0 {
+                for i in 0..families {
+                    for (key, ask) in ROUTING_KEYS {
+                        rows.push(KeySpec {
+                            section,
+                            path: leak(format!("plan_policies[{i}].{key}")),
+                            kind: EditKind::SetValue,
+                            ask,
+                            note: "",
+                        });
+                    }
+                }
+                // The per-family `set-enabled` row for the cap. The
+                // `ENABLE_ROWS` const carries fixed paths, so this one is
+                // built here: the shipped list carries the cap commented
+                // out inside each entry, and a commented key inside a list
+                // entry resolves with `enabled=false` — which is what makes
+                // the edit reachable (ADR-052 §2.1 row 8, measured).
+                for i in 0..families {
+                    rows.push(KeySpec {
+                        section,
+                        path: leak(format!("plan_policies[{i}].overflow_monthly_cap_usd")),
+                        kind: EditKind::SetEnabled,
+                        ask: Ask::Bool,
+                        note: "",
+                    });
+                }
+            } else {
+                for (key, ask) in ROUTING_KEYS {
+                    rows.push(KeySpec {
+                        section,
+                        path: leak(format!("plan_policy.{key}")),
+                        kind: EditKind::SetValue,
+                        ask,
+                        note: "",
+                    });
+                }
+            }
+        }
         Section::Providers => {
             for name in anchor::entry_names(file_text, "providers", "name") {
                 // The row set is decided by the entry the file itself
@@ -407,21 +410,27 @@ pub fn show_entries(section: Section, file_text: &str) -> Vec<(String, String)> 
             v
         }
         Section::Routing => {
-            // The list spelling (spec §4.6.1 / ADR-049 §4): over a root
-            // that writes `plan_policies:`, the section's display names
-            // each declared family — its tag and its
-            // `overflow_selection` — one line per family, in declaration
-            // order. Nothing is prompted and nothing is written there
-            // (`rows_for` builds no `plan_policy.*` value row).
+            // The two spellings (spec §4.6.1 / ADR-049 §4, amended by
+            // ADR-052 §2.2). Over a list root the section prints one
+            // **membership** line per declared family — its index and its
+            // tag, with the note that adding, dropping or reordering a
+            // family is a hand edit — and then the section's ordinary
+            // display lines. The union is the point: `aliases` and
+            // `fallback` are spelled independently of the policy's shape,
+            // so a surface that dropped them because the policy is a list
+            // would hide facts the file carries. The keys **inside** each
+            // entry are prompted (`rows_for` builds them, one family at a
+            // time); only the membership is display-only.
+            let mut v: Vec<(String, String)> = Vec::new();
             if top_key_present(file_text, "plan_policies") {
-                return declared_families(file_text);
+                v.extend(membership_lines(file_text));
             }
-            let mut v = vec![(
+            v.push((
                 "aliases".to_string(),
                 "membership edits (add / drop / reorder an entry) are hand \
                  edits — shown, not prompted"
                     .to_string(),
-            )];
+            ));
             for k in anchor::block_keys(file_text, "aliases") {
                 if let Ok(a) =
                     crate::setup::anchor::resolve_typed(file_text, &format!("aliases.{k}"))
@@ -482,10 +491,11 @@ fn pool_names(text: &str, name: &str) -> Option<Vec<String>> {
     None
 }
 
-/// One display line per declared family of a `plan_policies:` root
-/// (spec §4.11): the family's tag and its `overflow_selection`, in
-/// declaration order — the list is shown, never edited.
-fn declared_families(text: &str) -> Vec<(String, String)> {
+/// Each declared family of a `plan_policies:` root, in declaration order,
+/// as its 0-based index and its tag — the membership fact spec §4.11
+/// prints one line per family, and the set of entries `rows_for` builds
+/// the questions for. A property of the **file**, never of the template.
+fn plan_family_tags(text: &str) -> Vec<(usize, String)> {
     let Some(v) = yaml(text) else {
         return Vec::new();
     };
@@ -493,20 +503,38 @@ fn declared_families(text: &str) -> Vec<(String, String)> {
         return Vec::new();
     };
     list.iter()
-        .map(|e| {
-            let tag = e.get("family").and_then(|f| f.as_str()).unwrap_or("");
-            let sel = e
-                .get("overflow_selection")
-                .and_then(|f| f.as_str())
-                .unwrap_or("declared");
+        .enumerate()
+        .map(|(i, e)| {
             (
-                format!("plan_policies: family {tag} — overflow_selection {sel}"),
-                "the family list is shown, never edited — edits inside a \
-                 plan_policies[i] entry are hand edits"
+                i,
+                e.get("family")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
                     .to_string(),
             )
         })
         .collect()
+}
+
+/// The display-only **membership** lines of a list root: one per declared
+/// family, `plan_policies[<i>] — family <tag>` (spec §4.11's line), each
+/// noting that adding, dropping or reordering a family is a hand edit
+/// while the keys inside the entry **are** prompted (ADR-052 §2.2).
+fn membership_lines(text: &str) -> Vec<(String, String)> {
+    let note = "membership (add / drop / reorder a family) is a hand edit — \
+                the keys inside each entry are prompted"
+        .to_string();
+    plan_family_tags(text)
+        .into_iter()
+        .map(|(i, tag)| (format!("plan_policies[{i}] — family {tag}"), note.clone()))
+        .collect()
+}
+
+/// A built row's path, held for the run's life. `KeySpec::path` is
+/// `&'static str`; the rows a file decides leak one small string each,
+/// exactly as the `providers`/`plugins` rows do.
+fn leak(path: String) -> &'static str {
+    Box::leak(path.into_boxed_str())
 }
 
 #[cfg(test)]
@@ -544,15 +572,47 @@ mod tests {
     /// the table carries must resolve in the shipped example **of its
     /// target file** — the table and the example cannot drift, and the
     /// split cannot move a section's keys without this test seeing it.
+    /// Since **ADR-052** (F2) the `routing` rows are **built** rather
+    /// than static — the shipped root writes the list spelling, so the
+    /// eight `plan_policy.*` paths cannot both stay in `STATIC_ROWS` and
+    /// resolve — and this test therefore keeps the static table minus
+    /// them. The routing witness is the second test below.
     #[test]
     fn every_static_row_resolves_in_the_example() {
-        for row in STATIC_ROWS.iter().chain(ENABLE_ROWS) {
+        for row in STATIC_ROWS
+            .iter()
+            .chain(ENABLE_ROWS)
+            .filter(|r| r.section != Section::Routing)
+        {
             let text = shipped_example_for(row);
             assert!(
                 anchor::resolve(&text, row.path).is_ok(),
                 "{} must resolve in the shipped {} example",
                 row.path,
                 row.section.target(true).as_str()
+            );
+        }
+    }
+
+    /// ADR-052 §2.3(c): the routing section's rows are **built from the
+    /// file** (`plan_policies[i].<key>` for each declared entry, plus
+    /// that family's cap `set-enabled` row), so the witness is the built
+    /// row set: every path it carries must resolve in the shipped root.
+    /// The two tests stay two tests — one over the static table, one over
+    /// the built row set (the ADR's `§2.3(c)`).
+    #[test]
+    fn every_built_routing_row_resolves_in_the_example() {
+        let text = example();
+        let rows = rows_for(Section::Routing, &text);
+        assert!(
+            !rows.is_empty(),
+            "the shipped root declares a plan family (ADR-052's flip)"
+        );
+        for row in &rows {
+            assert!(
+                anchor::resolve(&text, row.path).is_ok(),
+                "the built routing row `{}` must resolve in config.example.yaml",
+                row.path
             );
         }
     }
@@ -731,65 +791,179 @@ plan_policies:
     cooldown: 30m
 "#;
 
-    /// Spec §4.11's list assertion: over a root that writes
-    /// `plan_policies:`, the routing section builds no `plan_policy.*`
-    /// value row and its display names each declared family — the
-    /// alternative spelling's keys are never named as if the file were
-    /// missing them.
+    /// Spec §4.11's list assertion (ADR-052 §2.2, §2.3(d) — re-pointed
+    /// from `a_plan_policies_root_is_shown_never_edited`): over a root
+    /// that writes `plan_policies:`, the routing section **builds the
+    /// eight policy rows per declared family** — family-major, plus that
+    /// family's `set-enabled` row for its commented-out cap — and builds
+    /// **no** `plan_policy.*` row; and its display names each declared
+    /// family's **membership** beside the section's ordinary
+    /// `aliases`/`fallback` lines (the union of §2.2 — a
+    /// spelling-independent line must not vanish because the policy is
+    /// spelled as a list).
     #[test]
-    fn a_plan_policies_root_is_shown_never_edited() {
+    fn a_plan_policies_root_is_edited_family_by_family() {
+        use crate::setup::edit::EditKind;
+
         let rows = rows_for(Section::Routing, PLAN_POLICIES_ROOT);
         assert!(
             rows.iter().all(|r| !r.path.starts_with("plan_policy.")),
-            "no plan_policy.* value row over a plan_policies: root, got {:?}",
+            "no plan_policy.* row over a plan_policies: root, got {:?}",
             rows.iter().map(|r| r.path).collect::<Vec<_>>()
         );
-        let shown = show_entries(Section::Routing, PLAN_POLICIES_ROOT);
-        let families: Vec<&str> = shown
+        // The relation: eight value rows per declared family,
+        // family-major — the fixture declares two families.
+        let keys = [
+            "family",
+            "primary",
+            "overflow",
+            "on_primary_exhausted",
+            "recover",
+            "cooldown",
+            "overflow_selection",
+            "overflow_monthly_cap_usd",
+        ];
+        let value_rows: Vec<&str> = rows
             .iter()
-            .map(|(p, _)| p.as_str())
-            .filter(|p| p.starts_with("plan_policies:"))
+            .filter(|r| r.kind == EditKind::SetValue)
+            .map(|r| r.path)
             .collect();
         assert_eq!(
-            families,
+            value_rows.len(),
+            8 * 2,
+            "8 x the number of declared families"
+        );
+        for (k, key) in keys.iter().enumerate() {
+            assert_eq!(value_rows[k], format!("plan_policies[0].{key}"));
+            assert_eq!(value_rows[8 + k], format!("plan_policies[1].{key}"));
+        }
+        // The rows are the single spelling's own questions.
+        let ask_of = |path: &str| {
+            rows.iter()
+                .find(|r| r.path == path)
+                .map(|r| r.ask)
+                .expect("the row exists")
+        };
+        assert_eq!(
+            ask_of("plan_policies[0].overflow_selection"),
+            Ask::Enum(&["declared", "cheapest"])
+        );
+        assert_eq!(
+            ask_of("plan_policies[1].on_primary_exhausted"),
+            Ask::Enum(&["spill", "block"])
+        );
+        assert_eq!(
+            ask_of("plan_policies[0].recover"),
+            Ask::Enum(&["probe", "none"])
+        );
+        // One set-enabled row per family, for the cap key inside it.
+        let enables: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.kind == EditKind::SetEnabled)
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(
+            enables,
             vec![
-                "plan_policies: family glm-5.3 — overflow_selection cheapest",
-                "plan_policies: family kimi-k3 — overflow_selection declared",
+                "plan_policies[0].overflow_monthly_cap_usd",
+                "plan_policies[1].overflow_monthly_cap_usd"
+            ]
+        );
+
+        // The display: one membership line per declared family — its
+        // index and its tag — then the section's ordinary lines.
+        let shown = show_entries(Section::Routing, PLAN_POLICIES_ROOT);
+        let first: Vec<&str> = shown.iter().take(3).map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            first,
+            vec![
+                "plan_policies[0] — family glm-5.3",
+                "plan_policies[1] — family kimi-k3",
+                "aliases",
             ],
-            "one line per declared family (its tag and its overflow_selection), \
-             in declaration order"
+            "membership lines, then the aliases header"
         );
         assert!(shown
             .iter()
-            .filter(|(p, _)| p.starts_with("plan_policies:"))
-            .all(|(_, note)| note.contains("shown, never edited")));
-        // The single-family root is unchanged: the same calls over the
-        // shipped example still build the eight rows (including the new
-        // overflow_selection row) and the aliases/fallback lines.
-        let shipped = rows_for(Section::Routing, &example());
-        assert!(shipped
+            .filter(|(p, _)| p.starts_with("plan_policies["))
+            .all(|(_, note)| note.contains("hand edit")));
+        assert!(
+            shown.iter().any(|(p, _)| p.starts_with("fallback:")),
+            "the fallback line is spelled independently of the policy's shape"
+        );
+        // The duration row is recognised **by shape** over the list
+        // spelling (ADR-052 §2.7 item 3) — an equality list of literal
+        // paths would let a per-family cooldown answer be encoded
+        // unvalidated.
+        let cooldowns: Vec<&KeySpec> = rows
             .iter()
-            .any(|r| r.path == "plan_policy.overflow_selection"));
-        assert!(shipped
+            .filter(|r| r.path.ends_with(".cooldown"))
+            .collect();
+        assert_eq!(cooldowns.len(), 2, "one cooldown row per declared family");
+        assert!(cooldowns.iter().all(|r| r.is_duration()));
+        let not_durations = [
+            "plan_policies[0].family",
+            "plan_policies[0].overflow_monthly_cap_usd",
+        ];
+        for path in not_durations {
+            assert!(!rows
+                .iter()
+                .find(|r| r.path == path)
+                .expect("the row exists")
+                .is_duration());
+        }
+
+        // Over the **shipped root** itself — a list root from R70 on
+        // (ADR-052 §2.6) — the same relation, over the file's own
+        // families, and the `aliases` line is still shown.
+        let shipped = example();
+        let shipped_rows = rows_for(Section::Routing, &shipped);
+        let families = anchor::entry_names(&shipped, "plan_policies", "family").len();
+        assert!(families >= 1, "the shipped root declares a family");
+        assert_eq!(
+            shipped_rows
+                .iter()
+                .filter(|r| r.kind == EditKind::SetValue)
+                .count(),
+            8 * families,
+            "the shipped root's built row set is 8 per declared family"
+        );
+        assert!(shipped_rows
             .iter()
-            .any(|r| r.path == "plan_policy.overflow_monthly_cap_usd"));
-        assert!(show_entries(Section::Routing, &example())
+            .all(|r| !r.path.starts_with("plan_policy.")));
+        assert!(show_entries(Section::Routing, &shipped)
             .iter()
             .any(|(p, _)| p == "aliases"));
     }
 
-    /// The commented spellings the shipped pair carries (R68-2's frozen
-    /// comments) are inert: a commented `api_keys:` line is not a live
-    /// pool, and a commented `plan_policies:` line is not a live list —
-    /// neither shape is detected over prose alone.
+    /// ADR-052 §2.3(e): the two spellings' inertness after the flip. The
+    /// shipped root now writes the **live** list, so it can no longer be
+    /// the inert carrier a commented spelling is witnessed on — a fixture
+    /// text carrying `# plan_policies:` is — while a commented `api_keys:`
+    /// line is still not a live pool (R68-2's frozen comments).
     #[test]
     fn commented_spellings_are_inert() {
         let root = example();
-        assert!(!top_key_present(&root, "plan_policies"));
-        assert!(!top_key_present(
-            &root,
-            "plan_policy_key_absent_by_construction"
-        ));
+        assert!(
+            top_key_present(&root, "plan_policies"),
+            "the shipped root writes the live list (ADR-052's flip)"
+        );
+        assert!(rows_for(Section::Routing, &root)
+            .iter()
+            .any(|r| r.path.starts_with("plan_policies[")));
+
+        // A commented spelling is prose, not a live list: no per-family
+        // row, no membership line — and the single spelling's rows are
+        // built instead (the file writes neither key).
+        let commented = "# plan_policies:\n#   - family: ghost\n";
+        assert!(!top_key_present(commented, "plan_policies"));
+        assert!(rows_for(Section::Routing, commented)
+            .iter()
+            .all(|r| !r.path.starts_with("plan_policies[")));
+        assert!(show_entries(Section::Routing, commented)
+            .iter()
+            .all(|(p, _)| !p.starts_with("plan_policies[")));
+
         let roster = roster_example();
         assert!(!entry_writes_pool(&roster, "deepseek"));
         assert_eq!(

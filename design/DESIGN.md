@@ -698,7 +698,7 @@ pub struct ServerCfg { pub addr: String, pub upstream_attempt_timeout: DurationV
 | `currency` (spec §4.8) | `USD` \| `CNY`, the ISO-4217 code exact (a lowercase spelling is a load error, and so is any other code); **absent ⇒ `USD`**. The value is carried into `PriceTable.currency` (§12.4) — the parser never converts anything |
 | `region` (spec §4.8) | `cn` \| `intl`; **absent ⇒ `intl`**; any other value is a load error naming `providers[i].region`. Informational: it routes nothing, it chooses no unit, and the vadis does not check it against a host in `urls` (ADR-018, ADR-020). Surfaced by `/health` (§12.10.2) |
 | `models[].family` (spec §4.8) | optional non-empty string; **absent ⇒ the model's own `id`**. At most one model entry of a provider entry may carry a given tag; a duplicate or an empty string is a load error naming `providers[i].models[j].family`. This is the value `plan_policy.family` matches (§4.6). It is never a route: nothing resolves a client's string to a tag, and no rule infers a tag from ids that look alike |
-| `plan_policy` (spec §4.6) | at most one section in v0.1; a second family is an additive future key, never a reshaped section. Its cross-field checks are §12.10.2's table (they are routing rules, not syntax) |
+| `plan_policy` (spec §4.6) | the single-family spelling; **exactly one of `plan_policy` (one family) and `plan_policies` (N) is written** (spec §4.6.1's ladder) — the additive key ADR-049 §4 landed, one list entry per family — never a reshaped section. Its cross-field checks are §12.10.2's table (they are routing rules, not syntax) |
 | `overflow_monthly_cap_usd` (spec §4.6) | read as a `CapUsdVal` (f64 USD) and converted **at load time** by `CapUsdVal::to_nano()` to `Nano((v * 1e9).round())` — one rounding, the same shape as `price` (§12.4); a negative or non-finite value is a load error, and so is setting it when `overflow`'s provider is of a currency other than USD (the cap is USD by name; spec §4.8/§4.6 — the message names the key and the currency found); absent means no cap. Every later comparison is integer and single-currency |
 | `urls` (spec §4.9) | a map `<wire> → <complete URL>`; the vadis uses the value **verbatim** — it appends nothing and trims nothing (ADR-020). `set(keys) == set(supports)` is enforced here: a declared wire with no URL, or a URL for an undeclared wire, is a load error naming `providers[i].urls`, and a value that is not an absolute `http(s)` URL (or that contains whitespace) is a load error naming the path and the value found. The key type is `WireApi`, whose own deserializer refuses an unknown protocol — `deny_unknown_fields` cannot police a map's keys |
 | `rules_file` | resolved relative to **the directory containing this config file** (not the CWD); `trace.dir` follows the same rule (spec §4.1) |
@@ -1588,6 +1588,27 @@ set, `CONF-88/89`'s arms, `CONF-91…97`'s — stays **byte-identical**, with th
 Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract or the L1 envelope
 (AGENTS 9 / ADR-012).
 
+**No allocation for R70 (the wizard edits policy families, `ADR-052`) — recorded 2026-10-06 by the
+round's contract card, and this paragraph exists to record a *non*-allocation.** The occupancy check is
+the same measurement the paragraph above describes (`ls` of `tests/conformance/tests/` cross-read with
+the register): the maximum file id is `CONF-104` (`R69`'s five), `CONF-98`/`CONF-99` remain the parked
+branch `round/67-abandoned-attempt`'s, and **`CONF-105` stays free**. R70 spends **no** id, for the
+reasons ADR-052 §2.6 states and this section should make checkable: the behaviour it lands is the
+**shipped root's own shape** — after R70 the shipped `config.example.yaml` writes `plan_policies:`, so
+the section table's own test module asserts the row set **over the shipped file itself**, which is
+strictly stronger than a case re-creating that root in its own temp dir; and the half an on-wire case
+*could* observe that the in-crate witness cannot — an answer landing on a line inside a list entry — is
+the **interactive** path, which spec §4.11 pins to a PTY script rather than to a Rust harness. Spending
+an id is irreversible and allocating one is the owner's act (ADR-012; the paragraphs above); a card that
+cannot write the stronger assertion must not burn the id to approximate it. The round's witnesses are
+therefore the **migrated** existing assertions of ADR-052 §2.6's table (five CLI sites in
+`crates/vadis-cli`, plus the in-crate byte contract of `CONF-67/69`'s shape) and no new file. The
+**heading of this section therefore stays** `` `CONF-01…CONF-104` ``, and no existing assertion moves
+beyond the five ADR-052 §2.3 names; `docs/spec.md` §9.3 was **checked** by the same card and gains no
+row — the flip adds and removes no surface (`vadis setup` is served before and after, and no listed
+deferred surface is involved). Nothing here moves a gate definition, a threshold, the corpus, the loop
+replay contract or the L1 envelope (AGENTS 9 / ADR-012).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1696,6 +1717,25 @@ five existing CLI assertions that stand on them (`config_load.rs:379`, `setup/an
 fresh `vadis setup` silently unable to edit any family. Due round: the one that teaches the wizard's
 anchor syntax its support list and edits it (spec §4.11 + the `sections.rs` line construction).
 Detail: ADR-051's dated note of 2026-10-06 (R69-2b).
+
+**Register line (2026-10-06, R70): the line above is CLOSED — R70 is that due round.** `ADR-052`
+(`design/decisions/ADR-052-wizard-edits-policy-families.md`) lands the contract: the anchor grammar's
+`a.b[i].k` row (already implemented at HEAD; measured), the per-family row set over a `plan_policies:`
+root (eight keys per declared entry, family-major, the membership line display-only), the shipped
+root's flip to the two-family list, and the migration of the five CLI assertions named above — each
+re-stated by semantics in ADR-052 §2.3, not by a literal diff. **Two things the round decided *not* to
+do, and one premise it corrects.** (i) **No `CONF` id is allocated** — `CONF-105` stays free — for the
+reasons §12.8's non-allocation paragraph records (the witness is the shipped root itself, and the
+interactive half belongs to a PTY). (ii) The wizard's **membership** edits (add / drop / reorder a
+family) stay hand edits (Q21's boundary; ADR-052 `R70-0-F4`). (iii) The round's card states both
+families are single-currency; the measurement says **either** family mixes once ranked (a family tag
+defaults to the model's own id, §4.8, so `zai-cn`'s GLM-5.3 entries join both candidate sets), and the
+shipped comment that stated the refusal for the first family alone is corrected to say either — the
+`declared` default is what makes the flip legal, and switching either family to `cheapest` is refused
+at load naming that family's own key (ADR-052 §1.2 item 4, measured). What this register line may
+**not** claim: nothing here is measured on a landed template — R70-0 writes no product byte and no
+`config.example.yaml` line; the flip and its two rewritten sentences land in ADR-052 §2.7's
+implementing card.
 
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
@@ -3315,15 +3355,22 @@ file's §2, and "anti-pattern N" its §4.
 | `setup/split.rs` | **the shape step** (ADR-038): the inline `providers:` block's span, the byte move into the roster file's bytes, and the root's replacement line — a pure function of (the root's text, the template's own `providers_file:` line), no I/O and no YAML document |
 | `config_path` (**not** under `setup/`) | the location rule both sides call: spec §4.12's order, the `selected_by` member, the `mkdir -p` / `0600` / `0700` rules. `main` resolves once and passes an **absolute path** to `serve` / `stats` / `setup`, whose signatures are unchanged — which is what keeps CONF-23's, CONF-25's and CONF-43's rigs driving the same code path they always did |
 
-**The askable key set's two ADR-049 shapes (spec §4.11; the R68 contract).** The section table gains three
+**The askable key set's two ADR-049 shapes (spec §4.11; the R68 contract, the list spelling amended by
+ADR-052).** The section table gains three
 pieces of behaviour and no new section. (i) `plan_policy.overflow_selection` is a `routing` value row
 (`Ask::Enum(&["declared", "cheapest"])`), its default read from the file and else from the template like
 every other row. (ii) A provider entry that writes `api_keys:` in place of `api_key_env` contributes a
 **display-only** row instead of its `api_key_env` row (the `show_entries` shape: one line per pool name, with
 the hand-edit note), because a pool's membership is a flow sequence and locator rule 6 above makes a flow
-value not settable. (iii) Over a root that writes `plan_policies:`, `rows_for(Routing)` returns **no**
-`plan_policy.*` rows and `show_entries(Routing)` names each declared family — the list is a membership
-structure and a `plan_policies[i]` entry is a multi-line mapping, so `a.b[i]` cannot reach inside it. All
+value not settable. (iii) Over a root that writes `plan_policies:`, `rows_for(Routing)` builds the eight
+policy rows of the section table **for each declared entry**, family-major, with the dynamic paths
+`plan_policies[<i>].<key>` (the `Box::leak(format!(…))` shape the `providers`/`plugins` rows already use) —
+including, per entry, the `SetEnabled` row for a commented-out `overflow_monthly_cap_usd`, which the
+`ENABLE_ROWS` const cannot carry because its paths are fixed; and `show_entries(Routing)` prints one
+**membership** line per declared family (`plan_policies[<i>] — family <tag>`, stating that adding, dropping
+or reordering a family is a hand edit) **beside** the section's ordinary `aliases`/`fallback` lines — the
+union, because a spelling-independent line must not vanish because a policy is spelled as a list. The row
+set follows the file's entries, so a hand-added third family moves the questions with it. All
 three are decided by the **file the run is holding** (the locator's own block/flow reading), never by whether
 the shipped template carries the entry's name. **At HEAD the warning shape is template-dependent and this is
 the defect the contract removes:** a row is skipped with a warning only when **neither** the base **nor** the
@@ -3332,13 +3379,22 @@ template resolves it (`setup/mod.rs:866-881`), so a pool entry whose name the sh
 providers[name=…].api_key_env: not settable in this file …; left alone` — measured both ways by R68-0
 (`autowork/harness/r68-0/probe-out/probe3.log`, P5/P5b). Nothing on `--check` moves: `setup/report.rs:72`
 already enumerates `key_pool()`, one row per name, which is the read-out spec §4.11's secret boundary now
-states. **The witness is `setup/sections.rs`'s own test module** over two fixtures — a roster that writes
-`api_keys:` for one entry, and a root that writes `plan_policies:` — both shapes the shipped pair names only
-inside comments, never as live keys (spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
+states, and a `plan_policies[i].<key>` row names no environment variable at all. **The witness is
+`setup/sections.rs`'s own test module** over one fixture — a roster that writes `api_keys:` for one entry —
+and, for the list spelling since ADR-052, **over the shipped root itself** (the shipped template is a
+`plan_policies:` root from R70 on, so no fixture can be a better witness than the file the round ships; the
+shipped roster still names `api_keys:` only inside a comment, which is why the pool's half keeps its
+fixture — spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
 reason spec §4.11's assertion list gives: §12.8's occupancy is `CONF-01…CONF-97` at HEAD and the parked
 `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`. **Dated note (2026-10-06, R69):** the heading
 has since moved to `CONF-01…CONF-104` (the allocation paragraph for ADR-051 above); this round allocated none,
-which is what this sentence states, and `CONF-98`/`CONF-99` remain the parked branch's.
+which is what this sentence states, and `CONF-98`/`CONF-99` remain the parked branch's. **Dated note
+(2026-10-06, R70):** ADR-052 rewrote clause (iii) — it read *"`rows_for(Routing)` returns **no**
+`plan_policy.*` rows and `show_entries(Routing)` names each declared family — the list is a membership
+structure and a `plan_policies[i]` entry is a multi-line mapping, so `a.b[i]` cannot reach inside it"*. The
+first half was the defect (the shipped root became a silent no-op for every user); the second was imprecise —
+the **terminal** `a.b[i]` cannot reach inside a mapping entry, while `a.b[i].k` does, and does so at HEAD
+already (measured; the grammar table above now lists the row and locator rule 6 refuses the terminal form).
 
 **Types** (sketch; the shapes whose *stability* matters, not the bodies):
 
@@ -3376,6 +3432,7 @@ pub fn apply(base: &[u8], plan: &Plan) -> Vec<u8>;            // pure; byte-spli
 |---|---|
 | `a.b.c` | the value of key `c` in the block mapping `b` in the document's `a` block |
 | `a.b[i]` | the `i`-th entry of the **block sequence** `b` (0-based), when that entry is a single-line scalar |
+| `a.b[i].k` | the key `k` of the `i`-th entry of the **block sequence** `b` (0-based), when that entry is a **block mapping** — including an entry whose first key rides its own dash line. The form the wizard reaches a `plan_policies[i]` entry's keys with (ADR-052 §2.1); every one of the eight policy keys resolves on its own line inside the entry, a commented-out one included |
 | `a[id=NAME].k` / `providers[name=NAME].k` | the key `k` inside the list entry whose own sibling `id:` / `name:` is `NAME` |
 
 **The locator's rules — the one piece that carries the risk, so every rule is stated.** It is a **line
@@ -3393,8 +3450,11 @@ comments the whole strategy exists to protect).
 5. `[id=NAME]` / `[name=NAME]` resolve by scanning that entry's **own** lines only, so a key of a *different*
    entry can never be matched by text alone.
 6. **Not settable** (a refusal for a requested change, a warning otherwise): a value inside a flow collection
-   (`{ … }`, `[ … ]`), a block scalar, a multi-line value, or a key that appears at two depths the path cannot
-   distinguish. **Ambiguous** when the path matches more than one line. **No such key** when it matches none.
+   (`{ … }`, `[ … ]`), a block scalar, a multi-line value, a key that appears at two depths the path cannot
+   distinguish, or a **terminal** selector — `a.b[i]`, `…[name=NAME]`, `…[id=NAME]` as the path's last
+   segment — whose entry is a block mapping rather than a single-line scalar: the last case must be **refused**,
+   never answered with the entry's own dash line, because the extent it would name is structure and not a value
+   (ADR-052 §2.1). **Ambiguous** when the path matches more than one line. **No such key** when it matches none.
 7. The scanner reads bytes; it edits a **copy** of the base and returns new bytes. The target is never edited
    in place.
 

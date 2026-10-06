@@ -225,9 +225,10 @@ providers:
   endpoint is usually a *different* base URL from the same vendor's metered API (sometimes a different
   host entirely). Copy the plan's base URL from the plan's own documentation, not from the metered entry.
 - **A plan and a metered account can serve one model under two different ids.** Pair them with a **family
-  tag**: give both model entries the same `family` string and name that string in `plan_policy.family`. Each
-  route still sends the id its own provider expects, so the tag changes what the vadis prefers, never what
-  goes on the wire ([`docs/spec.md` §4.8](../docs/spec.md)).
+  tag**: give both model entries the same `family` string and name that string in the policy's `family`
+  key — `plan_policy.family`, or `plan_policies[i].family` in the list spelling the shipped template
+  carries. Each route still sends the id its own provider expects, so the tag changes what the vadis
+  prefers, never what goes on the wire ([`docs/spec.md` §4.8](../docs/spec.md)).
 - **Check the plan's terms before pointing it at a gateway.** Not every vendor allows a subscription key to
   be used through your own tool: at least one mainland coding plan documents that its allowance is only
   usable inside the vendor's supported coding tools, while another documents handing the subscription's key

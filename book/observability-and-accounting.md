@@ -136,8 +136,9 @@ question.
 Two surfaces read the records back out, and both are **read-only** — neither is a second source of
 truth, and neither prices anything you cannot already find in a record:
 
-- **`GET /health`** answers with what this process actually loaded, and when a `plan_policy` is
-  configured it also carries a **plan section**: the family, its two routes, which account the
+- **`GET /health`** answers with what this process actually loaded, and when a plan family is
+  configured — either spelling: `plan_policy`, or the `plan_policies` list — it also carries a
+  **plan section**: the family, its two routes, which account the
   family is on right now, when it moved there, and — while it is on the metered account — the
   instant at which the plan may be probed again, plus why a probe would not be admitted yet
   (the cooldown, the plan's own window, a provider cooldown). It reports state; it can also say

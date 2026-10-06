@@ -174,53 +174,41 @@ fallback:
   - kimi/kimi-k3
   - zai/glm-5.3
 
-plan_policy:
-  # spec §4.6 / ADR-014 — the subscription first, the metered account as the
-  # spill. Optional, and **at most one** in v0.1 (a second family is an additive
-  # future key, never a reshaped section). The keys and this example land
-  # together (GAP-Q15): `deny_unknown_fields` makes an example that carries a key
-  # the parser does not know an unservable file.
-  family: glm-5.3                    # required: the model id both routes carry — and the key of the family's state.
-                                    #   Both entries declare `family: glm-5.3` explicitly (§4.8; kept through the
-                                    #   2026-09-21 → 2026-09-22 `[1m]` → bare id round-trip, R16-1) so the pairing
-                                    #   does not depend on id equality.
-  primary: zai-plan/glm-5.3         # required: a roster route whose provider is `account: coding_plan`. The id is
-                                    #   the bare upstream-native form again (R16-1 revert, 2026-09-22): `[1m]` is a
-                                    #   client-side switch the upstream refuses as an id (400 [1211], measured).
-  overflow: zai/glm-5.3              # required: a distinct roster route whose provider is `account: api`. For a request inside
-                                     #   this family it is the first candidate after `primary`, before the `fallback` list above (§4.2)
-  on_primary_exhausted: spill        # spill | block (default spill). spill: the family continues on the metered account at its
-                                     #   real price. block: the request is refused with `quota_exceeded` (429, §8) instead of being
-                                     #   served from the metered account.
-  recover: probe                     # probe | none (default probe). probe: after the cooldown the first request of a new session
-                                     #   tries the plan again, and a success is recorded. none: no automatic probe — the family
-                                     #   returns at the plan's own window boundary, or by an operator action.
-  cooldown: 15m                      # default 15m: the floor between the move away from `primary` and the first admitted probe
-  # overflow_monthly_cap_usd: 20.0   # optional: a ceiling on this family's **metered** spend in a UTC calendar month, compared
-                                     #   against measured usage priced by this file's table. Once reached, the family's overflow
-                                     #   requests are refused with `cost_cap_exceeded` (403, §8). The request that crosses the
-                                     #   ceiling is served (its cost cannot be known beforehand), so the overshoot is at most one
-                                     #   request. Absent = no cap; commented out here on purpose — the shipped example imposes none.
-  # A plan's `quota` is a warning, not the authority (spec §4.6 rule 3, GAP-Q1):
-  # only an upstream `403 quota_exhausted` moves the account, and it may defer a
-  # probe until the plan's own window boundary has passed. Neither plan entry in
-  # this file carries a `quota` block today — both vendors publish their
-  # allowance in a shape that is not a monthly token count (spec §4.0, GAP-Q17),
-  # so the key is demonstrated by `docs/spec.md` §4.6 and not by this roster.
-  # --- the fan-out's other keys (spec §4.6.1 / ADR-049) — written nowhere on purpose -------------
-  # overflow_selection: declared   # the default is this file's behaviour. `cheapest` ranks the family's
+plan_policies:
+  # spec §4.6 / ADR-014 / ADR-049 §4 — the subscription first, the metered account
+  # as the spill. A **list** of families, one entry each: the shipped default, and
+  # the shape `vadis setup` walks family by family (spec §4.11). `plan_policy:`
+  # (one family, no list) stays a legal alternative spelling, and exactly one of
+  # the two keys is written — a second family in one file is an entry here, never
+  # a second `plan_policy:` section. The keys and this example land together
+  # (GAP-Q15): `deny_unknown_fields` makes an example that carries a key the
+  # parser does not know an unservable file.
+  - family: glm-5.3                    # required: the model id both routes carry — and the key of the family's state.
+    primary: zai-plan/glm-5.3          # required: a roster route whose provider is `account: coding_plan`.
+    overflow: zai/glm-5.3              # required: a distinct roster route whose provider is `account: api`.
+    on_primary_exhausted: spill        # spill | block (default spill).
+    recover: probe                     # probe | none (default probe).
+    cooldown: 15m                      # default 15m: the floor between the move away from `primary` and the first admitted probe
+    # overflow_selection: declared
+    # overflow_monthly_cap_usd: 20.0   # optional: a ceiling on this family's **metered** spend in a UTC calendar month.
+  - family: glm-5.3-flash              # the second family; its routes already exist in the roster (zai-plan, zai)
+    primary: zai-plan/glm-5.3-flash
+    overflow: zai/glm-5.3-flash
+    on_primary_exhausted: spill
+    recover: probe
+    cooldown: 15m
+    # overflow_selection: declared
+    # overflow_monthly_cap_usd: 20.0
+  # --- the fan-out's other key (spec §4.6.1 / ADR-049) — written nowhere on purpose ----------------
+  # overflow_selection: declared   # the default is this file's behaviour. `cheapest` ranks a family's
   #   metered candidates by price (input_miss, then output, then roster order) instead, and it **refuses to
-  #   load** over this roster: every family below pairs an intl (USD) metered route with a cn (CNY) one, and
-  #   a ranking is a comparison — two currencies are never compared (spec §4.8). Measured 2026-10-06:
-  #   `cheapest` on family `glm-5.3` exits 2, "family 'glm-5.3' mixes currencies across its metered
-  #   candidate set". A single-currency family is what the mode needs; drop the other currency's route, or
-  #   keep `declared`.
-  #   The other two spellings are roster/policy shapes, not keys of this block: a per-provider credential
-  #   `api_keys:` pool (roster) and a `plan_policies:` list of families in place of the one `plan_policy:`
-  #   above. `vadis setup` shows a pool and shows the list — neither is prompted, and neither is written by
-  #   a run (spec §4.11).
-
-# spec §4.6's other key lives on the provider entries above, not here:
-# `account: coding_plan | api` (absent ⇒ api) — see `zai-plan` and
-# `kimi-plan`. Operators who want no speculative attempt at all write
-# `recover: none` above instead.
+  #   load** over this roster: **either** family in the list above mixes an intl (USD) metered route with a
+  #   cn (CNY) one (the family tag defaults to the model's own id, §4.8, so `zai-cn`'s GLM-5.3 entries join
+  #   both candidate sets), and a ranking is a comparison — two currencies are never compared (spec §4.8).
+  #   Measured 2026-10-06: `cheapest` on the second family exits 2 too, "family 'glm-5.3-flash' mixes
+  #   currencies across its metered candidate set", naming `plan_policies[1].overflow_selection`. A
+  #   single-currency family is what the mode needs; drop the other currency's route, or keep `declared`.
+  #   The one remaining alternative spelling is a roster shape, not a key of this block: a per-provider
+  #   credential `api_keys:` pool. `vadis setup` shows a pool — never prompted, never written by a run. The
+  #   families above **are** prompted and written, one family at a time, by the keys inside each entry
+  #   (spec §4.11).

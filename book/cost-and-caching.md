@@ -211,21 +211,23 @@ still writes `provider/model`, and a bare tag resolves to nothing), and it is no
 guesses that `k3` and `kimi-k3` are the same model — you state it or it is not true)
 ([`docs/spec.md` §4.8](../docs/spec.md)).
 
-One optional top-level `plan_policy` section then names the pair:
+One optional top-level `plan_policies:` **list** then names the pair — one entry per family (the
+shipped template carries it, and `vadis setup` walks it one family at a time):
 
 ```yaml
-plan_policy:
-  family: <the family tag both routes' model entries carry>   # §4.8 — see below when their ids differ
-  primary: <the coding-plan route>   # must be an account: coding_plan route
-  overflow: <the metered route>      # must be an account: api route, distinct from primary
-  on_primary_exhausted: spill        # or block
-  recover: probe                     # or none
-  cooldown: 15m
-  # overflow_monthly_cap_usd: <usd>  # optional ceiling on metered spend
+plan_policies:
+  - family: <the family tag both routes' model entries carry>   # §4.8 — see below when their ids differ
+    primary: <the coding-plan route>   # must be an account: coding_plan route
+    overflow: <the metered route>      # must be an account: api route, distinct from primary
+    on_primary_exhausted: spill        # or block
+    recover: probe                     # or none
+    cooldown: 15m
+    # overflow_monthly_cap_usd: <usd>  # optional ceiling on metered spend
 ```
 
-`plan_policy` appears **at most once** in v0.1 (one family). A second plan account that no policy
-names is a legal roster entry — it is simply not routed specially yet.
+**One of the two spellings is written, never both**: either that list, or the single `plan_policy:`
+section (one family, no list). A second plan account that no entry names is a legal roster entry — it
+is simply not routed specially yet.
 
 **When it spills.** Only when the provider itself says the plan is exhausted — an upstream
 `403`. The verdict is read off the provider's own answer, which vadis reads before it decides —
@@ -335,9 +337,9 @@ plan_policy:
 ```
 
 With several families (say, one plan pair per model you use), write them as a list under
-`plan_policies:` instead — the parser and the routing have accepted the list since ADR-049, while
-the shipped template still carries the one `plan_policy:`. One of the two keys, never both — as with
-the roster's own two spellings, a config that writes both is refused at load, naming both keys.
+`plan_policies:` — the parser and the routing have accepted the list since ADR-049, and the shipped
+template carries it (`vadis setup` walks it one family at a time). One of the two keys, never both —
+as with the roster's own two spellings, a config that writes both is refused at load, naming both keys.
 
 **The order is your roster order.** Inside the plan tier every member costs the same (zero marginal
 price), so there is no price to rank them by — the order is yours, expressed by where you list the
