@@ -429,6 +429,9 @@ not in this repository yet, and this chapter will not invent them.
   engine and the cache policy.
 - [`docs/spec.md` §4.6](../docs/spec.md) — `account` and `plan_policy`: the per-key
   semantics, the defaults and the hard rules of plan-first routing.
+- [`docs/spec.md` §4.6.1](../docs/spec.md) — the fan-out's own contract: a provider entry's
+  credential pool, the `cheapest` metered ranking and the `plan_policies:` list, with every
+  load-time refusal that goes with them.
 - [`design/decisions/ADR-014-plan-first-routing.md`](../design/decisions/ADR-014-plan-first-routing.md)
   — why the preference is session-scoped, why the upstream (not the local counter) is the
   authority on exhaustion, and why a probe only happens at a session boundary.

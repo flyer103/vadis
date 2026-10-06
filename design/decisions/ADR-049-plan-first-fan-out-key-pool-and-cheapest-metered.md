@@ -577,3 +577,27 @@ the observation boundary (constraint 3 — §7's additions are reads), the accou
 no new figure, and nothing here may be counted as a saving), the price policy (constraint 5 — the ranking
 *reads* the sourced table and writes no number), and ADR-014's three frozen rules: session granularity
 (item 1), the session-boundary probe (item 2), and the guard's rule order (item 9).
+
+---
+
+## Dated note — 2026-10-06 (R68-0; **F-12** of R66's close-out register)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** It repairs the
+*wording* of one sentence and points at the authority rather than restating it.
+
+**§7(e)'s `key_index` clause names two null classes where the code has one.** §7(e) reads *"the credential
+that served, integer, `null` when the provider holds one key **or when the pool's first name served**"*. Only
+the first half is true. The rule the code implements is one class: `decision.key_index` is `null` **iff** the
+entry writes the single-key spelling (`api_key_env`), and it is the credential's **integer index into
+`api_keys`** — `0` for the pool's first name — whenever the entry writes the pool. The code sites are
+`crates/vadis-proxy/src/forward.rs:1536` (`key_index: multi_key.then_some(key_cursor as u32)`) and
+`crates/vadis-proxy/src/stream_forward.rs:206` (*"`decision.key_index` is null on the single-credential
+spelling"*); `CONF-91` and `docs/spec.md`'s `decision` field row agree with them, so this ADR's sentence is
+the outlier — written before the index's base was frozen. Read §7(e)'s clause as: *`null` when the entry
+holds one credential; otherwise the index, in `api_keys` declaration order, of the name that served — `0`
+for the first.*
+
+**What this note does not do.** It re-opens no decision: §3 (the pool), §6 (the trace members) and §9 (the
+cases) are untouched, no key is added, and no assertion is edited (AGENTS constraint 9 / ADR-012 — this is a
+wording repair, not a measurement, and it moves no gate, corpus, threshold or L1-envelope value). It closes
+the item R66's close-out carried as **F-12** against the code at `5d78f7b`; `CONF-91` stays the witness.

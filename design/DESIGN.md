@@ -3225,13 +3225,36 @@ file's §2, and "anti-pattern N" its §4.
 | Module | Holds |
 |---|---|
 | `setup/mod.rs` | the run: the target/base decision, the section list, the plan → validate → land sequence, the exit codes — and the three embedded templates it starts from: the root example (`EMBEDDED_TEMPLATE`), the roster example (`EMBEDDED_ROSTER`) and, from **ADR-046**, the rule file (`EMBEDDED_RULES`, `rules/tool_output.toml`) |
-| `setup/sections.rs` | **the section table** — the single place the wizard's key set is written (section, key path, edit kind, how to ask, style hint) |
+| `setup/sections.rs` | **the section table** — the single place the wizard's key set is written (section, key path, edit kind, how to ask, style hint), including the two ADR-049 shapes' rows (spec §4.11: the display-only `api_keys` pool row, and the `routing` section's list-of-families reading) |
 | `setup/anchor.rs` | the line-oriented locator: key paths → a unique `(line, byte range)` inside the file's own bytes |
 | `setup/edit.rs` | the two edit kinds, the value codec, `Plan`, `apply` |
 | `setup/prompt.rs` | the answer channel: `std::io::IsTerminal` on stdin, line reads, the `[default]` rendering |
 | `setup/report.rs` | the `--print` / `--check` / `--dry-run` renderings, human and `--json` |
 | `setup/split.rs` | **the shape step** (ADR-038): the inline `providers:` block's span, the byte move into the roster file's bytes, and the root's replacement line — a pure function of (the root's text, the template's own `providers_file:` line), no I/O and no YAML document |
 | `config_path` (**not** under `setup/`) | the location rule both sides call: spec §4.12's order, the `selected_by` member, the `mkdir -p` / `0600` / `0700` rules. `main` resolves once and passes an **absolute path** to `serve` / `stats` / `setup`, whose signatures are unchanged — which is what keeps CONF-23's, CONF-25's and CONF-43's rigs driving the same code path they always did |
+
+**The askable key set's two ADR-049 shapes (spec §4.11; the R68 contract).** The section table gains three
+pieces of behaviour and no new section. (i) `plan_policy.overflow_selection` is a `routing` value row
+(`Ask::Enum(&["declared", "cheapest"])`), its default read from the file and else from the template like
+every other row. (ii) A provider entry that writes `api_keys:` in place of `api_key_env` contributes a
+**display-only** row instead of its `api_key_env` row (the `show_entries` shape: one line per pool name, with
+the hand-edit note), because a pool's membership is a flow sequence and locator rule 6 above makes a flow
+value not settable. (iii) Over a root that writes `plan_policies:`, `rows_for(Routing)` returns **no**
+`plan_policy.*` rows and `show_entries(Routing)` names each declared family — the list is a membership
+structure and a `plan_policies[i]` entry is a multi-line mapping, so `a.b[i]` cannot reach inside it. All
+three are decided by the **file the run is holding** (the locator's own block/flow reading), never by whether
+the shipped template carries the entry's name. **At HEAD the warning shape is template-dependent and this is
+the defect the contract removes:** a row is skipped with a warning only when **neither** the base **nor** the
+template resolves it (`setup/mod.rs:866-881`), so a pool entry whose name the shipped roster carries produced
+**no warning at all** (a silent no-op), while one whose name it does not produced `warning:
+providers[name=…].api_key_env: not settable in this file …; left alone` — measured both ways by R68-0
+(`autowork/harness/r68-0/probe-out/probe3.log`, P5/P5b). Nothing on `--check` moves: `setup/report.rs:72`
+already enumerates `key_pool()`, one row per name, which is the read-out spec §4.11's secret boundary now
+states. **The witness is `setup/sections.rs`'s own test module** over two fixtures — a roster that writes
+`api_keys:` for one entry, and a root that writes `plan_policies:` — both shapes the shipped pair names only
+inside comments, never as live keys (spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
+reason spec §4.11's assertion list gives: §12.8's occupancy is `CONF-01…CONF-97` at HEAD and the parked
+`round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`.
 
 **Types** (sketch; the shapes whose *stability* matters, not the bodies):
 

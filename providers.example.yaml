@@ -21,6 +21,11 @@ providers:
       responses: https://api.deepseek.com/responses
       anthropic: https://api.deepseek.com/anthropic/v1/messages
     api_key_env: DEEPSEEK_API_KEY                 # the key is read only from this env; no value in this file
+                                                  #   the pool spelling is `api_keys: [ENV_A, ENV_B]`, in rotation order — exactly
+                                                  #   one of this key OR that one (spec §4.6.1 / ADR-049). A pool rotates a
+                                                  #   credential on 401 / 429 only; an upstream 403 quota_exhausted is a fact
+                                                  #   about the *account*, never a bad key, so it moves the family and rotates
+                                                  #   nothing. `vadis setup --check` reports one row per name in a pool.
     wire_api: responses                           # official docs explicitly support the Responses API (for the Codex scenario)
     supports: [chat, responses, anthropic]        # all three wire formats are officially documented (Responses API / Anthropic API),
                                                   #   and each carries its own URL above — so all three cells are reachable
@@ -86,6 +91,13 @@ providers:
         #   `anthropic` alone, which understated the plan — the same page (and the model-switch guide) lists the
         #   OpenAI Chat and OpenAI Responses bases too, and each is a complete URL now, so none has to be guessed.
     account: coding_plan                          # coding_plan | api (absent ⇒ api)
+                                                  #   this entry is NOT the family's only plan. `zai-cn-plan` below carries the
+                                                  #   same `family: glm-5.3` tag, so family `glm-5.3` has a **two-member plan
+                                                  #   tier**: `plan_policy.primary` starts the walk here and the second member is
+                                                  #   drained before any metered money is spent (ADR-049 §5.1). A family whose tag
+                                                  #   one `coding_plan` entry alone carries is a one-member tier — the pre-ADR-049
+                                                  #   shape. This roster holds none: every tag it declares is carried by two
+                                                  #   `coding_plan` entries, so no one-member tier is shown here.
     models:
       - id: glm-5.3                               # the upstream-native id — REVERTED 2026-09-22 (R16-1): `glm-5.3[1m]` is
                                                   #   refused 400 [1211] 模型不存在 on every plan wire (anthropic / chat /

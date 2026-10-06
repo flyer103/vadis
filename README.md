@@ -19,9 +19,11 @@ Three native wires — `POST /v1/chat/completions`, `POST /v1/responses`, `POST 
 | **Three wires, one endpoint** | chat completions, responses and Anthropic messages, each served natively when the route's provider speaks that wire |
 | **Byte-faithful passthrough** | the client's own bytes minus vadis-owned top-level fields, carrying the resolved provider-native `model` id; a streaming response relays the upstream's SSE events as they arrive |
 | **A decision and a cost record per request** | the decision, the plan family's switches, the usage the upstream reported, integer-Nano amounts and the quota snapshot; `vadis stats` and `GET /health` read them back |
-| **Plan-first routing, classified failover** | a subscription account as primary, its metered twin as spill, a session-boundary probe back; upstream failures are classified and the request fails over along the configured chain |
+| **Plan-first routing, classified failover** | every coding-plan account of a family is drained before anything metered is spent, a provider's credential pool rotates when one is refused, and the metered accounts can be ranked by their own published prices; upstream failures are classified and the request fails over along the configured chain |
 | **Prefix-cache continuity** | session identity is the client's own key (`prompt_cache_key`, then the configured headers), so one turn cannot invalidate the cache for the turns after it |
 | **Hot reload, guided setup** | a config change takes effect without a restart; `vadis setup` writes the config trio from templates embedded in the binary and asks about only your own keys ([plugins](book/plugins.md)) |
+
+**Holding several plans, or several keys for one provider?** Give the entries that belong together the same `family` tag — that tag *is* the candidate set, so adding a plan or a metered account is a roster edit and nothing else — then name the pair's anchor and the ranking mode. Several families go in one `plan_policies:` list, and a family ranked by price must be single-currency: a candidate set spanning USD and CNY is refused at load. A ranking is resolved once and pinned to the session, so a reload moves new sessions only. `vadis setup` shows a provider's `api_keys:` pool and a root's `plan_policies:` list, and writes neither. The walk-through is [Cost and caching § Several keys, several plans](book/cost-and-caching.md#several-keys-several-plans-drain-them-all-then-spend); the contract is [`docs/spec.md` §4.6/§4.6.1](docs/spec.md).
 
 ## Requirements
 

@@ -656,7 +656,8 @@ the key. Each key holds its own cooldown (a projection keyed `(provider, key_ind
 names the **index** — never the value (spec §4.7's own rule, at N names). A key switch may change the
 upstream cache namespace, so it is narrated and priced exactly as an account move is
 (`error.classified.action: "rotate_credential"`). The pool touches **no body byte** (AGENTS constraint 1):
-it is a header.
+it is a header. The pool as `vadis setup` sees it — a display-only row on the writing side, one row per name
+on `--check` — is §4.11's askable key set, which is the surface that states it.
 
 **The family list.** `plan_policies:` is a list of the policy objects above; exactly one of `plan_policy`
 (one family) and `plan_policies` (N) is written (§4.14's ladder). Families are **independent**: one family's
@@ -1128,9 +1129,39 @@ where a group coincides with a file block it takes that block's name.
 | `auth` | `server.auth_token_env` — the **variable name** only, plus whether the key is enabled at all | value / enabled | the file's state (the template ships it commented out) | the root config file |
 | `session` | `session.ttl`, `cache.sticky`, `cache.breakeven.enabled`, `cache.breakeven.min_remaining_turns`, `cache.breakeven.safety_factor` | value | the file's current value, else the template's | the root config file |
 | `paths` | `trace.dir`, `trace.rollover` (`hourly` is the only value §4.1 defines) | value | same | the root config file |
-| `providers` | `providers[name=<entry>].api_key_env`, for every provider entry | value | same | the **roster file** — one the root names with `providers_file:` (§4.14), or one this run creates by moving the root's inline block (the *shape step* below, ADR-038) |
-| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_monthly_cap_usd` | value / enabled | same | the root config file |
+| `providers` | `providers[name=<entry>].api_key_env`, for each entry that **writes that key**, and a **display-only pool row** `providers[name=<entry>].api_keys` (§4.6.1) for each entry that **writes the pool instead** — never both for one entry, which §4.6.1's exactly-one-of ladder refuses | value / shown | same | the **roster file** — one the root names with `providers_file:` (§4.14), or one this run creates by moving the root's inline block (the *shape step* below, ADR-038) |
+| `routing` | `plan_policy.family`, `.primary`, `.overflow`, `.on_primary_exhausted`, `.recover`, `.cooldown`, `.overflow_selection`, `.overflow_monthly_cap_usd` | value / enabled | same | the root config file |
 | `plugins` | `plugins[id=<entry>].config.rules_file`, `plugins[id=<entry>].disabled` | value / enabled | same | the root config file |
+
+**Two spellings the key set now reaches, and what the run does with each (ADR-049).** §4.6.1 gave a config
+two shapes the wizard's key set did not know: a credential **pool** (`api_keys:` in place of
+`api_key_env`) and a **family list** (`plan_policies:` in place of `plan_policy`). Both are shapes of the
+**file**, not new questions, and neither is editable by an anchored edit: a pool's membership is a flow
+sequence (DESIGN §12.14's locator rule 6 — a value inside a flow collection is not settable) and a
+`plan_policies[i]` entry is a multi-line mapping, which the anchor grammar's `a.b[i]` form reaches only
+when the entry is a **single-line scalar**. The run's rule is therefore uniform, and it is decided by **the
+file the run is holding** — never by whether the shipped template happens to carry that entry's name:
+
+- **A pool entry is shown, never asked.** An entry that writes `api_keys:` contributes a **display-only**
+  row (the pool's names, in rotation order) and **no** `api_key_env` row; the run writes nothing for it, and
+  the row's note says that a pool's membership — add, drop or reorder a name — is a hand edit, exactly as
+  `aliases` and `fallback` are (the *what is deliberately not a section* list below). It is displayed on
+  `--print` and on the run's own section listing; `--check` is unaffected by it, because `--check` already
+  emits one row per name for a pool (the *secret boundary* bullet below).
+- **A `plan_policies:` root is shown, never edited.** Over a root that writes the list, the `routing`
+  section builds **none** of the eight `plan_policy.*` rows and prints one line per declared family
+  instead (its family tag and its `overflow_selection`), because the list is a membership structure and the
+  keys inside a `plan_policies[i]` mapping are not reachable by an anchor. Nothing is prompted and nothing
+  is written there. This is the one place the section table's own row set follows the file's shape, and it
+  is stated so that no run may report `no change` to a user whose file it never read (a run that silently
+  treats a `plan_policies:` root as a no-op is the failure this sentence exists to prevent).
+
+Both behaviours are witnessed by the **section table's own unit tests** (`setup/sections.rs`'s test
+module — the rows built for a fixture roster that writes `api_keys:`, and for a fixture root that writes
+`plan_policies:`) rather than by a conformance case: the shipped pair cannot witness either shape (neither shape appears in
+the shipped pair as a **live key** — R68's example-file freezes carry both only inside comments, so both
+files keep loading unchanged), and this round allocates no new `CONF` id (DESIGN §12.8's occupancy paragraph: `CONF-01…CONF-97`
+is the heading at HEAD and the parked `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`).
 
 **The target file, and why exactly one section has two of them.** The command writes a key **in the file
 that owns it**. Six of the seven sections own keys of the root config, so they edit the root — the file
@@ -1295,8 +1326,15 @@ recall one: it shows what the file carries and what the file cites. A list- or f
   `.env` (§4.7 reads the process environment and the CLI has no dotenv path), so a `.env` it wrote would be a
   file whose presence does not make a key present. It prints the **export** snippet for each missing name and
   stops there — `export DEEPSEEK_API_KEY='<paste the key here>'`.
-- `--check` lists the variables the file names: for a provider key "not present"; for the token, **"absent" and
-  "empty" as distinct states**, the distinction `serve` refuses the start on (§4.7, §12.10.2).
+- `--check` lists the variables the file names, **one row per declared name**: a provider entry that writes
+  `api_keys:` contributes **one row per name in the pool**, in rotation order, and never one row for the
+  entry (ADR-049 §7(a) — the pool is enumerated, never collapsed to its first member). Each row is that
+  name's own presence, so a half-present pool says **which** name is missing; for the token, **"absent" and
+  "empty" as distinct states**, the distinction `serve` refuses the start on (§4.7, §12.10.2). The rows are
+  presence, not a verdict: pool-wide availability (§4.6.1 — a provider is available iff at least one name is
+  present) is what `/health` reports, and `--check` still says nothing about it. `--check`'s stdout does not
+  change one byte for an entry that writes `api_key_env` (the one-key shape is one row today and stays one
+  row).
 
 **Validation and atomicity, before anything lands.**
 
@@ -1411,6 +1449,19 @@ is byte-identical after a bare run and after `--force` **without** the `plugins`
 its previous bytes kept at `<file>.bak` by `--force` **with** it; `--check`'s stdout is byte-identical whether
 the file is there or not, while `--dry-run` names the file it would create or replace; and a base that names no
 rule file materializes nothing.
+
+The **askable key set's two ADR-049 spellings** (the paragraph above) add their own assertions to that
+list, all in-crate and in the module that owns the table — `crates/vadis-cli/src/setup/sections.rs`'s own
+test module, where the table↔example rig already lives: over a **fixture roster** that writes `api_keys:`
+for one entry, the `providers` rows carry a display-only pool row for that entry and **no** `api_key_env`
+row for it, while every other entry's `api_key_env` row is unchanged; over a **fixture root** that writes
+`plan_policies:`, the `routing` section's rows carry no `plan_policy.*` value row and the section's display
+lines name each declared family. The fixtures matter and are named because the shipped pair carries
+neither shape as a **live key** — R68's example comments name both, so the shipped example cannot witness
+either, while a live key would move the default bundle (and, for `cheapest`, refuse to load). **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
+paragraph: the heading at HEAD is `CONF-01…CONF-97`, and the parked `round/67-abandoned-attempt` branch
+promises `conf_98`/`conf_99`): a `vadis-cli` unit test is the witness, and it lands with the code it
+witnesses.
 
 ### 4.12 The config file's location, and the paths inside it
 
@@ -2132,7 +2183,9 @@ account — the field is always present). Shape:
 `{ from, to, reason, probe, reprefill_tokens, switch_cost_nano, cost_currency, candidates, chosen }` (the
 last two are §4.6.1/ADR-049's and are **present only under `overflow_selection: cheapest`**, `null`
 otherwise so the key set never changes shape): `from` / `to` are
-`provider/model` routes; `reason ∈ {primary_exhausted, plan_exhausted, primary_cooling_down, primary_recovered}`
+`provider/model` routes naming the request's **first displacement** — the route it was displaced **from** and
+the route the walk moved **to** at that displacement (the value the pre-walk writer can know);
+`reason ∈ {primary_exhausted, plan_exhausted, primary_cooling_down, primary_recovered}`
 (`plan_exhausted` is §4.6.1/ADR-049's: the family moved from one **plan** member of its plan tier to the next
 and stayed in-plan — `account` is still `primary`); `probe` is a
 boolean (this switch was the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the
@@ -2143,6 +2196,18 @@ rather than borrowing `cost.currency`: a family may span two currencies, and whe
 fails and the chain serves a route of another currency, the switch's price and the record's own cost are in
 different units. It is the plan policy's own record and is **not** a second name for `failover_from` —
 the two answer different questions and are set by different facts:
+
+**Where the walk settled is a third question, and `chosen` is the only member that answers it (ADR-049).**
+One request can cross more than one displacement: with a **plan tier** of several members, the walk leaves
+the first plan member for the second (`plan_exhausted`, still in-plan) and only later leaves the tier for a
+metered candidate (`primary_exhausted`). The record carries **one** `plan_switch`, and its `from` / `to` are
+the request's **first** displacement — the only one the pre-walk writer can know. The route the walk
+**finally settled on** is `decision.provider` / `decision.model`; under `overflow_selection: cheapest` it is
+also `chosen` (the candidate the walk settled on — **not** the head of `candidates`, which is only the first
+candidate the ranking offered). Every later move in the same request is the **event log's**: one
+`plan.switched` row per move, in order, each carrying its own `from_route` / `to_route`. So `to` must not be
+read as "where this request stopped" — for the walk as a whole the events are the record, and for the
+settlement it is `decision.*` (and `chosen` under `cheapest`).
 
 | what moved the request | `failover_from` | `plan_switch` |
 |---|---|---|
@@ -2493,7 +2558,7 @@ and while the family is on the metered account:
 | `primary` / `overflow` | string | the policy's two routes, verbatim, in the `provider/model` wire form `failover_from` and `plan_switch` use |
 | `recover` | `probe` \| `none` | the policy's value. Printed because it decides whether a probe exists at all (§4.6) |
 | `account` | `primary` \| `overflow` | the family's current account state — the **tier** its active route belongs to: `primary` ⇔ the active route is in the plan tier (ADR-049 §4.6.1), `overflow` ⇔ it is in the metered tier. Read from the `plan_state` projection; **an absent row means `primary`** (a family that has never switched, §4.6) |
-| `route` | string | **ADR-049**: the specific route (`provider/model`) the family is currently on — the `plan_state` projection's active route, from which `account` is derived. For a family that never switched it is the policy's `primary`. This is what makes "which plan am I draining right now?" answerable across a tier of several plans |
+| `route` | string | **ADR-049**: the specific route (`provider/model`) the family is currently on — the `plan_state` projection's active route, from which `account` is derived. For a family that never switched it is the policy's `primary`. This is what makes "which plan am I draining right now?" answerable across a tier of several plans. A database **migrated forward** from DDL v2 carries the projection's route column unfilled until a rebuild runs, and the projection represents that as the **empty string** — which is not a route: both readers (`/health` here and the serving path's guard) derive the route from the stored two-valued word in that window (`overflow` ⇒ the policy's `overflow`, else the policy's `primary`), so an upgraded database keeps pre-tier semantics exactly and this member is never `""` |
 | `since` | string \| null | the last transition's instant (RFC3339 UTC, millisecond precision) — the `ts` of the `plan.switched` row that produced the current state. `null` for a family that never switched |
 | `probe` | object \| null | **`null` unless `account` is `overflow`**: a family on its primary has nothing to probe back to (§4.6 rule 2 — the probe *is* the way back from `overflow`) |
 | `probe.deadline` | string | `since + cooldown`, with `cooldown` from the **currently loaded config** — the same recomputation the serving path does (ADR-014 item 10's mid-flight clause), so a knob change moves a future deadline rather than rewriting history. It is not the stored informational column, which a rebuild may have derived from a cooldown that has since changed. **Always computable when `probe` is present** |
