@@ -971,8 +971,10 @@ fn default_cooldown() -> DurationVal {
 
 /// spec §4.6 `plan_policy`: one model family served by two accounts — the
 /// subscription first, the metered account as the spill (ADR-014). Optional:
-/// absent means no plan-first routing, and at most one policy exists in v0.1 (a
-/// second family is an additive future key, never a reshaped section).
+/// absent means no plan-first routing. This is the single-family spelling:
+/// exactly one of `plan_policy` (one family) and `plan_policies` (N) is
+/// written (spec §4.6.1's ladder) — the additive key ADR-049 §4 landed, one
+/// list entry per family — never a reshaped section.
 ///
 /// Only **syntax** is enforced here; the cross-field rules (which routes, which
 /// accounts, which quota covers the family) are routing rules and live in
@@ -1106,7 +1108,8 @@ pub struct VadisConfig {
     /// policy each. Exactly one of `plan_policy` and `plan_policies` is
     /// written (both written is a load error naming both keys, §4.14's
     /// ladder one layer up; **neither written is the no-plan
-    /// configuration and loads** — spec §4.6's "at most one policy");
+    /// configuration and loads** — spec §4.6's exactly-one-of
+    /// spelling rule);
     /// a present `plan_policies: null` is refused
     /// by `plan_policies:` itself (the roster's own presence rule).
     #[serde(default, deserialize_with = "de_plan_policies_presence")]
