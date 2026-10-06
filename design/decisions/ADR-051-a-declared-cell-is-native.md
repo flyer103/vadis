@@ -155,7 +155,7 @@ declares the inbound cell, so the wire the bytes went out on *is* the inbound pr
 `false` and `lossy[]` stays `[]` on every record this build writes (spec §6; ADR-022 decision 5, whose
 landing is already in place at `crates/vadis-proxy/src/accounting.rs:556-562`).
 
-### 2.2 The spec's 3×3 table, re-labelled
+### 2.2 The spec's 3×3 table, re-labelled, and the row whose meaning moved
 
 spec §2's table currently reads "Outbound native condition: provider `wire_api: chat`" per row. Under §2.1 it
 reads "the inbound protocol is declared in the entry's `supports`", and a new sentence replaces "only the
@@ -163,6 +163,22 @@ native diagonal is served": **every declared cell is a native cell**, each with 
 (ADR-020), and the walk's discriminant is the declared set. The lossy table (§2) is **kept byte for byte and
 labelled**: no cell in this build is produced by translation, so its rows describe a mapper this build does
 not have (`R69-1` changes no line of it).
+
+The 3×3 itself — inbound protocol × the entry's `wire_api` — with **the row the old rule lived on marked**:
+
+| inbound \ entry's `wire_api` | `chat` | `responses` | `anthropic` |
+|---|---|---|---|
+| **chat** | served, native passthrough | `501` → **now: served natively iff `chat ∈ supports`** | `501` → **now: served natively iff `chat ∈ supports`** |
+| **responses** | `501` → **now: served natively iff `responses ∈ supports`** | served, native passthrough | `501` → **now: served natively iff `responses ∈ supports`** |
+| **anthropic** | `501` → **now: served natively iff `anthropic ∈ supports`** | `501` → **now: served natively iff `anthropic ∈ supports`** | served, native passthrough |
+
+**`wire_api` is this table's column axis, and that is exactly what changes.** Before, the axis *was* the verdict:
+a cell was served iff the inbound protocol equalled the entry's `wire_api`, so only the three diagonal cells
+were reachable and the other six were `501` (or, for a candidate, skipped). After ADR-051 the column is a
+declaration the entry makes about itself — the diagonal it treats as native — and the verdict of any cell in the
+row is read from the entry's **`supports`**. The matrix does not change shape; the field that used to decide it
+stops being consulted for reachability, which is why an entry may now declare three cells and still name one of
+them as its native form.
 
 ### 2.3 (b) The ADR-022 supersede, named clause by clause
 
@@ -380,7 +396,7 @@ refusal body.
   inbound protocol".
 - `docs/spec.md` §4.11: **checked and reported, not changed.** `wire_api` and `supports` are **not** in the
   wizard's askable key set — the `providers` section writes `api_key_env`, or displays a pool
-  (`docs/spec.md:1132`) — and no locator rule (§12.14 rule 6: a value inside a flow collection is not
+  (`docs/spec.md:1166`) — and no locator rule (§12.14 rule 6: a value inside a flow collection is not
   settable) would reach them: `wire_api` is a scalar on an entry that *is* reachable, and `supports` is a flow
   sequence and is not. Adding either as a row would be a **§4.11 contract change requiring its own witness**,
   which is outside this card's write set; it is registered in §8 instead.
