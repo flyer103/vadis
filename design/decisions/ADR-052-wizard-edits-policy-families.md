@@ -568,3 +568,64 @@ its limbs would be:
 
 See §5.4. The primary evidence is `autowork/harness/r69-4b/EVIDENCE.md` (items 1 and 3) with its
 scripts (`fnset_diff2.sh` for the name-set convention, `fncount*.sh` for the counting-basis reconciliation).
+
+---
+
+## Dated note — 2026-10-06 (R70-0c; the owner's amendment of §2.5 per R70-0b's audit Item 1, and the dispositions of its secondary findings)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** The
+owner's amendment of 2026-10-06 accepts R70-0b's minimal correction. The amended block below is the
+normative text `R70-1` implements; it supersedes §2.5's verbatim block and the one §2.5 clause that
+names the banner as the carrier **only** — every other clause of this ADR stands as landed.
+
+### The falsification this note repairs (measured by the audit)
+
+Over §2.5's block exactly as landed, the shipped resolver answers `Err(NoSuchKey)` for 3 of the 16
+key×entry combinations §2.1 adjudicates editable: `plan_policies[0].overflow_selection` and
+`plan_policies[1].overflow_selection` (the commented `# overflow_selection:` carrier sits in the
+fan-out banner at indent 2, outside every entry) and `plan_policies[1].overflow_monthly_cap_usd`
+(§2.5's block carries the commented cap only in entry 0). Measured in
+`autowork/harness/r70-0b/probe_flip.txt` with the resolver lifted from HEAD. This falsified §2.2's
+`--print` example, §2.3(b)'s re-pointed assertion and spec §4.11's new assertion sentence at once —
+R70-0b's Item 1 verdict, which gated this amendment before `R70-1` could be cut.
+
+### The amendment, normative
+
+1. **§2.5's verbatim block is amended** so that **every** entry carries, commented at indent 4,
+   `# overflow_selection: declared` and `# overflow_monthly_cap_usd: 20.0` — entry 1 included; the
+   six live keys per entry are unchanged from §2.5 as landed. Measured over this amended shape
+   (`autowork/harness/r70-0c/probe_amended.txt`): **16 of 16** key×entry combinations resolve —
+   `overflow_selection` and the cap with `enabled=false`, which is exactly what keeps §2.1 row 7's
+   enum edit and row 8's `SetEnabled` available per family — and the amended root **loads**
+   (`autowork/harness/r70-0c/probe_load.txt`: no policy refusal, `serve` reaches `vadis listening`;
+   the only complaints are the expected offline ones).
+2. **The §2.5 "what the flip does and does not touch" clause that reads "`overflow_selection` is
+   written **nowhere**, as today (its commented line stays in the fan-out banner)" is reworded
+   to**: *`overflow_selection` is written nowhere as a **live** key in either spelling; its
+   commented carrier lives inside each entry (indent 4), so both families take `declared` and a
+   per-family set-enabled edit is askable.* The banner of §2.4(b) keeps its prose and stops being
+   the operative carrier: a commented line that remains in the banner is inert for per-entry
+   resolution (measured — the probe's amended root carries the banner too, and 16/16 still resolve).
+3. **§2.2's `--print` example, §2.3(b)'s re-pointed assertion and spec §4.11's assertion sentence
+   need no separate edit**: each is true over the amended block. The amendment, not a wording
+   change elsewhere, is what repairs them.
+
+### The secondary findings, dispositioned by the same act
+
+| id | finding | disposition |
+|---|---|---|
+| `R70-0b-F2` (low) | §2.3(c)'s "the property is unchanged for the static rows" is ambiguous — `STATIC_ROWS`' eight `plan_policy.*` paths cannot both stay static and resolve over a flipped root | **Clarified**: the routing rows leave `STATIC_ROWS` and become **built** rows for both spellings (the coherent reading, and the one §2.7 item 1 already states — "appended as dynamic paths"). `every_static_row_resolves_in_the_example` keeps the static table minus the routing rows; the routing witness is `rows_for(Routing, example())`. |
+| `R70-0b-F3` (medium-low) | the **write half** (an answer landing on a `plan_policies[i]` line) has no witness — PTY-pinned by spec §4.11, and no PTY harness exists in-repo | **Owner ruling: `R70-1` adds one g2-shaped in-crate limb** — `run_with_prompt` + one answered change on `plan_policies[0].cooldown`, asserting only that line moves, in `setup/mod.rs`'s test module. In-crate, so no CONF id is spent and §2.6 stands. This is the one new assertion the amendment authorises. |
+| `R70-0b-F4` (low) | §2.3(b)'s prose says "the eight `plan_policy.*` paths"; `anchor.rs:1061-1067` lists **seven** (no `plan_policy.overflow_selection`) | **Recorded as an accuracy correction**: the landed path list has seven entries; the migration semantics — each declared index × each of the eight keys, read from the file — are the contract and are unchanged. `R70-1`'s re-pointed test enumerates eight keys per entry regardless. |
+| (the audit's added-set correction to §5.4 item 3) | the added-set `{family_guard_reentry, provider_with, declared_cell_with_foreign_wire_api_serves}` includes two names that pre-exist the R69 base; only `declared_cell_with_foreign_wire_api_serves` is new | **Recorded**: the convention's claim (zero removals, additions attributable) still holds; the set has one true R69 addition and two pre-existing names on that base. No action. |
+
+**The gate is lifted.** R70-0b's closing clause — "`R70-1` must NOT be cut until the owner amends
+§2.5 per Item 1" — is satisfied by this note. The implementing cards are cut against this ADR **as
+amended by this note**.
+
+Evidence: `autowork/harness/r70-0c/` (`probe_amended.rs`/`.txt` — the resolver over the amended
+block, 16/16; `probe_load.py`/`.txt` — the amended root loads; `anchor.rs` — the unmodified shipped
+resolver copy both probes drive, same provenance as r70-0b's). This note is the outer repository's
+only change and it is docs-only; no `crates/`, `tests/` or example byte moved, so the four-gate
+reading R70-0b took at `c02fe2b` (build/clippy/fmt rc=0; 115 suites, 632 passed / 0 failed /
+11 ignored) stands for this HEAD.
