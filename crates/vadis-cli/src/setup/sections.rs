@@ -786,7 +786,10 @@ plan_policies:
     fn commented_spellings_are_inert() {
         let root = example();
         assert!(!top_key_present(&root, "plan_policies"));
-        assert!(!top_key_present(&root, "plan_policy_key_absent_by_construction"));
+        assert!(!top_key_present(
+            &root,
+            "plan_policy_key_absent_by_construction"
+        ));
         let roster = roster_example();
         assert!(!entry_writes_pool(&roster, "deepseek"));
         assert_eq!(
