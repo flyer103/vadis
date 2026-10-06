@@ -1158,9 +1158,9 @@ file the run is holding** — never by whether the shipped template happens to c
 
 Both behaviours are witnessed by the **section table's own unit tests** (`setup/sections.rs`'s test
 module — the rows built for a fixture roster that writes `api_keys:`, and for a fixture root that writes
-`plan_policies:`) rather than by a conformance case: the shipped pair cannot witness either shape (its
-pool and its list ship **commented out** — the example-file freezes of R68 leave both files loading
-unchanged), and this round allocates no new `CONF` id (DESIGN §12.8's occupancy paragraph: `CONF-01…CONF-97`
+`plan_policies:`) rather than by a conformance case: the shipped pair cannot witness either shape (neither shape appears in
+the shipped pair as a **live key** — R68's example-file freezes carry both only inside comments, so both
+files keep loading unchanged), and this round allocates no new `CONF` id (DESIGN §12.8's occupancy paragraph: `CONF-01…CONF-97`
 is the heading at HEAD and the parked `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`).
 
 **The target file, and why exactly one section has two of them.** The command writes a key **in the file
@@ -1456,9 +1456,9 @@ test module, where the table↔example rig already lives: over a **fixture roste
 for one entry, the `providers` rows carry a display-only pool row for that entry and **no** `api_key_env`
 row for it, while every other entry's `api_key_env` row is unchanged; over a **fixture root** that writes
 `plan_policies:`, the `routing` section's rows carry no `plan_policy.*` value row and the section's display
-lines name each declared family. The fixtures matter and are named because the shipped pair carries both
-shapes **commented out** — the shipped example cannot witness either, and an example edited to carry them
-live would move the default bundle. **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
+lines name each declared family. The fixtures matter and are named because the shipped pair carries
+neither shape as a **live key** — R68's example comments name both, so the shipped example cannot witness
+either, while a live key would move the default bundle (and, for `cheapest`, refuse to load). **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
 paragraph: the heading at HEAD is `CONF-01…CONF-97`, and the parked `round/67-abandoned-attempt` branch
 promises `conf_98`/`conf_99`): a `vadis-cli` unit test is the witness, and it lands with the code it
 witnesses.

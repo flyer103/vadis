@@ -3251,8 +3251,8 @@ providers[name=…].api_key_env: not settable in this file …; left alone` — 
 (`autowork/harness/r68-0/probe-out/probe3.log`, P5/P5b). Nothing on `--check` moves: `setup/report.rs:72`
 already enumerates `key_pool()`, one row per name, which is the read-out spec §4.11's secret boundary now
 states. **The witness is `setup/sections.rs`'s own test module** over two fixtures — a roster that writes
-`api_keys:` for one entry, and a root that writes `plan_policies:` — both shapes the shipped pair carries
-only **commented out** (spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
+`api_keys:` for one entry, and a root that writes `plan_policies:` — both shapes the shipped pair names only
+inside comments, never as live keys (spec §4.11's *two spellings* paragraph). No new `CONF` id is allocated, for the
 reason spec §4.11's assertion list gives: §12.8's occupancy is `CONF-01…CONF-97` at HEAD and the parked
 `round/67-abandoned-attempt` branch promises `conf_98`/`conf_99`.
 
