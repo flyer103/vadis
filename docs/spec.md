@@ -1521,15 +1521,22 @@ list, all in-crate and in the module that owns the table — `crates/vadis-cli/s
 test module, where the table↔example rig already lives: over a **fixture roster** that writes `api_keys:`
 for one entry, the `providers` rows carry a display-only pool row for that entry and **no** `api_key_env`
 row for it, while every other entry's `api_key_env` row is unchanged; over a **fixture root** that writes
-`plan_policies:`, the `routing` section's rows carry no `plan_policy.*` value row and the section's display
-lines name each declared family. The fixtures matter and are named because the shipped pair carries
-neither shape as a **live key** — R68's example comments name both, so the shipped example cannot witness
-either, while a live key would move the default bundle (and, for `cheapest`, refuse to load). **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
+`plan_policies:`, the `routing` section builds the eight rows of each declared family and **no**
+`plan_policy.*` value row, and the section's display lines name each declared family beside the
+section's ordinary `aliases`/`fallback` lines. The **pool's** fixture matters and is named, because the
+shipped roster carries `api_keys:` only inside a comment: the shipped example cannot witness **that**
+shape as a **live key** (R68's example comments name both spelled shapes as prose, so both files keep
+loading unchanged), while a live pool would change what the default bundle writes. The **list's** half
+needs no fixture since **ADR-052**: the shipped root writes `plan_policies:` from R70 on, so the same
+module asserts the row set over the shipped file itself (the witness sentence above, and the *what must
+be asserted* list's ADR-052 line). **No new `CONF` id is allocated for either** (DESIGN §12.8's occupancy
 paragraph: the heading at HEAD is `CONF-01…CONF-97`, and the parked `round/67-abandoned-attempt` branch
 promises `conf_98`/`conf_99`): a `vadis-cli` unit test is the witness, and it lands with the code it
 witnesses. **Dated note (2026-10-06, R69):** the heading has since moved to `CONF-01…CONF-104` (DESIGN §12.8's
 allocation paragraph for ADR-051); this round allocated none, and `CONF-98`/`CONF-99` remain the parked
-branch's.
+branch's. **Dated note (2026-10-06, R70):** the pool/list split above is R70-1's, and it repairs a
+sentence R70-0 left standing: ADR-052 makes the shipped root a `plan_policies:` root, so the list's half
+is witnessed over that file itself and the **pool's** half alone keeps its fixture.
 
 ### 4.12 The config file's location, and the paths inside it
 
