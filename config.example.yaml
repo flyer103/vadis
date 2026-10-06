@@ -207,6 +207,7 @@ plan_policy:
   # this file carries a `quota` block today — both vendors publish their
   # allowance in a shape that is not a monthly token count (spec §4.0, GAP-Q17),
   # so the key is demonstrated by `docs/spec.md` §4.6 and not by this roster.
+  # overflow_selection: cheapest        # declared | cheapest …
 
 # spec §4.6's other key lives on the provider entries above, not here:
 # `account: coding_plan | api` (absent ⇒ api) — see `zai-plan` and

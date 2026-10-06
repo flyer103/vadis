@@ -258,6 +258,17 @@ const STATIC_ROWS: &[KeySpec] = &[
         ask: Ask::Line,
         note: "",
     },
+    // spec §4.6.1 / ADR-049 §5.5: how a spilled request picks its metered
+    // route — the tag's declared order, or the price ranking. The row sits
+    // between `.cooldown` and `.overflow_monthly_cap_usd` (spec §4.11's
+    // amended section table).
+    KeySpec {
+        section: Section::Routing,
+        path: "plan_policy.overflow_selection",
+        kind: EditKind::SetValue,
+        ask: Ask::Enum(&["declared", "cheapest"]),
+        note: "",
+    },
     KeySpec {
         section: Section::Routing,
         path: "plan_policy.overflow_monthly_cap_usd",
