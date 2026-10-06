@@ -596,6 +596,18 @@ pub fn resolve_typed(text: &str, path: &str) -> Result<Anchor, AnchorError> {
                             "a flow collection is not a single-line scalar",
                         ));
                     }
+                    // ADR-052 §2.1: the documented form is `- <scalar>`.
+                    // An entry that is a **block mapping** (its first key
+                    // riding its own dash line, `- family: x`, or a key on
+                    // a following line) is structure, never a value: the
+                    // terminal selector is refused rather than answered
+                    // with the dash line's own text, whose extent a
+                    // `set-value` edit would splice as if it were a value.
+                    if parse_key(after).is_some() {
+                        return Err(AnchorError::NotSettable(
+                            "a mapping list entry is not a single-line scalar",
+                        ));
+                    }
                     let mut e = ln.full.len();
                     let b = ln.full.as_bytes();
                     let mut i = off;
@@ -901,6 +913,32 @@ plan_policy:
         assert_eq!(
             resolve_typed(DOC, "fallback[2]"),
             Err(AnchorError::NoSuchKey)
+        );
+    }
+
+    /// ADR-052 §2.1: a **terminal** selector whose entry is a block
+    /// mapping is *not settable* — the entry as a whole is structure,
+    /// never a single-line scalar, and the dash line's own text is not a
+    /// value the wizard may splice. The scalar-entry form is unchanged.
+    #[test]
+    fn terminal_selector_on_a_mapping_entry_is_not_settable() {
+        for path in [
+            "providers[0]",
+            "providers[name=deepseek]",
+            "plugins[id=cache-guard]",
+        ] {
+            assert_eq!(
+                resolve_typed(DOC, path),
+                Err(AnchorError::NotSettable(
+                    "a mapping list entry is not a single-line scalar"
+                )),
+                "{path} must be refused, never answered with the dash line's text"
+            );
+        }
+        // A `- <scalar>` entry still resolves to the scalar itself.
+        assert_eq!(
+            resolve_typed(DOC, "fallback[0]").unwrap().value,
+            "deepseek/deepseek-v4-pro"
         );
     }
 
