@@ -207,7 +207,18 @@ plan_policy:
   # this file carries a `quota` block today — both vendors publish their
   # allowance in a shape that is not a monthly token count (spec §4.0, GAP-Q17),
   # so the key is demonstrated by `docs/spec.md` §4.6 and not by this roster.
-  # overflow_selection: cheapest        # declared | cheapest …
+  # --- the fan-out's other keys (spec §4.6.1 / ADR-049) — written nowhere on purpose -------------
+  # overflow_selection: declared   # the default is this file's behaviour. `cheapest` ranks the family's
+  #   metered candidates by price (input_miss, then output, then roster order) instead, and it **refuses to
+  #   load** over this roster: every family below pairs an intl (USD) metered route with a cn (CNY) one, and
+  #   a ranking is a comparison — two currencies are never compared (spec §4.8). Measured 2026-10-06:
+  #   `cheapest` on family `glm-5.3` exits 2, "family 'glm-5.3' mixes currencies across its metered
+  #   candidate set". A single-currency family is what the mode needs; drop the other currency's route, or
+  #   keep `declared`.
+  #   The other two spellings are roster/policy shapes, not keys of this block: a per-provider credential
+  #   `api_keys:` pool (roster) and a `plan_policies:` list of families in place of the one `plan_policy:`
+  #   above. `vadis setup` shows a pool and shows the list — neither is prompted, and neither is written by
+  #   a run (spec §4.11).
 
 # spec §4.6's other key lives on the provider entries above, not here:
 # `account: coding_plan | api` (absent ⇒ api) — see `zai-plan` and
