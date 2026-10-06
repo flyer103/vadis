@@ -1543,6 +1543,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// G2's second limb, the one the owner's R70-0c note authorises
+    /// (`R70-0b-F3`; ADR-052 §2.7 item 8): the **write half** over a
+    /// `plan_policies:` root. With the shipped root a list root from R70
+    /// on, a `routing`-section run asks the eight keys of each declared
+    /// family, family-major (plus each family's cap `set-enabled` row), so
+    /// an answer landing on `plan_policies[0].cooldown` must move that
+    /// line and nothing else. The path the PTY owns in the real product is
+    /// the same path, driven here in-crate.
+    #[test]
+    fn g2_over_a_plan_policies_root_moves_only_the_answered_line() {
+        let dir = temp_root("g2-list");
+        let target = dir.join("config.yaml");
+        run_with_prompt(&args(&target), &non_interactive());
+        // `plan_policies[0].cooldown` is the sixth question of the first
+        // family — family, primary, overflow, on_primary_exhausted,
+        // recover, cooldown, ... — and the only answer that differs.
+        let mut answers: Vec<&str> = vec![""; 18];
+        answers[5] = "30m";
+        let code = run_with_prompt(
+            &SetupArgs {
+                section: Some("routing".to_string()),
+                config: Some(target.display().to_string()),
+                ..Default::default()
+            },
+            &scripted(&answers),
+        );
+        assert_eq!(code, 0, "the routing run lands (no refusal, no cancel)");
+        let base = EMBEDDED_TEMPLATE;
+        let after = std::fs::read_to_string(&target).unwrap();
+        let a = anchor::resolve_typed(base, "plan_policies[0].cooldown").unwrap();
+        let base_lines: Vec<&str> = base.lines().collect();
+        let after_lines: Vec<&str> = after.lines().collect();
+        assert_eq!(base_lines.len(), after_lines.len());
+        let mut moved = Vec::new();
+        for (i, (b, c)) in base_lines.iter().zip(after_lines.iter()).enumerate() {
+            if b != c {
+                moved.push(i);
+            }
+        }
+        assert_eq!(moved, vec![a.line], "only the answered line may move");
+        assert!(after_lines[a.line].contains("30m"));
+        // The roster file is not the routing section's target: untouched.
+        assert_eq!(
+            std::fs::read(dir.join("providers.example.yaml")).unwrap(),
+            EMBEDDED_ROSTER.as_bytes(),
+            "a routing answer never moves the roster's bytes"
+        );
+        // The written pair still loads through the same loader `serve` runs.
+        assert!(crate::config_load::load(&target).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// G4 / CONF-68: the refusal ladder — (a) an anchor the file does not
     /// carry, with a requested change; (b) an ambiguous anchor; (c) a key
     /// whose value is not a single-line scalar; (d) a candidate that does

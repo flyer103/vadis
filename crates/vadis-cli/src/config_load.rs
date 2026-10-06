@@ -364,7 +364,10 @@ fallback: []
     /// unservable example, which is why the keys and the example land together
     /// (GAP-Q15). This is the regression that keeps the two in step, and it
     /// asserts the example exercises ADR-014's keys — a key that exists only in
-    /// the spec is a key nothing has ever parsed.
+    /// the spec is a key nothing has ever parsed. Since **ADR-052** the shipped
+    /// root writes the **list** spelling (`plan_policies:`), so the arm that
+    /// read the singular `plan_policy` is gone: the example exercises the list,
+    /// and the two roster assertions are unchanged.
     #[test]
     fn the_shipped_example_parses_and_carries_the_plan_first_keys() {
         let path =
@@ -372,12 +375,18 @@ fallback: []
         let rc = load(&path).unwrap_or_else(|e| panic!("config.example.yaml: {e}"));
         assert!(!rc.vadis.providers.is_empty());
 
-        let policy = rc
+        let policies = rc
             .vadis
-            .plan_policy
+            .plan_policies
             .as_ref()
-            .expect("the example exercises `plan_policy` (spec §4.6)");
-        assert_eq!(policy.family, "glm-5.3");
+            .expect("the example exercises `plan_policies` (spec §4.6.1)");
+        assert_eq!(policies.len(), 2, "the shipped list declares two families");
+        let tags: std::collections::BTreeSet<&str> =
+            policies.iter().map(|p| p.family.as_str()).collect();
+        assert_eq!(
+            tags,
+            std::collections::BTreeSet::from(["glm-5.3", "glm-5.3-flash"])
+        );
         assert!(rc
             .vadis
             .providers
