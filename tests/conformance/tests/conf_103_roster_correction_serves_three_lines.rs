@@ -168,7 +168,6 @@ async fn serve(dir: &std::path::Path, listen_addr: &str) -> tokio::task::JoinHan
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-103: depends on R69-1"]
 async fn conf_103_corrected_roster_serves_three_lines() {
     let (mocks, listen_addr, dir) = rig("conf103").await;
     for m in &mocks {
@@ -200,10 +199,22 @@ async fn conf_103_corrected_roster_serves_three_lines() {
                 "{} served the {protocol} cell at its own URL",
                 e.name
             );
+            // Mutation (b) alone (spec §2 / AGENTS constraint 1): the
+            // top-level `model` value the client wrote — the route id, built
+            // above as `{entry}/{model}` — is rewritten to the resolved
+            // route's provider-native model id before the bytes are
+            // forwarded; every other byte is the client's own. Build the
+            // expectation by rewriting exactly that one value, the same way
+            // conf_100 states its two permitted mutations.
+            let expected = {
+                let mut v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                v["model"] = serde_json::Value::String(e.model.to_string());
+                serde_json::to_string(&v).unwrap()
+            };
             assert_eq!(
                 String::from_utf8_lossy(&last.body),
-                body,
-                "and with the client's own bytes"
+                expected,
+                "the client's own bytes, modulo mutation (b) alone (the top-level `model` value rewritten to the native id)"
             );
         }
     }

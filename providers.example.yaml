@@ -445,13 +445,21 @@ providers:
                                              #   https://api.kimi.ai/coding/, CN https://api.kimi.com/coding/)
       anthropic: https://api.kimi.ai/coding/v1/messages
       chat:      https://api.kimi.ai/coding/v1/chat/completions
+      responses: https://api.kimi.ai/coding/v1/responses
+                                              #   **added 2026-10-06 (ADR-051 §2.5.1)**: the coding service's
+                                              #   Responses cell — source: https://www.kimi.com/code/docs/third-party-tools/codex
+                                              #   @2026-10-06 (「Kimi Code 服务端原生支持 OpenAI Responses API（流式/非流式、
+                                              #   reasoning、function calling 均可用）」), whose overseas configuration is
+                                              #   base_url = "https://api.kimi.ai/coding/v1" with wire_api = "responses";
+                                              #   the base agrees with https://www.kimi.com/code/docs/ @2026-10-06 (服务地址
+                                              #   table: OpenAI 兼容 — intl https://api.kimi.ai/coding/v1)
     api_key_env: KIMI_CODING_API_KEY               # see the KIMI_* naming note on the metered kimi entry above
     wire_api: anthropic                           # the form this entry treats as native (the shape the plan's own
                                                   #   tooling, Claude Code, speaks). The `chat` cell is served by
                                                   #   translation to it (spec §2's lossy list). The vendor documents
                                                   #   both forms, so a client that speaks the OpenAI form should flip
                                                   #   this field — the choice is the operator's, not the vendor's
-    supports: [anthropic, chat]
+    supports: [anthropic, chat, responses]
     account: coding_plan
     models:
       - id: k3                                    # the coding endpoint's flagship native id (the same id the CN coding
@@ -773,7 +781,14 @@ providers:
       chat:      https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
       responses: https://open.bigmodel.cn/api/v1/responses
     api_key_env: ZAI_CN_CODING_API_KEY      # a separate env var, because it is a separate account
-    wire_api: anthropic
+    wire_api: responses                     # **flipped 2026-10-06 (ADR-051 §2.5.2)** from `anthropic`: a change of
+                                            #   which cell the entry names as its native diagonal, NOT of
+                                            #   reachability — the entry declares all three cells either way, every
+                                            #   declared cell is served natively (ADR-051 §2.1), and
+                                            #   `wire_api ∈ supports` still holds (`responses` ∈
+                                            #   [anthropic, chat, responses]). Source: the same 接入端点说明 table
+                                            #   the `urls` block cites (OpenAI Response 协议
+                                            #   https://open.bigmodel.cn/api/v1), re-read 2026-10-06.
     supports: [anthropic, chat, responses]
         # all three cells the CN plan's endpoint table publishes (it declared `anthropic` alone before).
     account: coding_plan
@@ -910,11 +925,19 @@ providers:
                                              #   https://api.kimi.com/coding/)
       chat:      https://api.kimi.com/coding/v1/chat/completions
       anthropic: https://api.kimi.com/coding/v1/messages
+      responses: https://api.kimi.com/coding/v1/responses
+                                             #   **added 2026-10-06 (ADR-051 §2.5.1)**: the coding service's Responses
+                                             #   cell — source: https://www.kimi.com/code/docs/third-party-tools/codex
+                                             #   @2026-10-06 (「Kimi Code 服务端原生支持 OpenAI Responses API（流式/非流式、
+                                             #   reasoning、function calling 均可用）」), whose CN configuration is
+                                             #   base_url = "https://api.kimi.com/coding/v1" with wire_api = "responses";
+                                             #   the base agrees with the 服务地址 table already cited above (CN
+                                             #   OpenAI 兼容 https://api.kimi.com/coding/v1), re-read 2026-10-06
     api_key_env: KIMI_CN_CODING_API_KEY
     wire_api: chat                           # this entry treats the OpenAI form as native; `anthropic` is served by
                                              #   translation to it. Both forms are documented, so the choice of native
                                              #   wire is the operator's (flip it if the client speaks the other one)
-    supports: [chat, anthropic]
+    supports: [chat, anthropic, responses]
     account: coding_plan
     models:
       - id: k3                              # the coding endpoint's own native id (its catalogue: k3, k3-256k,

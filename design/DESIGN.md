@@ -1687,6 +1687,16 @@ declaration), the zai metered entry's `responses` cell (no page documents one; `
 plan-ToS/allowance question (vendor policy, unobservable from here; `R69-0-F3`) — all registered by
 ADR-051 §5.4 and untouched by the code change that lands §2.1's discriminant.
 
+**Register line (2026-10-06, R69-2b): ADR-051 §2.5.3 — the shipped root's second `plan_policies:`
+family — deferred.** Reason: the obstacle is the wizard's anchoring contract, not the parser (the
+list spelling has parsed since ADR-049, `stats.rs:846`); the shipped pair's own contract sentences
+(`config.example.yaml:179-180` 「at most one in v0.1」, `:218-221` 「shown, never edited」) and the
+five existing CLI assertions that stand on them (`config_load.rs:379`, `setup/anchor.rs:1069`,
+`setup/sections.rs:551/770/788`) are the witness, and flipping the shipped root now would make a
+fresh `vadis setup` silently unable to edit any family. Due round: the one that teaches the wizard's
+anchor syntax its support list and edits it (spec §4.11 + the `sections.rs` line construction).
+Detail: ADR-051's dated note of 2026-10-06 (R69-2b).
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**

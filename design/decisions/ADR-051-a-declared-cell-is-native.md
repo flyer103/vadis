@@ -512,3 +512,38 @@ ruled it so, and `R69-1a` leaves the bytes untouched.
 `501` branch shifts `forward.rs` sites below `:911` up by ten lines and `stream_forward.rs` sites
 below `:453` up by fourteen; §5.2's and §5.3's forward.rs references are stated at this ADR's HEAD
 (`374c4e8`) throughout.
+
+## Dated note — 2026-10-06 (R69-2b; §2.5.3 deferred by the round's card)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** It
+records that §2.5.3 (the shipped root's second `plan_policies:` family) is **deferred out of this
+round**, and repairs one **premise error** in §2.5.3's own text while doing so.
+
+**The premise error.** §2.5.3's closing sentence reads *"`R69-1` makes this edit with the parser it
+needs — the shipped pair must keep parsing with the shipped parser (`deny_unknown_fields`), so it
+lands in the commit that teaches the parser the key"*. The antecedent is false: the `plan_policies:`
+list spelling has been parseable since **ADR-049** landed (`crates/vadis-cli/src/stats.rs:846` walks
+it, and `config.example.yaml:218-221`'s own comment describes it as a live alternative spelling).
+There is no parser to teach. The real obstacle is the **wizard's anchoring contract (spec §4.11)**:
+the shipped pair's own text makes promises the five existing CLI assertions stand guard over
+(`crates/vadis-cli/src/config_load.rs:379`, `setup/anchor.rs:1069`, `setup/sections.rs:551`,
+`:770`, `:788`) — `config.example.yaml:179-180` writes 「Optional, and **at most one** in v0.1」,
+and `:218-221` writes that the `plan_policies:` list is 「**shown, never edited**」. Editing the
+shipped root to a live `plan_policies:` block now would make those five assertions red **and** make
+the example's prose and spec §4.11 say false things at once.
+
+**The five assertions are the witness, not the obstacle.** They are the alarm, not the blocker:
+flipped today, a fresh `vadis setup` would **silently** fail to edit any family (the wizard never
+prompts for the list, so the failure is a quiet no-op). §2.5.3 belongs to the round that first
+teaches the wizard's anchor syntax its support list and edits it — spec §4.11 plus the
+`sections.rs` line construction — not to this one.
+
+**What is already true.** The second family is usable **today** by any operator who writes
+`plan_policies:` by hand: the parser and the walk both support the list spelling (ADR-049's
+landing); it merely is not the shipped template's default.
+
+**What this round (R69-2b) did land instead:** §2.5.1 and §2.5.2 only — the two added `responses`
+cells (`kimi-cn-plan`, `kimi-plan`) and the `zai-cn-plan` `wire_api` flip, in
+`providers.example.yaml`, with their page citations and read dates (2026-10-06) written into the
+comments. `config.example.yaml` is untouched by this round. The deferral and its due round are
+registered in `design/DESIGN.md` §12.9's register.
