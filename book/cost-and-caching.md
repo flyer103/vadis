@@ -283,6 +283,22 @@ their fields and the rule that decides which of the two numbers a claim may rest
 provider's quota. It reacts to what the provider says and comes back when the provider allows
 it; the allowance itself stays the provider's business.
 
+**A failover jump back into a family re-enters its policy.** The family's order above is not only
+for the route your client named: when the walk reaches a `fallback` entry that is a route inside a
+plan family, that route passes through the family's policy before it is attempted, so the request
+is routed by the family's state — its plan tier first — rather than billed at whatever the jump
+happened to land on. A request that fails over onto a family's metered route is therefore served by
+that family's plan while the plan is usable; the move is recorded as a switch, and a `fallback`
+entry outside every family is attempted as before.
+
+**The boundary this section does not cross.** What vadis states is that a request **reached the
+plan account on a protocol the vendor documents at the endpoint your roster names** — nothing more.
+It does **not** state, and must not be read as stating, that the plan's allowance is *consumed* the
+way you expect. Whether traffic that arrives through a gateway counts against a coding-plan
+allowance is a **vendor policy** question: the vadis cannot observe the vendor's meter, so no claim
+in this book can answer it. Read your plan's own terms — see
+[Getting started](getting-started.md) — before you point it at a gateway.
+
 ## Several keys, several plans: drain them all, then spend
 
 The section above describes one plan account and one metered account. Most people hold more than
@@ -319,8 +335,9 @@ plan_policy:
 ```
 
 With several families (say, one plan pair per model you use), write them as a list under
-`plan_policies:` instead. One of the two keys, never both — as with the roster's own two spellings,
-a config that writes both is refused at load, naming both keys.
+`plan_policies:` instead — the parser and the routing have accepted the list since ADR-049, while
+the shipped template still carries the one `plan_policy:`. One of the two keys, never both — as with
+the roster's own two spellings, a config that writes both is refused at load, naming both keys.
 
 **The order is your roster order.** Inside the plan tier every member costs the same (zero marginal
 price), so there is no price to rank them by — the order is yours, expressed by where you list the
@@ -340,7 +357,10 @@ with, and a ranking that changes mid-session (a reload, a competitor getting che
 sessions only. That rule is what keeps the prefix cache intact, and the cache is the larger saving of
 the two — a router that "optimises" per request costs more than it saves. It will also not invent an
 allowance or a quality score: it reads what your providers publish and your roster declares, and
-nothing else.
+nothing else. And it does not claim your plan's allowance behaves the way you hope: whether traffic
+that arrives through a gateway counts against a coding-plan allowance is vendor policy, not something a
+roster or a trace can answer (the boundary stated under
+[Plan-first routing](#plan-first-routing-the-subscription-first-the-metered-account-as-the-spill)).
 
 The precise rules — the tier's discovery, the state machine, the one reason word this adds, and every
 load-time refusal that goes with them — are

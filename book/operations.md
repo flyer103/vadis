@@ -216,7 +216,7 @@ wrong (ADR-012, ADR-013).
 |---|---|
 | the client sees `503` and nothing reaches the logs | the local-proxy prerequisite (`NO_PROXY=127.0.0.1,localhost`) — see [Connecting clients](connecting-clients.md) |
 | the process exits immediately at startup | the config (it names the offending key), the state store (permissions, a migration, or a second instance holding the writer lock), or — with `server.auth_token_env` written — a token variable that is unset or empty (see the startup table above) |
-| an endpoint returns "not implemented" | that path is a declared, staged gap — the unified error body names it; nothing is wrong with your setup |
+| a request comes back `400 capability_unsupported` | the inbound protocol is not a cell the route's entry declares — read that entry's `supports` and send one it declares, or point the client at the matching endpoint; nothing is wrong with your setup |
 | costs moved | prefix continuity between turns in the same session, before anything else |
 | a provider seems to be skipped entirely | it is inside a cooldown, which `/health` reports |
 | "nothing is being charged" | check `unknown_outcome` counts and whether usage was missing for those requests — a reported ambiguity is not a bug, an invented number would be |

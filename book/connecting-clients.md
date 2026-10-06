@@ -61,7 +61,7 @@ model_catalog_json = "~/.codex/models.json"
 [model_providers.vadis]
 name = "vadis"
 base_url = "http://127.0.0.1:8790/v1"
-wire_api = "responses"                  # must equal the route's native protocol (see below)
+wire_api = "responses"                  # which vadis wire codex sends on; the route must declare it (see below)
 env_key  = "VADIS_TOKEN"
 ```
 
@@ -104,25 +104,33 @@ codex exec --skip-git-repo-check -C <dir> "Reply with the single word: pong" < /
 Expected: the banner names `provider: vadis` and `model: coding-fast`, the reply is `pong`,
 and the vadis's trace records the session (codex sends a stable `prompt_cache_key`).
 
-`wire_api` here is the one easy mistake: it must equal the **provider's** `wire_api` for the
-route you picked, because v0.1 serves only native routes — a chat wire against the example
-roster's `deepseek` entry (native `responses`) answers `501 not_implemented`. Pick a
-chat-native route from your roster if your codex build cannot speak `responses`.
+`wire_api` here is codex's own key: it picks which of vadis's three inbound wires codex sends
+on (here `responses`, i.e. `POST /v1/responses`). What matters on the vadis side is that the
+route you pointed at **declares that protocol in its `supports`** — the stock roster's
+`deepseek` entry (the one `coding-fast` resolves to) declares all three, so it answers on any
+of them; a route that declared only `chat` would answer a responses request with
+`400 capability_unsupported`, never a translation. Read your roster's `supports` when you
+pick a route.
 
 Why the non-obvious parts are there:
 
 - `--skip-git-repo-check` — codex refuses to run outside a trusted git directory without it: `Not inside a trusted directory and --skip-git-repo-check was not specified.`
 - `< /dev/null` — `codex exec` reads stdin for additional input (`Reading additional input from stdin...`); pointing it at `/dev/null` gives that read an immediate EOF when you drive it from a script or CI.
 - `NO_PROXY` — the prerequisite above; reqwest does not honour the system proxy's exclusion list for `127.0.0.1`.
-- `wire_api = "responses"` — a chat wire against the example roster's `deepseek` entry would answer `501 not_implemented` (an inbound protocol the entry does not declare in `supports` answers `400` before that).
+- `wire_api = "responses"` — codex's own selection of vadis's responses wire. The vadis side needs the route to declare `responses` in `supports`; an inbound protocol a route does not declare answers `400 capability_unsupported` — it is never translated.
 - `env_key = "VADIS_TOKEN"` — the token a client sends vadis is vadis's own **inbound** token, not a provider credential; provider keys live only in the vadis process's environment.
 
 The **failover chain never crosses protocols either**: a `fallback` entry — or a plan family's `overflow`
-route — whose `wire_api` is not your inbound protocol is skipped exactly as an entry the vadis holds no key
-for is skipped, so your request can never be answered on a wire you did not ask for. When nothing in the
-chain can serve your protocol you get `502 upstream_error` with `details.stage: "no_available_route"` and a
-`details.skipped[]` list naming every candidate it refused and why; the refusal's frozen shape is
-[`docs/spec.md` §8](../docs/spec.md).
+route — whose `supports` does not declare your inbound protocol is skipped exactly as an entry the vadis
+holds no key for is skipped (its `skipped[]` reason is `wire_mismatch`, whose meaning is *this entry's
+`supports` does not declare this inbound protocol*), so your request can never be answered on a wire you
+did not ask for. When nothing in the chain can serve your protocol you get `502 upstream_error` with
+`details.stage: "no_available_route"` and a `details.skipped[]` list naming every candidate it refused and
+why; the refusal's frozen shape is [`docs/spec.md` §8](../docs/spec.md). A `fallback` step that lands on a
+route **inside a plan family** re-enters that family's policy before it is attempted, so the request is
+routed by the family's own state — its plan first — rather than billed at the metered route the jump
+happened to land on (see
+[Cost and caching](cost-and-caching.md#plan-first-routing-the-subscription-first-the-metered-account-as-the-spill)).
 
 **hermes** speaks the same native `responses` wire as codex through its codex transport.
 The setup below was smoke-verified end to end (two turns in one session, the second a tool
@@ -159,9 +167,11 @@ Why the non-obvious parts are there — all three are load-bearing (the first tw
 real during the smoke):
 
 - **`api_mode: codex_responses` must be written explicitly.** That is what makes hermes post
-  `POST /v1/responses` — the same native path codex uses. For a loopback `base_url` hermes's
-  URL detection returns nothing and the entry resolves to `chat_completions`, i.e. the wrong
-  wire against a responses-native route.
+  `POST /v1/responses` — the path codex uses and the one this smoke was recorded on. For a
+  loopback `base_url` hermes's URL detection returns nothing and the entry falls back to
+  `chat_completions`, so which wire hermes sends is something you state rather than something
+  the base URL implies. (Either wire is served when the route declares it — see the chat-wire
+  note below.)
 - **`api_key_env` alone is not enough.** hermes resolves a custom provider's credentials as
   `<PROVIDER>_API_KEY` — here `VADIS_API_KEY` — and refuses with
   `No usable credentials found for provider 'vadis'. Set RAMP_VADIS_API_KEY, VADIS_API_KEY.`
@@ -189,14 +199,14 @@ What that run left in the trace, so you know the healthy shape of a hermes sessi
   stable the same comparison reads 1.0. Clients do change their tool definitions between
   turns. Judge continuity per client and per turn; do not read 1.0 as a constant.
 
-The **chat wire is a different, unwitnessed cell**: switching hermes to
-`api_mode: chat_completions` requires a chat-native route of your own — the example roster's
-`deepseek` (which `coding-fast` points at) is responses-native, and chat against it answers
-`501 not_implemented`. The same smoke run did send hermes down the chat wire against the
-roster's two chat-native routes and witnessed **no 200**: the attempt ended `502` after
-failover (primary `429 rate_limit` → fallback `401 auth`, cost 0) — local upstream
-credentials and quotas, not the gateway. Until you have your own chat-native provider, treat
-hermes-over-chat as untested here.
+The **chat wire was not part of that witnessed run**: the smoke above exercised hermes over
+`responses` only. A route serves the chat wire when its entry's `supports` declares `chat` —
+the stock roster's `deepseek` (which `coding-fast` resolves to) does, so it answers on the
+chat wire too; a route that does not declare `chat` answers `400 capability_unsupported`. If
+you switch hermes to `api_mode: chat_completions`, pair it with a route that declares it. The
+chat-wire attempt this book records ended `502` after failover (primary `429 rate_limit` →
+fallback `401 auth`, cost 0) — local upstream credentials and quotas, not the gateway. Until
+you have a chat-native provider of your own, treat hermes-over-chat as untested here.
 
 **claude code** keeps the earlier advice — same shape (override the base URL, keep the token
 in the environment) — and was **not** part of the witnessed matrix above.
@@ -260,9 +270,10 @@ curl -s http://127.0.0.1:8790/v1/chat/completions \
 
 For codex and hermes the token goes in the same variable their `env_key` names (the snippet above
 uses `VADIS_TOKEN`) — they send it as `Authorization: Bearer <token>`. Note the endpoint in
-these examples is the chat one: pair it with a chat-native route from your roster (the example
-file's `zai` or `kimi` entries), or use `/v1/responses` for a responses-native route like
-`coding-fast` — v0.1 refuses the cross-protocol cell with `501 not_implemented` (see
+these examples is the chat one: pair it with a route whose `supports` declares `chat` (the
+stock roster's `zai` and `kimi` entries do, as does `deepseek`, which `coding-fast` resolves
+to) — or use `/v1/responses` for a route that declares `responses`. A route that does not
+declare the protocol you sent answers `400 capability_unsupported`, never a translation (see
 [Protocols](protocols.md)).
 
 A refused request answers `401` with the correlation header present — nothing reaches the
@@ -312,7 +323,8 @@ build against them yet:
 What v0.1 sends today: `X-Vadis-Request-Id` on the streaming path, and
 `X-Vadis-Failover-From` on a response served by a fallback route instead of the primary one.
 The buffered path carries the request id inside an error body rather than as a header, and the
-other two headers land with the translation cells they describe.
+other two headers are not sent in v0.1: they await a content mapper, which this build does not
+have (see [Protocols](protocols.md)).
 
 ## Session identity
 
@@ -360,8 +372,9 @@ not. Backup, inspection and what the store does when it cannot be opened are in
 
 The three protocol endpoints are served today (the [README](../README.md) says what is **not**
 in v0.1, and [`docs/spec.md` §9.3](../docs/spec.md) is the served/not-served list for the
-reporting surfaces). What still answers `501 not_implemented` is a route that would need cross-protocol
-translation — an inbound protocol that is not the provider's own `wire_api` (see
+reporting surfaces). Every protocol an entry declares in `supports` is served natively by that
+entry; an inbound protocol an entry does not declare answers `400 capability_unsupported` for
+the route the client named, and is skipped for a candidate the client did not name (see
 [Protocols](protocols.md)). The proxy prerequisite above is the one you need before any of it can
 reach vadis at all; the token (if you turned inbound auth on) is what gets a request through the
 front door.

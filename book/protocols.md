@@ -13,33 +13,51 @@ OpenAI chat completions, OpenAI responses and Anthropic messages. All three ente
 decision pipeline — one session resolution, one transform chain, one selection, one guard
 chain, one accounting path — and each mirrors its own protocol's semantics on the way out.
 
-## What "supported" means, and what an undeclared cell does
+## A declared cell is a native cell
 
 Each provider entry declares two things:
 
-- **`wire_api`** — the provider's *native* wire format. This is the format in which vadis
-  can forward the request as the client's own bytes.
-- **`supports`** — the set of inbound protocols vadis may serve *to that provider*,
-  including `wire_api` itself. These are the legal cells of the 3×3 inbound × outbound
-  matrix.
+- **`supports`** — the set of inbound protocols vadis serves **to that provider**. Every member
+  of this set is a **native cell**: the client's own bytes are posted to that cell's own
+  complete endpoint (the entry's `urls`), with no translation, re-encoding or re-ordering. The
+  three protocols above are the values this set can hold, and each declared cell carries its
+  own URL — a declared cell with no endpoint is a load error.
+- **`wire_api`** — the entry's *native* protocol: the single cell it treats as its diagonal.
+  It is a **declaration about the entry, not a gate**: it restricts nothing. Config validation
+  requires only that it be one of the cells the entry declares, so an entry that serves three
+  protocols still names one of them as its native form. Everything a reader once derived from
+  "the inbound protocol equals `wire_api`" is now read from `supports`.
 
-A request whose inbound protocol is outside a provider's `supports` is **refused with an
-explicit error** (`400`, `error.type: capability_unsupported`). There is no best-effort
-translation for an undeclared cell: declaring a format your provider does not document is
-how a gateway starts inventing wire formats, and "it usually works" is not a contract.
+A request whose inbound protocol is outside a provider's `supports` is a cell of a provider
+that does not exist, and vadis never invents one. The answer depends on **who asked**:
 
-The shipped example roster (`providers.example.yaml`, named by the shipped config — the pair is the file to
-read for the current declarations) is a useful illustration of the rule: the DeepSeek entry declares the
-`responses` wire format with all three inbound protocols supported, while the other entries
-declare `chat` as their wire format with a narrower `supports` set — so a `responses`
-inbound request aimed at one of those is refused rather than translated on a hunch.
+- for the route the **client named**, an explicit error — `400`,
+  `error.type: capability_unsupported`;
+- for a **candidate the client did not name** — a plan family's route, or a `fallback` entry —
+  the candidate is **skipped** exactly as an entry vadis holds no key for is skipped, and the
+  walk continues. Your request can therefore never be answered on a wire you did not ask for;
+  when no candidate can serve it, the request is refused in the shape
+  [`docs/spec.md` §8](../docs/spec.md) freezes (`502 upstream_error`,
+  `details.stage: "no_available_route"`).
 
-## Native passthrough first
+There is no best-effort translation for an undeclared cell: declaring a format your provider
+does not document is how a gateway starts inventing wire formats, and "it usually works" is
+not a contract.
 
-When the inbound protocol matches the provider's `wire_api`, the request body is forwarded
-as the client's original **bytes**. Exactly two mutations are permitted, both byte-level span
-edits, never a parse-and-reprint of the body (that is the most common way a gateway quietly
-changes what the provider sees):
+The shipped example roster (`providers.example.yaml`, named by the shipped config — that pair
+is the file to read for the current declarations) illustrates the rule: each entry's `supports`
+lists exactly the wire forms its vendor documents, and each listed cell has its own endpoint
+in the entry's `urls`. The DeepSeek entry documents all three forms, so it declares all three
+cells and answers on any of the three endpoints. Where a cell is not listed, it does not exist
+for that entry — vadis answers the `400` above rather than guessing a wire format the vendor
+never published.
+
+## Native passthrough, on every declared cell
+
+Whenever the inbound protocol is one the provider entry declares, the request body is
+forwarded as the client's original **bytes**, posted to that cell's own complete URL. Exactly
+two mutations are permitted, both byte-level span edits, never a parse-and-reprint of the body
+(that is the most common way a gateway quietly changes what the provider sees):
 
 - **removing vadis-owned fields** (the `vadis_meta` echo and routing hints), against a
   whitelist constant;
@@ -51,14 +69,18 @@ You can rely on the byte boundary in a checkable form: after those two edits, th
 bytes are byte-for-byte the client's, and neither edit changes a prefix block's hash (the
 `model` field is not part of the prefix, and vadis-owned fields are not either).
 
-## Deterministic translation second
+## No translation: a cell is served, or it does not exist
 
-Translation is the design's second mode, and it is **not implemented in v0.1**: vadis
-serves only the native diagonal of the 3×3 matrix — the cells where the inbound protocol
-is the provider's own `wire_api`. The other six cells refuse with a typed
-`501 not_implemented` whose message names the cell that is missing. What follows is the
-contract those cells are held to when one lands: it is written here and in
-[`docs/spec.md` §2](../docs/spec.md), and no code path implements it yet.
+vadis ships no content translator. A cell is served **iff** the entry declares it, and the
+bytes that go out on that cell are the client's own bytes. Nothing on the serving path
+re-encodes a body, so `protocol.translated` is `false` and `protocol.lossy` is `[]` on every
+record this build writes — and `protocol_out` equals `protocol_in` **by construction**, because
+a route is only ever attempted on a cell it declares.
+
+A deterministic content mapper — the design's second mode, which would let a client be served
+on a cell its provider does not declare — is **not implemented in v0.1**. It remains the
+contract those future cells are held to, written here and in
+[`docs/spec.md` §2](../docs/spec.md) so that the first one to land has something to satisfy:
 
 When a translation cell lands, the translation must be a pure function of content and
 stable config: the same content always produces the same upstream bytes, and nothing may
@@ -79,7 +101,8 @@ The lossy points a translation must handle explicitly, one by one:
 Whenever a translation drops something, the response must carry the `X-Vadis-Lossy`
 header and the decision record must list it; silent loss is the one outcome that is not
 allowed. No v0.1 code path emits that header — it becomes real together with the first
-translation cell.
+translation cell. None of the lines above describes anything this build does; each describes
+a mapper a translation cell would need.
 
 ## Streaming
 
@@ -123,9 +146,14 @@ change, and vadis never silently drops what it does not recognize.
   and the lossy-point table.
 - [`docs/spec.md` §8](../docs/spec.md) — the unified error body and the type-to-HTTP table
   (including capability failures and response headers).
+- [`docs/spec.md` §4.2](../docs/spec.md) — the candidate walk's eligibility rule: a candidate
+  is attempted only on a cell it declares.
 - [`design/DESIGN.md` §7](../design/DESIGN.md) — the translation layer as designed.
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the data plane: provider adaptation and
   the byte-level requirements of the streaming path.
+- [`design/decisions/ADR-051-a-declared-cell-is-native.md`](../design/decisions/ADR-051-a-declared-cell-is-native.md)
+  — why every declared cell is native, why `wire_api` names the diagonal and gates nothing,
+  and why an undeclared cell is a `400` (or a skip), never a translation.
 - [`design/decisions/ADR-004-protocol-passthrough-safe-translation.md`](../design/decisions/ADR-004-protocol-passthrough-safe-translation.md)
   — why native passthrough wins and what "deterministic translation" obliges.
 - [`design/decisions/ADR-007-span-faithful-forwarding.md`](../design/decisions/ADR-007-span-faithful-forwarding.md)
