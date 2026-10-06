@@ -38,10 +38,11 @@ you.
 - **Point a client** at the gateway base URL — but do the local-proxy prerequisite from
   [Connecting clients](connecting-clients.md) first, or nothing will reach vadis. If you
   turned inbound auth on, that chapter also has the token step.
-- **First request**: send one request in any of the three inbound protocols, natively —
-  v0.1 serves only routes whose inbound protocol equals the provider's own `wire_api`
-  (a mismatch answers `501 not_implemented`; the README's curl example explains the fork
-  for the stock roster). The `vadis_meta` response block (plugin chain, per-transform
+- **First request**: send one request in any of the three inbound protocols. A route is
+  served natively on every protocol its provider entry declares in `supports` — the client's
+  own bytes, posted to that cell's own URL — and a protocol the entry does not declare
+  answers `400 capability_unsupported` (the README's curl example shows the stock roster's
+  `deepseek` entry, which declares all three). The `vadis_meta` response block (plugin chain, per-transform
   accounting, session and cache state) is planned design intent, not served in v0.1 —
   today those same facts are read from the trace record instead.
 - **Know where state lands**: traces are appended under the `trace.dir` configured for
@@ -232,7 +233,12 @@ providers:
   usable inside the vendor's supported coding tools, while another documents handing the subscription's key
   to third-party tools. The vadis cannot know which case you are in — it is in your plan's terms, and the
   ADR that records both cases is
-  [ADR-018](../design/decisions/ADR-018-currency-region-and-family-mapping.md).
+  [ADR-018](../design/decisions/ADR-018-currency-region-and-family-mapping.md). And be precise about what
+  routing a plan through vadis does and does not claim: what it states is that a request **reached the plan
+  account on a protocol the vendor documents** — nothing more. It does **not** state, and must not be read
+  as stating, that the plan's allowance is *consumed* the way you expect: whether traffic that arrives
+  through a gateway counts against a coding-plan allowance is a **vendor policy** question, and the vadis
+  cannot observe the vendor's meter, so no claim in this book can answer it.
 
 - **The names are yours.** The convention this repository uses is `<vendor>[-<region>][<account>]`
   (`kimi`, `kimi-cn`, `kimi-plan`, `kimi-cn-plan`), with the vendor part matching the name its own API-key

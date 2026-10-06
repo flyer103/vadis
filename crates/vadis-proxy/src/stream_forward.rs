@@ -57,7 +57,7 @@ use vadis_protocol::sse::{SseUsageExtractor, SseUsageOutcome};
 use crate::accounting::{AccountCtx, Accountant, RouteAccounting};
 use crate::forward::{
     metered_candidates_field, resolve_session_key, rewrite_outbound_model, turn_index_for,
-    ForwardFailure, Forwarder, RequestFacts, REASON_PRIMARY_COOLING_DOWN,
+    ForwardFailure, Forwarder, GuardReentry, RequestFacts, REASON_PRIMARY_COOLING_DOWN,
 };
 use vadis_core::plan::{
     account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family,
@@ -182,7 +182,10 @@ struct RelayState {
     attempted: Vec<String>,
     /// The route currently answering (for events).
     route_label: String,
-    /// The answering route's wire protocol (the trace's `protocol_out`).
+    /// The wire the answering attempt went out on (the trace's
+    /// `protocol_out`): the inbound protocol, by construction (ADR-051
+    /// §2.1 — a candidate is attempted only if it declares the inbound
+    /// cell).
     wire: WireApi,
     /// The answering attempt's head latency (`result.upstream_ms`).
     head_ms: Option<u32>,
@@ -437,17 +440,9 @@ impl Forwarder {
                 })),
             });
         }
-        if provider.wire_api != proto_in {
-            return StreamOutcome::Failure(ForwardFailure {
-                status: 501,
-                code: ErrorCode::NotImplemented,
-                message: format!(
-                    "translation {} -> {} is not implemented in v0.1; only native routes are served",
-                    proto_in, provider.wire_api
-                ),
-                details: None,
-            });
-        }
+        // ADR-051 §2.1: a declared cell is a native cell — the request is
+        // served on `urls[inbound]` below, so the resolved route has no
+        // `501` branch left to take.
 
         // The outbound base (DESIGN §12.10.7): the client's bytes minus
         // vadis-owned top-level keys — mutation (a), once per request. The
@@ -502,7 +497,11 @@ impl Forwarder {
         );
         let decision_ms = decision_start.elapsed().as_millis() as u32;
         facts.decision_ms = decision_ms;
-        facts.proto_out = Some(provider.wire_api);
+        // ADR-051 §2.1: `protocol_out` is the inbound protocol by
+        // construction — the wire the bytes leave on is the cell the
+        // request came in on. `wire_api` names the diagonal and gates
+        // nothing.
+        facts.proto_out = Some(proto_in);
         self.append_event(
             EventKind::DecisionMade,
             request_id,
@@ -512,7 +511,7 @@ impl Forwarder {
                 "model": primary.model,
                 "requested_model": model,
                 "selection_source": selection_source,
-                "protocol_out": provider.wire_api.as_str(),
+                "protocol_out": proto_in.as_str(),
                 "decision_ms": decision_ms,
                 "stream": true,
             }),
@@ -560,7 +559,7 @@ impl Forwarder {
                     request_id,
                     received_event: facts.received_event,
                     proto_in: proto_in.as_str(),
-                    proto_out: Some(provider.wire_api.as_str()),
+                    proto_out: Some(proto_in.as_str()),
                     session: session.as_deref(),
                     turn_index,
                     selection_source,
@@ -679,10 +678,11 @@ impl Forwarder {
         // filtered to native routes with a key present at startup. For a
         // request inside a plan family the family's `overflow` route is
         // the first candidate after primary (spec §4.2 refined by §4.6).
-        // Entries the filter refuses are classified (ADR-022 / DESIGN
+        // Entries the filter refuses are classified (ADR-051 §2.1 / DESIGN
         // §12.10.9) so the walk-end refusal can say why — the buffered
         // walk answers "which candidates may serve" with the same rule:
-        // provider entry, key, and `wire_api == proto_in`.
+        // provider entry, key, and the inbound protocol being a declared
+        // cell (`supports ∋ proto_in`).
         let mut candidates: Vec<Candidate> = Vec::new();
         // Construction-time eligibility skips, each carrying its chain
         // position (ADR-024 ruling 2) so the serialiser can emit the
@@ -749,11 +749,13 @@ impl Forwarder {
                     });
                     continue;
                 };
-                if cfg.wire_api != proto_in {
-                    // The wire gate (ADR-022): the skip is in the keyless
-                    // class — never attempted, never narrated as a
-                    // displacement; the refusal reports it at the walk's
-                    // end.
+                if !cfg.supports.contains(&proto_in) {
+                    // The declared-cell gate (ADR-051 §2.1 / DESIGN
+                    // §12.10.9): the entry does not declare the inbound
+                    // protocol, so the cell does not exist for this
+                    // request. The skip is in the keyless class — never
+                    // attempted, never narrated as a displacement; the
+                    // refusal reports it at the walk's end.
                     skipped.push(ChainSkipped {
                         pos,
                         skip: (route.clone(), crate::forward::SKIP_WIRE_MISMATCH),
@@ -767,14 +769,19 @@ impl Forwarder {
                     });
                     continue;
                 }
-                let Some(url) = cfg.url_for(cfg.wire_api) else {
+                // ADR-051 §2.1: the URL is the **inbound** protocol's cell
+                // — never the entry's `wire_api`. `validate` refused any
+                // config whose declared cell has no URL, so a miss here is
+                // an internal error to answer — not a case to paper over
+                // by sending the request to a guessed endpoint.
+                let Some(url) = cfg.url_for(proto_in) else {
                     return StreamOutcome::Failure(ForwardFailure {
                         status: 500,
                         code: ErrorCode::Internal,
                         message: format!(
-                            "provider '{}' declares '{}' but carries no URL for it",
+                            "provider '{}' declares no URL for the inbound protocol '{}'",
                             cfg.name,
-                            cfg.wire_api.as_str()
+                            proto_in.as_str()
                         ),
                         details: Some(json!({"stream": true})),
                     });
@@ -782,7 +789,10 @@ impl Forwarder {
                 candidates.push(Candidate {
                     route: route.clone(),
                     chain_pos: pos,
-                    wire: cfg.wire_api,
+                    // The wire this attempt goes out on: the inbound
+                    // protocol (ADR-051 §2.1) — a declared cell is a
+                    // native cell, whatever `wire_api` names.
+                    wire: proto_in,
                     url: url.to_string(),
                     // ADR-049 §3 rule 1: the provider's **present**
                     // pool, in declaration order — the candidate owns
@@ -867,6 +877,112 @@ impl Forwarder {
             {
                 if attempted.iter().any(|p| p == &cand.route.provider) {
                     continue;
+                }
+                // ADR-051 §2.4, the buffered path's twin: the guard
+                // re-enters at EVERY commitment point — each candidate
+                // the walk reaches (a `fallback` entry, a family tier
+                // member, a mid-walk landing point) is routed by its
+                // family's state through the same two owners, and the
+                // walk's own conditions layer on top of the answer. A
+                // Redirect swaps the offered candidate for the family's
+                // answer; an answer the cooldown projection refuses is
+                // skipped `demoted` (CONF-42's shape) and the offered
+                // candidate stands. The head's commitment point is the
+                // guard's own evaluation above (same route, same state
+                // read — the answer is idempotent), so its re-entry
+                // pass is the same no-op every confirmed candidate
+                // costs: one projection read.
+                let mut redirected: Option<Candidate> = None;
+                match self.family_guard_reentry(&cand.route, &guard_ctx, &attempted, proto_in) {
+                    GuardReentry::Stand => {}
+                    GuardReentry::Cooling { route: answer } => {
+                        walk_skipped.push(ChainSkipped {
+                            pos: cand.chain_pos,
+                            skip: (answer, crate::forward::SKIP_DEMOTED),
+                        });
+                    }
+                    GuardReentry::Redirect { policy, outcome } => {
+                        let offered = cand.route.clone();
+                        let tier = plan_tier(&self.config, &policy);
+                        let metered = metered_walk(&self.config, &policy);
+                        if facts.plan_switch.is_none() {
+                            let (reprefill, cost_nano) =
+                                self.failover_cost(session.as_deref(), &outcome.route);
+                            facts.plan_switch = Some(PlanSwitchRec {
+                                from: offered.to_string(),
+                                to: outcome.route.to_string(),
+                                // The direction word the existing
+                                // single owner picks for THIS move —
+                                // the same owner, the same spelling.
+                                reason: displacement_reason(
+                                    &policy,
+                                    &tier,
+                                    &metered,
+                                    &offered,
+                                    &outcome.route,
+                                ),
+                                probe: outcome.probe,
+                                reprefill_tokens: reprefill,
+                                switch_cost_nano: cost_nano,
+                                cost_currency: self.route_currency(&outcome.route),
+                                candidates: metered_candidates_field(&self.config, &policy),
+                                chosen: Some(outcome.route.to_string()),
+                            });
+                        }
+                        // §2.4 boundary 4: the settled route is the
+                        // single truth for the attempt; the probe flag
+                        // stays current for the answering arm below.
+                        plan_guard_out = Some(outcome.clone());
+                        // The substitute must clear the construction
+                        // conditions the offered chain cleared (the
+                        // re-entry helper already read provider entry
+                        // and the declared inbound cell). A provider
+                        // with no URL or no key cannot serve: it
+                        // narrates the keyless skip and the offered
+                        // candidate stands.
+                        let sub = (|| {
+                            let cfg = self
+                                .config
+                                .providers
+                                .iter()
+                                .find(|p| p.name == outcome.route.provider)?;
+                            let url = cfg.url_for(proto_in)?;
+                            let keys = self.api_keys.get(&cfg.name)?;
+                            Some(Candidate {
+                                route: outcome.route.clone(),
+                                chain_pos: cand.chain_pos,
+                                // ADR-051 §2.1: the wire is the
+                                // inbound protocol — a declared cell is
+                                // a native cell.
+                                wire: proto_in,
+                                url: url.to_string(),
+                                api_keys: keys.clone(),
+                                key_index: 0,
+                            })
+                        })();
+                        match sub {
+                            Some(sub) => {
+                                if !accounting.contains_key(&sub.route.provider) {
+                                    if let Some(a) = crate::accounting::route_accounting(
+                                        &self.config,
+                                        &sub.route,
+                                    ) {
+                                        accounting.insert(sub.route.provider.clone(), a);
+                                    }
+                                }
+                                redirected = Some(sub);
+                            }
+                            None => {
+                                walk_skipped.push(ChainSkipped {
+                                    pos: cand.chain_pos,
+                                    skip: (outcome.route.clone(), crate::forward::SKIP_KEYLESS),
+                                });
+                            }
+                        }
+                    }
+                }
+                if let Some(sub) = redirected {
+                    cand = sub;
                 }
                 if self.provider_in_cooldown(&cand.route.provider) {
                     // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's

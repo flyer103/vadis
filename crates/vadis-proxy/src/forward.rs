@@ -303,6 +303,35 @@ pub(crate) struct PlanGuardOutcome {
     pub pinned: bool,
 }
 
+/// ADR-051 §2.4's re-entry answer for one walk commitment point: the
+/// offered candidate (a `fallback` entry, a family tier member, or a
+/// mid-walk landing point) has just re-entered `family_policy_for_route`
+/// and then `plan_guard`. The guard decides *which route this family
+/// wants*; the walk still decides *whether that route may be attempted
+/// now* — so only an answer that is a **different** route AND passes the
+/// walk's own in-request exclusions is a redirect, and an answer that
+/// fails one is skipped in the class that condition already owns (the
+/// cooldown class is the one that narrates, CONF-42's shape).
+pub(crate) enum GuardReentry {
+    /// Attempt the guard's route instead of the offered candidate: the
+    /// family's state moved this commitment point elsewhere (a plan
+    /// tier re-entry, a pinned metered route, an admitted probe).
+    Redirect {
+        policy: PlanPolicyCfg,
+        outcome: PlanGuardOutcome,
+    },
+    /// The answer is a route ADR-011's cooldown projection refuses: the
+    /// answer is skipped `demoted` (CONF-42's shape) and the offered
+    /// candidate stands.
+    Cooling { route: RouteSpec },
+    /// The offered candidate stands: no family policy for it, it is
+    /// outside every family, the guard confirmed it, or the answer
+    /// failed a walk condition the class owns silently (an
+    /// already-attempted provider is not re-attempted) or a serving
+    /// condition (off-roster, undeclared inbound cell).
+    Stand,
+}
+
 /// The per-request inputs `plan_guard` reads besides the policy and the
 /// resolved route, bundled so the signature stays at arity 3 (one
 /// object, not a growing positional list). Built once per request by
@@ -614,9 +643,11 @@ pub(crate) struct RequestFacts<'a> {
 
 impl Forwarder {
     /// Forwards one buffered request. `proto_in` is the inbound endpoint's
-    /// protocol; a native route (proto_in == the provider's `wire_api`)
-    /// forwards the client's bytes minus vadis-owned top-level keys,
-    /// everything else byte-identical. `headers` feed the session key
+    /// protocol; a route that declares the inbound cell in `supports`
+    /// (ADR-051 §2.1 — a declared cell is a native cell, whatever the
+    /// entry's `wire_api` names) forwards the client's bytes minus
+    /// vadis-owned top-level keys, everything else byte-identical.
+    /// `headers` feed the session key
     /// sources (`header:<name>`); the body's `prompt_cache_key` wins when
     /// present (spec §4 key_sources order).
     ///
@@ -881,8 +912,9 @@ impl Forwarder {
         };
         // Capability: an inbound protocol outside the provider's declared
         // `supports` is a 400, never a best-effort translation (spec §8).
-        // Translation between wire shapes is not implemented in v0.1, so a
-        // declared-but-different cell is refused below with a 501.
+        // ADR-051 §2.1: a declared cell IS a native cell — the request is
+        // served on `urls[inbound]` below, so the resolved route has no
+        // `501` branch left to take.
         if !provider.supports.contains(&proto_in) {
             let supports: Vec<&str> = provider.supports.iter().map(|w| w.as_str()).collect();
             return ForwardOutcome::Failure(ForwardFailure {
@@ -898,16 +930,6 @@ impl Forwarder {
                     "supports": supports,
                 })),
             });
-        }
-        if provider.wire_api != proto_in {
-            return ForwardOutcome::Failure(ForwardFailure::new(
-                501,
-                ErrorCode::NotImplemented,
-                format!(
-                    "translation {} -> {} is not implemented in v0.1; only native routes are served",
-                    proto_in, provider.wire_api
-                ),
-            ));
         }
 
         // The outbound base (DESIGN §12.10.7): the client's bytes minus
@@ -960,7 +982,11 @@ impl Forwarder {
         );
         let decision_ms = decision_start.elapsed().as_millis() as u32;
         facts.decision_ms = decision_ms;
-        facts.proto_out = Some(provider.wire_api);
+        // ADR-051 §2.1: `protocol_out` is the inbound protocol by
+        // construction — a route is attempted only if it declares the
+        // inbound cell, so the wire the bytes leave on *is* the inbound
+        // protocol. `wire_api` names the diagonal and gates nothing.
+        facts.proto_out = Some(proto_in);
         self.append_event(
             EventKind::DecisionMade,
             request_id,
@@ -970,7 +996,7 @@ impl Forwarder {
                 "model": primary.model,
                 "requested_model": model,
                 "selection_source": selection_source,
-                "protocol_out": provider.wire_api.as_str(),
+                "protocol_out": proto_in.as_str(),
                 "decision_ms": decision_ms,
             }),
             session.as_deref(),
@@ -1028,7 +1054,7 @@ impl Forwarder {
                     request_id,
                     received_event: facts.received_event,
                     proto_in: proto_in.as_str(),
-                    proto_out: Some(provider.wire_api.as_str()),
+                    proto_out: Some(proto_in.as_str()),
                     session: session.as_deref(),
                     turn_index,
                     selection_source,
@@ -1217,6 +1243,65 @@ impl Forwarder {
             if attempted_providers.iter().any(|p| p == &candidate.provider) {
                 continue;
             }
+            // ADR-051 §2.4: the guard re-enters at EVERY commitment
+            // point, this candidate included — a `fallback` entry, a
+            // family tier member or a mid-walk landing point that
+            // carries a family tag is routed by that family's state
+            // (plan tier → metered tier → global `fallback`, the
+            // existing order), by the same two owners the resolved
+            // route went through. The head's commitment point IS the
+            // guard's own evaluation above (same route, same state
+            // read, one commitment), so the head needs no second pass;
+            // state can only move later in THIS loop, at an upstream
+            // 403 the head already answered.
+            let mut redirected: Option<RouteSpec> = None;
+            match self.family_guard_reentry(candidate, &guard_ctx, &attempted_providers, proto_in) {
+                GuardReentry::Stand => {}
+                GuardReentry::Cooling { route, .. } => {
+                    // The guard's answer failed a walk condition the
+                    // cooldown class owns: the answer is skipped
+                    // `demoted` (CONF-42's shape) and the offered
+                    // candidate stands.
+                    skipped.push((route, SKIP_DEMOTED));
+                }
+                GuardReentry::Redirect { policy, outcome } => {
+                    let tier = plan_tier(&self.config, &policy);
+                    let metered = metered_walk(&self.config, &policy);
+                    if facts.plan_switch.is_none() {
+                        let (reprefill, cost_nano) =
+                            self.failover_cost(session.as_deref(), &outcome.route);
+                        facts.plan_switch = Some(PlanSwitchRec {
+                            from: candidate.to_string(),
+                            to: outcome.route.to_string(),
+                            // The direction word the existing single
+                            // owner picks for THIS move (§2.4: the
+                            // displacement's reason is decided by
+                            // direction, unchanged in spelling and
+                            // meaning).
+                            reason: displacement_reason(
+                                &policy,
+                                &tier,
+                                &metered,
+                                candidate,
+                                &outcome.route,
+                            ),
+                            probe: outcome.probe,
+                            reprefill_tokens: reprefill,
+                            switch_cost_nano: cost_nano,
+                            cost_currency: self.route_currency(&outcome.route),
+                            candidates: metered_candidates_field(&self.config, &policy),
+                            chosen: Some(outcome.route.to_string()),
+                        });
+                    }
+                    // §2.4 boundary 4: the settled route is the single
+                    // truth for the attempt — the walk continues from
+                    // the family's own answer, and the probe flag stays
+                    // current for the answering arm below.
+                    redirected = Some(outcome.route.clone());
+                    plan_guard_out = Some(outcome);
+                }
+            }
+            let candidate: &RouteSpec = redirected.as_ref().unwrap_or(candidate);
             if self.provider_in_cooldown(&candidate.provider) {
                 // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
                 // `failover_from` table, row 2): the projection refused
@@ -1238,14 +1323,14 @@ impl Forwarder {
                 skipped.push((candidate.clone(), SKIP_UNKNOWN_PROVIDER));
                 continue;
             };
-            // The wire gate (ADR-022 / DESIGN §12.10.9): a candidate may
-            // only be served on its own wire. `wire_api ∈ supports` holds
-            // by config validation, so this one condition subsumes the
-            // inbound protocol being a declared cell. The skip is in the
-            // keyless class — no attempt, no intent row, no
+            // The declared-cell gate (ADR-051 §2.1 / DESIGN §12.10.9): a
+            // candidate may be served iff its `supports` declares the
+            // inbound protocol — a declared cell is a native cell, whatever
+            // the entry's `wire_api` names as its diagonal. The skip is in
+            // the keyless class — no attempt, no intent row, no
             // classification, no `failover_from` (nothing failed and
             // nothing moved), narrated only at the walk's end.
-            if cand_provider.wire_api != proto_in {
+            if !cand_provider.supports.contains(&proto_in) {
                 skipped.push((candidate.clone(), SKIP_WIRE_MISMATCH));
                 continue;
             }
@@ -1309,18 +1394,20 @@ impl Forwarder {
             let multi_key = pool.len() > 1;
             let mut key_cursor: usize = 0;
             // spec §4.9 / ADR-020: the entry states the URL for the wire this
-            // attempt uses, and it is used verbatim. `validate` refused any
+            // attempt uses, and it is used verbatim. ADR-051 §2.1: that wire
+            // is the **inbound** protocol — the cell the request came in on —
+            // and never the entry's `wire_api`. `validate` refused any
             // config whose declared cell has no URL, so a miss here is an
             // internal error to answer — not a case to paper over by sending
             // the request to a guessed endpoint.
-            let Some(url) = cand_provider.url_for(cand_provider.wire_api) else {
+            let Some(url) = cand_provider.url_for(proto_in) else {
                 return ForwardOutcome::Failure(ForwardFailure::new(
                     500,
                     ErrorCode::Internal,
                     format!(
-                        "provider '{}' declares '{}' but carries no URL for it",
+                        "provider '{}' declares no URL for the inbound protocol '{}'",
                         cand_provider.name,
-                        cand_provider.wire_api.as_str()
+                        proto_in.as_str()
                     ),
                 ));
             };
@@ -1334,7 +1421,7 @@ impl Forwarder {
                 let plan = UpstreamPlan {
                     provider: &candidate.provider,
                     model: &candidate.model,
-                    protocol_out: cand_provider.wire_api,
+                    protocol_out: proto_in,
                     url,
                     api_key: &api_key,
                     attempt: attempt_index,
@@ -1382,7 +1469,7 @@ impl Forwarder {
                         payload: json!({
                             "route": format!("{}/{}", candidate.provider, candidate.model),
                             "attempt_index": attempt_index,
-                            "protocol_out": cand_provider.wire_api.as_str(),
+                            "protocol_out": proto_in.as_str(),
                             "prefix_blocks": blocks_now.iter().map(|b| json!({
                                 "index": b.index, "kind": b.kind.as_str(),
                                 "tokens": b.tokens, "hash": b.hash,
@@ -1429,7 +1516,10 @@ impl Forwarder {
                         facts.last_upstream_status = Some(resp.status);
                         // Row 6 — the outcome, FULL. `wrote_full_request` is
                         // true by construction on the answered path.
-                        let usage = normalize_usage(cand_provider.wire_api, &resp.body);
+                        // ADR-051 §2.1: the wire the attempt went out on is
+                        // the inbound protocol — usage is read in that
+                        // encoding.
+                        let usage = normalize_usage(proto_in, &resp.body);
                         self.append_event(
                             EventKind::UpstreamResponded,
                             request_id,
@@ -1526,7 +1616,7 @@ impl Forwarder {
                                 request_id,
                                 received_event: facts.received_event,
                                 proto_in: proto_in.as_str(),
-                                proto_out: Some(cand_provider.wire_api.as_str()),
+                                proto_out: Some(proto_in.as_str()),
                                 session: session.as_deref(),
                                 turn_index,
                                 selection_source,
@@ -1902,6 +1992,56 @@ impl Forwarder {
 
     // -- helpers -----------------------------------------------------------
 
+    /// ADR-051 §2.4: the guard is evaluated at **every commitment
+    /// point**, not only the resolved route. The walks call this for a
+    /// candidate they are about to consider: it re-enters the two
+    /// existing owners (`family_policy_for_route`, then `plan_guard`
+    /// unchanged) for the offered route, a projection read of the same
+    /// `plan_state` `/health` reads — no new state, no new config key,
+    /// no new event kind. The walk's own in-request exclusions (an
+    /// already-attempted provider; ADR-011's cooldown) layer **on top**
+    /// of the guard's answer, exactly as the boundary requires: an
+    /// answer whose provider was already attempted this request is
+    /// silently not re-attempted, an answer the cooldown projection
+    /// refuses is skipped `demoted` (CONF-42's shape), an answer whose
+    /// entry declares no inbound cell cannot serve, and only a
+    /// different route that passes all of it redirects the attempt.
+    pub(crate) fn family_guard_reentry(
+        &self,
+        offered: &RouteSpec,
+        ctx: &GuardCtx<'_>,
+        attempted_providers: &[String],
+        proto_in: WireApi,
+    ) -> GuardReentry {
+        let Some(policy) = self.config.family_policy_for_route(offered).cloned() else {
+            return GuardReentry::Stand;
+        };
+        let Ok(Some(outcome)) = self.plan_guard(Some(&policy), offered, ctx) else {
+            return GuardReentry::Stand;
+        };
+        if outcome.route == *offered {
+            return GuardReentry::Stand;
+        }
+        if attempted_providers
+            .iter()
+            .any(|p| p == &outcome.route.provider)
+        {
+            return GuardReentry::Stand;
+        }
+        if self.provider_in_cooldown(&outcome.route.provider) {
+            return GuardReentry::Cooling {
+                route: outcome.route,
+            };
+        }
+        let declares = self
+            .provider(&outcome.route)
+            .is_some_and(|p| p.supports.contains(&proto_in));
+        if !declares {
+            return GuardReentry::Stand;
+        }
+        GuardReentry::Redirect { policy, outcome }
+    }
+
     /// The plan policy's Guard stage (spec §4.6, evaluated before the
     /// allowance rule): for a request inside the family, where does it
     /// go? `Ok(None)` when there is no family policy for this
@@ -2254,8 +2394,8 @@ impl Forwarder {
                 !attempted_providers.contains(&c.provider)
                 && !self.provider_in_cooldown(&c.provider)
                 // The provider check doubles as existence: no entry, no
-                // wire to compare, no candidate.
-                && self.provider(c).is_some_and(|p| p.wire_api == proto_in)
+                // `supports` to consult, no candidate.
+                && self.provider(c).is_some_and(|p| p.supports.contains(&proto_in))
                 && self.transports.contains_key(&c.provider)
             })
             .cloned()
@@ -2624,11 +2764,13 @@ fn normalize_usage(wire: WireApi, body: &[u8]) -> Option<Usage> {
 
 #[cfg(test)]
 mod walk_tests {
-    //! The buffered candidate walk's wire gate (ADR-022 / DESIGN §12.10.9):
-    //! a candidate whose provider's `wire_api` differs from the inbound
-    //! protocol is skipped in the keyless class — never attempted, never a
-    //! displacement — and the walk-end refusal reports it as `wire_mismatch`.
-    //! The mock-upstream proof of the same relations is CONF-57.
+    //! The buffered candidate walk's declared-cell gate (ADR-051 §2.1 /
+    //! DESIGN §12.10.9, superseding ADR-022 decision 1's clause): a
+    //! candidate whose `supports` does not declare the inbound protocol is
+    //! skipped in the keyless class — never attempted, never a
+    //! displacement — and the walk-end refusal reports it as
+    //! `wire_mismatch` (now meaning *undeclared*, not *foreign wire*).
+    //! The mock-upstream proof of the same relations is CONF-101.
 
     use super::*;
     use std::collections::BTreeMap;
@@ -2661,14 +2803,25 @@ mod walk_tests {
     }
 
     fn provider(name: &str, wire: WireApi) -> ProviderCfg {
+        provider_with(name, wire, vec![wire])
+    }
+
+    /// The ADR-051 §5.3 shape: an entry that declares the inbound cell in
+    /// `supports` while naming another `wire_api` as its diagonal. Under
+    /// both rules `wire_api ∈ supports` holds at load, so the entry is
+    /// legal — only the new discriminant serves it.
+    fn provider_with(name: &str, wire: WireApi, supports: Vec<WireApi>) -> ProviderCfg {
         // A minimal legal entry: validate() is not run here, but the shape
         // matches what load() produces for a keyed provider.
         serde_json::from_value(serde_json::json!({
             "name": name,
-            "urls": { wire.as_str(): format!("http://{name}.example/v1/{wire}") },
+            "urls": {
+                wire.as_str(): format!("http://{name}.example/v1/{wire}"),
+                "chat": format!("http://{name}.example/v1/chat"),
+            },
             "api_key_env": format!("UNIT_{name}_KEY"),
             "wire_api": wire.as_str(),
-            "supports": [wire.as_str()],
+            "supports": supports.iter().map(|w| w.as_str()).collect::<Vec<_>>(),
             "models": [{
                 "id": "m",
                 "context": "128k",
@@ -2722,15 +2875,19 @@ mod walk_tests {
         }
     }
 
-    /// The gate's positive: a candidate whose wire matches the inbound
-    /// protocol is still served after wire-incompatible candidates were
+    /// The gate's positive: a candidate whose `supports` declares the
+    /// inbound protocol is still served after undeclared candidates were
     /// skipped — the foreign provider's transport is never handed a
-    /// request.
+    /// request. Includes ADR-051 §5.3's arm: an entry that declares the
+    /// inbound cell while naming another `wire_api` also serves (a
+    /// declared cell is a native cell), which the old discriminant would
+    /// have answered `501`.
     #[tokio::test]
     async fn wire_matching_candidate_still_serves_after_the_gate_skips_foreign_ones() {
         let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
         let foreign_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let native_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let diagonal_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         transports.insert(
             "foreign".into(),
             Arc::new(RecordingTransport {
@@ -2743,6 +2900,12 @@ mod walk_tests {
                 seen: native_seen.clone(),
             }),
         );
+        transports.insert(
+            "diagonal".into(),
+            Arc::new(RecordingTransport {
+                seen: diagonal_seen.clone(),
+            }),
+        );
         let config = VadisConfig {
             server: server_cfg(),
             session: session_cfg(),
@@ -2752,6 +2915,14 @@ mod walk_tests {
                 provider("keyless", WireApi::Chat),
                 provider("foreign", WireApi::Responses),
                 provider("native", WireApi::Chat),
+                // `wire_api: responses` (its diagonal) while `supports`
+                // declares `chat` — legal at load, served only under the
+                // declared-cell rule.
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
             ],
             aliases: BTreeMap::new(),
             plugins: Vec::new(),
@@ -2762,6 +2933,10 @@ mod walk_tests {
                 },
                 RouteSpec {
                     provider: "native".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "diagonal".into(),
                     model: "m".into(),
                 },
             ],
@@ -2775,7 +2950,7 @@ mod walk_tests {
 
         assert_eq!(
             status, 200,
-            "the wire-matching candidate serves the request"
+            "the declared-cell candidate serves the request"
         );
         assert_eq!(
             foreign_seen.lock().unwrap().len(),
@@ -2783,11 +2958,70 @@ mod walk_tests {
             "the responses-wire transport was never handed the chat request"
         );
         assert_eq!(native_seen.lock().unwrap().len(), 1);
+        assert_eq!(
+            diagonal_seen.lock().unwrap().len(),
+            0,
+            "the diagonal entry is behind the native one in the chain and never \
+             needed — but the arm proves the walk did not stall on it"
+        );
     }
 
-    /// The gate's negative: with no wire-matching candidate in the chain,
-    /// the walk ends in the frozen refusal and the wire-incompatible
-    /// entry is reported as `wire_mismatch`, never attempted.
+    /// ADR-051 §5.3's serving arm in isolation: with the plain-native
+    /// candidate absent, the entry that declares the inbound cell under a
+    /// foreign `wire_api` is the one that serves — the declared-cell rule's
+    /// whole point, and a `501` under the old discriminant.
+    #[tokio::test]
+    async fn declared_cell_with_foreign_wire_api_serves() {
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        let diagonal_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transports.insert(
+            "diagonal".into(),
+            Arc::new(RecordingTransport {
+                seen: diagonal_seen.clone(),
+            }),
+        );
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("keyless", WireApi::Chat),
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
+            ],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: vec![RouteSpec {
+                provider: "diagonal".into(),
+                model: "m".into(),
+            }],
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let f = forwarder(config, transports);
+
+        let (status, _details) = forward(&f, "keyless/m").await;
+
+        assert_eq!(
+            status, 200,
+            "an entry that declares the inbound cell serves it, whatever its wire_api"
+        );
+        assert_eq!(diagonal_seen.lock().unwrap().len(), 1);
+    }
+
+    /// The gate's negative: with no candidate that declares the inbound
+    /// cell anywhere in the chain, the walk ends in the frozen refusal and
+    /// the undeclared entry is reported as `wire_mismatch` — whose meaning
+    /// since ADR-051 §2.3 is *this entry's `supports` does not declare
+    /// this inbound protocol*, never attempted. Includes §5.3's arm
+    /// (CONF-104's `deaf` shape): an entry that declares the inbound cell
+    /// under a foreign `wire_api` passes the wire test and is refused by
+    /// the key test instead — `keyless`, not `wire_mismatch`.
     #[tokio::test]
     async fn wire_mismatch_candidate_never_serves_and_reports_the_reason() {
         let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
@@ -2806,11 +3040,30 @@ mod walk_tests {
             providers: vec![
                 provider("keyless", WireApi::Chat),
                 provider("foreign", WireApi::Responses),
+                // The discriminating arm (ADR-051 §5.3, CONF-104's `deaf`
+                // shape): `wire_api: responses` while `supports` declares
+                // the inbound `chat` cell — legal at load — and the entry
+                // holds no key (no transport inserted above). Under the
+                // old discriminant it is skipped as `wire_mismatch`
+                // (`responses != chat`); under the declared-cell rule the
+                // wire test passes and the key test is what refuses it:
+                // `keyless`.
+                provider_with(
+                    "diagonal",
+                    WireApi::Responses,
+                    vec![WireApi::Chat, WireApi::Responses],
+                ),
             ],
-            fallback: vec![RouteSpec {
-                provider: "foreign".into(),
-                model: "m".into(),
-            }],
+            fallback: vec![
+                RouteSpec {
+                    provider: "foreign".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "diagonal".into(),
+                    model: "m".into(),
+                },
+            ],
             aliases: BTreeMap::new(),
             plugins: Vec::new(),
             plan_policy: None,
@@ -2825,11 +3078,17 @@ mod walk_tests {
         let details = details.expect("the refusal carries details");
         assert_eq!(details["stage"], "no_available_route");
         let skipped = details["skipped"].as_array().expect("skipped[]");
-        assert_eq!(skipped.len(), 2, "the resolved route and the one fallback");
+        assert_eq!(skipped.len(), 3, "the resolved route and the two fallbacks");
         assert_eq!(skipped[0]["route"], "keyless/m");
         assert_eq!(skipped[0]["reason"], "keyless");
         assert_eq!(skipped[1]["route"], "foreign/m");
         assert_eq!(skipped[1]["reason"], "wire_mismatch");
+        assert_eq!(skipped[2]["route"], "diagonal/m");
+        assert_eq!(
+            skipped[2]["reason"], "keyless",
+            "the entry declares the chat cell, so the wire test passes and the \
+             key test is what refuses it"
+        );
         assert_eq!(
             foreign_seen.lock().unwrap().len(),
             0,

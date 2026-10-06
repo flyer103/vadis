@@ -11,11 +11,12 @@ record; a change that fails its gates leaves documentation and no broken code.
 - **Where the project stands right now**: the data plane is real — requests are forwarded to
   upstreams with byte-faithful native passthrough, the streaming path relays the SSE stream
   event byte-for-byte, usage is normalized, upstream failures are classified and can fail over,
-  and every terminal outcome lands in the trace. Cross-protocol translation is still to come; the
+  and every terminal outcome lands in the trace. A content translator — the mode that would serve a
+  client on a cell its provider does not declare — is still to come; the
   reporting surfaces that read those traces back out are partly served — `vadis stats`,
   `/health` and `/metrics` — while `vadis replay` and `vadis trace tail` are planned
   and not served ([`docs/spec.md` §9](../docs/spec.md)).
-- **The next step**: cross-protocol translation and the trace/observation wiring, which is what
+- **The next step**: the content translator and the trace/observation wiring, which is what
   turns the cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a
   passing change means only the parts that were measurable passed.
 - **Decision models: evaluated, not adopted.** A small "structured decision" model — one call returns
@@ -32,8 +33,9 @@ record; a change that fails its gates leaves documentation and no broken code.
   protocol's semantics* — an MCP tool that runs a completion, an A2A agent card, a gRPC service — is
   declined: each one stops forwarding your client's own bytes and starts synthesizing a reply, which
   is the one thing this gateway promises not to do, and which is the maintainer's call to change rather
-  than anyone else's. So the six cross-protocol cells that already refuse with `501` stay the whole promise (see
-  [Protocols](protocols.md)). *Carrying the same bytes over HTTP/2* is the one transport change the
+  than anyone else's. So vadis stays a byte-forwarder: it serves the cells an entry declares and
+  refuses an undeclared cell outright (see [Protocols](protocols.md)) rather than synthesizing a
+  reply. *Carrying the same bytes over HTTP/2* is the one transport change the
   evidence supports, and it is not taken yet: it waits on a conformance experiment and on a reason to
   have it. *Reaching the vadis from an MCP client* — fronting the OpenAI-compatible endpoints with an
   external MCP adapter — works today with no product change, and the book will document it rather than

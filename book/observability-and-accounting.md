@@ -37,8 +37,10 @@ Read it in this order; each group answers a different question.
    the resolved `session` (the client's own key, or null when it sent none), and
    `turn_index` within the session. Start here, because every later number is per-request.
 2. **Protocol** — `protocol_in`, `protocol_out`, whether a translation happened, and the
-   lossy notes if it did. This is where an unexplained behavioural difference usually
-   starts.
+   lossy notes if it did. On every record this build writes the two wires are equal — a route
+   is attempted only on a cell it declares — and no translation happens, so this group is the
+   check that the passthrough promise held. It is also where an unexplained behavioural
+   difference usually starts.
 3. **Decision** — `provider`, `model`, `selection_source` and the plugin chain. If the
    request did not go where you expected, this is the answer to "why".
 4. **State** — whether the inbound request carried server-side state, whether the sticky
@@ -221,7 +223,8 @@ figures are not savings figures: `verified` and `inferred` (the table above) are
 
 1. **Prefix continuity** between adjacent turns in the same session. If it dropped, something at the
    *front* of the conversation changed: the client's own content (a different first message, an edited
-   turn), a translation, a configuration change — or, if the transform mode is in use, a mid-session
+   turn), a route change (a failover or a plan switch re-prefills on another upstream cache), a
+   configuration change — or, if the transform mode is in use, a mid-session
    mode or rule change (the drop is how that change is made visible). On the default path no transform
    runs, so the number is a statement about the conversation and the routing.
 2. **The per-transform accounting** — which step claims what, and whether the claim is

@@ -12,8 +12,11 @@ question is about a number, the answer is a link, never a number.
 - **"Why does `model: auto` fail?"** Automatic model selection is intentionally not enabled
   in v0.1; `auto` returns an explicit error and the selection slot is reserved for a plugin.
   Use an explicit `provider/model` or a configured alias.
-- **"Endpoint X returns 'not implemented'."** Unimplemented paths are declared, staged gaps:
-  the gateway answers them with a specific error code rather than pretending or panicking.
+- **"My request came back `400 capability_unsupported`."** The inbound protocol you sent is not
+  one the route declares. Each provider entry lists its cells in `supports`, and every listed
+  cell is served natively on its own URL; send a protocol the entry declares, or point the client
+  at a route that declares the one you want. Vadis never translates an undeclared cell, so this
+  is a fact about your roster rather than a fault in the gateway.
 - **"Where are the prices?"** In the config, one entry per model, each carrying the official
   pricing page URL and capture date. Documentation intentionally never copies price numbers,
   so there is exactly one place to update and one place to audit.

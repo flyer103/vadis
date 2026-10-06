@@ -16,14 +16,14 @@ Three native wires — `POST /v1/chat/completions`, `POST /v1/responses`, `POST 
 
 | Capability | what it is |
 |---|---|
-| **Three wires, one endpoint** | chat completions, responses and Anthropic messages, each served natively when the route's provider speaks that wire |
+| **Three wires, one endpoint** | chat completions, responses and Anthropic messages, each served natively — the client's own bytes to that cell's own URL — when the route's provider declares the protocol in `supports` |
 | **Byte-faithful passthrough** | the client's own bytes minus vadis-owned top-level fields, carrying the resolved provider-native `model` id; a streaming response relays the upstream's SSE events as they arrive |
 | **A decision and a cost record per request** | the decision, the plan family's switches, the usage the upstream reported, integer-Nano amounts and the quota snapshot; `vadis stats` and `GET /health` read them back |
 | **Plan-first routing, classified failover** | every coding-plan account of a family is drained before anything metered is spent, a provider's credential pool rotates when one is refused, and the metered accounts can be ranked by their own published prices; upstream failures are classified and the request fails over along the configured chain |
 | **Prefix-cache continuity** | session identity is the client's own key (`prompt_cache_key`, then the configured headers), so one turn cannot invalidate the cache for the turns after it |
 | **Hot reload, guided setup** | a config change takes effect without a restart; `vadis setup` writes the config trio from templates embedded in the binary and asks about only your own keys ([plugins](book/plugins.md)) |
 
-**Holding several plans, or several keys for one provider?** Give the entries that belong together the same `family` tag — that tag *is* the candidate set, so adding a plan or a metered account is a roster edit and nothing else — then name the pair's anchor and the ranking mode. Several families go in one `plan_policies:` list, and a family ranked by price must be single-currency: a candidate set spanning USD and CNY is refused at load. A ranking is resolved once and pinned to the session, so a reload moves new sessions only. `vadis setup` shows a provider's `api_keys:` pool and a root's `plan_policies:` list, and writes neither. The walk-through is [Cost and caching § Several keys, several plans](book/cost-and-caching.md#several-keys-several-plans-drain-them-all-then-spend); the contract is [`docs/spec.md` §4.6/§4.6.1](docs/spec.md).
+**Holding several plans, or several keys for one provider?** Give the entries that belong together the same `family` tag — that tag *is* the candidate set, so adding a plan or a metered account is a roster edit and nothing else — then name the pair's anchor and the ranking mode. Several families may be declared in one `plan_policies:` list in your own config — the parser and the routing have accepted it since ADR-049, while the shipped template still carries the single `plan_policy:` — and a family ranked by price must be single-currency: a candidate set spanning USD and CNY is refused at load. A ranking is resolved once and pinned to the session, so a reload moves new sessions only. `vadis setup` shows a provider's `api_keys:` pool and a root's plan-family keys, and writes neither. The walk-through is [Cost and caching § Several keys, several plans](book/cost-and-caching.md#several-keys-several-plans-drain-them-all-then-spend); the contract is [`docs/spec.md` §4.6/§4.6.1](docs/spec.md).
 
 ## Requirements
 
@@ -64,7 +64,7 @@ curl -s http://127.0.0.1:8790/health            # 3. liveness; never requires a 
 
 With `auth_token_env: VADIS_TOKEN` written into the config's `server:` section, every protocol endpoint requires the token; if the variable is unset or empty, `vadis serve` refuses to start (exit `4`) rather than serving unauthenticated. With a system proxy configured, codex sends requests for a locally bound router into the proxy, router receives no connection, and the client reports `503 Service Unavailable` — hence `NO_PROXY`.
 
-First request with curl — accepted as `-H "Authorization: Bearer <your-token>"` or `-H "x-api-key: <your-token>"`, either header form works. The example roster's `deepseek` entry (which the `coding-fast` alias points at) speaks `responses`, so against the stock roster use the responses endpoint:
+First request with curl — accepted as `-H "Authorization: Bearer <your-token>"` or `-H "x-api-key: <your-token>"`, either header form works. The example roster's `deepseek` entry (which the `coding-fast` alias points at) declares all three cells, so the alias answers on any of the three endpoints; the responses form below is the one codex speaks and the one this walkthrough uses:
 
 ```bash
 curl -s http://127.0.0.1:8790/v1/responses \
@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:8790/v1/responses \
   -d '{"model":"coding-fast","input":"Reply with the single word: pong","max_output_tokens":64}'
 ```
 
-A success returns the upstream response verbatim — `"model":"deepseek-flash"` (the resolved native id, not the alias you sent) — and `usage.total_tokens` greater than zero. Without a token the same request is refused locally (`401 unauthorized`; nothing reaches the upstream) and still leaves exactly one trace record, pre-pipeline and cost `0`. v0.1 serves a request **natively only** when the inbound protocol equals the provider's `wire_api`; a route the client names in a cell that needs cross-protocol translation answers `501 not_implemented`.
+A success returns the upstream response verbatim — `"model":"deepseek-flash"` (the resolved native id, not the alias you sent) — and `usage.total_tokens` greater than zero. Without a token the same request is refused locally (`401 unauthorized`; nothing reaches the upstream) and still leaves exactly one trace record, pre-pipeline and cost `0`. A route is served natively on every protocol it declares in `supports` — the client's own bytes posted to that cell's own URL — and a protocol it does not declare is not a cell of that entry: it answers `400 capability_unsupported`. Nothing is translated.
 
 **codex** — in `~/.codex/config.toml`:
 
@@ -85,7 +85,7 @@ model_catalog_json = "~/.codex/models.json"
 [model_providers.vadis]
 name = "vadis"
 base_url = "http://127.0.0.1:8790/v1"
-wire_api = "responses"                  # must equal the route's native protocol
+wire_api = "responses"                  # which vadis wire codex sends on; the route must declare it
 env_key  = "VADIS_TOKEN"                # codex reads this variable and sends it as the auth header
 ```
 
