@@ -392,3 +392,88 @@ pub fn dry_run_would_write_text(path: &Path, because: &str) -> String {
 pub fn kind_str(k: EditKind) -> &'static str {
     k.as_str()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F-D (R68-0b's audit finding): `check_rows`' per-name pool rows —
+    /// the shipped-but-unwitnessed F-9 behaviour, whose only caller is
+    /// `setup/mod.rs`'s `--check`. A provider that writes the pool
+    /// spelling contributes **one row per declared name**, in rotation
+    /// order — the pool is enumerated, never collapsed to its first
+    /// member — and a one-key entry contributes exactly its one name
+    /// (ADR-049 §3 rule 1; spec §4.11's `--check` bullet).
+    ///
+    /// The config is parsed by the same loader `serve` runs (not
+    /// hand-built), over the smallest root/roster pair that writes the
+    /// pool for one provider and the one-key spelling for another — the
+    /// ladder's both-sides witness in one file.
+    #[test]
+    fn check_rows_yields_one_row_per_declared_name_for_a_pooled_provider() {
+        let roster = r#"providers:
+  - name: pooled
+    urls:
+      chat: https://x.example/v1/chat/completions
+    api_keys: [P_A, P_B, P_C]
+    wire_api: chat
+    supports: [chat]
+    models:
+      - id: m1
+        context: 200k
+        price:
+          input_miss: 0.00066
+          input_hit: 0.000022
+          cache_write: 0.0
+          output: 0.00198
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://x.example/pricing @2026-09-19"
+  - name: onekey
+    urls:
+      chat: https://y.example/v1/chat/completions
+    api_key_env: OK_KEY
+    wire_api: chat
+    supports: [chat]
+    models:
+      - id: m2
+        context: 200k
+        price:
+          input_miss: 0.00066
+          input_hit: 0.000022
+          cache_write: 0.0
+          output: 0.00198
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://y.example/pricing @2026-09-19"
+"#;
+        let dir = std::env::temp_dir().join(format!("vadis-check-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("roster.yaml"), roster).expect("write roster");
+        std::fs::write(
+            dir.join("root.yaml"),
+            r#"server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m }
+session:  { key_sources: ["prompt_cache_key"], ttl: 12h }
+cache:    { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
+trace:    { dir: "./state/traces", rollover: hourly }
+providers_file: roster.yaml
+aliases:  {}
+plugins: []
+fallback: []
+"#,
+        )
+        .expect("write root");
+        let rc = crate::config_load::load(&dir.join("root.yaml")).expect("the fixture loads");
+        let rows = check_rows(&rc.vadis);
+        let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["P_A", "P_B", "P_C", "OK_KEY"],
+            "one row per declared pool name in rotation order, then the \
+             one-key entry's own name"
+        );
+        // The probe is presence-only and never a value (the secret
+        // boundary); under this test runner all four names are absent.
+        assert!(rows.iter().all(|(_, s)| *s == KeyState::Absent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

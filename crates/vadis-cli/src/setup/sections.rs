@@ -612,4 +612,190 @@ mod tests {
             .iter()
             .any(|r| r.path == "providers[name=kimi-cn-plan].api_key_env"));
     }
+
+    /// A roster fixture that writes the pool spelling for **one** entry
+    /// (spec §4.11's assertion list; the shipped pair ships both shapes
+    /// commented out, so it cannot witness either — the fixtures are the
+    /// witness). The `deepseek` entry writes the pool; `zai` keeps the
+    /// one-key spelling, so the fixture covers both sides of the
+    /// exactly-one-of ladder in one file.
+    const POOL_ROSTER: &str = r#"providers:
+  - name: deepseek
+    urls:
+      chat: https://api.deepseek.com/chat/completions
+      responses: https://api.deepseek.com/responses
+    api_keys: [DS_POOL_A, DS_POOL_B, DS_POOL_C]
+    wire_api: chat
+    supports: [chat, responses]
+    account: api
+    models:
+      - id: deepseek-chat
+        context: 128k
+        price:
+          input_miss: 0.00027
+          input_hit: 0.000007
+          cache_write: 0.0
+          output: 0.0011
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://api-docs.deepseek.com/quick_start/pricing @2026-09-19"
+  - name: zai
+    urls:
+      chat: https://api.z.ai/api/paas/v4/chat/completions
+    api_key_env: ZAI_API_KEY
+    wire_api: chat
+    supports: [chat]
+    account: api
+    models:
+      - id: glm-5.3
+        context: 200k
+        family: glm-5.3
+        price:
+          input_miss: 0.00066
+          input_hit: 0.000022
+          cache_write: 0.0
+          output: 0.00198
+          peak: { multiplier: 1.0, windows: [] }
+        source: "https://z.ai/pricing @2026-09-19"
+"#;
+
+    /// Spec §4.11's pool assertion: the pool entry contributes a
+    /// display-only row per pool name (in `api_keys:` order) and **no**
+    /// `api_key_env` row, while every one-key entry's row is unchanged.
+    #[test]
+    fn a_pool_entry_is_shown_never_asked() {
+        let rows = rows_for(Section::Providers, POOL_ROSTER);
+        // No api_key_env row for the pooled entry — the pool spelling and
+        // the one-key spelling are never both asked for one entry.
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.path == "providers[name=deepseek].api_key_env"),
+            "a pool entry contributes no api_key_env row"
+        );
+        // The one-key entry's row is unchanged.
+        assert!(rows
+            .iter()
+            .any(|r| r.path == "providers[name=zai].api_key_env"));
+        // The display lines: one per pool name, in rotation order.
+        let shown = show_entries(Section::Providers, POOL_ROSTER);
+        let pool_lines: Vec<&str> = shown
+            .iter()
+            .filter(|(p, _)| p.starts_with("providers[name=deepseek].api_keys"))
+            .map(|(p, _)| p.as_str())
+            .collect();
+        assert_eq!(
+            pool_lines,
+            vec![
+                "providers[name=deepseek].api_keys = DS_POOL_A",
+                "providers[name=deepseek].api_keys = DS_POOL_B",
+                "providers[name=deepseek].api_keys = DS_POOL_C",
+            ],
+            "one display line per pool name, in api_keys: order"
+        );
+        // The note says what the run does not do: membership is a hand
+        // edit (the same shape as `aliases`/`fallback`).
+        assert!(shown
+            .iter()
+            .filter(|(p, _)| p.starts_with("providers[name=deepseek].api_keys"))
+            .all(|(_, note)| note.contains("hand edit")));
+        // The one-key entry contributes no pool line.
+        assert!(!shown
+            .iter()
+            .any(|(p, _)| p.starts_with("providers[name=zai].api_keys")));
+    }
+
+    /// A root fixture that writes the list spelling (spec §4.11's
+    /// assertion list). Two families, so the one-line-per-family shape is
+    /// asserted on a list and not on a singleton; the second family
+    /// omits `overflow_selection`, so the default line names `declared`.
+    const PLAN_POLICIES_ROOT: &str = r#"server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m }
+session: { key_sources: ["prompt_cache_key"], ttl: 12h }
+cache: { sticky: true, breakeven: { enabled: true, min_remaining_turns: 3, safety_factor: 1.2 } }
+trace: { dir: "./state/traces", rollover: hourly }
+aliases: {}
+plugins: []
+fallback: []
+plan_policies:
+  - family: glm-5.3
+    primary: zai-plan/glm-5.3
+    overflow: zai/glm-5.3
+    on_primary_exhausted: spill
+    recover: probe
+    cooldown: 15m
+    overflow_selection: cheapest
+  - family: kimi-k3
+    primary: kimi-plan/kimi-k3
+    overflow: kimi/kimi-k3
+    on_primary_exhausted: block
+    recover: none
+    cooldown: 30m
+"#;
+
+    /// Spec §4.11's list assertion: over a root that writes
+    /// `plan_policies:`, the routing section builds no `plan_policy.*`
+    /// value row and its display names each declared family — the
+    /// alternative spelling's keys are never named as if the file were
+    /// missing them.
+    #[test]
+    fn a_plan_policies_root_is_shown_never_edited() {
+        let rows = rows_for(Section::Routing, PLAN_POLICIES_ROOT);
+        assert!(
+            rows.iter().all(|r| !r.path.starts_with("plan_policy.")),
+            "no plan_policy.* value row over a plan_policies: root, got {:?}",
+            rows.iter().map(|r| r.path).collect::<Vec<_>>()
+        );
+        let shown = show_entries(Section::Routing, PLAN_POLICIES_ROOT);
+        let families: Vec<&str> = shown
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .filter(|p| p.starts_with("plan_policies:"))
+            .collect();
+        assert_eq!(
+            families,
+            vec![
+                "plan_policies: family glm-5.3 — overflow_selection cheapest",
+                "plan_policies: family kimi-k3 — overflow_selection declared",
+            ],
+            "one line per declared family (its tag and its overflow_selection), \
+             in declaration order"
+        );
+        assert!(shown
+            .iter()
+            .filter(|(p, _)| p.starts_with("plan_policies:"))
+            .all(|(_, note)| note.contains("shown, never edited")));
+        // The single-family root is unchanged: the same calls over the
+        // shipped example still build the eight rows (including the new
+        // overflow_selection row) and the aliases/fallback lines.
+        let shipped = rows_for(Section::Routing, &example());
+        assert!(shipped
+            .iter()
+            .any(|r| r.path == "plan_policy.overflow_selection"));
+        assert!(shipped
+            .iter()
+            .any(|r| r.path == "plan_policy.overflow_monthly_cap_usd"));
+        assert!(show_entries(Section::Routing, &example())
+            .iter()
+            .any(|(p, _)| p == "aliases"));
+    }
+
+    /// The commented spellings the shipped pair carries (R68-2's frozen
+    /// comments) are inert: a commented `api_keys:` line is not a live
+    /// pool, and a commented `plan_policies:` line is not a live list —
+    /// neither shape is detected over prose alone.
+    #[test]
+    fn commented_spellings_are_inert() {
+        let root = example();
+        assert!(!top_key_present(&root, "plan_policies"));
+        assert!(!top_key_present(&root, "plan_policy_key_absent_by_construction"));
+        let roster = roster_example();
+        assert!(!entry_writes_pool(&roster, "deepseek"));
+        assert_eq!(
+            rows_for(Section::Providers, &roster)
+                .iter()
+                .filter(|r| r.path == "providers[name=deepseek].api_key_env")
+                .count(),
+            1,
+            "the shipped one-key entries keep their rows"
+        );
+    }
 }
