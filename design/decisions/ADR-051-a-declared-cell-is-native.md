@@ -484,3 +484,31 @@ the old behaviour costs nothing that was not already lost (the walk's order is t
 The roster corrections of §2.5 are single-line edits in both directions. §2.1's `wire_api` role is reversible
 by re-reading the field as a gate — at which point this ADR is superseded by a new one citing it, exactly as
 ADR-022's Reversibility clause provides.
+
+---
+
+## Dated note — 2026-10-06 (R69-1; C1 of R69-0b's audit)
+
+**This note is appended because this ADR is append-only: not one line above it is edited.** It repairs
+§6's site list, which is short one entry, and records the line-number drift `R69-1`'s edits cause.
+
+**`ErrorCode::NotImplemented` has nine sites in the whole repository, not §6's four-plus-one.** The
+complete list, at `R69-1`'s HEAD: the vocabulary (`error.rs:22` the variant, `:41` its string,
+`:60` its status; `trace.rs:403` its `kind_for_code` mapping), the two resolved-route branches
+`R69-1` deletes (`forward.rs:905` before the edit, `stream_forward.rs:443` before the edit), the
+unmounted helper (`stubs.rs:12`, built on `health.rs:487`), and — the entry §6 omitted — the
+**buffered `stream: true` guard at `forward.rs:776-777`** ("a streaming request is not served on this
+path; resend with stream: false").
+
+**The fifth site is unreachable, which is why deleting it is out of `R69-1`'s scope rather than part
+of the deletion.** `Forwarder::forward` has exactly two callers in the repository:
+`vadis-cli/src/lib.rs:577`, which sits **behind** the body-level `stream` shallow-parse split at
+`vadis-cli/src/lib.rs:531-540` (a `stream: true` body is routed to the streaming forwarder before
+that call can see it), and `forward.rs:2711`, which is inside `#[cfg(test)]`. No reachable caller
+can hand `forward` a `stream: true` body, so the guard answers nothing — `R69-0b`'s audit (C1)
+ruled it so, and `R69-1a` leaves the bytes untouched.
+
+**Line-number drift `R69-1`'s own edits cause** (this ADR's convention, §preamble): deleting the
+`501` branch shifts `forward.rs` sites below `:911` up by ten lines and `stream_forward.rs` sites
+below `:453` up by fourteen; §5.2's and §5.3's forward.rs references are stated at this ADR's HEAD
+(`374c4e8`) throughout.

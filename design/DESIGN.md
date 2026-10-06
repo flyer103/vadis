@@ -1680,6 +1680,13 @@ historical register)**
 | newly registered by this round (gaps this round **deliberately does not close**) | **cross-protocol content translation** — option C, refused as scope (ADR-051 §1.3): a mapper is a lossy, determinism-critical content step with its own contract, its own lossy register and six already-allocated unwitnessed cells (`CONF-04…09`); **`wire_api: native` as a second declaration layer** — option B, refused because it would state one fact twice (ADR-051 §3); **the plan's ToS/allowance semantics** — whether a coding-plan allowance is *consumed* by gateway traffic is vendor policy and unobservable from here (ADR-051 §2.6, `R69-0-F3`); **`zai`'s metered `responses` cell** — no page documents one for a metered key, so it is not added (§4.0's better-missing-than-guessed rule; `R69-0-F1`); **`wire_api`/`supports` in §4.11's askable key set** — absent today and reachable by no anchor rule, so adding either is a §4.11 contract change with its own witness, outside this card's write set (`R69-0-F4`) |
 | not written back, and why | the `501` row's *text* is annotated in place rather than deleted (a client parses `error.type`; the vocabulary is contract); ADR-022 is **not edited** (append-only — ADR-051 §2.3 states the supersede clause by clause) |
 
+**Register line (2026-10-06, R69-1): the items this implementing round deliberately does not do.**
+Cross-protocol content translation (ADR-051 §1.3 option C, refused as scope — `CONF-04…09` stay
+unwitnessed), a `wire_api: native` second declaration layer (option B, refused — one fact, one
+declaration), the zai metered entry's `responses` cell (no page documents one; `R69-0-F1`), and the
+plan-ToS/allowance question (vendor policy, unobservable from here; `R69-0-F3`) — all registered by
+ADR-051 §5.4 and untouched by the code change that lands §2.1's discriminant.
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**
@@ -1702,7 +1709,7 @@ quietly reinterpreted.
 // crates/vadis-providers (§12.1 allowlist: reqwest, tokio, futures)
 pub struct UpstreamPlan<'a> {
     pub route: &'a RouteSpec,
-    pub protocol_out: Protocol,       // the provider's wire_api; the encoding was decided in §7
+    pub protocol_out: Protocol,       // the inbound protocol (ADR-051 §2.1): the settled route declares that cell, so the wire the bytes leave on IS protocol_in
     pub url: &'a str,                 // the resolved wire's complete URL (spec §4.9, ADR-020)
     pub api_key: &'a SecretKey,       // Debug prints <redacted>; never serialized, never logged
     pub attempt: u32,                 // 0-based attempt index within one inbound request
@@ -2120,12 +2127,13 @@ the intent row precede the effect?* Row 5 is the one that carries money — it c
 the request bytes leave — and CONF-20 asserts it on a fixed trace.
 
 **R1 — refinement of ADR-010 item 2 (which row owns `protocol_out`).** ADR-010 lists
-"protocol in/out" among `request.received`'s essentials, but the outbound protocol does not
-exist at receive time: it *is* the selected provider's `wire_api`, decided at selection. The
-row therefore carries `protocol_in` with `protocol_out: null`, and row 3 carries the resolved
-`protocol_out`. No column moves, no row is ever rewritten, and nothing is lost: ADR-010's list
-summarizes what a request's events know collectively. Recorded so two implementers do not
-disagree about which row owns the field.
+"protocol in/out" among `request.received`'s essentials, but the outbound protocol does
+not exist at receive time: it *is* the inbound protocol (ADR-051 §2.1 — the settled route
+declares the inbound cell, so the wire the bytes go out on is `protocol_in` by
+construction). The row therefore carries `protocol_in` with `protocol_out: null`, and row 3
+carries the resolved `protocol_out`. No column moves, no row is ever rewritten, and nothing
+is lost: ADR-010's list summarizes what a request's events know collectively. Recorded so
+two implementers do not disagree about which row owns the field.
 
 **R2 — the trace line precedes the accounting rows.** ADR-009 item 3 gives the event a
 `trace_ref` pointer, and an event row is never rewritten (ADR-009 item 7) — so the only rows
