@@ -960,6 +960,45 @@ impl Store for SqliteStore {
                 QueryRow::Count(nano)
             }
             Query::AllEvents => QueryRow::Events(self.read_events(&conn)?),
+            Query::EventsSince { kinds, since_us } => {
+                // Spec §4.18 (ADR-054): the serving path's bounded read —
+                // kind-filtered inside SQLite (the idx_events_kind_ts index
+                // serves it), window-bounded by the caller. Never a scan of
+                // the whole log.
+                let placeholders = kinds.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT event_id, ts_us, kind, request_id, session, schema_version, payload, \
+                     body_hash, trace_ref FROM events WHERE kind IN ({placeholders}) \
+                     AND ts_us >= ? ORDER BY event_id"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| map_err(false, e))?;
+                let mut params: Vec<&dyn rusqlite::ToSql> =
+                    kinds.iter().map(|k| k as &dyn rusqlite::ToSql).collect();
+                params.push(&since_us);
+                let mut rows = stmt
+                    .query(params.as_slice())
+                    .map_err(|e| map_err(false, e))?;
+                let mut out = Vec::new();
+                while let Some(row) = rows.next().map_err(|e| map_err(false, e))? {
+                    let kind_raw: String = row.get(2).map_err(|e| map_err(false, e))?;
+                    let payload: String = row.get(6).map_err(|e| map_err(false, e))?;
+                    out.push(StoredEvent {
+                        event_id: EventId(row.get(0).map_err(|e| map_err(false, e))?),
+                        ts_us: row.get(1).map_err(|e| map_err(false, e))?,
+                        kind: EventKind::from_str_lossy(&kind_raw), // None = unknown, tolerated
+                        kind_raw,
+                        request_id: row.get(3).map_err(|e| map_err(false, e))?,
+                        session: row.get(4).map_err(|e| map_err(false, e))?,
+                        schema_version: row.get(5).map_err(|e| map_err(false, e))?,
+                        payload: serde_json::from_str(&payload).map_err(|e| {
+                            StoreError::Sql(format!("event payload is not JSON: {e}"))
+                        })?,
+                        body_hash: row.get(7).map_err(|e| map_err(false, e))?,
+                        trace_ref: row.get(8).map_err(|e| map_err(false, e))?,
+                    });
+                }
+                QueryRow::Events(out)
+            }
         })
     }
 
