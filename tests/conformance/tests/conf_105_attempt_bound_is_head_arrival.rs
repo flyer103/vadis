@@ -21,16 +21,16 @@
 //!   empty, `[DONE]` last). **Red at the base** (ADR-044's
 //!   total-elapsed clock truncated exactly this rig mid-body).
 //! - (b) **the slow head — the conservative arm, and the cross-media
-//!   class parity** (R71-0b limb-1 FAIL (d), qa's repair option 1 as
-//!   the orchestrator recorded it): PARKED `#[ignore]` pending the
-//!   owner's ruling on the buffered leg's rig. The streamed leg rigs
-//!   a head that never arrives within the knob and expects the
-//!   `unknown_outcome` refusal (502 / `upstream_error` / `stage:
-//!   "unknown_outcome"` / `error_class: "timeout"`, no retry, no
-//!   failover, exactly one record); the buffered leg rigs a
-//!   MID-BODY STALL (head arrives, body stalls past the knob) and
-//!   asserts the same class word and stage in the buffered path's own
-//!   carriage. The shared-class-word assertion (§2.3's invariant) is
+//!   class parity** (enabled by the owner's 2026-10-07 ruling,
+//!   ADR-053 §11): the streamed leg rigs a head that never arrives
+//!   within the knob and expects the `unknown_outcome` refusal (502 /
+//!   `upstream_error` / `stage: "unknown_outcome"` / `error_class:
+//!   "timeout"`, no retry, no failover, exactly one record); the
+//!   buffered leg rigs a MID-BODY STALL (head arrives, body stalls
+//!   past the knob) and asserts the same class word and stage — the
+//!   observed buffered carriage is also 502 `upstream_error` (the 504
+//!   arm is unreachable for this fault; ADR-053 §11's follow-up
+//!   finding). The shared-class-word assertion (§2.3's invariant) is
 //!   what the limb exists for.
 //! - (c) **the connect window stays classified**: a host that REFUSES
 //!   is still `connect_failure` with its failover-eligible action,
