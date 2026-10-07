@@ -165,8 +165,10 @@ per request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JS
 reason a surface's shape is frozen only by the change that implements it is the rule in
 [`docs/spec.md` §9.3](../docs/spec.md).
 
-`vadis stats` reads the trace files directly and opens the local store read-only, so it runs
-while `serve` holds that state directory (see [Operations](operations.md)).
+`vadis stats` reads the trace files directly and runs while `serve` holds that state directory:
+its own read-only open of the store is refused there, so the one store-derived figure — `unknown
+outcome requests` — is answered by the running gateway instead, over its guarded read surface
+(see [Operations](operations.md) and [`docs/spec.md` §9.2](../docs/spec.md)).
 
 ## How to read a stream's own numbers
 
