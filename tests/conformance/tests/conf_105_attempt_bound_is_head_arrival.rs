@@ -386,9 +386,12 @@ async fn midbody_stall_listener() -> u16 {
 /// (b) The slow head — the conservative arm, and the cross-media class
 /// parity (qa repair option 1, as the orchestrator recorded it).
 ///
-/// PARKED pending the owner's ruling (R71-0b limb-1 FAIL (d)): the
-/// buffered leg's rig. Authored so the ruling only flips this ignore
-/// off:
+/// OWNER RULING 2026-10-07 — limb (b) is enabled as authored. Shown the
+/// executed-rig facts (the buffered mid-body stall answers 502 with
+/// shared `stage`/`error_class`; the 504 `upstream_timeout` arm is
+/// unreachable for this fault), the owner asked for the recommendation
+/// ("你的建议是什么？"), was shown this rig, and answered "确认"
+/// (confirmed). The two rigs as they stand:
 /// - streamed leg: a head that never arrives within the knob → the
 ///   `unknown_outcome` refusal — 502 / `upstream_error` / `stage:
 ///   "unknown_outcome"` / `error_class: "timeout"`, no retry, no
@@ -396,10 +399,10 @@ async fn midbody_stall_listener() -> u16 {
 /// - buffered leg: a MID-BODY STALL (head arrives, body stalls past
 ///   the knob) → `WrittenNoResponse` — the same `stage:
 ///   "unknown_outcome"` and `error_class: "timeout"` class word in
-///   the buffered medium's own carriage;
+///   the buffered medium's own carriage (observed: 502
+///   `upstream_error`);
 /// - the shared-class-word assertion (ADR-053 §2.3's invariant) is
 ///   the limb's point: one fault, one class, both media.
-#[ignore = "CONF-105 limb (b): buffered-leg rig re-scope awaits owner ruling — R71-0b limb-1 FAIL (d), options in comment 631"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_105_b_slow_head_is_conservative_unknown_outcome_on_both_media() {
     // -- streamed leg: the head never arrives within the knob ----------
@@ -471,7 +474,9 @@ async fn conf_105_b_slow_head_is_conservative_unknown_outcome_on_both_media() {
     // so this fault cannot reach it. The status carriage is in fact
     // the SAME (502) on both media for this rig; the class word and
     // stage — the invariant §2.3 names — are what is shared and
-    // asserted. Flagged for the owner's limb-(b) ruling.
+    // asserted. Ruled and enabled 2026-10-07 by the owner
+    // ("确认"); the 504-unreachability is a registered follow-up
+    // finding for a future buffered-path round (ADR-053 §11).
     assert_eq!(
         status2, 502,
         "the buffered mid-body stall's observed carriage: {body2:?}"
