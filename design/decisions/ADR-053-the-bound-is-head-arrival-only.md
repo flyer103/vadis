@@ -97,7 +97,7 @@ The new **Elapsed-on-head** arm adds **no new variant, no new status and no new 
 
 | Medium | A full-write-no-response timeout produces | Where it is decided |
 |---|---|---|
-| buffered | `504`, `error.type: upstream_timeout`, `details.stage: "unknown_outcome"`, `details.error_class: "timeout"` | `vadis-proxy/src/forward.rs:1938-1960` (the `WrittenNoResponse` arm's `timed_out` branch) |
+| buffered | `502`, `error.type: upstream_error`, `details.stage: "unknown_outcome"`, `details.error_class: "timeout"` — **as observed on the executed rigs (2026-10-07, §§10-11): the `504 upstream_timeout` row this table carried at first writing is unreachable for these faults** (the `TransportKind::Other` hardcode; a registered follow-up finding, §11) | `vadis-proxy/src/forward.rs:1938-1960` (the `WrittenNoResponse` arm) |
 | streamed | `502`, `error.type: upstream_error`, `details.stage: "unknown_outcome"`, `details.error_class: "timeout"` | `vadis-proxy/src/stream_forward.rs:1512-1527` |
 
 This asymmetry is the *"except the class string"* the owner's direction names: it is the **status carriage**, and it is already the tree's behaviour on the two media today. Closing it would be a change to **both** media and is not this round's (it is named in §6 as out of scope).
@@ -220,7 +220,7 @@ So reverting re-tightens the ceiling and keeps the outer bound; adopting widens 
 | **`CONF-105`** | **allocated** to this round's witness — the head-arrival bound, its conservative class, the cross-media class parity and the idle control, in one case (§4 above; the row lands in DESIGN §12.8) |
 | **the widened busy-stream ceiling** | **stated**, not a new capability: a busy stream is now bounded by `request_timeout` (§4). It is an identity the operator and the docs must carry, not a feature |
 | **the buffered side of `request_timeout`** | **deferred and named** (§3, §6) |
-| **the cross-media status carriage** (buffered `504 upstream_timeout` vs streamed `502 upstream_error` for the same full-write-no-response fault) | **recorded at HEAD, untouched** (§2.2, §6) — closing it would move both media |
+| **the cross-media status carriage** (recorded at §2.2's first writing as buffered `504 upstream_timeout` vs streamed `502 upstream_error` for the same full-write-no-response fault) | **recorded at HEAD, untouched by this ADR's contract** (§2.2, §6) — closing it would move both media. *(Superseded observationally 2026-10-07, §11: the buffered `504` arm is unreachable for the executed rigs' faults — both media in fact answer `502`; the §2.2 row is corrected there and the dead arm is a registered follow-up finding.)* |
 | **two documents that cite the superseded reading** | **repaired in this card.** `DESIGN` §12.20's truncation limb (ADR-045's own landing in `DESIGN`) is corrected **in place** — `DESIGN` is a living document — and **ADR-045 §3.5 item 2's parenthetical** gets a **dated note** instead (append-only, ADR-048 §8's precedent). The limb's *rig* was always the **gap** fixture (`"the stub emits units, then declares a gap longer than `server.upstream_attempt_timeout`"`), so the construction and the four assertions are unchanged; only the citation of the total-elapsed reading moved |
 | anything else | **nothing.** This ADR carries no new loop finding; `CONF-98`/`CONF-99` and `ADR-050` stay the parked branch `round/67-abandoned-attempt`'s |
 
@@ -292,3 +292,46 @@ authorized by the orchestrator's ruling on R71-0b (2026-10-07) and
 recorded for owner ratification in the round record — not a silent
 gate edit. Nothing in §2's rulings, §3's contract, or the after-shape
 table changes; the after-shape is implemented as written.
+
+## 11. Dated ruling note (2026-10-07, `R71-5` — append-only)
+
+**The owner ruled on limb (b), and it is enabled as authored.** Shown
+the executed-rig facts of §10's closing paragraph (a buffered
+mid-body stall answers **502** with the shared
+`details.stage: "unknown_outcome"` +
+`details.error_class: "timeout"`; the 504 `upstream_timeout` arm is
+unreachable for this fault), the owner asked for the recommendation
+("你的建议是什么？" — "what is your recommendation?"), was shown:
+enable limb (b) as authored (it asserts the observed truth and §2.3's
+one-fault-one-class-both-media invariant) + a one-line DESIGN §12.8
+re-scope + register the 504-unreachability as a follow-up finding for
+a future buffered-path round (the `TransportKind::Other` hardcode is
+NOT fixed now — the buffered path is out of scope by this round's
+boundary). The owner answered: **"确认"** ("confirmed").
+
+**Consequences.** `CONF-105`'s limb (b) is un-ignored and runs green
+(4 passed / 0 ignored on the case; the workspace's ignored count
+drops 12 → 11). DESIGN §12.8's CONF-105 row now scopes the buffered
+leg to the mid-body-stall rig with its observed `502 upstream_error`
+carriage. §10's closing sentences ("parked with the owner … parked
+`#[ignore]` until that ruling … DESIGN §12.8's row is untouched by
+`R71-1`") are superseded by this note. §2.2's cross-media table's
+buffered row carries the pointer.
+
+**FOLLOW-UP FINDING (registered).**
+
+- **class:** dead-arm
+- **site:** `crates/vadis-providers/src/lib.rs:186-189` (the buffered
+  body-read failure arm's hardcoded `TransportKind::Other`), together
+  with `vadis-proxy/src/forward.rs`'s `timed_out` branch, which
+  requires `kind == Timeout`
+- **effect:** on the buffered path today, both the mid-body-stall and
+  the slow-head faults answer **502 `upstream_error`**; the 504
+  `upstream_timeout` arm is unreachable on the buffered path
+- **owner:** human (a buffered-path contract change is not this
+  loop's to make — AGENTS 9 / ADR-012)
+- **due:** a future buffered-path round (`R72+`)
+
+Fixing it is deliberately out of this round's scope: the buffered
+path is untouched by ADR-053's boundary, and the classification
+either way is an owner act.
