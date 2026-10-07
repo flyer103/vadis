@@ -234,3 +234,61 @@ So reverting re-tightens the ceiling and keeps the outer bound; adopting widens 
 - **Not** *"the connect window changed."* A fast refusal is still a **classified** failure (`connect_failure`, retry/failover eligible, CONF-29's shape), never an Elapsed — the client's own `connect_timeout` fires first for a dead host.
 - **Not** *"the calibration in CONF-90 is intact."* Its premise moved; §8.2 freezes the repair, and `R71-2` executes it — the case keeps its ID and its byte-completeness claim, not its old three-way verdict.
 - **Not** *"R71-0 changed a product byte."* Zero bytes under `crates/`, `tests/`, `.github/` in this card; the code and the case repair land on `R71-1` and `R71-2` respectively.
+
+---
+
+## 10. Dated correction (2026-10-07, `R71-1` — append-only)
+
+The R71-0b audit (card `t_6907644e`, comment 631; probe rigs at
+`~/.hermes/profiles/qa/cache/scratch/probe_head_timeout/`, reqwest
+0.12.28 matching `Cargo.lock`) found §2.2's **"today"** map wrong, and
+this section corrects it without rewriting a sentence above. Two
+claims move, both about the pre-change behaviour this ADR's "before"
+column described:
+
+1. **"Today, a head window that expires after a full write already
+   lands in this same arm" is false.** A per-request `.timeout()`
+   expiry is built by reqwest as `Kind::Request`, so `is_request()`
+   is TRUE and `wrote_full_request` (`stream.rs:150`) is FALSE —
+   today's streamed slow head lands in
+   `Ok(StreamOpen::NotSent(Timeout, …))`, classifies `timeout`
+   (`fails_over()` false), and refuses chain-exhausted: **502,
+   `upstream_error`, `details.error_class: "timeout"`, NO
+   `details.stage`**, one record, `upstream_ms` null. The `Err` →
+   `UnknownOutcome` arm was reachable before this round only by a
+   non-`Kind::Request` send error, which a deadline expiry never is.
+   Consequently "**net behaviour identical to today except the message
+   string**" is wrong: after `R71-1` the refusal gains
+   `details.stage: "unknown_outcome"` and `result.upstream_ms`; the
+   observable delta is **three fields** (stage, upstream_ms, message),
+   not one. Status/code/retry/failover are unchanged — also
+   conservative before, conservative after; the class word
+   `"timeout"` is identical on both sides.
+
+2. **§5 leg 2's before-expectation** ("both before and after —
+   §2.2's refusal") cannot be recorded as written: the BEFORE shape is
+   the no-stage chain-exhausted 502 above. `R71-1` recorded the honest
+   before/after pair on the CONF-105 rig (limb (b)'s streamed leg):
+   before — 502, no `stage`, `error_class: "timeout"`; after — 502,
+   `stage: "unknown_outcome"`, `error_class: "timeout"`, no
+   `failover.triggered`, one record.
+
+The §2.2 cross-media table's buffered row is mis-premised the same
+way (a buffered slow head also dies `NotSent(Timeout)` → 502/no
+stage); the buffered `504 upstream_timeout` arm is reached only when
+the deadline fires during the body read. An executed R71-1 probe of
+the recommended mid-body-stall rig observed the buffered carriage as
+**502 `upstream_error`** with the shared `stage: "unknown_outcome"` /
+`error_class: "timeout"` — the 504 branch requires
+`kind == Timeout`, but the buffered body-read failure arm hardcodes
+`TransportKind::Other` (`vadis-providers/src/lib.rs:186-189`), so
+this fault cannot reach the 504 arm either. The limb-(b) buffered-leg
+rig choice is parked with the owner (options in comment 631);
+CONF-105's limb (b) is parked `#[ignore]` until that ruling, and
+DESIGN §12.8's row is untouched by `R71-1`.
+
+This note is a factual correction of this round's own unlanded text,
+authorized by the orchestrator's ruling on R71-0b (2026-10-07) and
+recorded for owner ratification in the round record — not a silent
+gate edit. Nothing in §2's rulings, §3's contract, or the after-shape
+table changes; the after-shape is implemented as written.
