@@ -1728,6 +1728,7 @@ dependencies = [
  "clap",
  "futures",
  "notify",
+ "reqwest",
  "serde_json",
  "serde_yaml",
  "tokio",
