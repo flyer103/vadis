@@ -874,6 +874,99 @@ pub async fn serve(config_path: &str) -> i32 {
             ))
     }
 
+    /// `GET /state/events` (spec §4.18, ADR-054, DESIGN §12.24): the live
+    /// event-log figure, answered by the running process from its own
+    /// store. The third guarded non-protocol route: same guard middleware
+    /// as `/metrics`, its own word `"state"`, and — like `/metrics` — no
+    /// body extractor, no body layer, no request byte read. The window
+    /// arrives as the one query parameter; an unusable one answers
+    /// `400` (§8's body) **before** any store read; a store error answers
+    /// `500` honestly (an assembly that cannot read its own store does
+    /// not paper over it). The admitted arm writes nothing.
+    fn guarded_state_route(
+        revision: vadis_proxy::SharedRevision,
+        state: std::sync::Arc<AppState>,
+    ) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/state/events",
+                get(move |uri: axum::http::Uri| {
+                    let state = state.clone();
+                    async move {
+                        let raw = uri.query().and_then(|q| {
+                            q.split('&')
+                                .find_map(|kv| kv.strip_prefix("window=").map(|w| w.to_string()))
+                        });
+                        let now_us = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_micros() as i64)
+                            .unwrap_or(0);
+                        match vadis_proxy::state_events_handle(
+                            &state,
+                            raw.as_deref(),
+                            now_us,
+                            rfc3339_micros,
+                        ) {
+                            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+                            Err("window") => {
+                                let request_id = request_id();
+                                let mut eb = ErrorBody::new(
+                                    vadis_core::error::ErrorCode::InvalidRequest,
+                                    format!(
+                                        "window: required, the config duration grammar, bounded \
+                                         {}ms..={}ms (spec 4.18)",
+                                        vadis_proxy::WINDOW_MIN_MS,
+                                        vadis_proxy::WINDOW_MAX_MS
+                                    ),
+                                    &request_id,
+                                );
+                                eb.error.details = Some(serde_json::json!({
+                                    "param": "window",
+                                }));
+                                let mut resp = (
+                                    StatusCode::from_u16(
+                                        vadis_core::error::ErrorCode::InvalidRequest.http_status(),
+                                    )
+                                    .expect("400 maps"),
+                                    Json(eb),
+                                )
+                                    .into_response();
+                                if let Ok(v) = request_id.parse() {
+                                    resp.headers_mut().insert("x-vadis-request-id", v);
+                                }
+                                resp
+                            }
+                            Err(_) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "the state store could not be read",
+                            )
+                                .into_response(),
+                        }
+                    }
+                }),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(
+                GuardState {
+                    revision,
+                    proto_in: "state",
+                },
+                guard_mw,
+            ))
+    }
+
+    /// RFC3339 UTC with millisecond precision from **microseconds** —
+    /// `/state/events`'s in-band window bounds (spec §4.18 uses the same
+    /// format `stats` and `/health` print).
+    fn rfc3339_micros(us: i64) -> String {
+        let ms = us.div_euclid(1_000);
+        // Milliseconds from microseconds: the remainder of the ÷1000 is
+        // microseconds-in-the-millisecond — dividing it by 1_000 again
+        // (the typo this fixes) always produced 0, truncating spec
+        // §4.18's "RFC3339 UTC, milliseconds" to whole seconds.
+        let milli = us.rem_euclid(1_000_000) / 1_000;
+        crate::stats::rfc3339_pub(ms, milli.max(0) as u64)
+    }
+
     /// What the guard runs with: the revision handle and this route's own
     /// protocol word. The gate itself lives on the **revision** (ADR-040
     /// D5's honesty note — a reload may rename, add or drop
@@ -992,6 +1085,7 @@ pub async fn serve(config_path: &str) -> i32 {
             max_body_bytes,
         ))
         .merge(guarded_metrics_route(cell.clone(), state.clone()))
+        .merge(guarded_state_route(cell.clone(), state.clone()))
         .with_state(());
 
     let listener = match tokio::net::TcpListener::bind(addr).await {

@@ -9,6 +9,7 @@ mod body_limit;
 mod forward;
 mod health;
 mod revision;
+mod state_read;
 mod stream_forward;
 mod stubs;
 
@@ -24,5 +25,9 @@ pub use forward::{
 };
 pub use health::{health_json, AppState, ConfigIdentity, KeyFact, ProviderKeyFacts};
 pub use revision::{Revision, RevisionCell, SharedRevision};
+pub use state_read::{
+    count_unknown_outcomes, handle as state_events_handle, parse_window, state_events_json,
+    StateWindow, WINDOW_MAX_MS, WINDOW_MIN_MS,
+};
 pub use stream_forward::{StreamOutcome, StreamSuccess};
 pub use stubs::protocol_stub;

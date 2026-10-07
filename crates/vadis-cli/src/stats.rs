@@ -65,10 +65,17 @@ pub struct TraceFigures {
 /// `upstream.submitted` in the window with no `upstream.responded` for the
 /// same `request_id`. `log_was_read` is false when the store could not be
 /// opened read-only — the figure is then omitted, never estimated.
+/// `source` names where the figure came from when it was read: `"store"`
+/// (this process opened the file) or `"gateway"` (the live-gateway
+/// fallback of spec §9.2 / ADR-054 answered for the writer).
 #[derive(Debug, Default)]
 pub struct EventFigures {
     pub unknown_outcome_requests: u64,
     pub log_was_read: bool,
+    /// `"gateway"` after the fallback served the figure; empty when the
+    /// local read produced it or the figure is absent. Reported in-band
+    /// (text: `(gateway)`; --json: `events.source`).
+    pub source: &'static str,
 }
 
 /// Pure aggregation over the window's records (spec §9.2's provenance
@@ -274,6 +281,7 @@ pub fn report(config_path: &str, window: &str) -> Result<Report, String> {
             match store.query(Query::AllEvents) {
                 Ok(QueryRow::Events(rows)) => {
                     events.log_was_read = true;
+                    events.source = "store";
                     let start_us = start_ms * 1_000;
                     let end_us = now_ms * 1_000;
                     let mut submitted: BTreeMap<String, bool> = BTreeMap::new();
@@ -308,11 +316,39 @@ pub fn report(config_path: &str, window: &str) -> Result<Report, String> {
             }
         }
         Err(e) => {
-            unknown_note = Some(format!(
-                "unknown outcome requests omitted: state store {} could not be opened \
-                 read-only: {e}",
-                state_db.display()
-            ));
+            // The one retriable-by-proxy failure: the writer holds the
+            // store. Spec §9.2 / ADR-054 — ask the running gateway (the
+            // process that owns the lock) through its guarded read
+            // surface instead of giving up on the figure. Every other
+            // open failure (no directory, unreadable file, newer schema)
+            // keeps today's omission: there is no live process that
+            // could answer for it.
+            if matches!(
+                e,
+                vadis_core::store::StoreError::Locked | vadis_core::store::StoreError::Busy
+            ) {
+                match live_gateway_figure(&rc, window) {
+                    Some(n) => {
+                        events.log_was_read = true;
+                        events.unknown_outcome_requests = n;
+                        events.source = "gateway";
+                        // No note: the figure is present, not omitted.
+                    }
+                    None => {
+                        unknown_note = Some(format!(
+                            "unknown outcome requests omitted: state store {} could not be \
+                             opened read-only: {e} (live-gateway fallback unavailable)",
+                            state_db.display()
+                        ));
+                    }
+                }
+            } else {
+                unknown_note = Some(format!(
+                    "unknown outcome requests omitted: state store {} could not be opened \
+                     read-only: {e}",
+                    state_db.display()
+                ));
+            }
         }
     }
     if let Some(note) = &unknown_note {
@@ -495,8 +531,14 @@ fn now_epoch_ms() -> i64 {
 // -- output ------------------------------------------------------------------
 
 fn rfc3339_millis(ms: i64) -> String {
+    rfc3339_pub(ms, ms.rem_euclid(1_000) as u64)
+}
+/// One calendar formatter, two precisions: `/state/events`'s in-band
+/// window bounds (microseconds) and this report (milliseconds) render
+/// through the same calendar — one formatter, two precisions, never two
+/// formatters.
+pub(crate) fn rfc3339_pub(ms: i64, milli: u64) -> String {
     let s = (ms.div_euclid(1_000)).max(0) as u64;
-    let milli = ms.rem_euclid(1_000) as u64;
     let (y, mo, d, minute, _) = vadis_core::peak::timestamp_parts(s, vadis_core::peak::Tz::Utc);
     let (h, mi) = (minute / 60, minute % 60);
     format!(
@@ -599,7 +641,30 @@ pub(crate) fn print_text(
 ) {
     let out = std::io::stdout();
     let mut w = std::io::BufWriter::new(out.lock());
-    use std::io::Write as _;
+    write_text(&mut w, rc, window, start_ms, now_ms, files_read, f, e);
+}
+
+/// `print_text`'s whole body, over any sink — the seam the unit tests
+/// drive (the `(gateway)` provenance suffix is a rendering rule, and
+/// rendering rules are tested at the renderer, not through a process's
+/// stdout).
+//
+// 8 args, allowed: the printer's parameter list is the §9.2 report's
+// own header set (window, bounds, files, figures, events) — grouping
+// them into a struct would move the spec's names out of the signature
+// the CONF-41/56 rigs already call.
+#[allow(clippy::format_in_format_args)]
+#[allow(clippy::too_many_arguments)]
+fn write_text(
+    w: &mut dyn std::io::Write,
+    rc: &crate::config_load::ResolvedConfig,
+    window: &str,
+    start_ms: i64,
+    now_ms: i64,
+    files_read: usize,
+    f: &TraceFigures,
+    e: &EventFigures,
+) {
     let _ = writeln!(
         w,
         "window:      {window} ({} .. {})",
@@ -738,11 +803,20 @@ pub(crate) fn print_text(
         w,
         "  stateful inbound rate       {stateful:.4}   (always 0 in v0.1 — gap G-F; printed so the constant is visible)"
     );
-    // The only omittable figure (the read-only store open above).
+    // The only omittable figure (the read-only store open above). The
+    // parenthetical names the source (spec §9.2 / ADR-054): `(event log)`
+    // when this process read the store, `(gateway)` when the fallback
+    // served it — the same word the --json shape carries in
+    // `events.source`.
     if let Some(unknown) = e_unknown(e) {
+        let provenance = if e.source == "gateway" {
+            "(gateway)"
+        } else {
+            "(event log)"
+        };
         let _ = writeln!(
             w,
-            "  unknown outcome requests         {unknown}   (event log)"
+            "  unknown outcome requests         {unknown}   {provenance}"
         );
     }
     let overhead = p99(&mut f.overhead_ms.clone()).unwrap_or(0);
@@ -857,9 +931,290 @@ pub fn report_json(
     }
     if e.log_was_read {
         v["unknown_outcome_requests"] = serde_json::json!(e.unknown_outcome_requests);
+        // Spec §9.2 / ADR-054: the figure, when present, gains
+        // `events: {source}` **beside its value** — the CONF-56 top-level
+        // key keeps its frozen place and shape; `events` names the reader
+        // that produced the figure. Never nested, never a second copy of
+        // the number: one figure, one key, one source word.
+        v["events"] = serde_json::json!({
+            "source": if e.source == "gateway" { "gateway" } else { "store" },
+        });
     }
     if let Some(note) = unknown_note {
         v["notes"] = serde_json::json!([note]);
     }
     v
+}
+
+/// The live-gateway fallback (spec §9.2 / ADR-054): the writer process
+/// answers for the store it owns. One GET, one figure, nothing else.
+/// Returns `None` on any miss (connection refused, `401`, non-200,
+/// unparseable body) — the caller keeps today's omission and the note
+/// names the fallback as unavailable, so a degraded read is always
+/// visible, never silent.
+///
+/// **The runtime the fallback owns** (ADR-054 §4 rule 1): `stats` is a
+/// sync CLI — `main.rs` calls it with no Tokio runtime installed, so a
+/// reqwest future cannot be driven by ambient context (`futures::
+/// executor::block_on` panics there: "there is no reactor running").
+/// The fallback therefore builds its OWN `new_current_thread` runtime
+/// and drives it on a dedicated std thread, which also makes it safe
+/// when a runtime IS ambient (a `#[tokio::test]` rig): blocking a
+/// reactor thread on another runtime's I/O is exactly the nest the
+/// dedicated thread avoids. The stats entry stays sync by design; the
+/// fix lives inside the fallback, not in `main`.
+///
+/// **The token is optional** (spec §9.2 / ADR-054 §4 rule 3): the call
+/// goes out whenever the store open was refused Locked/Busy — the only
+/// trigger, decided by the caller. The credential is attached only when
+/// `server.auth_token_env` names a variable that is set and non-empty
+/// in this process's environment; otherwise the request is sent with no
+/// credential at all (the endpoint answers `200` unauthenticated when
+/// auth is off, and refuses `401` when it is on — the omission note
+/// then explains, per spec §9.2). An unconfigured `auth_token_env`
+/// never skips the attempt.
+///
+/// The client is `.no_proxy()` because the target is always the loopback:
+/// the macOS system proxy does not honor its own exclusion list for
+/// `127.0.0.1` (AGENTS.md "Environment gotchas" — reqwest reads the system
+/// proxy and intercepts localhost), so honoring a proxy here would break
+/// the fallback exactly on the machines that need it. Five-second total
+/// timeout: this is one figure inside an interactive command, not a
+/// serving-path call.
+fn live_gateway_figure(rc: &crate::config_load::ResolvedConfig, window: &str) -> Option<u64> {
+    // Only a set, non-empty variable yields a credential; every other
+    // shape (unconfigured key, unset variable, empty value) sends none.
+    let token = rc
+        .vadis
+        .server
+        .auth_token_env
+        .as_deref()
+        .and_then(|env_name| std::env::var(env_name).ok())
+        .filter(|t| !t.is_empty());
+    let url = format!(
+        "http://{}/state/events?window={window}",
+        rc.vadis.server.addr
+    );
+    // One dedicated thread: it owns the runtime, runs the GET to
+    // completion, and hands the figure back across the join. The
+    // thread's own panic (a build failure of the runtime) is caught by
+    // `join`, mapped to the fallback's universal miss — the report is
+    // never lost to it.
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .ok()?;
+        let mut req = client.get(url);
+        if let Some(token) = token.as_deref() {
+            req = req.bearer_auth(token);
+        }
+        let resp = rt.block_on(async {
+            // `send()` must be CALLED inside the runtime context: reqwest
+            // constructs its timeout `Sleep` eagerly when `send()` builds
+            // the future (client.rs: `Option::map(sleep)`), and a `Sleep`
+            // needs a reactor AT CONSTRUCTION. Calling `send()` outside
+            // `block_on` (as `block_on`'s argument — evaluated before the
+            // context guard) was the residual D1 panic; inside the async
+            // block it runs at first poll, context entered.
+            let resp = req.send().await.ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            // `text` + `serde_json` (not reqwest's `json` feature): the
+            // workspace row (root Cargo.toml) carries only
+            // http2+rustls-tls, and this surface needs no more.
+            let text = resp.text().await.ok()?;
+            let body: Value = serde_json::from_str(&text).ok()?;
+            body.get("unknown_outcome_requests").and_then(Value::as_u64)
+        });
+        resp
+    })
+    .join()
+    .ok()
+    .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vadis_core::config::{
+        BreakevenCfg, CacheCfg, MultiplierVal, Rollover, ServerCfg, SessionCfg, TraceCfg,
+        VadisConfig,
+    };
+
+    /// A minimal-but-complete `ResolvedConfig` — `report_json` and
+    /// `write_text` read only `rc.vadis` (the plan-policy list) and
+    /// `rc.trace_dir`, so the identities and paths are placeholders and
+    /// the config is the no-plan baseline (a family nobody configured is
+    /// not reported, never fabricated).
+    fn resolved_config() -> crate::config_load::ResolvedConfig {
+        crate::config_load::ResolvedConfig {
+            config_dir: PathBuf::from("/cfg"),
+            trace_dir: PathBuf::from("/cfg/state/traces"),
+            state_db: PathBuf::from("/cfg/state/vadis.db"),
+            vadis: VadisConfig {
+                server: ServerCfg {
+                    addr: "127.0.0.1:0".into(),
+                    upstream_attempt_timeout: DurationVal(60_000),
+                    request_timeout: DurationVal(600_000),
+                    auth_token_env: None,
+                    max_body_bytes: 2_097_152,
+                },
+                session: SessionCfg {
+                    key_sources: vec!["prompt_cache_key".into()],
+                    ttl: DurationVal(43_200_000),
+                },
+                cache: CacheCfg {
+                    sticky: true,
+                    breakeven: BreakevenCfg {
+                        enabled: true,
+                        min_remaining_turns: 2,
+                        safety_factor: MultiplierVal(1.1),
+                    },
+                },
+                trace: TraceCfg {
+                    dir: "./state/traces".into(),
+                    rollover: Rollover::Hourly,
+                },
+                providers: Vec::new(),
+                aliases: BTreeMap::new(),
+                plugins: Vec::new(),
+                fallback: Vec::new(),
+                plan_policy: None,
+                plan_policies: None,
+                state: None,
+            },
+            identity: crate::config_load::ConfigIdentity {
+                root_path: PathBuf::from("/cfg/config.yaml"),
+                roster_path: None,
+                root_sha16: "0123456789abcdef".into(),
+                roster_sha16: String::new(),
+                config_digest: "0011223344556677".into(),
+            },
+        }
+    }
+
+    fn report_with_events(e: EventFigures) -> Report {
+        Report {
+            figures: TraceFigures::default(),
+            events: e,
+            files_read: 0,
+            start_ms: 0,
+            now_ms: 0,
+        }
+    }
+
+    fn rendered(e: &EventFigures) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_text(
+            &mut buf,
+            &resolved_config(),
+            "15m",
+            0,
+            0,
+            0,
+            &TraceFigures::default(),
+            e,
+        );
+        String::from_utf8(buf).expect("the text report is utf-8")
+    }
+
+    fn unknown_line(text: &str) -> String {
+        text.lines()
+            .find(|l| l.contains("unknown outcome requests"))
+            .map(str::to_string)
+            .expect("the figure's line is printed")
+    }
+
+    // Spec §9.2 / ADR-054, the text half: the figure's parenthetical
+    // names the reader that produced it — `(event log)` for the local
+    // read, `(gateway)` after the fallback served it.
+    #[test]
+    fn text_names_the_gateway_source_in_band() {
+        let local = rendered(&EventFigures {
+            unknown_outcome_requests: 3,
+            log_was_read: true,
+            source: "",
+        });
+        assert!(
+            unknown_line(&local).contains("(event log)"),
+            "the local read keeps its word: {}",
+            unknown_line(&local)
+        );
+        assert!(
+            !local.contains("(gateway)"),
+            "no gateway word on a local read"
+        );
+
+        let gw = rendered(&EventFigures {
+            unknown_outcome_requests: 3,
+            log_was_read: true,
+            source: "gateway",
+        });
+        let line = unknown_line(&gw);
+        assert!(
+            line.contains("(gateway)"),
+            "the fallback-served figure is marked: {line}"
+        );
+        assert!(
+            !line.contains("(event log)"),
+            "the two words never co-occur: {line}"
+        );
+        assert!(line.contains('3'), "the figure itself still prints: {line}");
+    }
+
+    // Spec §9.2 / ADR-054, the --json half: the figure stays at its
+    // CONF-56-frozen top-level key and gains `events.source` beside it —
+    // one figure, one key, one source word; no nested second copy of the
+    // number.
+    #[test]
+    fn json_carries_events_source_both_ways() {
+        let rc = resolved_config();
+        for (source_field, source_word) in [("", "store"), ("gateway", "gateway")] {
+            let rep = report_with_events(EventFigures {
+                unknown_outcome_requests: 7,
+                log_was_read: true,
+                source: source_field,
+            });
+            let v = report_json(&rc, "15m", &rep, &None);
+            assert_eq!(
+                v["unknown_outcome_requests"], 7,
+                "the top-level key keeps its frozen place and value"
+            );
+            assert_eq!(
+                v["events"]["source"], source_word,
+                "events.source names the reader ({source_word})"
+            );
+            assert_eq!(
+                v["events"].as_object().unwrap().len(),
+                1,
+                "events carries the source word and nothing else"
+            );
+        }
+    }
+
+    // The omission rule is unchanged (spec §9.2): the figure absent ⇒ no
+    // top-level key and no `events` member — the fallback never invents a
+    // figure, and an absent one is never read as 0.
+    #[test]
+    fn json_omission_rule_is_unchanged() {
+        let rc = resolved_config();
+        let rep = report_with_events(EventFigures::default());
+        assert!(!rep.events.log_was_read);
+        let v = report_json(&rc, "15m", &rep, &None);
+        assert!(
+            v.get("unknown_outcome_requests").is_none(),
+            "no top-level figure key when the log was not read"
+        );
+        assert!(
+            v.get("events").is_none(),
+            "no events member either — the omission rule gains no exception"
+        );
+    }
 }

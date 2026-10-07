@@ -957,7 +957,7 @@ Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a sessi
 `X-Vadis-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-105`)
+### 12.8 conformance case table (`CONF-01…CONF-106`)
 
 Location: the workspace member `vadis-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1066,6 +1066,7 @@ not written).
 | CONF-103 | ADR-051 §2.5·the **corrected roster** serves three lines, and the declaration stays consistent | **the pages' cells are the cells that serve.** The three entries the correction touches are mirrored as a fixture (one mock per entry, three `urls` on that mock, so the mock's recorded **path** is the evidence): `zai-cn-plan` with its `wire_api` flipped to `responses`, and `kimi-cn-plan` / `kimi-plan` each declaring the added `responses` cell. All three inbound protocols are driven against each entry — nine requests — and each must answer `200` with its own cell's path in the mock's log and the client's own bytes on the wire. Red at the base: every off-diagonal cell is a `501` (`forward.rs:902-911`, `stream_forward.rs:440-453`), so nine assertions collapse to three; driven instead over the **shipped pair** it is red one step earlier — a declared cell with no `urls` row refuses to load (spec §4.9), which is what makes the two added rows mandatory rather than cosmetic. Plus the invariants the edit must not break, each a load-time refusal when broken: `wire_api ∈ supports`, `set(urls) == set(supports)`, no repeated (provider, model) | the roster edit landing with the parser it needs (R69-1), plus the declared-cell rule |
 | CONF-104 | ADR-051 §2.3 + **ADR-022 decision 3**·the frozen refusal still holds under the new discriminant | **a chain nothing may serve, with the discriminant as the only arm that moves.** A chat request whose chain offers four candidates, none attemptable: the resolved `keyless-a/m` and the same provider's second model `keyless-a/m2` (⇒ `keyless`, the provider-level exclusion may not swallow the second model — ADR-023 decision 3); `deaf/m`, which **declares `chat`** (`supports: [chat, responses]`) while naming `responses` as its `wire_api` and is unkeyed ⇒ **`keyless`** — the discriminating arm, `wire_mismatch` on the base tree; and the **keyed** `nocell/m`, which declares no `chat` cell ⇒ `wire_mismatch`. Both media: `502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `details.skipped[]` holding one entry per offered candidate in the chain's order each with a reason from `{unknown_provider, keyless, wire_mismatch, demoted}`, `upstream_status` / `error_class` both `null`, the two `details` objects equal element for element modulo the streaming arm's pre-existing `"stream": true`, **no** `upstream.submitted` row, `usage_missing: true` and nothing charged. Red at the base on exactly one line — `deaf/m`'s reason — which is what makes the case prove ADR-022 decision 3 was not reopened | the eligibility predicate on both forwarding paths only; the refusal body is ADR-022 decision 3's, **byte-identical** |
 | CONF-105 | §4.2·the classification's evidence + §12.10.3 R4/R6·the attempt bound is **head-arrival-only** (ADR-053) | **the two bounds, and the fault the two media share.** Through the real `serve` assembly against a loopback mock, with `upstream_attempt_timeout` at the rig's own **sub-second** value so no limb rests on an assumption about machine speed: (a) **the busy stream — the change's own claim**: a stream whose **total** elapsed exceeds the attempt knob while **every** inter-byte gap stays under it is relayed **byte-complete** with its terminal event (`stream_completed: true`, `errors[]` empty, `[DONE]` last where the protocol has one) — **red at the base**, which truncates it at the knob; (b) **the slow head — the conservative arm, and the cross-media class parity**: the two rigs (streamed: a mock whose response **head** misses the knob; buffered: a **mid-body stall** — the head arrives, the body stalls past the knob) yield, on **both** media, `details.stage: "unknown_outcome"` with `details.error_class: "timeout"`, **no** retry, **no** `failover.triggered` row and exactly **one** record — each medium in its **own** status carriage (streamed `502 upstream_error`; buffered `502 upstream_error` — the observed carriage of the mid-body-stall rig: the 504 `upstream_timeout` arm is unreachable for this fault via the `TransportKind::Other` hardcode at `vadis-providers/src/lib.rs:186-189`, registered as a follow-up finding for a future buffered-path round, see the ADR-053 §11 note), asserted as the *shared class word plus the per-path carriage*, so the limb cannot pass on one path alone; (c) **the discriminant that keeps (b) from swallowing the connect window**: a host that **refuses** is still `connect_failure` with its failover-eligible action (CONF-29's shape), never `timeout`, so the new arm cannot absorb a fast refusal; (d) **the idle control, unchanged**: a stream that goes **silent** for longer than the knob is a **declared truncation** (`stream_completed: false`, a `stream_truncated_reason` string, `error_class: "stream_truncated"`, no `[DONE]`), so the gap bound R4 always had stays asserted | the head-arrival wrap plus the **unmoved** per-read idle arm (`vadis-providers/src/stream.rs`, `R71-1`); the classification seam (`vadis-proxy/src/stream_forward.rs`'s `OpenHead` arms; `forward.rs`'s `WrittenNoResponse` arm) |
+| CONF-106 | §4.18 + §9.2's fallback + §12.10.8's bounded-use rule (ADR-054) | **the live event-log figure, five limbs.** Through the real `serve` assembly against mock upstreams, one request driven to leave no `upstream.responded` (a mock that accepts the bytes and never answers), then: (a) **the figure is the independent count** — `GET /state/events?window=15m` answers `200` with `unknown_outcome_requests` equal to the case's own count over the store rows read after exit (submitted-in-window minus request_ids answered anywhere); (b) **the status set is `{200, 400, 401}`**: an absent/unparsable/`>24h` `window` answers `400` with §8's body and reads no store (a store double that panics on any query proves the arm); a call without the token (auth on) answers `401` and leaves exactly one pre-pipeline record with `protocol.protocol_in = "state"` and `errors[].kind = "unauthorized"`; (c) **the window bound**: a submitted row older than the window does not count, and a responded row that arrives after the window still closes its intent (seeded through the live rig's own traffic in two windows); (d) **the fallback**: `stats::report` against the live gateway's port-resolved config returns the figure with `source: "gateway"` (the local open is refused by the live `serve`), while the same call after `serve` stops reads the store directly (`source: "store"`) — same number; (e) **the bounded-use rule**: the endpoint's read path never constructs `Query::AllEvents` (asserted by the store double's panic-on-AllEvents, the same limb class CONF-41 uses) | `crates/vadis-proxy/src/state_read.rs` (the handler), `crates/vadis-cli/src/stats.rs` (the fallback), `Query::EventsSince` (`vadis-store`) |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -4316,8 +4317,8 @@ or the book shows is citable iff **(1)** its raw artifact lives under a `tracked
 the loop's results tree, the loop's capture tree, the corpus — the evidence-homing rule R46 wrote into
 the loop execution model), **(2)** the exact command that produced it is published, **(3)** the **reducer** is committed and
 **runs offline against the raw** (no rerun, no network), and **(4)** the machine and the commit are named —
-ADR-029 D3's clause, unchanged: *a figure that does not name its machine is not citable*. **The acid test is the
-definition of done:** a third party, given only the repository, reproduces the figure by reducing the committed
+ADR-029 D3's clause, unchanged: *a figure that does not name its machine is not citable*. **The acid test is
+the definition of done:** a third party, given only the repository, reproduces the figure by reducing the committed
 raw. **The counterexample this rule exists for**: R32's chat-streaming C=32 tail — `C22` — whose two tracked
 aggregates read `p99 9` and `p99 23` ms on the same cell while the 220 per-request records each was reduced from
 are excluded by `.gitignore:29`, and whose reducer has **no offline mode** (`qa3_rig.py`-class rig: `scan_trace` is
@@ -4326,6 +4327,69 @@ gate operand, mints no label (`loop-local` and a caveat-carrying `verified` are 
 question), and is **not** the loop charter text — that file is a gate definition (AGENTS 9). **Where the
 numbers live**: in the per-run evidence under the loop's evidence for that decision and in the loop state record's *Key measured
 facts*, restated by the round record — never as a second copy of a measurement in this file (§12.16's rule).
+
+### 12.24 The `/state/events` surface (the landing of spec §4.18, ADR-054)
+
+Spec §4.18 is the contract; this section is where it lands. The one-sentence version: **a guarded,
+read-only `GET /state/events?window=<duration>` that counts `upstream.submitted` rows in the window
+with no `upstream.responded` for the same `request_id`, answered by the running process from its own
+store — plus a `vadis stats` fallback that reaches it when a live `serve` holds the store and the local
+read-only open is refused.** ADR-009 item 8 (EXCLUSIVE locking, single writer) is untouched; the reader
+is the lock holder.
+
+**The store query, not a log scan.** The `Store` trait gains `Query::EventsSince { kinds, since_us }` —
+rows in `event_id` order with `ts_us >= since_us`, filtered by kind inside SQLite (the
+`idx_events_kind_ts` index serves it). The handler passes exactly two kinds, `upstream.submitted` and
+`upstream.responded`, and `since_us = now − window`; the count joins the two sets in Rust by
+`request_id` (an intent with no response anywhere in the returned `responded` set). `Query::AllEvents`'
+bounded-use doc — *"the serving path never scans the log"* — is kept verbatim; its meaning is the
+**full-log** scan, which this is not. The query is bounded twice over: by kinds (two of a closed
+vocabulary) and by `since_us` (the window, capped at 24h by the endpoint's own validation).
+
+**The assembly mirrors `/metrics` (§12.21)**: a `get` route with **no body extractor and no body
+layer** (the route reads no request byte), guarded by the same `guard_mw` with its own word
+`"state"` (`GuardState::proto_in`), merged into the app beside `guarded_metrics_route`. The handler
+takes `AppState` and the query string; it captures **no revision** (the store handle is process-level
+— `AppState.store`, the same `Arc<dyn Store>` `/health`'s `plan` section reads — and the reload cannot
+move it), reads the clock once, and answers `200` with the two-key body. An unusable `window`
+(absent, unparsable, out of the `1ms..=24h` bound) answers `400` with §8's body; **no store read
+happens on that arm**. A refused call writes the guard's one pre-pipeline record with
+`protocol_in: "state"`; the admitted arm writes nothing.
+
+**The single-owner rule, applied to the log figure.** The count is `stats`'s own derivation shape
+(`EventFigures::unknown_outcome_requests`): the handler does not invent a second definition, and the
+`vadis stats` fallback parses the endpoint's JSON into the same `EventFigures` the local read
+produces — one derivation, two readers (ADR-041 §4's rule, one surface later). The text report marks
+the source: `(event log)` when read locally, `(gateway)` when the fallback served it. The `--json`
+shape is spec §9.2's own sentence: the figure, when present, stays at its CONF-56-frozen top-level
+key **and gains `events: {"source": "store" | "gateway"}` beside it** — one figure, one key, one
+source word; the number is never copied inside `events`, and the omission rule gains no exception
+(figure absent ⇒ no top-level key and no `events` member).
+
+**The stats fallback (`stats.rs`).** It fires **only** on the local open's `Locked`/`Busy` refusal —
+every other `StoreError` (absent, unreadable, schema too new) keeps today's omission note unchanged,
+because a gateway call cannot answer for a store that is not there. The request:
+`GET http://<server.addr>/state/events?window=<w>`, one attempt, 5-second total timeout, a reqwest
+client built **`.no_proxy()`** (spec §5's localhost rule: the system proxy intercepts `127.0.0.1` and
+does not honour its own exclusion list — AGENTS "Environment gotchas"), the token from the config's
+`server.auth_token_env` as `Authorization: Bearer ***` when that variable is set. Any non-`200`
+outcome falls back to today's note, extended to name the gateway attempt (so a `401` teaches the
+operator to export the variable, and a dead gateway reads as the old omission, not a new failure).
+
+**Invariants and their cases** (the rows are §12.8's; the contract is spec §4.18; the reasoning
+ADR-054 §6):
+
+| invariant | case |
+|---|---|
+| the figure equals the independent count over the store's rows (submitted-in-window minus answered) | `CONF-106` |
+| the status set is `{200, 400, 401}`; the `400` arm reads no store; the `401` arm writes exactly one pre-pipeline record with `protocol_in: "state"` | `CONF-106` |
+| the window bound: a submitted row outside the window counts for no window that excludes it; a responded row outside the window still closes its intent | `CONF-106` |
+| `vadis stats` against a live gateway prints the figure through the fallback (and marks it `(gateway)`); the other figures never depend on it | `CONF-106` |
+| `Query::AllEvents` is never called by the serving path (the bounded-use rule holds) | `CONF-106` |
+
+**What this section does not promise**: no second figure (no event-kind breakdown, no per-provider
+split, no session identity — spec §4.18's export boundary), no configurable window bound, no
+`vadis state` subcommand, and no change to the store's locking.
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 

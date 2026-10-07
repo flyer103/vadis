@@ -39,3 +39,10 @@ futures = { workspace = true }
 # taken (ADR-040 D12.3): the coalescing window is a constant in the reload's
 # own module, not a dependency (`notify-debouncer-full` refused).
 notify = { workspace = true }
+# reqwest: DESIGN §12.1's allowlist row (vadis-providers), taken here for the
+# ONE non-forwarding client the product owns — `vadis stats`' live-gateway
+# fallback (spec §9.2, ADR-054): one localhost GET when the local read-only
+# store open is refused. The same TLS feature set as vadis-providers
+# (CONF-26's invariant class); the client is built `.no_proxy()` because the
+# target is always the loopback (spec §5).
+reqwest = { workspace = true }

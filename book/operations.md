@@ -96,18 +96,22 @@ relative to the config file's directory, so the state can live outside the repos
 - **One writer per state directory.** While `serve` runs it holds the database file
   exclusively. A second `serve` pointed at the same state directory is **refused at
   startup** with a stated reason, rather than becoming a second writer on one file.
-- **Consequence for inspection:** you cannot casually open the file with a SQLite tool while
-  the gateway is running (and you will get a busy error rather than a corrupt read): while
-  `serve` runs it holds the store exclusively, and a second process's open — a read-only one
-  included — is refused. Stop `serve` first, inspect, then start it again. The read-only
-  surfaces split the same way: `GET /health` answers against a live gateway because it is
-  served by the running process itself, while `vadis stats`' own read-only open is refused
-  there too — against a live gateway its report comes out with the one store-derived figure,
-  `unknown outcome requests`, **omitted** and a one-line note on stderr naming the refusal,
-  every other figure printed unchanged (see
-  [Observability](observability-and-accounting.md)). To read that figure, run `stats` with
-  `serve` stopped. A dedicated `vadis state`-style surface is a
-  separate change, not part of v0.1.
+- **Consequence for inspection:** a *second* process opening the file — a read-only one
+  included — is still refused while `serve` runs (a busy error rather than a corrupt read), so
+  a SQLite tool of your own needs `serve` stopped. Reading the *report* no longer does.
+  `vadis stats` falls back to the running gateway when its own read-only open is refused: it
+  asks the live process for the one figure only the store holds, `unknown outcome requests`,
+  through the guarded read surface `GET /state/events`
+  ([`docs/spec.md` §4.18](../docs/spec.md)). Against a live gateway the report therefore
+  prints **every** figure — the store-derived one carries a `(gateway)` marker where a local
+  read prints `(event log)`, and in `--json` the same figure appears with
+  `"events": {"source": "gateway" | "store"}`. If the gateway cannot be answered for — an
+  unreachable address, auth on with the token env var unset (the call then goes out with no
+  credential and is refused), or any non-`200` — that one figure is **omitted** with a
+  one-line note on stderr naming the fallback as unavailable, every other figure printed
+  unchanged, exactly as a refused local open behaved before. The contract is
+  [`docs/spec.md` §9.2](../docs/spec.md) and §4.18; see
+  [Observability](observability-and-accounting.md).
 - **The store is a startup prerequisite** (see the table above). An unreadable file is a
   permissions problem to fix, not a mode to run in.
 
@@ -238,6 +242,8 @@ wrong (ADR-012, ADR-013).
   split, the join key, durability tiers and the failure behaviour.
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
   `vadis stats` report, and what is not served yet.
+- [`docs/spec.md` §4.18](../docs/spec.md) — `GET /state/events`, the guarded read surface that
+  answers `vadis stats`'s one store-derived figure while a live `serve` holds the store.
 - [`design/DESIGN.md` §8](../design/DESIGN.md) — state and persistence boundaries.
 - [`design/DESIGN.md` §11](../design/DESIGN.md) — risks and mitigations.
 - [`design/DESIGN.md` §12.10](../design/DESIGN.md) — the store's DDL, the writer lock, the

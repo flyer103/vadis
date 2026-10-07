@@ -311,8 +311,13 @@ pub enum Query<'a> {
         month_start_us: i64,
     },
     /// The full event log in `event_id` order (bounded use: conformance and
-    /// rebuild; the serving path never scans the log).
+    /// rebuild; the serving path never scans the log — the windowed
+    /// `EventsSince` is the serving path's bounded read, spec §4.18).
     AllEvents,
+    /// The events of the given kinds, in `event_id` order, with
+    /// `ts_us >= since_us` (spec §4.18: the live figure's windowed read —
+    /// kind-filtered inside the store, bounded by the caller's window).
+    EventsSince { kinds: &'a [&'a str], since_us: i64 },
 }
 
 #[derive(Debug, Clone)]
