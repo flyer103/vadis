@@ -436,3 +436,27 @@ working tree (its file paths and round-record names, its state record, charter, 
 model and replay contract, its scripts and module names, and the kanban card ids), each
 replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
 threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
+
+## Dated note (2026-10-07, R71-0): §3.5 item 2's parenthetical cites a superseded reading
+
+**What moved.** `ADR-053`
+(`design/decisions/ADR-053-the-bound-is-head-arrival-only.md`) supersedes **ADR-044's clock (i) only**: the
+streaming attempt knob now bounds **head arrival**, and the body's per-read bound reverts to **R4's original
+gap letter** (the idle arm inside `read_chunk`), with `server.request_timeout` enforced as the stream path's
+whole-request outer bound.
+
+**What that changes here, and what it does not.** §3.5 item 2's *rig* was always a **gap** fixture — *"the stub
+emits units, then declares a gap longer than `server.upstream_attempt_timeout`"* — so the limb's construction,
+its four assertions (strict prefix, no synthesized terminal carrier, declared `error_class: stream_truncated`,
+the relay ends) and its purpose are **unchanged and still correct**; if anything the limb is now the *only*
+bound that reads as written. What moved is its parenthetical: *"(ADR-044/R6's semantics, on the **total-elapsed**
+reading ADR-044 settled — *this* is the bound the leg must be written against, not the old "idle gap"
+letter)"*. Under ADR-053 the bound the leg is written against **is** the idle-gap letter, restored; the
+total-elapsed reading is superseded for the body. Read §3.5 item 2's assertions with **ADR-053** as the
+authority and that parenthetical as the record of a reading that no longer stands.
+
+**Why this note is an append and not a rewrite.** ADRs are append-only (AGENTS 9's doc map; ADR-012). Not one
+sentence of this ADR's decision is edited: everything else it decides — the quantities, the method, §3.8's
+refusals, the instrument's home — stands untouched (ADR-053 §s 6 and 8.3). `DESIGN`'s own landing of this limb
+(§12.20) is corrected in place by the same round, since `DESIGN` is a living document rather than a record.
+

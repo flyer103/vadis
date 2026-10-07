@@ -111,15 +111,19 @@ order, flushes each event as it arrives, and writes the three `X-Vadis-*` header
 the first event. It does not re-frame the stream, reorder or normalize `event:`/`data:`
 lines, and it does not add a terminal marker of its own.
 
-Two consequences worth knowing before you point an agent at it:
+Three consequences worth knowing before you point an agent at it:
 
-- **The relay is bounded, not just a stall.** The configured upstream attempt timeout bounds the
-  whole attempt on elapsed time, so both a gap with no upstream bytes *and* a stream that keeps
-  sending bytes but runs past that timeout end the relay: the client sees a truncated stream rather
-  than a hang. Point a slow, long-running response at it — a long reasoning stream is the obvious
-  case — and it is this timeout you will meet; raise it if that is the shape you serve. The exact
-  rule is [`docs/spec.md` §4.2](../docs/spec.md) and DESIGN §12.10.3 R4
-  ([`ADR-044`](../design/decisions/ADR-044-the-bound-is-total-elapsed-time.md)).
+- **The relay is bounded twice, and neither bound is a stall.** The configured **upstream attempt
+  timeout** bounds two things on the relay: how long the upstream may take to produce its response
+  **head**, and the **gap** between upstream bytes, one read at a time. A stream that is *continuously
+  busy* is **not** cut off by it — a long reasoning stream now runs to completion as long as it is
+  never idle for longer than that timeout. What ends a busy stream is the **whole-request** bound,
+  `server.request_timeout`: it caps the entire request, the head phase and the relay together. Either
+  way the client sees a truncated stream rather than a hang, and **which knob to raise depends on the
+  symptom** — a stream that dies while it was still sending bytes has outrun the **request timeout**;
+  one that dies mid-body after going quiet has outrun the **upstream attempt timeout** for its
+  provider's gaps. The exact rule is [`docs/spec.md` §4.2](../docs/spec.md) and DESIGN §12.10.3 R4
+  ([`ADR-053`](../design/decisions/ADR-053-the-bound-is-head-arrival-only.md)).
 - **A failure after the first event cannot be failed over.** Once events have reached the
   client, the output is committed; vadis terminates the stream using the protocol's own
   in-band failure shape where one exists, and otherwise simply ends it without the
