@@ -836,8 +836,11 @@ for a byte loop. Comparing the two lengths first is accepted and documented here
 
 **Exemption.** `GET /health` **always** answers without a token: it is the liveness probe, and a probe
 that needs a credential cannot be used by whatever supervises the process. Nothing else is exempt, and
-the exemption is **structural** — the guard is applied to the three protocol endpoints' routes only,
-never to `/health` — not a path comparison inside the guard that a later edit could get wrong.
+the exemption is **structural** — the guard is applied to the guarded routes' own layers (the three
+protocol endpoints, plus the guarded non-protocol routes `GET /metrics` §4.16 and `GET /state/events`
+§4.18, each with its own word), never to `/health` — not a path comparison inside the guard that a later
+edit could get wrong. A guarded non-protocol route's refusal record carries that route's own word in
+`protocol.protocol_in` (`"metrics"`, `"state"`) — the vocabulary a §6 reader filters on.
 
 **A refusal is not an upstream failure.**
 
@@ -1937,6 +1940,11 @@ equal §9.2's derivation and `--json`'s values, the series set is a function of 
 traffic, the read's bound and its source, determinism, and the zero-vs-absent rule). DESIGN §12.8's rows
 carry them.
 
+**The figure this surface does not carry has a surface of its own.** `unknown outcome requests` is served
+live by `GET /state/events` (§4.18), read from the process's own store by the writer itself; `vadis stats`
+reaches it through that endpoint when its local read-only open is refused (§9.2's fallback). This surface's
+own constant — it scans the trace, never the log — is unchanged by that.
+
 ### 4.17 `builtin/response_cache` (the exact-match response cache — off by default)
 
 One capability, one key, one default, and it is **off** unless the operator asks for it. The kind is a tier-A
@@ -1991,6 +1999,60 @@ plugins:
 - **Assertions**: `CONF-88` (off by default, with the red control that can fail it) and `CONF-89` (a hit is the
   recorded bytes, the record's shape, the ledger's reconciliation). **This section and the code that implements
   it land together** — the contract is not written ahead of the feature.
+
+### 4.18 `GET /state/events` (the live event-log figure)
+
+*Status: **served** — the contract below and the handler land together (§9.3's rule). The route's home and
+the seam it joins are `design/DESIGN.md` §12.24; the authority, the rejected alternatives and the register
+are [ADR-054](../design/decisions/ADR-054-live-state-read-surface.md).*
+
+**One endpoint, one figure, one reader: the process's own event log, read in-process by the writer itself,
+serving the one figure a second process cannot read while the store is held exclusively** (ADR-009 item 8's
+inspection consequence — the operator no longer stops `serve` to read it).
+
+| Property | Value |
+|---|---|
+| Method / path | `GET /state/events` (one route; no variants; one query parameter) |
+| Query | **`window`** — required, the §4.1 duration grammar, bounded `1ms ..= 24h`; absent, unparsable or out of bounds ⇒ `400` with §8's body (`error.type = "invalid_request"`) |
+| Auth | behind `server.auth_token_env`'s guard, exactly as `/metrics` (§4.7: *"Nothing else is exempt"*). A call presents the token in `Authorization: Bearer ***` or `x-api-key: ***` |
+| Success | `200`, `application/json` — the body below |
+| Refused | `401` with §8's unified body, `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"state"`** — §4.7's refusal table, unchanged |
+| Any other status | **a defect.** The status set is exactly `{200, 400, 401}` |
+| Reads | the process's own store (`AppState.store`, the writer's connection) through the **windowed, kind-filtered** query `Query::EventsSince` (`upstream.submitted` / `upstream.responded`, `ts_us >= now − window`) — never `Query::AllEvents`, never the trace, no path outside the process's own state |
+| Writes | nothing: no trace record on the admitted arm, no event row, no state (a refusal writes the guard's one record) |
+
+**The body** (the values are illustrative):
+
+```json
+{
+  "window": { "from": "2026-10-07T10:21:09.574Z", "to": "2026-10-07T10:36:09.574Z" },
+  "unknown_outcome_requests": 0
+}
+```
+
+| Key | Type | Semantics |
+|---|---|---|
+| `window.from` / `window.to` | string (RFC3339 UTC, milliseconds) | the window the figure covers, in-band (§7: a report must state the window it covers); `to` is the call's own clock read |
+| `unknown_outcome_requests` | integer | **§6's own definition, verbatim**: `upstream.submitted` events in the window with no `upstream.responded` for the same `request_id` — a count, never priced |
+
+**The derivation is `vadis stats`'s own** (`EventFigures`): the endpoint counts `upstream.submitted` rows
+whose `ts_us` is inside the window and whose `request_id` has no `upstream.responded` row **anywhere in the
+log** (not merely in the window — a response written a moment after the window closes still closes its
+intent). The single-owner rule of §4.16 applies unchanged: this surface formats the figure `stats` derives;
+it may not compute a figure of its own, and the two can never disagree.
+
+**What may not be exported** — the same list §4.16 freezes, applied here: no client bytes, no message
+content, no key material (not even a variable name), nothing per-request and nothing keyed by traffic (no
+`request_id` list, no per-provider split), no session identity, no config echo. The body is exactly the two
+keys above; anything else a future round adds is a contract change, not an extension.
+
+**Determinism:** two calls over an unchanged log and equal windows differ only in `window.to`'s
+sub-second digits (the clock read is the one input); the figure itself is a pure function of the log rows
+and the window.
+
+**Assertions.** `CONF-106`: the figure equals the independent count over the store's rows; the status set;
+the guard's four arms with `protocol_in: "state"`; the window bound; and `vadis stats`'s fallback resolving
+the figure against a live gateway. DESIGN §12.8's rows carry them.
 
 ## 5. Onboarding prerequisite (mandatory)
 
@@ -2683,6 +2745,18 @@ vadis stats [--config <config path>] --window <duration> [--json]
   edge. When the store cannot be opened read-only (a live `serve` holding it, no state directory yet, an
   unreadable file, a schema newer than this binary), the one figure that only the log holds — `unknown outcome
   requests` — is **omitted** with a one-line note on stderr, and the rest of the report is printed unchanged.
+- **The live-gateway fallback (ADR-054).** When — and only when — the read-only open was refused because a
+  live `serve` holds the store, `stats` asks the running process instead: one `GET
+  http://<server.addr>/state/events?window=<window>` (§4.18), the token from the config's own
+  `server.auth_token_env` presented as `Authorization: Bearer ***` when that variable is set in `stats`'s
+  environment (absent or empty ⇒ the call goes out with no credential). The call is bounded (one attempt,
+  a 5-second timeout, no proxy — §5's localhost rule is honoured in the client) and read-only. On `200`
+  the figure prints with its source marked `(gateway)` and the stderr note does not appear; on any other
+  outcome (connection refused, `401`, a non-`200` status) the omission note of the rule above stands,
+  extended to name the gateway attempt. No other failure class ever triggers the fallback — a missing
+  store directory does not become a network call, and the text report's other figures never depend on it.
+  In `--json` the figure, when present, gains `"events": {"source": "store" | "gateway"}` beside its
+  value.
 - **Exit codes**: `0` a report was produced; `2` the invocation itself is unusable (unreadable or invalid
   config, an unparsable window, a trace directory that does not exist). A partial report is never presented as
   a complete one.
