@@ -1,94 +1,60 @@
 //! CONF-90 (DESIGN §12.10.3 R1/R2 — the relay delivers the upstream's
-//! bytes as they arrive; R4 — the idle bound is **not moved**): **a
-//! single SSE event larger than 16 MiB is relayed byte-complete.**
+//! bytes as they arrive; R4 as ADR-053 amended it — the attempt knob
+//! bounds **head arrival** and the **per-read idle gap**, never a busy
+//! stream's duration): **a single SSE event larger than 16 MiB is
+//! relayed byte-complete.**
 //!
 //! R51-2 measured the pre-existing defect this case pins (finding F1,
 //! curl evidence captured when the finding was made): with the
 //! usage tap rescanning its whole reassembly buffer on every chunk, one
 //! oversized event made `feed()` quadratic in the buffered length, the
 //! relay starved, and the client received a strict 16 MiB prefix before
-//! the stream died at the 10s bound. The failure is specific to ONE
-//! giant event — the same total delivered as many events streamed in
-//! full — so limb (b) is the case's own control arm.
+//! the stream died. The failure is specific to ONE giant event — the
+//! same total delivered as many events streamed in full — so limb (b)
+//! is the case's own control arm.
 //!
-//! Limbs:
-//! - (a) **one event of >64 MiB** (payload `64 MiB + 1`, R51-2's fixture
-//!   size): the client receives the upstream's exact byte sequence, the
-//!   stream terminates normally (its record declares no error), and the
-//!   transfer completes inside `server.upstream_attempt_timeout` — the
-//!   defect's signature was death AT that bound. **Red before the fix**
-//!   (a red control run captured before the fix): the client received a
-//!   strict 16 777 216-byte prefix at the bound.
-//! - (b) **the same total as many 16 KiB events**: byte-complete, as it
-//!   always was — the fix may not change the ordinary path. It runs
-//!   FIRST and doubles as the machine calibration for limb (a) (R58,
-//!   below).
+//! Under ADR-053's clock the witness is direct; this file is the
+//! two-limb byte-completeness witness ADR-053 §8.2 C90-2 collapses the
+//! old three-way calibration machine into:
+//! - (a) **one event of >64 MiB** (payload `64 MiB + 1`, R51-2's
+//!   fixture size): the client receives the upstream's exact byte
+//!   sequence, the stream terminates on its own terminal event
+//!   (`data: [DONE]` last), the record declares no error, and
+//!   `stream_completed` is `true` — asserted outright, with no
+//!   machine-speed calibration gating it.
+//! - (b) **the same total as many 16 KiB events**: byte-complete, as
+//!   it always was — the fix may not change the ordinary path. It runs
+//!   FIRST as the control arm.
 //!
-//! R58 — how "completes inside the 10s bound" is asserted without any
-//! wall-clock assumption (the R56-1 load red at :168 — 10.225s measured
-//! client-side against the 10s bound on a transfer the relay completed
-//! cleanly — and, under R58-0's own heavier recipe, a second face of the
-//! same assumption: the starved host genuinely cannot feed 64 MiB
-//! through the relay inside ADR-044's total-elapsed bound, so the
-//! stream legitimately DIES at it — R54-1's F1, "size- and
-//! machine-dependent", measured twice). The fixed case measures the
-//! machine instead of assuming it: **limb (b) runs FIRST as the
-//! calibration** — the same byte count through the same relay shape on
-//! the same machine at the same moment.
+//! Why the R58/R58-3 three-way calibration (Fast/Marginal/Starved) is
+//! gone: it existed to guard the strict limb against **death at
+//! ADR-044's total-elapsed attempt bound** — "limb (b) died at the
+//! bound" was a reachable outcome because any stream whose *total*
+//! exceeded the knob died mid-body. Under ADR-053 that outcome is
+//! unreachable for a busy fixture: the control limb is continuously
+//! busy, so the attempt knob can no longer kill it, and a calibration
+//! for a death that cannot occur is dead weight that would silently
+//! weaken the case it was built to protect (ADR-053 §8.2 C90-2's
+//! collapse, executed here).
 //!
-//! R58-3 — the calibration carries MARGIN (the R58-1 BLOCKING finding:
-//! "limb (b) byte-clean" was a binary proof with no margin — a marginal
-//! machine completed the calibration at 8.84s/9.40s against the 10s
-//! bound, `machine_fast` went true, and limb (a) then drifted over
-//! ADR-044's server-side total-elapsed bound and red-ed at full
-//! strictness on byte-identical input). The verdict is now THREE-WAY,
-//! and each route prints its recorded reason:
-//! - **fast** — limb (b) byte-clean AND its measured client-side elapsed
-//!   is within HALF the bound (`FAST_CALIBRATION`): the machine is proven
-//!   fast with headroom, and limb (a) fires at full strictness
-//!   (byte-complete, terminal event, clean record, `stream_completed:
-//!   true` — the defect's signature, death at the bound, reds all of
-//!   them). On a quiet machine limb (b) is ~0.9s (measured), so the
-//!   strict limb stays exercised there; measured limb(a)/limb(b) ratios
-//!   under load are ~1.2x, so a 2x headroom threshold is a margin, not
-//!   a coin flip.
-//! - **marginal** — limb (b) byte-clean but over half the bound: the
-//!   machine MIGHT sustain limb (a) and might not; limb (a) routes to
-//!   the declared-truncation invariants (byte-exact prefix, death
-//!   declared on both terminal rows), and a clean completion is still
-//!   asserted a fortiori (the full-clean shape, `[DONE]` included).
-//! - **starved** — limb (b) died at the bound: the run is not a valid
-//!   measurement of the relay; limb (b) and limb (a) assert what every
-//!   machine state still forces (byte-exact prefix, declared death —
-//!   R1/R2 hold even in death), never a silent pass: the route prints
-//!   its reason.
-//! The client-side elapsed is still measured and printed, as an
-//! observation only. What this trade removes is precisely the flake —
-//! a healthy relay on a starved or marginal host — and nothing else:
-//! the falsifiability controls captured when this case was made
-//! demonstrate the full-strictness branch red-ing on the defect class
-//! (quiet machine) and the truncation branch red-ing on a mis-declared
-//! death.
+//! What can still end either limb, and what the case does about it:
+//! a stream that goes **idle** for longer than the attempt knob still
+//! dies (R4's original letter, restored), and a stream whose **whole
+//! request** exceeds `server.request_timeout` dies at the new outer
+//! bound — both as DECLARED truncations (R6), never a silent one and
+//! never a fabricated terminal. A pathologically starved host could
+//! still hit one of those, so each limb keeps the declared-truncation
+//! invariants as its honest fallback: the delivered bytes are a
+//! byte-exact prefix of the upstream's, and the death is declared on
+//! both terminal rows.
 //!
-//! THE NAMED LIMIT (R58-3, registered with the same prominence as
-//! R58-0's): the strict limb does NOT fire exactly when the calibration
-//! lands outside the fast route — i.e. when limb (b)'s client-side
-//! elapsed exceeds HALF the 10s bound (5s) or limb (b) dies at the
-//! bound. On such a run the case proves only the honest-death
-//! invariants (byte-exact prefix + declared death on both terminal
-//! rows) plus, when limb (a) completes anyway, the full-clean shape
-//! a fortiori; a quadratic-defect regression would go unseen ON THAT
-//! RUN (its signature — death at the bound — is the legitimate outcome
-//! the invariants accept). The strict limb's firing condition is a
-//! measured machine property, printed on every run, so a registry that
-//! never sees "fast" in its logs knows the case is not biting there.
-//! A second scenario remains covered by no assertion, as R58-0 named:
-//! a relay that stopped ENFORCING the bound entirely would let a slow
-//! transfer pass — that regression belongs to the bound's own
-//! semantics (ADR-044), not to this case's byte-completeness claim.
+//! This case claims nothing about a SLOW-HEAD shape: a head that
+//! misses the attempt knob is refused by the head-arrival wrap's own
+//! arm and is CONF-105's witness. CONF-90 is strictly about
+//! byte-completeness of busy streams plus declared idle-gap deaths.
 //!
-//! No network egress: a loopback mock upstream only; the cache capability
-//! is not mounted (`plugins: []`) — the defect predates it.
+//! No network egress: a loopback mock upstream only; the cache
+//! capability is not mounted (`plugins: []`) — the defect predates it.
 //!
 //! Registration note: this row is owed to DESIGN §12.8's table by the
 //! round's contract side (the CONF-86 precedent — retroactive
@@ -100,8 +66,8 @@ use serde_json::Value;
 use vadis_conformance::testkit::{self, SseChunk};
 
 /// One event's `data:` payload: past the 64 MiB store bound and 4× the
-/// observed 16 MiB truncation point — comfortably above any machine's
-/// pre-fix crawl inside the 10s bound.
+/// observed 16 MiB truncation point — far past the defect's measured
+/// truncation threshold on any host this suite runs on.
 const GIANT_PAYLOAD: usize = (64 << 20) + 1;
 
 fn giant_event() -> Vec<u8> {
@@ -129,7 +95,12 @@ fn many_events() -> Vec<u8> {
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
-        r#"server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 10s, request_timeout: 60s }}
+        r#"# upstream_attempt_timeout (10s) bounds head arrival and the per-read
+# idle gap (ADR-053 §2.1); request_timeout (60s) is the whole-request
+# outer bound on the stream path (ADR-053 §3) — a healthy 64 MiB
+# transfer sits far under it, and a starved host's death there is a
+# declared truncation, not a silent one.
+server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 10s, request_timeout: 60s }}
 session:  {{ key_sources: ["prompt_cache_key"], ttl: 11h }}
 cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, safety_factor: 1.1 }} }}
 trace:    {{ dir: "./state/traces", rollover: hourly }}
@@ -161,32 +132,14 @@ fallback: []
 
 const CLIENT_BODY: &str = r#"{"model":"mock/glm","messages":[{"role":"user","content":"stream me"}],"stream":true,"stream_options":{"include_usage":true},"prompt_cache_key":"sess-90"}"#;
 
-/// The attempt bound the config sets below (`upstream_attempt_timeout:
-/// 10s` — ADR-044's total-elapsed bound). Named once so the margin
-/// threshold cannot drift from the fixture.
+/// The attempt knob the config sets below (`upstream_attempt_timeout:
+/// 10s`). Under ADR-053 it names TWO bounds and only those: the
+/// head-arrival window on the streaming send, and the per-read idle
+/// gap inside the relay — never a busy stream's total duration (that
+/// is `request_timeout`'s job on the stream path). Named once so the
+/// head-latency witness in `clean_completion` cannot drift from the
+/// fixture.
 const ATTEMPT_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
-/// The margin the calibration must carry (R58-3): limb (b) byte-clean
-/// AND within HALF the bound on the measured client-side clock before
-/// the machine counts as proven fast. Measured basis: quiet-machine
-/// limb (b) is ~0.9s; under load the healthy limb(a)/limb(b) ratio is
-/// ~1.2x, so half the bound is genuine headroom for the transfer one
-/// attempt later — not a coin flip (the R58-1 reds sat at 88%/94% of
-/// the bound, deep inside what this threshold routes AWAY from full
-/// strictness).
-const FAST_CALIBRATION: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// The calibration's three-way verdict (R58-3). Each route prints its
-/// recorded reason at runtime; the strict limb fires only on `Fast`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Calibration {
-    /// Limb (b) byte-clean within half the bound: headroom proven.
-    Fast,
-    /// Limb (b) byte-clean but over half the bound: no headroom — the
-    /// R58-1 flake regime. Limb (a) routes to the honest invariants.
-    Marginal,
-    /// Limb (b) died at the bound: not a valid measurement of the relay.
-    Starved,
-}
 
 fn read_records(trace_dir: &std::path::Path) -> Vec<Value> {
     let mut records = Vec::new();
@@ -263,18 +216,20 @@ async fn run_arm(
 }
 
 /// The terminal-rows shape both limbs share, in either outcome: one
-/// record, its head latency present and inside the bound on the
-/// server's clock; one `upstream.responded` event. Returns the
-/// byte-clean completion witness: the stream ended on its own terms
-/// (record errors empty, `stream_completed: true`, no truncation
-/// reason) — the enforcing-side proof that the bound never fired.
+/// record, its head latency present and inside the head-arrival bound
+/// on the server's clock (the attempt knob's remaining role on the
+/// stream path, ADR-053 §2.1); one `upstream.responded` event.
+/// Returns the byte-clean completion witness: the stream ended on its
+/// own terms (record errors empty, `stream_completed: true`, no
+/// truncation reason) — the enforcing-side proof that neither the idle
+/// bound nor `request_timeout` fired.
 fn clean_completion(records: &[Value], events: &[(String, Value)]) -> bool {
     assert_eq!(records.len(), 1, "one record for the one request");
     let head_ms = records[0]["result"]["upstream_ms"].as_u64();
     assert!(
-        head_ms.is_some_and(|ms| ms < 10_000),
+        head_ms.is_some_and(|ms| ms < ATTEMPT_BOUND.as_millis() as u64),
         "the answering attempt's head latency, measured on the server's own \
-         clock, is present and inside the 10s bound: {:?}",
+         clock, is present and inside the {ATTEMPT_BOUND:?} head-arrival bound: {:?}",
         records[0]["result"]["upstream_ms"]
     );
     let responded: Vec<&(String, Value)> = events
@@ -292,11 +247,12 @@ fn clean_completion(records: &[Value], events: &[(String, Value)]) -> bool {
         && responded[0].1["stream_truncated_reason"] == Value::Null
 }
 
-/// The honest invariants of a NON-completing run (the bound legitimately
-/// killed a stream its starved host could not feed): the delivered bytes
-/// are a byte-exact PREFIX of the upstream's — never corrupted,
-/// fabricated or reordered (R1/R2 hold even in death) — and the death
-/// is DECLARED on both terminal rows, never silent.
+/// The honest invariants of a NON-completing run (an idle gap longer
+/// than the attempt knob, or the whole-request outer bound, killed a
+/// stream its starved host could not feed): the delivered bytes are a
+/// byte-exact PREFIX of the upstream's — never corrupted, fabricated
+/// or reordered (R1/R2 hold even in death) — and the death is
+/// DECLARED on both terminal rows, never silent.
 fn assert_declared_truncation(
     got: &[u8],
     want: &[u8],
@@ -336,53 +292,20 @@ fn assert_declared_truncation(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conf_90_giant_single_sse_event_completes() {
-    // Limb (b) FIRST — the calibration (R58, margined in R58-3): the
-    // same total bytes as many 16 KiB events through the same relay
-    // shape on the same machine at the same moment. Its byte-clean
-    // completion WITHIN HALF THE BOUND proves this machine can sustain
-    // the ~64 MiB through this path inside the 10s attempt bound right
-    // now, with headroom for the same transfer one attempt later; its
-    // byte-clean completion WITHOUT that margin proves nothing about
-    // limb (a) (the R58-1 flake regime — the two clocks differ: the
-    // margin is measured on the client clock, the bound is enforced on
-    // the server's total-elapsed clock, ADR-044); its death at the
-    // bound proves the machine currently cannot sustain it (a
-    // starvation fact about the host, not a relay fact). No machine
-    // speed is assumed: the machine's speed is MEASURED on the exact
-    // byte count in question, and each limb then asserts only what the
-    // measurement proves.
+    // Limb (b) FIRST — the control arm: the same total bytes as many
+    // 16 KiB events through the same relay shape on the same machine.
+    // Under ADR-053 both limbs assert byte-completeness outright: a
+    // busy stream can no longer die at the attempt knob, so no
+    // machine-speed calibration gates the strict claim. The only
+    // deaths left — a gap longer than the 10s idle bound, or the 60s
+    // whole-request outer bound on a starved host — keep the
+    // declared-truncation invariants as their honest fallback.
     let mut want_many = many_events();
     want_many.extend_from_slice(b"data: [DONE]\n\n");
     let (got_many, elapsed_many, records_many, events_many) =
         run_arm("conf90b", want_many.clone()).await;
-    eprintln!("conf90 limb (b) client-side elapsed: {elapsed_many:?}");
-    let b_clean = clean_completion(&records_many, &events_many) && got_many == want_many;
-    let calibration = if !b_clean {
-        Calibration::Starved
-    } else if elapsed_many <= FAST_CALIBRATION {
-        Calibration::Fast
-    } else {
-        Calibration::Marginal
-    };
-    match calibration {
-        Calibration::Fast => eprintln!(
-            "conf90 calibration: FAST — limb (b) byte-clean in {elapsed_many:?} \
-             (<= {FAST_CALIBRATION:?} = half the {ATTEMPT_BOUND:?} bound): the machine is \
-             proven fast WITH HEADROOM; limb (a) fires at FULL strictness"
-        ),
-        Calibration::Marginal => eprintln!(
-            "conf90 calibration: MARGINAL — limb (b) byte-clean but {elapsed_many:?} \
-             (> {FAST_CALIBRATION:?} = half the {ATTEMPT_BOUND:?} bound): no proven headroom \
-             for limb (a) one transfer later; limb (a) routes to the declared-truncation \
-             invariants (a clean completion is still asserted a fortiori)"
-        ),
-        Calibration::Starved => eprintln!(
-            "conf90 calibration: STARVED — limb (b) died at the bound: the run is not a \
-             valid measurement of the relay; SKIP the strict limb with this recorded reason \
-             and assert the honest-death invariants on both limbs"
-        ),
-    }
-    if b_clean {
+    eprintln!("conf90 limb (b) client-side elapsed: {elapsed_many:?} (observation only)");
+    if clean_completion(&records_many, &events_many) {
         assert!(
             got_many == want_many,
             "the many-events control stays byte-complete: got {} of {} bytes",
@@ -394,75 +317,44 @@ async fn conf_90_giant_single_sse_event_completes() {
         // run is not a valid measurement of the relay. The invariants
         // that survive any machine: byte-exactness up to a DECLARED
         // death, never corruption, never a silent truncation.
-        assert!(
-            want_many.starts_with(&got_many),
-            "the many-events control is byte-exact up to its end: got {} of {} bytes",
-            got_many.len(),
-            want_many.len()
+        eprintln!(
+            "conf90 limb (b): did not complete cleanly — asserting the \
+             declared-truncation invariants (the only deaths left under \
+             ADR-053 are an idle gap over {ATTEMPT_BOUND:?} or the 60s \
+             whole-request outer bound)"
         );
         assert_declared_truncation(&got_many, &want_many, &records_many, &events_many);
     }
 
-    // Limb (a): ONE event past 64 MiB, then [DONE].
+    // Limb (a): ONE event past 64 MiB, then [DONE] — the case's own
+    // claim, asserted outright (ADR-053 §8.2 C90-2's collapse).
     let mut want = giant_event();
     want.extend_from_slice(b"data: [DONE]\n\n");
     let (got, elapsed, records, events) = run_arm("conf90a", want.clone()).await;
-    // The client-side elapsed, kept as an observation only — it is NOT
-    // the clock the attempt bound is enforced on (the R56-1 load red
-    // measured 10.225s here on a cleanly completed transfer).
-    eprintln!("conf90 limb (a) client-side elapsed: {elapsed:?}");
-    let a_clean = clean_completion(&records, &events) && got == want;
-    match calibration {
-        Calibration::Fast => {
-            // The calibration just proved this machine sustains the same
-            // byte count through the same relay inside the bound WITH
-            // HEADROOM — so the healthy linear relay MUST deliver the
-            // giant event byte-complete (the R54 defect's quadratic tap
-            // dies at the bound here: red, at full strictness — the
-            // base's :159/:166 assertions unchanged, plus the
-            // terminal-rows witnesses).
-            assert!(
-                a_clean,
-                "on a machine proven fast by the control, the giant single event \
-                 must arrive byte-complete with clean terminal rows: got {} of {} \
-                 bytes, record errors {}, stream_completed {}",
-                got.len(),
-                want.len(),
-                records[0].get("errors").unwrap_or(&Value::Null),
-                events
-                    .iter()
-                    .find(|(k, _)| k == "upstream.responded")
-                    .map(|(_, p)| p["stream_completed"].to_string())
-                    .unwrap_or_else(|| "<none>".into()),
-            );
-            assert!(
-                got.ends_with(b"data: [DONE]\n\n"),
-                "the stream reached its terminal event (a truncated stream ends mid-event)"
-            );
-        }
-        _ if a_clean => {
-            // Completed anyway, on a machine the control could not prove
-            // fast: the full-clean shape holds a fortiori.
-            eprintln!(
-                "conf90 limb (a): completed cleanly in {elapsed:?} on an unproven \
-                 machine — the full-clean shape is asserted a fortiori"
-            );
-            assert!(
-                got.ends_with(b"data: [DONE]\n\n"),
-                "the stream reached its terminal event"
-            );
-        }
-        _ => {
-            // Marginal or starved, and limb (a) died at the bound: on a
-            // machine the calibration did not prove fast, the bound's
-            // death is legitimate. Assert what any machine state still
-            // forces — byte-exact prefix, declared death, no third shape.
-            eprintln!(
-                "conf90 limb (a): died at the bound in {elapsed:?} on an unproven \
-                 machine — asserting the declared-truncation invariants \
-                 (byte-exact prefix, death declared on both terminal rows)"
-            );
-            assert_declared_truncation(&got, &want, &records, &events);
-        }
+    eprintln!("conf90 limb (a) client-side elapsed: {elapsed:?} (observation only)");
+    if clean_completion(&records, &events) {
+        assert!(
+            got == want,
+            "the giant single event arrives byte-complete with clean terminal \
+             rows: got {} of {} bytes, record errors {}",
+            got.len(),
+            want.len(),
+            records[0].get("errors").unwrap_or(&Value::Null),
+        );
+        assert!(
+            got.ends_with(b"data: [DONE]\n\n"),
+            "the stream reached its terminal event (a truncated stream ends mid-event)"
+        );
+    } else {
+        // Died at one of the two remaining bounds on a starved host:
+        // the death is legitimate and must be declared. Assert what any
+        // machine state still forces — byte-exact prefix, declared
+        // death on both terminal rows, no third shape.
+        eprintln!(
+            "conf90 limb (a): did not complete cleanly — asserting the \
+             declared-truncation invariants (byte-exact prefix, death \
+             declared on both terminal rows)"
+        );
+        assert_declared_truncation(&got, &want, &records, &events);
     }
 }

@@ -125,6 +125,14 @@ struct RelayCtx {
     /// at its own provider's table).
     accounting: HashMap<String, RouteAccounting>,
     idle: Duration,
+    /// ADR-053 §3's single-owner `server.request_timeout` deadline, an
+    /// ABSOLUTE instant measured from the moment the request entered
+    /// the streaming driver. The relay's own reads trip against it
+    /// (`tokio::time::timeout_at`) into R6 column 2's declared
+    /// truncation; it is never re-armed per chunk, and the head phase
+    /// (outside this struct) enforces the same instant, not a second
+    /// timer.
+    request_deadline: tokio::time::Instant,
     request_id: String,
     proto_in: WireApi,
     session: Option<String>,
@@ -261,19 +269,63 @@ impl Forwarder {
             transform_records: Vec::new(),
             transform_error: None,
         };
-        let outcome = self
-            .forward_stream_inner(&mut facts, proto_in, body, request_id, headers)
-            .await;
+        // ADR-053 §3 — `server.request_timeout` becomes real on the
+        // stream path, SINGLE OWNER: one deadline measured from the
+        // moment the request enters this driver (facts.started), armed
+        // here, before the head phase, and carried into the relay's
+        // context as the same ABSOLUTE instant. The head wrap below
+        // enforces this instant (it is not a second timer); the relay's
+        // per-read `timeout_at` trips against it without re-arming.
+        let deadline = tokio::time::Instant::from_std(facts.started) + self.request_timeout();
+        let outcome = match tokio::time::timeout_at(
+            deadline,
+            self.forward_stream_inner(&mut facts, proto_in, body, request_id, headers, deadline),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_elapsed) => {
+                // The whole-request bound tripped BEFORE our head was
+                // sent (any inner outcome — including a relay-priming
+                // success — would have returned by now): R6 column 1's
+                // ordinary refusal, conservatively §2.2's
+                // `unknown_outcome` shape (the request may have been
+                // fully written upstream).
+                StreamOutcome::Failure(ForwardFailure {
+                    status: 502,
+                    code: ErrorCode::UpstreamError,
+                    message: "no response head within server.request_timeout \
+                         (unknown_outcome): the whole-request bound expired \
+                         before any byte was relayed"
+                        .to_string(),
+                    details: Some(json!({
+                        "stage": "unknown_outcome",
+                        "error_class": "timeout",
+                        "stream": true,
+                    })),
+                })
+            }
+        };
         if let StreamOutcome::Failure(f) = &outcome {
             self.record_failure_trace(&facts, f);
         }
         outcome
     }
 
+    /// ADR-053 §3: the stream path's whole-request bound. One owner —
+    /// this driver — reading the one configured value.
+    fn request_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.server.request_timeout.0)
+    }
+
     /// Pre-flight + relay setup: the same parse → session → route →
     /// capability → outbound bytes rules as the buffered path (R11), the
     /// same event vocabulary (rows 1–5 of §12.10.5), and a pre-relay
     /// candidate walk that classifies with the same evidence inputs.
+    /// `deadline` is ADR-053 §3's whole-request bound — the SAME
+    /// absolute instant the outer wrap enforces, carried through so the
+    /// relay the priming hands off to trips against it after our head
+    /// is sent.
     async fn forward_stream_inner(
         &self,
         facts: &mut RequestFacts<'_>,
@@ -281,6 +333,7 @@ impl Forwarder {
         body: &[u8],
         request_id: &str,
         headers: &[(String, String)],
+        deadline: tokio::time::Instant,
     ) -> StreamOutcome {
         let started = facts.started;
         let now_epoch_s = facts.now_epoch_s;
@@ -1161,6 +1214,7 @@ impl Forwarder {
                                     trace: self.trace.clone(),
                                     accounting,
                                     idle,
+                                    request_deadline: deadline,
                                     request_id: request_id.to_string(),
                                     proto_in,
                                     session: session.clone(),
@@ -1747,7 +1801,19 @@ fn relay_stream(
         (ctx, init, cleaned),
         |(mut ctx, mut st, cleaned)| async move {
             loop {
-                match vadis_providers::stream::read_chunk(&mut st.head, ctx.idle).await {
+                // ADR-053 §3, the relay's leg of the single owner: each
+                // upstream read still runs under R4's idle bound, but the
+                // WHOLE request now also trips at the absolute
+                // `server.request_timeout` deadline — the same instant
+                // the head-phase wrap enforces, never re-armed. The
+                // deadline is in the past ⇒ trip now; otherwise the
+                // effective window is min(idle, time-until-deadline).
+                let window = ctx
+                    .request_deadline
+                    .checked_duration_since(tokio::time::Instant::now())
+                    .unwrap_or_default();
+                let idle = std::cmp::min(ctx.idle, window);
+                match vadis_providers::stream::read_chunk(&mut st.head, idle).await {
                     vadis_providers::stream::StreamRead::Chunk(b) => {
                         if !b.is_empty() {
                             // §12.10.3 R2 write-through: this chunk is the item; the
@@ -1777,14 +1843,29 @@ fn relay_stream(
                         return None;
                     }
                     vadis_providers::stream::StreamRead::Failed { message, timed_out } => {
+                        // Which bound fired (ADR-053 §3): a `timed_out`
+                        // read at or past the absolute deadline is the
+                        // WHOLE-request bound, not the idle gap — the
+                        // declared reason must name the one that tripped.
+                        let request_bound =
+                            timed_out && tokio::time::Instant::now() >= ctx.request_deadline;
                         // R6: after the first relayed byte, failover is
-                        // impossible — truncate, record, never retry.
-                        if !st.relayed
+                        // impossible — truncate, record, never retry. The
+                        // whole-request bound adds its own refusal: a
+                        // trip at zero bytes does NOT walk the chain
+                        // either — every further attempt would run past
+                        // the bound the trip just named.
+                        if !request_bound
+                            && !st.relayed
                             && failover_zero_byte(&mut ctx, &mut st, &cleaned, &message).await
                         {
                             continue;
                         }
-                        let reason = if timed_out {
+                        let reason = if request_bound {
+                            "server.request_timeout exceeded: the whole-request bound \
+                             expired before the stream completed"
+                                .to_string()
+                        } else if timed_out {
                             format!("idle bound exceeded: {message}")
                         } else {
                             message
@@ -2088,4 +2169,243 @@ fn event(ctx: &RelayCtx, kind: EventKind, payload: Value) -> Option<EventId> {
             payload,
         })
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    //! ADR-053's unit witnesses on the driver seam: the single-owner
+    //! `server.request_timeout` on the stream path (head phase and relay
+    //! tripping at the SAME absolute instant, one timer, never re-armed),
+    //! and the head-arrival attempt bound's conservative arm.
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use tokio::io::AsyncReadExt;
+    use vadis_core::config::VadisConfig;
+    use vadis_core::trace::DecisionRecord;
+    use vadis_core::transform::TransformMode;
+
+    /// Captures every record the driver writes, for assertions.
+    #[derive(Default)]
+    struct CaptureTrace {
+        records: StdMutex<Vec<String>>,
+    }
+
+    impl vadis_core::TraceWriter for CaptureTrace {
+        fn write(&self, rec: &DecisionRecord) -> Result<Option<String>, String> {
+            self.records
+                .lock()
+                .unwrap()
+                .push(serde_json::to_string(rec).unwrap());
+            Ok(Some("test:0".into()))
+        }
+        fn config_digest(&self) -> &str {
+            ""
+        }
+    }
+
+    /// A config whose one `mock` provider serves chat from the given
+    /// loopback port, under the given bounds.
+    fn test_config(attempt_ms: u64, request_ms: u64, upstream_port: u16) -> VadisConfig {
+        serde_json::from_value(serde_json::json!({
+            "server": {
+                "addr": "127.0.0.1:0",
+                "upstream_attempt_timeout": format!("{attempt_ms}ms"),
+                "request_timeout": format!("{request_ms}ms"),
+            },
+            "session": { "key_sources": ["prompt_cache_key"], "ttl": "11h" },
+            "cache": { "sticky": true,
+                       "breakeven": { "enabled": true, "min_remaining_turns": 2, "safety_factor": 1.1 } },
+            "trace": { "dir": "./state/traces", "rollover": "hourly" },
+            "providers": [{
+                "name": "mock",
+                "urls": { "chat": format!("http://127.0.0.1:{upstream_port}/v1/chat/completions") },
+                "api_key_env": "UNIT_STREAM_KEY",
+                "wire_api": "chat",
+                "supports": ["chat"],
+                "models": [{
+                    "id": "m", "context": "128k",
+                    "price": { "input_miss": 0.001, "input_hit": 0.0001,
+                               "cache_write": 0.0, "output": 0.002,
+                               "peak": { "multiplier": 1.0, "windows": [] } },
+                    "source": "unit fixture"
+                }]
+            }],
+            "aliases": {},
+            "plugins": [],
+            "fallback": []
+        }))
+        .unwrap()
+    }
+
+    fn forwarder(cfg: VadisConfig, trace: Option<std::sync::Arc<CaptureTrace>>) -> Forwarder {
+        Forwarder {
+            config: cfg,
+            transports: HashMap::new(),
+            api_keys: HashMap::from([("mock".to_string(), vec!["sk-unit".to_string()])]),
+            store: None,
+            trace: trace.map(|t| t as std::sync::Arc<dyn vadis_core::TraceWriter>),
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        }
+    }
+
+    const STREAM_BODY: &[u8] =
+        br#"{"model":"mock/m","messages":[{"role":"user","content":"x"}],"stream":true}"#;
+
+    /// A listener that accepts, reads the request, and never answers —
+    /// the slow-head fixture. Each accepted connection is held open.
+    async fn slow_head_listener() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    // Hold the connection open, draining quietly.
+                    loop {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            s.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0)) | Err(_) => return,
+                            Ok(Ok(_)) => {}
+                            Ok(Err(_)) => return,
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_timeout_trips_head_phase_into_unknown_outcome_refusal() {
+        let port = slow_head_listener().await;
+        // attempt (head) bound 10s, whole-request bound 150ms: the OUTER
+        // bound must fire first — the change's own discriminating rig.
+        let f = forwarder(test_config(10_000, 150, port), None);
+        let t0 = std::time::Instant::now();
+        let outcome = f
+            .forward_stream(
+                WireApi::Chat,
+                STREAM_BODY,
+                "req-unit",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        let elapsed = t0.elapsed();
+        assert!(elapsed >= std::time::Duration::from_millis(140));
+        assert!(
+            elapsed < std::time::Duration::from_millis(2_000),
+            "trips at the bound, not far past it: {elapsed:?}"
+        );
+        match outcome {
+            StreamOutcome::Failure(f) => {
+                assert_eq!(f.status, 502);
+                assert_eq!(f.code, ErrorCode::UpstreamError);
+                let d = f.details.expect("details");
+                assert_eq!(d["stage"], "unknown_outcome");
+                assert_eq!(d["error_class"], "timeout");
+                assert_eq!(d["stream"], true);
+            }
+            StreamOutcome::Success(_) => panic!("the head phase must trip, not serve"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_timeout_trips_a_busy_relay_into_declared_truncation() {
+        // A trickle upstream: head + one SSE chunk every 30ms (every gap
+        // well under the 10s idle bound), forever — past the 400ms
+        // whole-request bound. The relay must be killable at the bound
+        // and the trip must be a DECLARED truncation.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 8192];
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), s.read(&mut buf))
+                            .await;
+                    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+                    if s.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut n = 0u32;
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                        let data = format!("data: tick{n}\n\n");
+                        let frame = format!("{:x}\r\n{}\r\n", data.len(), data);
+                        if s.write_all(frame.as_bytes()).await.is_err() {
+                            return; // the vadis dropped the connection — expected
+                        }
+                        n += 1;
+                    }
+                });
+            }
+        });
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = forwarder(test_config(10_000, 400, port), Some(trace.clone()));
+        let t0 = std::time::Instant::now();
+        let outcome = f
+            .forward_stream(
+                WireApi::Chat,
+                STREAM_BODY,
+                "req-unit",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(3_000),
+            "the driver returns at the head; the relay is killed at the bound"
+        );
+        match outcome {
+            StreamOutcome::Success(s) => {
+                // Drain the relay: it must END (the truncation), never run
+                // forever, and must have relayed some bytes first.
+                let mut body = Box::pin(s.body);
+                let mut items = 0u32;
+                while let Some(_b) = futures::StreamExt::next(&mut body).await {
+                    items += 1;
+                    assert!(
+                        items < 10_000,
+                        "the relay must be killable at request_timeout"
+                    );
+                }
+                assert!(
+                    items > 0,
+                    "some bytes must have been relayed before the trip"
+                );
+                let records = trace.records.lock().unwrap().clone();
+                assert_eq!(records.len(), 1, "one terminal record");
+                let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+                assert_eq!(rec["result"]["status"], 200);
+                let errors = rec["errors"].as_array().expect("errors[]");
+                assert!(
+                    errors
+                        .iter()
+                        .any(|e| e["details"]["error_class"] == "stream_truncated"),
+                    "the whole-request trip is a DECLARED truncation: {errors:?}"
+                );
+                assert_eq!(rec["usage_missing"], true, "usage honesty (R8)");
+            }
+            StreamOutcome::Failure(f) => {
+                panic!(
+                    "the head arrived; the outcome must be a relay, not status {} {:?}",
+                    f.status, f.details
+                )
+            }
+        }
+    }
 }

@@ -125,9 +125,16 @@ impl ReqwestStreamClient {
         for (name, value) in parts.headers.iter() {
             out = out.header(name.as_str(), value.as_bytes());
         }
-        let fut = out.body(body).timeout(self.idle_timeout).send();
-        match fut.await {
-            Ok(resp) => {
+        // ADR-053 §2.1: the attempt knob bounds HEAD ARRIVAL only. The
+        // wrap is isomorphic with `read_chunk`'s own — a
+        // `tokio::time::timeout` around the send — so the clock stops
+        // when the head arrives, whichever way it arrives. The body is
+        // bounded per-read by the idle arm inside `read_chunk` alone; a
+        // stream that never idles is never truncated by this knob.
+        let send = out.body(body).send();
+        let mut send = std::pin::pin!(send);
+        match tokio::time::timeout(self.idle_timeout, &mut send).await {
+            Ok(Ok(resp)) => {
                 let status = resp.status().as_u16();
                 let retry_after = resp
                     .headers()
@@ -146,7 +153,7 @@ impl ReqwestStreamClient {
                     response: resp,
                 }))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 let wrote_full_request = !e.is_connect() && !e.is_request();
                 if wrote_full_request {
                     // Full write, no head: the caller must treat this as
@@ -171,6 +178,18 @@ impl ReqwestStreamClient {
                     ))
                 }
             }
+            // The head-arrival window expired (ADR-053 §2.2): the send
+            // produced neither a head nor a transport error, so the vadis
+            // cannot know whether the request bytes were fully written.
+            // ADR-011 item 6 row 3 fixes that ambiguity's rule — after a
+            // full write a retry is a probable double charge — so this
+            // arm feeds the existing `OpenHead::UnknownOutcome` path
+            // (502 / `stage: unknown_outcome` / `error_class: "timeout"`
+            // / no retry / no failover). Same shape the Err arm's
+            // full-write case builds; only the message names the window.
+            Err(_elapsed) => Err(
+                "no response head within upstream_attempt_timeout (unknown_outcome)".to_string(),
+            ),
         }
     }
 }

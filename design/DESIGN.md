@@ -957,7 +957,7 @@ Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a sessi
 `X-Vadis-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-104`)
+### 12.8 conformance case table (`CONF-01…CONF-105`)
 
 Location: the workspace member `vadis-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1065,6 +1065,7 @@ not written).
 | CONF-102 | ADR-051 §2.4·a **fallback jump re-enters the family guard** | **a candidate inside a family is routed by that family's state, not by the jump that reached it.** The resolved route is outside every family and its mock answers a retryable failure (429); the `fallback` entry carries the family's tag and is the family's **metered** route, while the family's state says `primary` (its plan mock answers 200): the request is served by the **plan** route, `result.plan_switch.reason == "primary_recovered"` (the direction word the existing single owner picks), the metered mock receives **0** requests, and `cost.currency` is the settled route's entry currency. Negative limb: the same rig with the family's state already `overflow` serves the metered route and writes no second `plan_switch`. Red at the base: the walk attempts the metered route with no guard call at all (`forward.rs`'s candidate loop). Depends on: the guard being evaluated at every commitment point (§12.10.9, ADR-051 §2.4) |
 | CONF-103 | ADR-051 §2.5·the **corrected roster** serves three lines, and the declaration stays consistent | **the pages' cells are the cells that serve.** The three entries the correction touches are mirrored as a fixture (one mock per entry, three `urls` on that mock, so the mock's recorded **path** is the evidence): `zai-cn-plan` with its `wire_api` flipped to `responses`, and `kimi-cn-plan` / `kimi-plan` each declaring the added `responses` cell. All three inbound protocols are driven against each entry — nine requests — and each must answer `200` with its own cell's path in the mock's log and the client's own bytes on the wire. Red at the base: every off-diagonal cell is a `501` (`forward.rs:902-911`, `stream_forward.rs:440-453`), so nine assertions collapse to three; driven instead over the **shipped pair** it is red one step earlier — a declared cell with no `urls` row refuses to load (spec §4.9), which is what makes the two added rows mandatory rather than cosmetic. Plus the invariants the edit must not break, each a load-time refusal when broken: `wire_api ∈ supports`, `set(urls) == set(supports)`, no repeated (provider, model) | the roster edit landing with the parser it needs (R69-1), plus the declared-cell rule |
 | CONF-104 | ADR-051 §2.3 + **ADR-022 decision 3**·the frozen refusal still holds under the new discriminant | **a chain nothing may serve, with the discriminant as the only arm that moves.** A chat request whose chain offers four candidates, none attemptable: the resolved `keyless-a/m` and the same provider's second model `keyless-a/m2` (⇒ `keyless`, the provider-level exclusion may not swallow the second model — ADR-023 decision 3); `deaf/m`, which **declares `chat`** (`supports: [chat, responses]`) while naming `responses` as its `wire_api` and is unkeyed ⇒ **`keyless`** — the discriminating arm, `wire_mismatch` on the base tree; and the **keyed** `nocell/m`, which declares no `chat` cell ⇒ `wire_mismatch`. Both media: `502`, `error.type == "upstream_error"`, the frozen sentence verbatim, `details.stage == "no_available_route"`, `details.skipped[]` holding one entry per offered candidate in the chain's order each with a reason from `{unknown_provider, keyless, wire_mismatch, demoted}`, `upstream_status` / `error_class` both `null`, the two `details` objects equal element for element modulo the streaming arm's pre-existing `"stream": true`, **no** `upstream.submitted` row, `usage_missing: true` and nothing charged. Red at the base on exactly one line — `deaf/m`'s reason — which is what makes the case prove ADR-022 decision 3 was not reopened | the eligibility predicate on both forwarding paths only; the refusal body is ADR-022 decision 3's, **byte-identical** |
+| CONF-105 | §4.2·the classification's evidence + §12.10.3 R4/R6·the attempt bound is **head-arrival-only** (ADR-053) | **the two bounds, and the fault the two media share.** Through the real `serve` assembly against a loopback mock, with `upstream_attempt_timeout` at the rig's own **sub-second** value so no limb rests on an assumption about machine speed: (a) **the busy stream — the change's own claim**: a stream whose **total** elapsed exceeds the attempt knob while **every** inter-byte gap stays under it is relayed **byte-complete** with its terminal event (`stream_completed: true`, `errors[]` empty, `[DONE]` last where the protocol has one) — **red at the base**, which truncates it at the knob; (b) **the slow head — the conservative arm, and the cross-media class parity**: a mock whose response **head** misses the knob yields, on **both** media, `details.stage: "unknown_outcome"` with `details.error_class: "timeout"`, **no** retry, **no** `failover.triggered` row and exactly **one** record — each medium in its **own** status carriage (streamed `502 upstream_error`; buffered `504 upstream_timeout`), asserted as the *shared class word plus the per-path carriage*, so the limb cannot pass on one path alone; (c) **the discriminant that keeps (b) from swallowing the connect window**: a host that **refuses** is still `connect_failure` with its failover-eligible action (CONF-29's shape), never `timeout`, so the new arm cannot absorb a fast refusal; (d) **the idle control, unchanged**: a stream that goes **silent** for longer than the knob is a **declared truncation** (`stream_completed: false`, a `stream_truncated_reason` string, `error_class: "stream_truncated"`, no `[DONE]`), so the gap bound R4 always had stays asserted | the head-arrival wrap plus the **unmoved** per-read idle arm (`vadis-providers/src/stream.rs`, `R71-1`); the classification seam (`vadis-proxy/src/stream_forward.rs`'s `OpenHead` arms; `forward.rs`'s `WrittenNoResponse` arm) |
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1609,6 +1610,27 @@ row — the flip adds and removes no surface (`vadis setup` is served before and
 deferred surface is involved). Nothing here moves a gate definition, a threshold, the corpus, the loop
 replay contract or the L1 envelope (AGENTS 9 / ADR-012).
 
+**Allocation of `CONF-105` (R71 — the attempt bound is head-arrival-only, ADR-053) — recorded 2026-10-07 by the
+round's contract card, the R9/R10/R17/R22/R28/R29/R32/R43/R50/R51/R65/R66/R69 precedent.** The allocation is the
+**owner's act** of 2026-10-07 (quoted verbatim in ADR-053 §1.2, item (d)) — a human decision, not a loop outcome
+(AGENTS constraint 9 / ADR-012) — and it **adds** one assertion and moves no existing one. The occupancy check is
+a **measurement** of the real directory at this card's HEAD: case files present are `01–47`, `53–66`, `71–78`,
+`80–97`, `100–104`; the register's accumulated **spent** set is `01–47`, `52–70`, `71–78`, `79`, `80–97`,
+`100–104`; `48–51` stay reserved exactly as the paragraphs above leave them; `CONF-98`/`CONF-99` are **promised
+by the parked branch `round/67-abandoned-attempt`** (and `ADR-050` is that branch's too) and are neither
+allocated nor read here — that branch is never switched, merged or deleted by this round; **the next free ID
+above the tree's maximum and beyond that promise is `CONF-105`**, and this round takes it. The case **lands with
+the implementation it witnesses** (`R71-1`) and is parked `#[ignore = "CONF-105: depends on R71-1"]` until then
+(the CONF-20…25 parking rule); until its file exists this row is the allocation record (CONF-27's precedent).
+**One registry repair rides with this paragraph, forced by the measurement and not a new decision**: this
+section's **heading** moves from `` `CONF-01…CONF-104` `` to `` `CONF-01…CONF-105` `` — the same drift this
+section forbids (R50's/R66's/R69's precedent above). No existing assertion is touched: `CONF-90` is repaired by
+`R71-2` **only** under the owner's explicit authorisation, and its three-item edit list is frozen in **ADR-053
+§8.2** (the round record carries that same list, AGENTS 9), while every other case file — `CONF-45`'s six arms,
+`CONF-58/59/64/65`'s `skipped[]` assertions, `CONF-82`'s failure-head evidence, `CONF-87`'s series set,
+`CONF-88/89`'s arms and `CONF-91…104`'s — stays **byte-identical**. Nothing here moves a gate definition, a
+threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 / ADR-012).
+
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
 `removed`).
@@ -1736,6 +1758,32 @@ at load naming that family's own key (ADR-052 §1.2 item 4, measured). What this
 **not** claim: nothing here is measured on a landed template — R70-0 writes no product byte and no
 `config.example.yaml` line; the flip and its two rewritten sentences land in ADR-052 §2.7's
 implementing card.
+
+**Register line (2026-10-07, R71-0): the attempt bound is head-arrival-only — the contract, and the CONF-90
+repair it obliges.** `ADR-053` (`design/decisions/ADR-053-the-bound-is-head-arrival-only.md`) supersedes
+**ADR-044's clock (i) only**: the attempt knob `server.upstream_attempt_timeout` bounds **head arrival** (a
+`tokio::time::timeout` around the streaming send, isomorphic with `read_chunk`), the body reverts to R4's **gap**
+reading (the per-read idle arm, unchanged), and `server.request_timeout` is **enforced this round on the stream
+path only** as the whole-request outer bound (single owner; R6's declared shape on a trip, never a fabricated
+terminal). The three documents that name the old clock are amended by this card: `DESIGN` §12.10.3 **R4**,
+`docs/spec.md` **§4.2**, `book/protocols.md:114-122`. **Two consequences land on named cards, and this line
+records both so the red-first rule is checkable:** (i) the code change is **`R71-1`**'s — the streaming send's
+wrap plus the `request_timeout` enforcement and its single owner — and **`CONF-105`** (§12.8's new row) is its
+witness, parked `#[ignore = "CONF-105: depends on R71-1"]` (see the allocation paragraph above); (ii) the
+**CONF-90 repair is `R71-2`**'s, executed mechanically from the **frozen, three-item list in ADR-053 §8.2** —
+**C90-1** the module doc-comment's reframe (the case now pins byte-completeness under the **gap** bound; every
+*death at the total-elapsed bound* sentence removed or replaced), **C90-2** the calibration machine re-derived
+against the gap bound **or** collapsed to a two-limb byte-completeness witness (ADR-053 §8.2 recommends the
+collapse and gives the reason: the machine's `Starved`/`Marginal` premise — *death at the total-elapsed bound* —
+is unreachable for a busy stream), and **C90-3** the `ATTEMPT_BOUND` constant's semantics re-named to the
+**gap/head** bound. `R71-2` may edit **only** `conf_90_…rs`; every other case file stays byte-identical, no
+gate / threshold / corpus / L1-envelope value moves, and `CONF-90`'s **ID is unchanged** (an ID is the contract,
+a description is not). **What this register line may not claim:** nothing here is a measurement — R71-0 writes no
+product byte and no test byte; the before/after measurements ADR-044 §6 demanded are **`R71-1`**'s obligation and
+are specified in **ADR-053 §5**. The widened busy-stream ceiling (`request_timeout`, default **10m**, in place of
+the de-facto **60s**) is **stated, not a new capability**; ADR-044 §4's busy-but-slow throughput guard (row
+**25**) remains **registered-open and NOT built**; and the buffered path's `.timeout` is **untouched**, with the
+buffered side of `request_timeout` deferred and named (ADR-053 §3, §6).
 
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
@@ -1913,21 +1961,27 @@ plus §12.7's response headers, including all three `X-Vadis-*` values required 
 is written before the first body byte. A streaming response never gains a `content-length`
 that vadis invented; a buffered response keeps the upstream's.
 
-**R4 — bounded idle.** After the head is sent, the attempt is bounded by
-`server.upstream_attempt_timeout` on **total elapsed time since the attempt was sent**, not on the gap
-between bytes: the bound is that knob applied as reqwest's **per-request timeout** (the `.timeout(…)`
-on the streaming provider client's own send, `crates/vadis-providers/src/stream.rs`), so a relay that
-stays *continuously busy* for longer than the knob is a failure exactly as an idle one is: the relay
-ends (R6), it does not hang. (The knob's second application — the per-read gap arm inside `read_chunk`,
-on the same read path — is real and unchanged, but it is not the arm that binds first.) **Consequence,
-stated so a reader does not have to learn it by incident:** a legitimately long single response, a long
-reasoning stream being the obvious case, is capped by the same knob; raising the knob is the remedy, and
-the trace records the truncation (`errors[]` with `error_class: stream_truncated`, R8's usage honesty
-below). *ADR-044 is this sentence's authority: it amends the clock this rule defines — from the
-pre-ADR *"a gap with no upstream bytes"* — and touches neither the knob's value, nor the bound's
-duration, nor the read path, nor the failover/attempt semantics of R6 and R12.* The
-inbound `server.request_timeout` (default 10m) remains the outer bound on the whole request,
-including the stream.
+**R4 — the bound, split into the two it names plus the outer one.** `server.upstream_attempt_timeout` bounds
+the attempt's **head arrival only**: the streaming provider client wraps its own send in a
+`tokio::time::timeout` (`crates/vadis-providers/src/stream.rs`), **isomorphic with** `read_chunk`'s wrap on the
+same read path, so the clock stops when the response head arrives and an upstream that misses the knob is a
+failure: the relay ends (R6), it does not hang. After the head, the body is bounded by **R4's original letter**
+— *a gap with no upstream bytes longer than `server.upstream_attempt_timeout`* — enforced by the per-read idle
+arm inside `read_chunk`, one read at a time, unchanged: a relay that stays *continuously busy* is **not**
+truncated by the attempt knob. The **whole request** — the head phase *and* the relay — is bounded by the
+inbound `server.request_timeout` (default 10m), enforced on **this path** by its single owner (R71; tripping
+into R6's declared shape — a truncation where our head has already been sent, the ordinary refusal where it has
+not; never a fabricated terminal). **Consequence, stated so a reader does not have to learn it by incident:** a
+busy stream's ceiling is `server.request_timeout`, **not** the attempt knob — a legitimately long single
+response, a long reasoning stream being the obvious case, now completes as long as it is never idle past the
+knob *and* the whole request stays under `request_timeout`; a stream that does go idle past the knob, or that
+overruns `request_timeout`, ends as a declared truncation (`errors[]` with `error_class: stream_truncated`, R8's
+usage honesty below). The buffered path's own `.timeout` (which covers send → body-consumed and is correct
+there) is untouched, and the buffered side of `request_timeout` is deferred and named. *ADR-053 is this
+sentence's authority: it amends the clock ADR-044 gave this rule — the attempt knob becomes head-arrival-only
+and the body reverts to the gap reading — and touches neither the knob's value, nor the bound's duration, nor
+the read path, nor the failover/attempt semantics of R6 and R12. ADR-044 stays on disk, marked superseded for
+that clock by ADR-053.*
 
 **R5 — a client disconnect cancels the upstream.** Dropping the response future drops the
 upstream body stream, which closes that connection: vadis does not keep draining a stream
@@ -4242,7 +4296,9 @@ sequence to compare and no upstream gap for the added quantity, so the instrumen
 record shows a hit and says so, rather than folding a hit's timing into a jitter number.
 
 **Termination and error paths are limbs, not footnotes.** Normal end (the terminal unit is last, nothing
-appended); truncation by the bound per **ADR-044**'s total-elapsed semantics (the delivered bytes are a
+appended); truncation by the bound — the per-read idle **gap** inside `read_chunk`, with
+`server.request_timeout` as the whole-request outer bound on this path (**ADR-053** supersedes **ADR-044**'s
+total-elapsed reading for the body; the delivered bytes are a
 **strict prefix**; **no terminal carrier is synthesized** — the classic re-frame; the death is declared as
 `error_class: stream_truncated`; the relay ends, it does not hang); upstream error mid-stream (same prefix and
 no-synthesis rules, ADR-011's classification, no failover after bytes reached the client, exactly one

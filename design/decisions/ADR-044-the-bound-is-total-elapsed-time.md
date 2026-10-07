@@ -1,6 +1,8 @@
 # ADR-044 — `DESIGN` §12.10.3 R4's bound is **total elapsed time**, not an idle gap: the document yields to the implementation
 
-- Status: accepted
+- Status: accepted; **superseded for its clock (i) only by ADR-053** (2026-10-07, round R71) — see the dated
+  note at the end of this file. The rest of this ADR stands: its §4 row-25 registration, its §2.4 table, its §5
+  and its §7 register are unchanged.
 - Date: **2026-09-28** (the owner's ruling; recorded by round R57, whose run is 2026-09-29)
 - Kind: **contract repair under an owner ruling.** One sentence of `design/DESIGN.md` §12.10.3 (R4),
   two clauses of `docs/spec.md` §4.2 that name that bound, and one user-facing sentence of
@@ -230,3 +232,27 @@ working tree (its file paths and round-record names, its state record, charter, 
 model and replay contract, its scripts and module names, and the kanban card ids), each
 replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
 threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
+
+## Dated note (2026-10-07, R71-0): this ADR's clock (i) is superseded by ADR-053
+
+**What moved.** `ADR-053`
+(`design/decisions/ADR-053-the-bound-is-head-arrival-only.md`) exercises exactly the door §6 of this ADR
+reserved (*"its own ADR and its own measurements"*): the owner directed on 2026-10-07 that the streaming send's
+wrap become a `tokio::time::timeout` around **head arrival only** (isomorphic with `read_chunk`), so that the
+body is bounded by R4's **original gap letter** again, and that the whole-request outer bound
+(`server.request_timeout`) be **enforced on the stream path**. So **the pre-ADR letter this ADR set aside is the
+letter that now stands**, for the body; the attempt knob bounds head arrival.
+
+**What did not move, and must be read with ADR-053 rather than against it.** Everything else this ADR decided is
+untouched: the knob's value and the bound's duration; the read path (`read_chunk`, unchanged); R6's and R12's
+failover/attempt semantics; §2.3's asymmetry argument; §2.4's "does not touch" table; §3's blast-radius
+construction (ADR-053 §4 is its mirror image on the new clock); §4's **row-25 busy-but-slow guard**, still
+registered-open and **not built**; §6's reversibility reasoning and §7's register. The `unknown_outcome` reading
+of a full-write-no-response head timeout (§2.4, ADR-011 item 6 row 3) is likewise unchanged — ADR-053 §2.2
+reuses the very arm this ADR's §1.2 row A landed in.
+
+**Why this note is an append and not a rewrite.** ADRs are append-only (AGENTS 9's doc map; ADR-012). Not one
+sentence of this ADR's ruling text is edited: the status line carries a supersession marker and this note
+records the act, its authority and its scope, exactly as ADR-048 §8's precedent requires of a contract file whose
+rule a later act narrows.
+
