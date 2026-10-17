@@ -1125,7 +1125,7 @@ mod tests {
         // The audit's 106: 200 + a truncation entry + usage_missing — the
         // record satisfies all three at once, and lands in exactly one
         // bucket of the three.
-        let mut r = rec(200, truncated);
+        let mut r = rec(200, truncated.clone());
         r["usage_missing"] = serde_json::json!(true);
         assert_eq!(bucket_of(&r), Bucket::StreamIncomplete);
         // A non-2xx is failed whatever its errors carry.
