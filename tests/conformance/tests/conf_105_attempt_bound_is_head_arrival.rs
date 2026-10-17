@@ -61,7 +61,7 @@ const BUSY_GAP: u64 = 300;
 
 fn config_yaml(upstream_port: u16, listen_port: u16) -> String {
     format!(
-        r#"server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 2s, request_timeout: 8s }}
+        r#"server:   {{ addr: "127.0.0.1:{listen_port}", upstream_attempt_timeout: 2s, request_timeout: 8s, stream_idle_timeout: 2s }}
 session:  {{ key_sources: ["prompt_cache_key"], ttl: 11h }}
 cache:    {{ sticky: true, breakeven: {{ enabled: true, min_remaining_turns: 2, safety_factor: 1.1 }} }}
 trace:    {{ dir: "./state/traces", rollover: hourly }}
@@ -303,6 +303,16 @@ async fn conf_105_d_idle_gap_still_truncates_declared() {
             .iter()
             .any(|e| e["details"]["error_class"] == "stream_truncated"),
         "the idle trip is a DECLARED truncation: {errors:?}"
+    );
+    // ADR-056 §5 amendment A1: the idle arm now reads the gap bound's own
+    // key, and a truncation names its cause — on this rig the two knobs
+    // share a value, so the limb's story is unchanged and the cause word
+    // is asserted beside it.
+    assert!(
+        errors
+            .iter()
+            .any(|e| e["details"]["stream_end"] == "idle_timeout"),
+        "the idle trip's cause is `idle_timeout`: {errors:?}"
     );
     let events = read_events(&dir);
     let responded: Vec<&(String, Value)> = events

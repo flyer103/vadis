@@ -47,14 +47,17 @@ const POLICY_1H: &str = "  family: m1\n  primary: p-plan/m1\n  overflow: p-api/m
 
 /// The frozen series set (spec §4.16's table): nothing else is ever
 /// emitted — limb (a)'s "no series exists that the derivation does not
-/// produce".
-const FROZEN_SERIES: [&str; 21] = [
+/// produce". ADR-056 §5 amendment A3: the set gains
+/// `vadis_requests_stream_incomplete` (21 → 22) in the same change that
+/// adds the series.
+const FROZEN_SERIES: [&str; 22] = [
     "vadis_metrics_window_seconds",
     "vadis_metrics_omitted_figures",
     "vadis_trace_files_read",
     "vadis_requests",
     "vadis_requests_succeeded",
     "vadis_requests_failed",
+    "vadis_requests_stream_incomplete",
     "vadis_failures_by_kind",
     "vadis_requests_usage_missing",
     "vadis_cost_nano",
@@ -321,6 +324,10 @@ struct Own {
     requests: u64,
     succeeded: u64,
     failed: u64,
+    /// ADR-056 §5 amendment A3: the case's own aggregator adopts spec
+    /// §4.20.4's three-bucket predicate — 2xx with a `stream_truncated`
+    /// entry.
+    stream_incomplete: u64,
     failure_kinds: BTreeMap<String, u64>,
     usage_missing: u64,
     currencies: BTreeMap<String, ()>,
@@ -345,9 +352,19 @@ fn compute_own(recs: &[Value]) -> Own {
     for r in recs {
         o.requests += 1;
         let status = r["result"]["status"].as_u64();
-        if matches!(status, Some(s) if (200..300).contains(&s)) {
-            o.succeeded += 1;
-        } else {
+        // Spec §4.20.4's three-way predicate (ADR-056 §5 amendment A3):
+        // the class word `stream_truncated` moves a 2xx record out of
+        // `succeeded`; a non-empty `errors[]` alone does not.
+        let two_xx = matches!(status, Some(s) if (200..300).contains(&s));
+        let truncated = two_xx
+            && r["errors"]
+                .as_array()
+                .map(|errs| {
+                    errs.iter()
+                        .any(|e| e["details"]["error_class"] == "stream_truncated")
+                })
+                .unwrap_or(false);
+        if !two_xx {
             o.failed += 1;
             if let Some(errs) = r["errors"].as_array() {
                 for e in errs {
@@ -356,6 +373,10 @@ fn compute_own(recs: &[Value]) -> Own {
                     }
                 }
             }
+        } else if truncated {
+            o.stream_incomplete += 1;
+        } else {
+            o.succeeded += 1;
         }
         if r["usage_missing"].as_bool() == Some(true) {
             o.usage_missing += 1;
@@ -444,6 +465,11 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
     assert_eq!(
         value_of(samples, "vadis_requests_failed", &[]),
         Some(own.failed.to_string().as_str())
+    );
+    assert_eq!(
+        value_of(samples, "vadis_requests_stream_incomplete", &[]),
+        Some(own.stream_incomplete.to_string().as_str()),
+        "the third bucket (ADR-056 §5 amendment A3)"
     );
     for (kind, n) in &own.failure_kinds {
         assert_eq!(
