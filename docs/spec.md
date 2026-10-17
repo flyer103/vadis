@@ -152,6 +152,12 @@ that route's id too (§2).
 
 ```yaml
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
+            stream_idle_timeout: 30s,        # §4.20: the longest SILENCE between two forwarded bytes of a
+                                             #   streamed response body — the per-read gap bound, and only
+                                             #   that (default 30s; 1s ≤ value ≤ 300s). It is **not** the
+                                             #   attempt budget (which bounds connect + head arrival) and
+                                             #   **not** the whole-request deadline (`request_timeout`,
+                                             #   which always wins when it is nearer: min(gap, deadline))
             max_body_bytes: 2097152,         # §4.13: the largest inbound request body the vadis will read,
                                              #   in bytes (default 2 MiB); a larger one is refused at the
                                              #   boundary with §8's `413 request_too_large`
@@ -454,9 +460,11 @@ whose head is an error status, the answer's body is therefore **read before the 
 has sent no byte to the client at that point (DESIGN §12.10.3 R6 column 1), so the request is still an ordinary
 one and the §8 refusal answers it. The read is bounded exactly as the relay's own reads are and introduces no
 bound of its own (no new bound and no new knob): on this path `server.upstream_attempt_timeout` bounds **head
-arrival** and, per read, the **gap** between upstream bytes (DESIGN §12.10.3 R4), and the inbound
-`server.request_timeout` is the outer bound on the **whole** request — head phase *and* relay — enforced on the
-streaming path (ADR-053). It is **internal**: an error head is relayed to no one, so this changes no byte a client
+arrival** and, per read, the **gap** between upstream bytes is `server.stream_idle_timeout` (§4.20 — the gap
+bound's own key, default 30s; until R74-1 lands, today's build reads the attempt knob's value there, which is
+the defect §4.20's status line records), and the inbound `server.request_timeout` is the outer bound on the
+**whole** request — head phase *and* relay — enforced on the streaming path (ADR-053). It is **internal**: an
+error head is relayed to no one, so this changes no byte a client
 sees. A read that ends short (the bound trips, or the connection closes) leaves the classifier with the
 bytes that arrived — the status-and-headers verdict when none did. The read is an **input** to the
 classification, never a fourth fact about it: a failure whose body could not be read is not a different outcome
@@ -1792,6 +1800,15 @@ travels with the revision and may change under a running process; a key read onc
 is refused until the implementation rebuilds that object with the revision. The direction is deliberate —
 widening this later is a smaller change than narrowing it.
 
+**`server.stream_idle_timeout` (§4.20) is on the other side of that rule, deliberately.** The streaming
+driver reads it **once, at each request's entry**, so it travels with the revision: a change takes effect
+without a restart, and a request already in flight keeps the window it entered with (§4.15 rule 3 — the
+value is captured, not re-read per chunk). The adjacent `server.upstream_attempt_timeout` stays **refused**
+for exactly the reason above (the buffered transports are built once with it), and the contrast is the rule
+working, not an inconsistency: two keys with two read sites have two reload answers. An implementation that
+hoists the streaming client to a startup-built object would silently move the new key into the refused
+class, and that is a defect, not an optimisation.
+
 **What a process keeps when it forgets a revision.** Nothing durable: the revision in force lives in the
 process's memory and is re-derived from the files at the next start, where one `config.applied` row is
 written exactly as it always was. That is what keeps the stateless-client boundary of §4.5 intact — a
@@ -1871,6 +1888,7 @@ ratios carry the report's own four decimal places, `overhead_ms_p99` is integer 
 | `vadis_requests` | — | count | `requests` |
 | `vadis_requests_succeeded` | — | count | `succeeded` |
 | `vadis_requests_failed` | — | count | `failed` |
+| `vadis_requests_stream_incomplete` | — | count | `stream incomplete` — the 2xx records whose body did not complete (§4.20.4). One class, so no label: `vadis_failures_by_kind` stays the **`failed`** side's split |
 | `vadis_failures_by_kind` | `kind` | count | the `failed` split — `kind` ∈ §8's `errors[].kind` vocabulary |
 | `vadis_requests_usage_missing` | — | count | `usage missing` |
 | `vadis_cost_nano` | `tier`, `currency`, `provenance` | integer nano | the four cost tiers, **per currency**; `tier` ∈ `input_miss`\|`input_hit`\|`cache_write`\|`output`. **No total series exists** — the printed total is their sum, and a `tier="total"` would double-count under a `sum()` |
@@ -2129,6 +2147,171 @@ byte-identical calls; the route strings' absence from the body; the guard's `401
 set (no trace line, no event row, no cost, no session, no prefix); the method face (`405` admitted,
 `401` unauthenticated) and the reload. DESIGN §12.8's row carries them.
 
+### 4.20 The silence of a stream (the gap bound, a truncation's cause, the three buckets, and a silent route's cooldown)
+
+*Status: **contracted, not served** — R74-0 (`ADR-056`) freezes the contract on the owner's 2026-10-17
+round ruling; `R74-1` implements it. Until then a config file that carries `server.stream_idle_timeout`
+is **refused** by today's loader (the schema has no such key), no trace record carries
+`details.stream_end`, `/metrics` has no incomplete series, the gap bound still reads
+`server.upstream_attempt_timeout`, and `CONF-108/109/110` are parked `#[ignore]`d. This section is the
+contract the implementing change lands against; it is not a description of today's build.*
+
+Three facts about a streamed response are stated here, because each was measured on a 13-day trace window
+and each was previously either absent or expressed by the wrong knob: **how long a stream may stay
+silent** (§4.20.1–§4.20.2), **why a stream ended short** (§4.20.3), **which bucket a request lands in**
+(§4.20.4), and **what a silent route costs the next request** (§4.20.5). Nothing here touches the relayed
+bytes: the per-chunk write-through, the ordering and the "never fabricate a terminal" rule are unchanged.
+
+#### 4.20.1 `server.stream_idle_timeout` — the gap bound's own key
+
+| Key | Type | Default | Range | Semantics |
+|---|---|---|---|---|
+| `server.stream_idle_timeout` | duration | **`30s`** | **`1s` … `300s`** — outside it the **load is refused, naming the key** | the maximum **silence between two forwarded bytes** of a streamed response body: the per-read gap bound, and only that |
+
+Three bounds now have three names (`§4.20.2` states how they combine):
+
+| Bound | Key | What it bounds |
+|---|---|---|
+| **head arrival** | `server.upstream_attempt_timeout` | connect, and how long the upstream may take to produce the response **head** (ADR-053) |
+| **the body's silence** | **`server.stream_idle_timeout`** | the gap between two forwarded bytes of the body |
+| **the whole request** | `server.request_timeout` | the absolute deadline of the whole inbound request, head phase **and** relay (ADR-053 §3) |
+
+- The value is a **product default, not a measured optimum**: 30 s is half the shipped attempt knob and far
+  above the gaps a healthy stream shows. No measurement in the audited window fixes it, and this section
+  claims none.
+- A value **at or above** `server.request_timeout` is **inert** — the outer bound fires first. That is a
+  stated fact, not a refusal: a default may not make an otherwise-valid file unloadable.
+- A value below the range is refused because a gap bound under a second is indistinguishable from "cut the
+  stream at random" against real network jitter; above 300 s it is indistinguishable from no bound at all
+  under a 10 m whole-request default.
+- **It is not in §4.11's askable set.** `vadis setup` neither asks for nor rewrites it (§4.11's `server` row
+  keeps `addr`, `upstream_attempt_timeout` and `request_timeout`), and a root that does not write the key
+  serves the default. Reading a key and being able to set it through the wizard are two decisions; only the
+  first is taken here.
+
+#### 4.20.2 How the three combine, and what does not move
+
+The relay's per-read window is **`min(stream_idle_timeout, time-until-request-deadline)`** — the outer
+bound still wins whenever it is nearer, and no read may sit past it. The connect window stays on the
+attempt budget (ADR-053 §2.2's rule: a fast refusal is a `connect_failure`, never a timeout).
+
+**A healthy stream sees no change.** A stream whose every gap is under the key is relayed byte for byte as
+it is today — same bytes, same timing, same record, `errors[]` empty. What narrows is only **the wait** of
+a stream that has gone quiet: it now ends at the gap bound instead of the attempt budget, in the same
+declared shape (no fabricated terminal, no `[DONE]`, exactly one `errors[]` entry).
+
+**Reload: it takes effect without a restart** (§4.15). The value is read once, at each request's entry, so
+a revision that changes it is **applied** — not refused, unlike `server.upstream_attempt_timeout`, whose
+buffered consumers are built once at startup. A request already in flight keeps the window it entered
+with (§4.15 rule 3). An implementation that re-reads the key per chunk, or hoists the streaming client to a
+startup-built object, breaks one of those two halves and is a defect.
+
+#### 4.20.3 A truncation names its cause: `details.stream_end`
+
+A stream is **complete iff the wire's own terminal event was seen** — `[DONE]` for `chat`, the `responses`
+terminal events, `message_stop` for `anthropic`. A body that ends without it is a **truncation**, never a
+completion. A truncation is recorded as it is today (a `200` head plus one `errors[]` entry with
+`kind: "upstream_error"` and `details.error_class: "stream_truncated"`, `details.stream: true`), and it
+**also** names its cause:
+
+| `details.stream_end` | The cause | Produced when | `details.window_ms` |
+|---|---|---|---|
+| **`idle_timeout`** | the upstream went **silent** | the per-read gap bound tripped with the connection still open | **present** — the window actually in force for that read (the `min()` above) |
+| **`upstream_ended_early`** | the upstream **closed first** | the body ended — a clean EOF, or a transport error — before the wire's terminal event | **absent** — no bound tripped |
+| **`request_timeout`** | **our own** outer bound | `server.request_timeout`'s deadline was reached | **present** — the effective window of the tripping read |
+
+The vocabulary is **closed** and `stream_end` is **never null** on a truncation entry. Alongside it, three
+observables are always present on that entry:
+
+| Key | Type | Value |
+|---|---|---|
+| `relayed_bytes` | count | how many body bytes this request wrote through to the client |
+| `window_ms` | integer ms | the window in force for the tripping read — present **iff** a bound tripped (the table above) |
+| `since_last_byte_ms` | integer ms | the interval from the last byte received from the upstream to the verdict; measured from the head's arrival when no byte was ever received |
+
+The event log's `upstream.responded` carries the same two words (`stream_completed` = that same terminal
+predicate; `stream_end` present iff truncated), so the demotion rule of §4.20.5 is derivable from the
+event alone.
+
+**Why the causes are separate, and not a boolean.** §4.20.5's instrument must be able to target **silence**
+alone: a graceful early close is not a stall, and punishing it would make a gateway fire on a route that is
+answering. The two differ by a fact the relay already holds — *which bound tripped, if any* — not by a
+reading of the prose.
+
+**Vintage.** A record written before `R74-1` carries `error_class: "stream_truncated"` and **no**
+`stream_end`; a reader takes the missing key as *"the cause was not recorded"* (the additive-vintage rule
+`config_digest` uses), never as `idle_timeout`. §4.20.4's predicate does not depend on it, so one window
+may hold both vintages.
+
+#### 4.20.4 One record, exactly one bucket
+
+`requests` is partitioned by three **mutually exclusive** buckets, decided by one predicate:
+
+| Bucket | Predicate over one record |
+|---|---|
+| `failed` | `result.status` is **not** 2xx |
+| `stream_incomplete` | `result.status` **is** 2xx **and** `errors[]` holds an entry with `details.error_class == "stream_truncated"` |
+| `succeeded` | every other record (2xx **without** such an entry) |
+
+**The invariant: `succeeded + failed + stream_incomplete == requests`**, for any window and any mixture of
+vintages. `result.status` is **not** rewritten — the client really did receive a `200` head, and a partial
+body; what changes is the aggregate's honesty.
+
+**`usage_missing` is orthogonal to the partition, and is never a fourth bucket.** It partitions the same
+`requests` on a different axis (was a measurement obtained?), is reported on its own line, and is **never**
+added to, subtracted from or intersected out of the three. A truncated record with no usage is counted
+**once** in `stream_incomplete` **and once** in `usage missing`; the second count says nothing about the
+first. (The measured window's 106 truncated records are exactly this case: `status = 200`,
+`errors[]` non-empty, `usage_missing: true` — a contract that made `usage_missing` a bucket would contradict
+its own invariant on the very records this rule exists for.)
+
+**What is *not* the discriminator: "`errors[]` is non-empty".** `transform_error` (§8: a failing transform
+falls back to the original and the request is forwarded **as usual**) and `trace_write_failed` (a missing
+observation never blocks a request) both ride a successful record. Only the class word `stream_truncated`
+moves a record out of `succeeded`, because only it states that the body did not complete.
+
+The figure is reported by `vadis stats` (§9.2) and rendered by `GET /metrics` (§4.16) as
+`vadis_requests_stream_incomplete` — one derivation, two readers (ADR-041's single-owner rule).
+
+#### 4.20.5 A silent route loses its **next** selection, and nothing else
+
+A truncation whose `stream_end` is **`idle_timeout`** writes one **route-scoped** cooldown row. ADR-011 item 4
+fixes the demotion **unit** for billing-class failures (the provider, not the credential) and the code's own
+summary of it names the route-scoped case — *"every other failure is a fact about the attempt or the route"*
+(`demotes_provider()`'s doc comment) — which is the half this rule writes:
+
+| Property | Value |
+|---|---|
+| Landing | `provider_cooldown` — `scope = "route"`, `provider`, `model` = the route's **native model id** (never an alias, never `""`), `until_us`, `reason = "stream_silence"` |
+| Second landing | the **same** object inside the `error.classified` payload as `demotion`, with exactly `{scope, provider, model, until_us, ttl_s, reason}` — the incremental write and `rebuild_cooldown` share one source, so the projection reproduces from the log (CONF-21's identity) |
+| Trigger | **one** such truncation (no streak, no counter — a counter would be state the log cannot rebuild); a truncation whose `stream_end` is `upstream_ended_early` or `request_timeout` writes **nothing** |
+| TTL | **60 s** — a code constant, not a config key |
+| Effect | the candidate walk **prefers** an eligible candidate whose route is not silence-cooling, and leaves a cooling one **only when such a candidate exists**. The skip narrates `result.failover_from` naming the abandoned route and writes **no** `failover.triggered` row (ADR-024) |
+| Never | it **never refuses a request**: a `stream_silence` row is not a reason for `no_available_route`, never appears in `skipped[]`, and when it is the only eligible route the request is attempted as usual. It is *advisory*, and `reason = "stream_silence"` is the value that says so |
+| Not touched | `QuotaExhausted`'s semantics and every other class's answer from `demotes_provider()`; every binding (provider-wide) demotion keeps today's hard semantics exactly; the probe gate's `primary_cooling_down` (§9.1) keeps asking the **provider-wide** question, so a 60 s selection preference can never move a family's account |
+
+The reason for the advisory rule is availability, stated so it is not re-opened: a **binding** row can end a
+chain (`no_available_route`), which is correct for a billing verdict and self-inflicted harm for a stall —
+a single-route deployment would answer `502` for a minute instead of attempting a route that is answering
+almost always.
+
+#### 4.20.6 What this section does not change
+
+No relayed byte; no `result.status`; no `error.type`, HTTP status or §8 shape (a truncation remains a `200`
+head with an `errors[]` entry); no `DecisionRecord.schema_version` (`details` keys are additive on an
+optional object); no money, `usage` or ratio; no buffered-path timeout; no `overhead_ms_p99` definition
+(§6's `overhead_ms − upstream_ms` rule is R77's to revisit, and a truncated record still inflates it, so
+**no comparison of that figure across R74 is meaningful**).
+
+#### 4.20.7 Assertions
+
+`CONF-108` (the key is its own, the three causes are distinguishable, a healthy stream and a slow head are
+untouched, reload reaches the next request only), `CONF-109` (the three buckets partition `requests`;
+`usage_missing` is orthogonal; `usage_missing` alone never moves the bucket), `CONF-110` (one silent
+truncation leaves one route-scoped advisory row with its 60 s bound; the next request walks away without a
+`failover.triggered` row; `QuotaExhausted` stays provider-wide; a lone cooling route is still served).
+`DESIGN` §12.8's rows carry them; `ADR-056` is the reasoning.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
@@ -2201,6 +2384,18 @@ pre-route rejection, a connect failure, a request the inbound auth guard refused
 body bound refused (§4.13). The flag
 is what keeps such a record out of every rate, every sum and every gate — `vadis stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
+
+**A streamed response is complete only if its wire's terminal event arrived, and the record's bucket says so.**
+The terminal predicate is the wire's own (`[DONE]` for `chat`, the `responses` terminal events,
+`message_stop` for `anthropic`); a body that ends without it is a **truncation** — a `200` head plus one
+`errors[]` entry with `details.error_class: "stream_truncated"` and a `details.stream_end` cause word
+(§4.20.3: `idle_timeout` / `upstream_ended_early` / `request_timeout`). The partition of `requests` is
+therefore three-way and mutually exclusive — `failed` (`result.status` not 2xx), `stream_incomplete`
+(2xx **with** such an entry), `succeeded` (2xx without one) — with
+`succeeded + failed + stream_incomplete == requests` (§4.20.4). `usage_missing` is a **second, orthogonal
+partition** on the same records, never a fourth bucket and never added to the three; and "`errors[]`
+is non-empty" is **not** the discriminator (a `transform_error` or a `trace_write_failed` rides a
+successful record).
 
 **A `cache` group means a *replay*, not a prediction, and the ledger must be able to say so** (§4.17). Three
 properties are contract rather than commentary, because each is a place a naive implementation breaks the
@@ -2495,6 +2690,10 @@ each improvise):
 - `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
 - `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
+- `stream_incomplete_requests` = the count of records in the `stream_incomplete` bucket (§4.20.4: a 2xx
+  record carrying an `errors[]` entry with `details.error_class == "stream_truncated"`). A count over the
+  same population as `requests`; it is **not** a class of `failed`, and a record counted here may also be
+  counted by `usage missing` (the two axes are orthogonal)
 - `overhead_ms_p99` = the p99 of (`result.overhead_ms` − `result.upstream_ms`) — **vadis's own overhead,
   excluding the upstream** — over the records of the window **whose `upstream_ms` is present**. A record with
   no upstream latency (`upstream_ms: null`: a boundary refusal, a pre-route rejection) carries the vadis's
@@ -2845,9 +3044,11 @@ trace:       /home/u/vadis/state/traces (5 files, 61 records)
 currencies:  USD                  (money is reported per currency and never summed across them)
 
 requests                         61
-  succeeded                      58
+  succeeded                      57
   failed                          3   (upstream_error 2, upstream_timeout 1)
-  usage missing                   2   (excluded from every rate and every sum below — never read as 0)
+  stream incomplete               1   (2xx with the body cut short — head returned, body not completed, §4.20.4)
+  usage missing                   3   (a second axis, never a bucket — counted here AND in its own bucket
+                                      above; excluded from every rate and sum below, never read as 0)
 
 cost (verified, USD)       184000 nano
   input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
@@ -2894,8 +3095,8 @@ Provenance of every figure:
 | Line in the report | Value | Source (which record) | §7 label | Excluded |
 |---|---|---|---|---|
 | `requests` | count | one per trace line whose `ts` is in the window | count | — |
-| `succeeded` / `failed` | count by `result.status` (2xx / non-2xx), split by `errors[].kind` | trace `result.status`, `errors[]` | count | — |
-| `usage missing` | count of records with `usage_missing: true` | trace `usage_missing` | count | those records contribute to nothing else in the report |
+| `succeeded` / `failed` / `stream incomplete` | the three-bucket partition of §4.20.4 — non-2xx ⇒ `failed`; 2xx with a `stream_truncated` entry ⇒ `stream incomplete`; 2xx without one ⇒ `succeeded` — with `succeeded + failed + stream incomplete == requests`; `failed` is split by `errors[].kind` | trace `result.status`, `errors[]` | count | — |
+| `usage missing` | count of records with `usage_missing: true` — a **second axis over the same records**, never a bucket | trace `usage_missing` | count | those records contribute to nothing priced or averaged below — but they are still **counted** in whichever of the three buckets they belong to |
 | `cost` and its four tiers | Σ per tier, **per currency** | trace `cost.*`, **grouped by `cost.currency`** (§4.8) — computed by the serving path from measured `usage` priced by the config table | **verified** | records with `usage_missing: true`; an uncomputed cost is never 0; a currency's figures never enter another currency's line |
 | `hit rate` | §6's `cache_hit_rate` | trace `usage` | **verified** | records with `usage_missing: true` |
 | `continuity p50` | §6's `prefix_continuity_p50` | trace `prefix.continuity` | **inferred** | records whose `continuity` is null (a session's first request — an absent measurement is absent, not 1.0) |
@@ -2909,7 +3110,17 @@ Provenance of every figure:
 | `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
 | `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` **− `result.upstream_ms`** (the derivation §6 defines) | measured | records whose `upstream_ms` is `null` — §6's definition excludes them from the sample, so an unreadable denominator is never read as 0 ms |
 
-Four conventions this report obeys, each of which has bitten someone:
+Five conventions this report obeys, each of which has bitten someone:
+
+- **The three request buckets are a partition; `usage missing` is not one of them** (§4.20.4). `succeeded`,
+  `failed` and `stream incomplete` sum to `requests` exactly, and `stream incomplete` is decided by the
+  record's `stream_truncated` class word — never by "`errors[]` is non-empty" (a `transform_error` or a
+  `trace_write_failed` rides a successful record) and never by `usage_missing`. `usage missing` cuts across
+  all three and is printed beside them; adding it to them, or reading a truncated record as priced because
+  its usage is missing, breaks the invariant on the very rows this rule exists for. In `--json` the third
+  count is `requests.incomplete`, a sibling of `requests.total` / `requests.succeeded` / `requests.failed` /
+  `requests.usage_missing` (`requests.failure_kinds` stays the failed side's split) — the same shape rule as
+  the text report, expressed as keys.
 
 - **A money line is printed once per currency, and never summed across them** (§4.8). The four tiers, the total,
   the plan section's two money lines: each is reported per currency present in the window, the header names the

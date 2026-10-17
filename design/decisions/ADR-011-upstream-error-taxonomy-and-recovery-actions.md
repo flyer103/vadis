@@ -310,3 +310,26 @@ working tree (its file paths and round-record names, its state record, charter, 
 model and replay contract, its scripts and module names, and the kanban card ids), each
 replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
 threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
+
+## Dated note (2026-10-17, `R74-0` — append-only)
+
+**The route-scoped half of item 4's summary gets its first tenant.** Item 4 above fixes the demotion
+**unit** for billing-class failures — *the provider, not the credential* — and the code's own summary of
+that item, `demotes_provider()`'s doc comment, is wider: *"only quota/billing exhaustion is a fact about
+the account; every other failure is a fact about the attempt **or the route**"*
+(`crates/vadis-core/src/error_class.rs:77-82`). The route-scoped half of that sentence has never been
+implemented: `demotes_provider()` answers `true` for `QuotaExhausted` alone, and `apply_demotion` writes
+`scope: "provider"`, `model: ""` on every path.
+
+`R74-0`'s contract (`design/decisions/ADR-056-the-silence-of-a-stream.md`, spec §4.20.5) writes the
+route-scoped consequence **without touching this decision**: a streamed truncation whose cause is
+`idle_timeout` (the upstream went silent — not an early close, not our own outer bound) writes one
+`provider_cooldown` row with `scope: "route"`, `reason: "stream_silence"`, a 60 s TTL, **advisory**
+only (it steers the next selection and can never refuse a request, so it cannot produce
+`no_available_route`). `QuotaExhausted`'s semantics are unchanged, `demotes_provider()`'s answer for
+every existing class is unchanged, and the probe gate continues to ask the provider-wide question.
+
+Registered with it: the `demotion` object's payload shape is fixed to
+`{scope, provider, model, until_us, ttl_s, reason}` for **every** demotion, because
+`rebuild_cooldown` reads five of those members and the incremental writer today emits two —
+ADR-056 §6.2 / finding `R74-0-F1`.

@@ -335,3 +335,24 @@ buffered row carries the pointer.
 Fixing it is deliberately out of this round's scope: the buffered
 path is untouched by ADR-053's boundary, and the classification
 either way is an owner act.
+
+## 12. Dated note (2026-10-17, `R74-0` — append-only)
+
+**The body's gap bound keeps this ADR's construction and changes its key.** `R74-0`'s contract
+(`design/decisions/ADR-056-the-silence-of-a-stream.md`) rules that the per-read gap bound —
+*"a gap with no upstream bytes longer than the idle bound"* (§2.1 item 2 above) — reads
+`server.stream_idle_timeout` (spec §4.20; default 30 s, `1s..=300s`), not
+`server.upstream_attempt_timeout`. The construction is untouched: one read at a time, one idle arm
+inside `read_chunk`, the same declared truncation shape (R6), and the relay's window still
+`min(gap bound, time-until-request-deadline)`.
+
+What stands as written: §2.1 item 1 (**head arrival** is the attempt knob's, and only its), §2.2's
+conservative `unknown_outcome` arm and its connect-window rule, §3 (`server.request_timeout` enforced on
+this path, single owner), §4's blast radius, §5's measurement obligations, §6's scope list, §7's
+reversibility reasoning, and the `CONF-105` allocation (§4, §8.3). §2.1 item 2 is **superseded as to the
+value only**; not one sentence of this ADR's ruling text is rewritten (append-only, AGENTS 9).
+
+**One consequence for `CONF-105`.** Its limb (d) asserted the idle arm's trip at the attempt knob; after
+`R74-1` that rig must name the new key and its assertion gains the truncation's `details.stream_end`
+cause word. The edit is frozen in ADR-056 §5 (item A1) so the implementing round re-decides nothing;
+every other limb of the case, and its ID, are untouched.

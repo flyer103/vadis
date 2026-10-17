@@ -902,6 +902,14 @@ spec §6 field groups → Rust paths (auditable line by line):
   components are all recoverable from the record itself (`cache.key_digest` + `protocol_in` + `config_digest` +
   `session` + `transform_mode`), which is what makes §12.22's ledger checks runnable by a stranger (§12.22 lands
   the rest).
+- **A truncation's cause word is an addition of the same class** (ADR-056; spec §4.20.3). `errors[].details` is
+  an optional free object, so the four keys a truncation entry gains — `stream_end` (`idle_timeout` /
+  `upstream_ended_early` / `request_timeout`), `relayed_bytes`, `window_ms` (present iff a bound tripped) and
+  `since_last_byte_ms` — move no type and no field's meaning: a record written before them has the same entry
+  without them, and a reader takes a missing `stream_end` as *"the cause was not recorded"* (the vintage rule
+  `config_digest` uses). `schema_version` stays **2**. The event log's `upstream.responded` gains `stream_end`
+  beside its existing `stream_completed` / `stream_truncated_reason`, and its `bytes_relayed` boolean is **not**
+  retyped (a count would be a second name for a different fact — the trace's `details.relayed_bytes`).
 - `identity.event_id` is the `request.received` row of that request in the state store: the analysis truth
   and the state truth are paired on `request_id` + `event_id`, never on a timestamp (spec §4.5).
 - `identity.event_id` is **`0`** when no such row exists, which is exactly the case for a request refused
@@ -957,7 +965,7 @@ Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a sessi
 `X-Vadis-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-107`)
+### 12.8 conformance case table (`CONF-01…CONF-110`)
 
 Location: the workspace member `vadis-conformance` (`tests/conformance/`), case file
 `tests/conformance/tests/conf_<NN>_<slug>.rs`, the test function named after the file. **An unimplemented path
@@ -1068,6 +1076,32 @@ not written).
 | CONF-105 | §4.2·the classification's evidence + §12.10.3 R4/R6·the attempt bound is **head-arrival-only** (ADR-053) | **the two bounds, and the fault the two media share.** Through the real `serve` assembly against a loopback mock, with `upstream_attempt_timeout` at the rig's own **sub-second** value so no limb rests on an assumption about machine speed: (a) **the busy stream — the change's own claim**: a stream whose **total** elapsed exceeds the attempt knob while **every** inter-byte gap stays under it is relayed **byte-complete** with its terminal event (`stream_completed: true`, `errors[]` empty, `[DONE]` last where the protocol has one) — **red at the base**, which truncates it at the knob; (b) **the slow head — the conservative arm, and the cross-media class parity**: the two rigs (streamed: a mock whose response **head** misses the knob; buffered: a **mid-body stall** — the head arrives, the body stalls past the knob) yield, on **both** media, `details.stage: "unknown_outcome"` with `details.error_class: "timeout"`, **no** retry, **no** `failover.triggered` row and exactly **one** record — each medium in its **own** status carriage (streamed `502 upstream_error`; buffered `502 upstream_error` — the observed carriage of the mid-body-stall rig: the 504 `upstream_timeout` arm is unreachable for this fault via the `TransportKind::Other` hardcode at `vadis-providers/src/lib.rs:186-189`, registered as a follow-up finding for a future buffered-path round, see the ADR-053 §11 note), asserted as the *shared class word plus the per-path carriage*, so the limb cannot pass on one path alone; (c) **the discriminant that keeps (b) from swallowing the connect window**: a host that **refuses** is still `connect_failure` with its failover-eligible action (CONF-29's shape), never `timeout`, so the new arm cannot absorb a fast refusal; (d) **the idle control, unchanged**: a stream that goes **silent** for longer than the knob is a **declared truncation** (`stream_completed: false`, a `stream_truncated_reason` string, `error_class: "stream_truncated"`, no `[DONE]`), so the gap bound R4 always had stays asserted | the head-arrival wrap plus the **unmoved** per-read idle arm (`vadis-providers/src/stream.rs`, `R71-1`); the classification seam (`vadis-proxy/src/stream_forward.rs`'s `OpenHead` arms; `forward.rs`'s `WrittenNoResponse` arm) |
 | CONF-106 | §4.18 + §9.2's fallback + §12.10.8's bounded-use rule (ADR-054) | **the live event-log figure, five limbs.** Through the real `serve` assembly against mock upstreams, one request driven to leave no `upstream.responded` (a mock that accepts the bytes and never answers), then: (a) **the figure is the independent count** — `GET /state/events?window=15m` answers `200` with `unknown_outcome_requests` equal to the case's own count over the store rows read after exit (submitted-in-window minus request_ids answered anywhere); (b) **the status set is `{200, 400, 401}`**: an absent/unparsable/`>24h` `window` answers `400` with §8's body and reads no store (a store double that panics on any query proves the arm); a call without the token (auth on) answers `401` and leaves exactly one pre-pipeline record with `protocol.protocol_in = "state"` and `errors[].kind = "unauthorized"`; (c) **the window bound**: a submitted row older than the window does not count, and a responded row that arrives after the window still closes its intent (seeded through the live rig's own traffic in two windows); (d) **the fallback**: `stats::report` against the live gateway's port-resolved config returns the figure with `source: "gateway"` (the local open is refused by the live `serve`), while the same call after `serve` stops reads the store directly (`source: "store"`) — same number; (e) **the bounded-use rule**: the endpoint's read path never constructs `Query::AllEvents` (asserted by the store double's panic-on-AllEvents, the same limb class CONF-41 uses) | `crates/vadis-proxy/src/state_read.rs` (the handler), `crates/vadis-cli/src/stats.rs` (the fallback), `Query::EventsSince` (`vadis-store`) |
 | CONF-107 | §4.19 (ADR-055) | **the model list surface, seven limbs.** Through the real `serve` assembly over loopback HTTP, against a roster declaring one provider (`zai-cn-plan`, models `glm-5.3` / `glm-5.3-flash`) and three aliases: (a) **the alias namespace, in order, twice** — `GET /v1/models` with the token answers `200 application/json`, `object: "list"`, exactly three entries each holding **exactly** `{id, object, created, owned_by}`, ids in ascending byte order (`chat-fast`, `coding-bulk`, `coding-fast`), `created == 0`, `owned_by == "vadis"`, **no** `X-Vadis-Request-Id` on the admitted arm, and a second call **byte-identical** to the first (the body is a pure function of the roster — no clock, no RNG, no per-process state); (b) **the route is not published** — the raw body contains neither the provider name `zai-cn-plan` nor the model ids `glm-5.3` / `glm-5.3-flash` nor any `provider/model` string, and no `id` contains `/` (the export boundary, asserted with the roster's own literal strings); (c) **the guard's two refusal arms** — no token ⇒ `401` (§8's body, `details.header: null`, `X-Vadis-Request-Id` present) and a wrong token ⇒ the same with `details.header: "authorization"`, each leaving **exactly one** pre-pipeline record with `protocol.protocol_in == "models"`, `errors[].kind == "unauthorized"`, `result.status == 401`, and no store row; (d) **the empty roster** — a rig whose `aliases:` is empty answers `200` with exactly `{object, data}` and `data: []` (never `404`, never `500`); (e) **the admission's stage set is empty** — over two admitted calls the trace directory gains no line, and after `serve` stops the store's event log holds only the boot's single `config.applied` row (asserted as a total row count, not a before-read), so no `request.received`, no `upstream.*`, no cost, no session and no prefix block was written for either call; (f) **the method face, both directions** — `POST` **with** the token ⇒ `405` with an `allow` header naming `GET`, no §8 body and **no** record; `POST` **without** a token ⇒ `401` and one record (auth precedes method dispatch: the route-layer wiring `guarded_models_route` shares with the two surfaces above, asserted so a later wiring change that flips the order is caught); (g) **the reload** — a rewritten `aliases:` block is accepted **without a restart** (the switch observed through `/health`'s `config_digest`, `CONF-96`'s technique) and the next call lists the new set while the process, the port and the trace directory are the same ones | `guarded_models_route` + the merge in `crates/vadis-cli/src/lib.rs`, the pure body builder in `crates/vadis-proxy/src/models_read.rs` (new), the `GuardState` word `"models"`; **nothing in `vadis-core` moves** (`aliases: BTreeMap<String, RouteSpec>` is already the read) |
+| CONF-108 | §4.20.1–§4.20.3 + §4.15 (the read-site rule) + §12.10.3 R4/R6·**the gap bound is its own key** (ADR-056) | **the stream's silence, four limbs**, through the real `serve` assembly against loopback mocks, with `stream_idle_timeout: 400ms`, `upstream_attempt_timeout: 3s`, `request_timeout: 8s` (so no limb rests on machine speed): (a) **the silent head-then-body** — a mock that answers `200` + one SSE event and then holds the socket open with no byte: the client call returns in **≥ 400 ms and < 3 s** (the attempt knob did not fire), the one record's truncation entry carries `details.stream_end: "idle_timeout"`, `details.window_ms: 400`, `details.relayed_bytes` equal to the bytes of that event, `details.since_last_byte_ms ≥ 350`, the event's `stream_completed: false`, and no `[DONE]` is fabricated. **Red at the base** (it waits the 3 s attempt knob and carries no cause word); (b) **a clean early end is a different cause** — a canned SSE whose body ends after one event with **no** terminal event: `details.stream_end: "upstream_ended_early"`, **no** `window_ms` key, `since_last_byte_ms` present, one `stream_truncated` entry. **Red at the base**, which records this as **complete** (`stream_completed: true`, `errors[]` empty); (c) **the healthy stream, and the head is not this key's business** — a mock whose head is delayed **800 ms** (under the 3 s attempt knob, over the 400 ms idle key) then six events 50 ms apart and `[DONE]`: the relayed body is byte-identical to the mock's, `errors[]` empty, `stream_completed: true`, **no** `stream_end` on the record. Red if the new key is applied to the head phase or if a busy stream is mistaken for a stalled one; (d) **reload reaches the next request only** — with the key at `4s`, request #1 drives a silent upstream while the pair is rewritten to `400ms` and `/health`'s `config_digest` moves: #1 ends at ≈ 4 s with `window_ms: 4000` and #2 at ≈ 400 ms with `window_ms: 400`, and the reload was **applied**, not refused. Red at the base (the key does not exist ⇒ the candidate config is refused) and red for an implementation that re-reads the key per chunk or hoists the streaming client to a startup-built object | the gap bound's own key read at the streaming driver's entry, the per-read arm unchanged (`vadis-providers/src/stream.rs`, `stream_forward.rs`'s `RelayCtx`), the terminal predicate exposed from `SseUsageExtractor` (`vadis-protocol/src/sse.rs`), and the config key + its load refusal (`vadis-core/src/config.rs`) |
+| CONF-109 | §4.20.4 + §6's metric definitions + §9.2's provenance table + §4.16's single-owner rule (ADR-056) | **one record, exactly one bucket**, three limbs over one process and one window: (a) **the partition** — a clean `[DONE]` stream (2xx), an explicit upstream failure (non-2xx) and a silent-head-then-body-cut stream (2xx with a truncation entry) give `vadis_requests 3`, `vadis_requests_succeeded 1`, `vadis_requests_failed 1`, `vadis_requests_stream_incomplete 1`, and `succeeded + failed + stream_incomplete == requests`. **Red at the base** (no incomplete series exists and `succeeded` reads 2); (b) **`usage_missing` is orthogonal, not a fourth bucket** — in that run none of the three carried a measurement: `vadis_requests_usage_missing 3` with the three buckets unchanged, and the truncated record counted in **both** `stream_incomplete` and `usage missing` (its own `usage_missing: true` is asserted too). Red for a contract that makes `usage_missing` a bucket (the sum then misses the truncated record) or that excludes `usage_missing` records from the buckets; (c) **`usage_missing` alone never moves the bucket** — a byte-complete stream with `[DONE]` and **no** usage carrier: `errors[]` empty, `usage_missing: true`, counted in `succeeded` and in `usage missing`, **not** in `stream_incomplete`. Red for a bucket rule built on `usage_missing` or on "`errors[]` is non-empty" (a `transform_error`/`trace_write_failed` rides a success) | the three-bucket predicate in its one owner (`vadis-cli/src/stats.rs`) plus its renderings (`vadis-cli/src/metrics.rs`, `--json`) |
+| CONF-110 | §4.20.5 + ADR-011 item 4 + ADR-024's skip shape + CONF-21's projection==rebuild identity (ADR-056) | **the short, route-scoped, advisory row**, four limbs: (a) **one silent truncation leaves one route-scoped row** — on a two-route rig (`p1/m1`, `fallback: [p2/m2]`) whose `p1` mock stalls after the head, `Query::Cooldown { provider: "p1", model: Some("m1") }` answers a row with `scope: "route"`, `model: "m1"`, `reason: "stream_silence"` and `until_us − <the error.classified event's own ts_us>` of **60 s** (asserted with a 0.5 s tolerance: two calls stamp the two values inside one request), while `Query::Cooldown { model: None }` answers **no row**; the event's `demotion` object carries `{scope: "route", provider: "p1", model: "m1", until_us, ttl_s: 60, reason: "stream_silence"}`. **Red at the base** (`provider_cooldown` stays empty — the audited window's own sighting), and red for a provider-wide row, a different TTL, or an incremental write the log cannot rebuild; (b) **the next request walks away, and only its selection moves** — the immediately following request resolving to `p1/m1`: `p1`'s mock records **no** second request, `p2`'s records exactly one, the record is a `200` from `p2` with `result.failover_from: "p1/m1"` and **no** `failover.triggered` row (ADR-024). Red for a row that is written but never read, and red for a displacement narrated without a move; (c) **`QuotaExhausted` is unchanged, side by side** — a streamed `403` carrying the quota wording on `p1` (the same two-route rig, no plan policy) demotes the **provider**: `scope: "provider"`, `model: ""`, a reason word that is not `stream_silence`, the provider-wide row existing with no route-scoped one, and the request still served (by `p2`). Red for an implementation that widens `demotes_provider()` instead of adding a route arm, or that files billing exhaustion under the new reason; (d) **advisory means never a refusal** — on a single-route rig with a live `stream_silence` row, the request is **served** (`200`), with no `no_available_route` and no `skipped[]` entry naming the cooling route. Red for a binding reading of the row (the 502 availability cliff §4.20.5 refuses) | the route-scoped demotion write and its one payload object (`stream_forward.rs`'s truncation arm, `forward.rs`'s `apply_demotion`/`record_classification_inner`), the model-passing availability read (`availability.rs`'s owner), and the advisory skip in the walk (`forward.rs` / `stream_forward.rs`) |
+
+**Allocation of CONF-108/109/110 (R74 — the silence of a stream, `ADR-056`) — recorded 2026-10-17 by the
+round's contract card, the R9/R10/R17/R22/R28/R29/R32/R43/R50/R51/R65/R66/R69/R71/R73 precedent.** The
+allocation is the **owner's act** of 2026-10-17 (the chat ruling that opened R74, quoted in ADR-056's
+header) — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012) — and it **adds** three
+assertions and moves no existing one. The occupancy check is a **measurement** of the real directory at
+this card's HEAD: case files present are `01–47`, `53–66`, `71–78`, `80–97`, `100–107`; the register's
+accumulated **spent** set is `01–47`, `52–70`, `71–78`, `79`, `80–97`, `100–107`; `48–51` stay reserved
+exactly as the paragraphs above leave them; `CONF-98`/`CONF-99` are **promised by the parked branch
+`round/67-abandoned-attempt`** (and `ADR-050` is that branch's too) and are neither allocated nor read
+here — that branch is never switched, merged or deleted by this round; **the next three free IDs above the
+tree's maximum and beyond that promise are `CONF-108/109/110`**, and this round takes them. All three files
+land **with this card**, parked `#[ignore = "CONF-10N: depends on R74-1"]` (the CONF-20…25 parking rule;
+ADR-055's precedent for a contract card that ships a parked file), and `R74-1` removes the attributes.
+**A conformance amendment rides with this paragraph, forced by the contract and explicitly authorised by
+the same owner act**: ADR-056 §5 freezes three edits to **existing** cases — `CONF-105`'s limb (d) fixture
+(the idle arm now reads the new key, so its rig must name it and its assertion gains the cause word),
+`CONF-41`'s partition assertions (three buckets, not two) and `CONF-87`'s `FROZEN_SERIES` (21 → 22, plus
+its own independent aggregator). Both lists are frozen there so `R74-1` re-decides nothing; **every other
+case file stays byte-identical**, and a case that turns red outside that list is a finding for the owner,
+never a silent repair. **The registry repair rides with this paragraph, forced by the measurement**: this
+section's **heading** moves `CONF-01…CONF-107` → `CONF-01…CONF-110`. Nothing here moves a gate definition,
+a threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 / ADR-012).
 
 **Allocation of CONF-20…25.** These six IDs are allocated by the owner's 2026-09-19
 decision — a human decision, not a loop outcome (AGENTS constraint 9 / ADR-012's
@@ -1758,6 +1792,20 @@ declaration), the zai metered entry's `responses` cell (no page documents one; `
 plan-ToS/allowance question (vendor policy, unobservable from here; `R69-0-F3`) — all registered by
 ADR-051 §5.4 and untouched by the code change that lands §2.1's discriminant.
 
+**Register line (2026-10-17, R74-0 — the silence of a stream, `ADR-056`).** The contract card registers,
+and this round's implementing card (`R74-1`) owes, the following; nothing below is settled here except the
+contract itself.
+
+| Item | State after this card |
+|---|---|
+| `server.stream_idle_timeout` (spec §4.20.1: default 30 s, `1s..=300s`, load refusal outside, **reloadable**) | **contracted, not served** — today's loader refuses the key; the code, the shipped `config.example.yaml` and the binary's embedded copy, and the `book/` sentence are `R74-1`'s |
+| the cause vocabulary `details.stream_end` + the three observables (spec §4.20.3) | **contracted** — the relay already computes the completeness fact (`SseUsageExtractor::terminal_seen`) and throws it away; `R74-1` exposes it and writes the entry |
+| the three-bucket partition and `vadis_requests_stream_incomplete` (spec §4.20.4, §6, §9.2, §4.16) | **contracted** — `R74-1` lands the predicate in its one owner and the two renderings |
+| the route-scoped, advisory `stream_silence` row (spec §4.20.5) | **contracted** — the store's `scope`/`model` columns and `Query::Cooldown { model: Some(..) }` already support it; `R74-1` adds the writer's one object and the model-passing read |
+| `R74-0-F1` (the `demotion` payload is not rebuild-sufficient: `forward.rs` writes `{scope, ttl_s}`, `rebuild_cooldown` reads five members) | **registered + repaired by `R74-1`** as a forced consequence of §4.20.5's landing — one object for both arms; no decision moves |
+| the 60 s TTL as a constant (`R74-0-F2`), the 106 records' unrecoverable cause split (`R74-0-F3`), F4's live effect (`R74-0-F4`), the probe gate's blindness to route rows (`R74-0-F5`), `overhead_ms_p99` (`R74-0-F6`, R77's) | **registered** — ADR-056 §9 carries each with its owner and due |
+| a **layered** / per-route override of the gap bound; a configurable silence TTL; a streak counter | **not built and not registered as wanted** — each is an additive key or a new state shape with its own ADR (ADR-056 §7's alternatives) |
+
 **Register line (2026-10-06, R69-2b): ADR-051 §2.5.3 — the shipped root's second `plan_policies:`
 family — deferred.** Reason: the obstacle is the wizard's anchoring contract, not the parser (the
 list spelling has parsed since ADR-049, `stats.rs:846`); the shipped pair's own contract sentences
@@ -2024,22 +2072,27 @@ the attempt's **head arrival only**: the streaming provider client wraps its own
 `tokio::time::timeout` (`crates/vadis-providers/src/stream.rs`), **isomorphic with** `read_chunk`'s wrap on the
 same read path, so the clock stops when the response head arrives and an upstream that misses the knob is a
 failure: the relay ends (R6), it does not hang. After the head, the body is bounded by **R4's original letter**
-— *a gap with no upstream bytes longer than `server.upstream_attempt_timeout`* — enforced by the per-read idle
-arm inside `read_chunk`, one read at a time, unchanged: a relay that stays *continuously busy* is **not**
-truncated by the attempt knob. The **whole request** — the head phase *and* the relay — is bounded by the
+— *a gap with no upstream bytes longer than the idle bound* — enforced by the per-read idle arm inside
+`read_chunk`, one read at a time, unchanged; **the idle bound's own key is `server.stream_idle_timeout`**
+(spec §4.20, ADR-056 — the value moved off the attempt knob, the construction did not; the relay's window is
+`min(server.stream_idle_timeout, time-until-request-deadline)`). A relay that stays *continuously busy* is
+**not** truncated by either bound: a busy stream's duration is bounded only by the outer one. The **whole
+request** — the head phase *and* the relay — is bounded by the
 inbound `server.request_timeout` (default 10m), enforced on **this path** by its single owner (R71; tripping
 into R6's declared shape — a truncation where our head has already been sent, the ordinary refusal where it has
 not; never a fabricated terminal). **Consequence, stated so a reader does not have to learn it by incident:** a
 busy stream's ceiling is `server.request_timeout`, **not** the attempt knob — a legitimately long single
 response, a long reasoning stream being the obvious case, now completes as long as it is never idle past the
-knob *and* the whole request stays under `request_timeout`; a stream that does go idle past the knob, or that
-overruns `request_timeout`, ends as a declared truncation (`errors[]` with `error_class: stream_truncated`, R8's
-usage honesty below). The buffered path's own `.timeout` (which covers send → body-consumed and is correct
+idle bound *and* the whole request stays under `request_timeout`; a stream that does go idle past the idle
+bound, or that overruns `request_timeout`, ends as a declared truncation (`errors[]` with
+`error_class: stream_truncated` **and** the `details.stream_end` cause word of spec §4.20.3, R8's usage
+honesty below). The buffered path's own `.timeout` (which covers send → body-consumed and is correct
 there) is untouched, and the buffered side of `request_timeout` is deferred and named. *ADR-053 is this
 sentence's authority: it amends the clock ADR-044 gave this rule — the attempt knob becomes head-arrival-only
 and the body reverts to the gap reading — and touches neither the knob's value, nor the bound's duration, nor
 the read path, nor the failover/attempt semantics of R6 and R12. ADR-044 stays on disk, marked superseded for
-that clock by ADR-053.*
+that clock by ADR-053.* *ADR-056 later moves the idle bound's **value** to `server.stream_idle_timeout`
+(spec §4.20) — the construction above is untouched, and ADR-053's clause stands for everything but that key.*
 
 **R5 — a client disconnect cancels the upstream.** Dropping the response future drops the
 upstream body stream, which closes that connection: vadis does not keep draining a stream
@@ -4261,6 +4314,15 @@ measurement it replaces.
 | zero is not absent: a hole is omitted with a named comment and counted by `vadis_metrics_omitted_figures` | `CONF-87` |
 | the `provenance` label is §9.2's word per series and is never re-labelled | `CONF-87` |
 | the formatter's signature admits no records (the single-owner rule's structural half) | `CONF-87` |
+
+**One series was added by R74, and the frozen set moved with it (ADR-056 §5 A3).**
+`vadis_requests_stream_incomplete` (spec §4.16, §4.20.4) is §9.2's third request bucket: the 2xx records whose
+body did not complete. It is **not** a class of `failed` and it carries no label (one class), and its value is
+`stats::aggregate`'s — the surface formats it, computes nothing. `CONF-87`'s `FROZEN_SERIES` (21 names, asserted
+by name) gains it in the same change, and that case's own independent aggregator adopts the three-bucket
+predicate; the edit is frozen in ADR-056 §5 because a conformance assertion is not a card's to move
+(AGENTS constraint 9). The `usage_missing` series stays where it is and is never summed into the three: the two
+are orthogonal axes over the same records (spec §4.20.4).
 
 **What this section does not promise**: no configurable window (ADR-041 `R50-0-F3`), no unknown-outcome
 figure (`R50-0-F2`), no per-provider or per-model cost split (forbidden by the single-owner rule until it is
