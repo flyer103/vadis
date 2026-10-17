@@ -218,7 +218,6 @@ fn health_digest(addr: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-107: depends on R73-1"]
 async fn conf_107_v1_models_lists_aliases() {
     // -----------------------------------------------------------------------
     // (a): the alias namespace — three entries, the four keys, the stated
@@ -287,6 +286,23 @@ async fn conf_107_v1_models_lists_aliases() {
     assert_eq!(
         raw2, raw,
         "two calls over one revision are byte-identical (no clock, no RNG)"
+    );
+
+    // D8's query-ignored rule, given its assertion landing: one call
+    // with a query string answers the same 200 and the same bytes.
+    let (status_q, raw_q, _h) = http_req(
+        &addr_a,
+        "GET",
+        "/v1/models?limit=1",
+        &bearer("tok-conf107-l1"),
+    );
+    assert_eq!(
+        status_q, 200,
+        "a query string is ignored, not refused, got {status_q}"
+    );
+    assert_eq!(
+        raw_q, raw,
+        "the ignored query string changes nothing in the body's bytes"
     );
 
     // -----------------------------------------------------------------------
@@ -537,15 +553,18 @@ async fn conf_107_v1_models_lists_aliases() {
     )
     .unwrap();
 
-    // Wait for the accepted revision (the digest moved) — CONF-96's technique.
+    // Wait for the accepted revision (the digest moved) — CONF-96's
+    // technique, with a window that survives a loaded machine: 60s at
+    // 250ms polling (the architect measured an 18s reload under load;
+    // 60s is ~3x that worst case, and still bounded).
     let mut moved = false;
-    for _ in 0..100 {
+    for _ in 0..240 {
         match health_digest(&addr_g) {
             Some(now) if now != before => {
                 moved = true;
                 break;
             }
-            _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => std::thread::sleep(std::time::Duration::from_millis(250)),
         }
     }
     assert!(moved, "the reload was accepted on the running process");

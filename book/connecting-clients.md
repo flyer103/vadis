@@ -49,13 +49,14 @@ token guard as the protocol endpoints) is served too — its contract is
 [`docs/spec.md` §4.16](../docs/spec.md), and the served/not-served list for the reporting
 surfaces is [`docs/spec.md` §9.3](../docs/spec.md).
 
-**The model list surface is contracted and not yet served.** The contract
+**The model list surface is served.** `GET /v1/models`
 ([`docs/spec.md` §4.19](../docs/spec.md), [ADR-055](../design/decisions/ADR-055-the-model-list-surface.md))
-fixes `GET /v1/models` as the OpenAI model list of the **alias names** your config declares —
-behind the same token guard as everything else, and with the resolved `provider/model` routes
-deliberately absent. It is the path a client that probes `<base_url>/models` for reachability asks
-for (codex's `doctor` check is one). On this build the path answers `404`: the route lands in its
-own change, and this page says so rather than describing a surface you cannot call.
+answers the OpenAI model list of the **alias names** your config declares — behind the same
+token guard as everything else, and with the resolved `provider/model` routes deliberately
+absent: the list names aliases only, never what each alias routes to. It is the path a client
+that probes `<base_url>/models` for reachability asks for (codex's `doctor` check is one), and
+it follows a config reload without a restart. A gateway built from an older tree answers `404`
+there — the surface is as new as the build that serves it.
 
 ## Per-client setup
 

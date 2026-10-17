@@ -2062,13 +2062,9 @@ the figure against a live gateway. DESIGN §12.8's rows carry them.
 
 ### 4.19 `GET /v1/models` (the configured alias names, as a model list)
 
-*Status: **contracted, not served.** The contract below was frozen on 2026-10-17 by the owner's ruling
-(ahead of the change that implements it), and §9.3's *"a documented-but-unreachable surface is a
-defect"* is the price this round pays knowingly: the route lands in a separate change, `CONF-107` is
-parked `#[ignore]`d with that change named in its reason, and the book and README say **contracted, not
-served** in the user's own words. Until then `GET /v1/models` answers `404` and this page describes the
-target, not the tree. The authority and the rejected alternatives are
-[ADR-055](../design/decisions/ADR-055-the-model-list-surface.md).*
+*Status: **served** — the contract below, the handler and `CONF-107` land together (§9.3's rule). The
+route's home and the seam it joins are `design/DESIGN.md` §12.8; the authority, the rejected alternatives
+and the register are [ADR-055](../design/decisions/ADR-055-the-model-list-surface.md).*
 
 **One endpoint, one namespace, one reader: the loaded configuration's `aliases:` keys, read from the
 revision in force and answered as the OpenAI model-list shape — so a client that probes
@@ -2081,7 +2077,7 @@ exists and says what it can route.** It dials nothing, prices nothing, and write
 | Auth | behind `server.auth_token_env`'s guard, exactly as `/metrics` and `/state/events` (§4.7: *"Nothing else is exempt"*). The token arrives in `Authorization: Bearer *** or `x-api-key: *** (§4.7's two accepted forms) |
 | Success | `200`, `application/json` — the body below |
 | Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"models"`**, and no store row — §4.7's refusal table, unchanged |
-| Any other method on the path, admitted | `405` with `allow: GET`; **no** §8 error body, **no** trace record, no event row |
+| Any other method on the path, admitted | `405` with an `allow` header naming `GET` (axum's `get` route emits `GET,HEAD`; the contract names `GET` and accepts the wire value); **no** §8 error body, **no** trace record, no event row |
 | Auth precedes method dispatch | a non-`GET` **without** a valid token is the guard's `401` (with its one record), never a `405`: the guard is the route's own layer and decides before the method router does, exactly as on `/metrics` and `/state/events`. Both directions are asserted (`CONF-107`) |
 | Status set | admitted: exactly `{200, 405}`; refused: exactly `{401}`. Never `404` (the route is served), never `500`, never `501` |
 | Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it the configuration's `aliases:` map — nothing else: **not** the store, **not** the trace, **not** a config file, **not** the network |
@@ -2959,15 +2955,6 @@ computed for it), money is **integer fixed-point nano** with the window's curren
 surface does not invent decimals — and a window holding two currencies carries both, per §4.8, never a
 combined figure. Its assertions are `CONF-46` (the served surface and its refusal) and `CONF-87` (the
 figures are §9.2's).
-
-**`GET /v1/models` is contracted and not yet served — a dated, bounded exception to this rule.** Its
-contract is **§4.19**, frozen on 2026-10-17 by the owner's ruling
-([ADR-055](../design/decisions/ADR-055-the-model-list-surface.md)), so that the change which lands the
-route is written against a reviewed shape rather than against a proposal. The exception is bounded
-three ways: the route answers `404` today and §4.19's status line says exactly that; `CONF-107` is
-parked `#[ignore = "CONF-107: depends on R73-1"]`, so the suite is never red while the gap is open;
-and the change that closes it is named (`R73-1`, ADR-055 §6), after which this paragraph is removed
-and §4.19's status reads *served*. Nothing else may be added to this exception.
 
 The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect

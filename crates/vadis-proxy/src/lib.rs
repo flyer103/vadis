@@ -8,6 +8,7 @@ mod availability;
 mod body_limit;
 mod forward;
 mod health;
+mod models_read;
 mod revision;
 mod state_read;
 mod stream_forward;
@@ -24,6 +25,7 @@ pub use forward::{
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
 pub use health::{health_json, AppState, ConfigIdentity, KeyFact, ProviderKeyFacts};
+pub use models_read::{models_body, models_body_from_config};
 pub use revision::{Revision, RevisionCell, SharedRevision};
 pub use state_read::{
     count_unknown_outcomes, handle as state_events_handle, parse_window, state_events_json,
