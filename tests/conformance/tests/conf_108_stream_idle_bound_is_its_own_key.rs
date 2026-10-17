@@ -501,13 +501,18 @@ async fn conf_108_d_reload_applies_to_the_next_request_only() {
     .unwrap();
 
     // The reload is applied (not refused): the digest moves, no restart.
+    // The window is the repo's load-tolerant value (CONF-107 limb (g),
+    // R74-PRE): 240 × 250 ms = 60 s. A measured reload reaches `/health`
+    // in ~18 s under a full-suite load, so a 10 s window judged a healthy
+    // landing red two runs in five; the window is patience, not an
+    // assertion — a reload that never happens still fails at 60 s.
     let mut applied = false;
-    for _ in 0..100 {
+    for _ in 0..240 {
         if config_digest(&addr) != digest_before {
             applied = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
     assert!(
         applied,
