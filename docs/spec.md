@@ -154,7 +154,8 @@ that route's id too (§2).
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
             stream_idle_timeout: 30s,        # §4.20: the longest SILENCE between two forwarded bytes of a
                                              #   streamed response body — the per-read gap bound, and only
-                                             #   that (default 30s; 1s ≤ value ≤ 300s). It is **not** the
+                                             #   that (default 30s; 100ms ≤ value ≤ 300s, the floor
+                                             #   amended by R74-1 — §4.20.1). It is **not** the
                                              #   attempt budget (which bounds connect + head arrival) and
                                              #   **not** the whole-request deadline (`request_timeout`,
                                              #   which always wins when it is nearer: min(gap, deadline))

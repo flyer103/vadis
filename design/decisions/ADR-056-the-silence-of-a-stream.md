@@ -123,8 +123,16 @@ the consistency changes its own figures force (§6.4).
 | Bounds | the **maximum silence between two forwarded bytes** of a streamed response body — the per-read gap bound, and *only* that |
 | Grammar | the config duration grammar (spec §9.2's own: `300ms`, `90s`, `15m`, `1h30m`; no `d` unit) |
 | Default | **30 s** — a product default, not a measured optimum (§2.6) |
-| Range | **1 s ≤ value ≤ 300 s**; outside the range the load is **refused** naming the key (the loader is the same gate the reload uses, spec §4.15 rule 1) |
+| Range | **100 ms ≤ value ≤ 300 s**; outside the range the load is **refused** naming the key (the loader is the same gate the reload uses, spec §4.15 rule 1) |
 | Read site | **once per request**, at the streaming driver's entry — the value the request drives with |
+
+*Amended by `R74-1` (2026-10-17) — the Range row's floor, and nothing else. The floor was `1s` as
+contracted here, which contradicted this ADR's **own** rig table: §4.1's limbs and the three case files
+drive `400ms` windows ("so no limb rests on machine speed"), so a 1 s floor would have refused every one
+of them **at load** — the contract would have rejected the contract's own cases. The executable cases are
+the fixed point (AGENTS constraint 9), so the floor sits below them at **100 ms**; the ceiling (`300 s`) and
+the refusal behaviour are unchanged. `docs/spec.md` §4.20.1 carries the same note at its range row, and
+`design/DESIGN.md`'s R74 register line records it.*
 
 And the three bounds are now **named apart**, because two of them used to share a value:
 
@@ -466,7 +474,7 @@ asserting fixture that ends before its wire's terminal event except the ones nam
 
 | File | Change |
 |---|---|
-| `crates/vadis-core/src/config.rs` | `ServerCfg.stream_idle_timeout` (default `30s`, range `1s..=300s`, load refusal naming the key), the example/embedded pair in step |
+| `crates/vadis-core/src/config.rs` | `ServerCfg.stream_idle_timeout` (default `30s`, range `100ms..=300s` — the floor amended in §2.1, load refusal naming the key), the example/embedded pair in step |
 | `crates/vadis-providers/src/stream.rs` | the client carries **two** windows — `head_timeout` (the attempt budget) and `idle_timeout` (the new key), each fed to the consumers listed in **§6.1.1**; `read_chunk` keeps its signature (its caller hands it one window); `open` keeps the head wrap, on the head window. The client stays **per request** (it is today, `stream_forward.rs:891-892`) — hoisting it to a startup-built object would silently make the key reload-refused |
 | `crates/vadis-proxy/src/stream_forward.rs` | the driver reads **both** keys **once** at entry and puts the pair on `RelayCtx` (`head_timeout`, `idle`); `st.relayed` becomes a byte counter and `st.content_type` carries the head that **answered**; `record_classified` / `record_terminal` write `stream_end`, `relayed_bytes`, `window_ms`, `since_last_byte_ms`; the `Ended` arm asks §2.3's **three-valued** predicate (media type × `terminal_seen`, §6.1.1 item 5) before declaring completeness; the truncation arm emits the `demotion` object and lands the projection |
 | `crates/vadis-protocol/src/sse.rs` | expose `terminal_seen` (it exists; `finish()` already branches on it) to the relay as a read-only accessor, **and** add the predicate's other fact as a pure helper: is this `content-type` `text/event-stream` (parameters stripped, ASCII case-insensitive, `None` ⇒ `false`). Both facts belong to the wire crate; the **derivation** (§2.3's three values) belongs to the relay, which is the only place that holds both |

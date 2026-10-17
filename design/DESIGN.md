@@ -1801,7 +1801,7 @@ contract itself.
 
 | Item | State after this card |
 |---|---|
-| `server.stream_idle_timeout` (spec §4.20.1: default 30 s, `1s..=300s`, load refusal outside, **reloadable**) | **contracted, not served** — today's loader refuses the key; the code, the shipped `config.example.yaml` and the binary's embedded copy, and the `book/` sentence are `R74-1`'s |
+| `server.stream_idle_timeout` (spec §4.20.1: default 30 s, `100ms..=300s`, load refusal outside, **reloadable**) | **contracted, not served** — today's loader refuses the key; the code, the shipped `config.example.yaml` and the binary's embedded copy, and the `book/` sentence are `R74-1`'s |
 | the cause vocabulary `details.stream_end` + the three observables (spec §4.20.3) | **contracted** — the relay already computes the completeness fact (`SseUsageExtractor::terminal_seen`) and throws it away; `R74-1` exposes it, adds the predicate's other fact (a pure `text/event-stream` test — completeness is asked only of an SSE body, so a healthy body that is not SSE is a completion, never an incomplete), and writes the entry |
 | the three-bucket partition and `vadis_requests_stream_incomplete` (spec §4.20.4, §6, §9.2, §4.16) | **contracted** — `R74-1` lands the predicate in its one owner and the two renderings |
 | the route-scoped, advisory `stream_silence` row (spec §4.20.5) | **contracted** — the store's `scope`/`model` columns and `Query::Cooldown { model: Some(..) }` already support it; `R74-1` adds the writer's one object and the model-passing read |
