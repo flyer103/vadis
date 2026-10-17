@@ -45,6 +45,40 @@ pub fn provider_in_cooldown(store: Option<&Arc<dyn Store>>, provider: &str, now_
     )
 }
 
+/// ADR-056 §2.5 (spec §4.20.5): is THIS exact route silence-cooling at
+/// `now_us` — a live `provider_cooldown` row with `scope: "route"` and
+/// `reason: "stream_silence"`? This is the **advisory** half of the
+/// cooldown projection's read side, and deliberately a different
+/// question from [`provider_in_cooldown`]: a `stream_silence` row never
+/// refuses a candidate (the walk prefers a non-cooling one and leaves
+/// the cooling route only when such a candidate exists), never appears
+/// in `skipped[]`, and never produces `no_available_route`. The probe
+/// gate and `/health` keep asking the provider-wide question and are
+/// invisible to this row (ADR-056 §2.5.4).
+///
+/// The union read (`Query::Cooldown { model: Some(..) }`) answers
+/// whichever row blocks the route now, a provider-wide row included;
+/// only a row that is itself route-scoped and silence-worded answers
+/// `true`, so a billing demotion can never be mistaken for a preference.
+pub fn route_silence_cooling(
+    store: Option<&Arc<dyn Store>>,
+    provider: &str,
+    model: &str,
+    now_us: i64,
+) -> bool {
+    let Some(store) = store else {
+        return false;
+    };
+    matches!(
+        store.query(Query::Cooldown {
+            provider,
+            model: Some(model),
+        }),
+        Ok(QueryRow::Cooldown(Some(row)))
+            if row.scope == "route" && row.reason == "stream_silence" && row.until_us > now_us
+    )
+}
+
 /// The local counter's window verdict (spec §4.6 rule 3, GAP-Q1; L1d's
 /// single owner): true when the primary provider declares a quota plan
 /// covering the family, that plan's current window has reached its
@@ -261,6 +295,7 @@ mod tests {
                 request_timeout: vadis_core::config::DurationVal(600_000),
                 auth_token_env: None,
                 max_body_bytes: 2_097_152,
+                stream_idle_timeout: vadis_core::config::DurationVal(30_000),
             },
             session: vadis_core::config::SessionCfg {
                 key_sources: vec!["prompt_cache_key".into()],
@@ -322,6 +357,102 @@ mod tests {
             quota_used: 0,
         });
         assert!(!provider_in_cooldown(Some(&empty), "p-plan", 0));
+    }
+
+    // ------------------------------------------------------------------
+    // route_silence_cooling (ADR-056 §2.5, the advisory half)
+    // ------------------------------------------------------------------
+
+    /// Answers the cooldown query with a row chosen by the model asked:
+    /// the advisory question must see only route-scoped silence rows.
+    struct RouteStore {
+        row_for_route: Option<CooldownRow>,
+        row_for_provider: Option<CooldownRow>,
+    }
+
+    impl Store for RouteStore {
+        fn append(
+            &self,
+            _ev: vadis_core::store::NewEvent<'_>,
+        ) -> Result<vadis_core::store::EventId, StoreError> {
+            Err(StoreError::Sql("unused".into()))
+        }
+        fn project(&self, _w: vadis_core::store::ProjectionWrite<'_>) -> Result<(), StoreError> {
+            Err(StoreError::Sql("unused".into()))
+        }
+        fn query(&self, q: Query<'_>) -> Result<QueryRow, StoreError> {
+            match q {
+                Query::Cooldown { model, .. } => Ok(QueryRow::Cooldown(if model.is_some() {
+                    self.row_for_route.clone()
+                } else {
+                    self.row_for_provider.clone()
+                })),
+                _ => Ok(QueryRow::Count(0)),
+            }
+        }
+        fn rebuild(
+            &self,
+            _which: vadis_core::store::Projection,
+        ) -> Result<vadis_core::store::RebuildStats, StoreError> {
+            Err(StoreError::Sql("unused".into()))
+        }
+        fn schema_version(&self) -> Result<u32, StoreError> {
+            Ok(1)
+        }
+    }
+
+    fn silence_row(provider: &str, model: &str, until_us: i64) -> CooldownRow {
+        CooldownRow {
+            scope: "route".into(),
+            provider: provider.into(),
+            model: model.into(),
+            until_us,
+            reason: "stream_silence".into(),
+        }
+    }
+
+    #[test]
+    fn silence_cools_only_its_own_route_inside_its_window() {
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(silence_row("p1", "m1", 1_000_000_000)),
+            row_for_provider: None,
+        });
+        let s = Some(&store);
+        // The exact route, strictly inside the row's bound: cooling.
+        assert!(route_silence_cooling(s, "p1", "m1", 999_999_999));
+        // At and past the bound: not cooling (the read is `until_us > now`).
+        assert!(!route_silence_cooling(s, "p1", "m1", 1_000_000_000));
+        // Another model on the same provider: the union read for that
+        // route sees no route row — and no provider-wide row either.
+        assert!(!route_silence_cooling(s, "p1", "m2", 999_999_999));
+        // No store: nothing cools.
+        assert!(!route_silence_cooling(None, "p1", "m1", 0));
+    }
+
+    #[test]
+    fn a_provider_wide_row_is_not_a_silence_preference() {
+        // QuotaExhausted's own shape answering the union read: the row is
+        // live and blocks the route, but it is not the advisory word —
+        // the binding question (`provider_in_cooldown`) owns it.
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(CooldownRow {
+                scope: "provider".into(),
+                provider: "p1".into(),
+                model: String::new(),
+                until_us: 1_000_000_000,
+                reason: "quota_exhausted".into(),
+            }),
+            row_for_provider: Some(CooldownRow {
+                scope: "provider".into(),
+                provider: "p1".into(),
+                model: String::new(),
+                until_us: 1_000_000_000,
+                reason: "quota_exhausted".into(),
+            }),
+        });
+        let s = Some(&store);
+        assert!(!route_silence_cooling(s, "p1", "m1", 999_999_999));
+        assert!(provider_in_cooldown(s, "p1", 999_999_999));
     }
 
     // ------------------------------------------------------------------

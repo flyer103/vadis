@@ -1317,6 +1317,25 @@ impl Forwarder {
                 }
                 continue;
             }
+            // ADR-056 §2.5 (spec §4.20.5): the advisory silence skip. A
+            // route whose own `stream_silence` row is live is preferred
+            // against, never refused — the walk moves past it only when
+            // the chain holds another candidate it would actually attempt,
+            // and attempts it as usual otherwise. The skip narrates
+            // `failover_from` (ADR-024's pre-attempt shape) and
+            // deliberately writes NO `skipped[]` entry and no
+            // `failover.triggered` row: a `demoted` entry would make an
+            // advisory row read binding, which §2.5.3 refuses.
+            if self.route_silence_cooling(candidate)
+                && candidates.iter().any(|c| {
+                    !attempted_providers.contains(&c.provider)
+                        && !self.provider_in_cooldown(&c.provider)
+                        && !self.route_silence_cooling(c)
+                })
+            {
+                failover_origin(&mut facts.failover_from, candidate);
+                continue;
+            }
             let Some(cand_provider) = self.provider(candidate).cloned() else {
                 // ADR-022's keyless class: the walk's own skip, not an
                 // answer — the chain continues.
@@ -1723,15 +1742,17 @@ impl Forwarder {
                             attempt_index += 1;
                             continue 'keys;
                         }
-                        let classified_id = self.record_classification(
+                        // The classification row carries its demotion's one
+                        // object and lands the projection from the same
+                        // `until_us` (ADR-056 §6.2) — one call, no second
+                        // writer to drift from the payload.
+                        self.record_classification(
                             request_id,
                             attempt_index,
                             Some(resp.status),
                             &cls,
+                            Some(candidate),
                         );
-                        // The demotion projection (state, not a local var),
-                        // riding on the classification event (ADR-011 item 4).
-                        self.apply_demotion(&candidate.provider, &cls, classified_id);
                         // The plan policy's only account-moving signal
                         // (ADR-014 item 2; ADR-049 §5.2 across the tier):
                         // an upstream 403 classified `quota_exhausted` on
@@ -1896,8 +1917,13 @@ impl Forwarder {
                             attempt_index += 1;
                             continue 'keys;
                         }
-                        let _classified_id =
-                            self.record_classification(request_id, attempt_index, None, &cls);
+                        let _classified_id = self.record_classification(
+                            request_id,
+                            attempt_index,
+                            None,
+                            &cls,
+                            Some(candidate),
+                        );
                         if let Some(next) = self.next_candidate(
                             &candidates,
                             &attempted_providers,
@@ -2276,15 +2302,20 @@ impl Forwarder {
     /// classification writes one event, even when the action is abort.
     /// Returns the event id the demotion projection rides on. Shared by
     /// both forwarding paths: the same failure gets the same row
-    /// whichever medium carried it.
+    /// whichever medium carried it. When the classification orders a
+    /// demotion, the event's `demotion` member and the `provider_cooldown`
+    /// projection write are produced HERE, from one `until_us` value —
+    /// the two landings share one source (ADR-056 §2.5/§6.2), so
+    /// `rebuild_cooldown` reproduces the row exactly (CONF-21).
     pub(crate) fn record_classification(
         &self,
         request_id: &str,
         attempt_index: u32,
         status: Option<u16>,
         cls: &Classification,
+        route: Option<&RouteSpec>,
     ) -> Option<vadis_core::EventId> {
-        self.record_classification_inner(request_id, attempt_index, status, cls, None)
+        self.record_classification_inner(request_id, attempt_index, status, cls, route, None)
     }
 
     /// The rotation twin (ADR-049 §3 rules 3/6): the classification row
@@ -2312,6 +2343,7 @@ impl Forwarder {
             attempt_index,
             status,
             cls,
+            None,
             Some((to_key_index, reprefill_tokens, switch_cost_nano)),
         )
     }
@@ -2322,6 +2354,7 @@ impl Forwarder {
         attempt_index: u32,
         status: Option<u16>,
         cls: &Classification,
+        route: Option<&RouteSpec>,
         rotation: Option<(u32, Option<u64>, Option<u64>)>,
     ) -> Option<vadis_core::EventId> {
         let store = self.store.as_ref()?;
@@ -2336,17 +2369,53 @@ impl Forwarder {
         } else {
             "abort"
         };
-        let demotion = cls.demotion.map(|d| {
-            json!({
-                "scope": if d.provider_wide { "provider" } else { "route" },
-                "ttl_s": d.ttl.as_secs(),
+        // ADR-056 §6.2 (repairing R74-0-F1): the `demotion` object's ONE
+        // shape — {scope, provider, model, until_us, ttl_s, reason}, the
+        // six members `rebuild_cooldown` reads — and the projection write
+        // derived from the SAME `until_us`, so the live row and a rebuild
+        // from the log are identical (CONF-21's identity). The
+        // provider-wide row's `model` member is the empty string, the
+        // route's is its native model id.
+        let mut demotion_write: Option<(&'static str, String, String, i64)> = None;
+        let demotion = cls
+            .demotion
+            .map(|d| {
+                let scope: &'static str = if d.provider_wide {
+                    "provider"
+                } else {
+                    "route"
+                };
+                let (provider, model) = match route {
+                    Some(r) => (
+                        r.provider.clone(),
+                        if d.provider_wide {
+                            String::new()
+                        } else {
+                            r.model.clone()
+                        },
+                    ),
+                    None => (String::new(), String::new()),
+                };
+                let until_us = now_us() + d.ttl.as_micros() as i64;
+                demotion_write = Some((scope, provider, model, until_us));
+                (scope, d.ttl.as_secs())
             })
-        });
+            .map(|(scope, ttl_s)| {
+                let (_, provider, model, until_us) = demotion_write.as_ref().unwrap();
+                demotion_json(
+                    scope,
+                    provider,
+                    model,
+                    *until_us,
+                    ttl_s,
+                    cls.class.as_str(),
+                )
+            });
         let (key_index, reprefill, switch_cost) = match rotation {
             Some((k, r, c)) => (Some(json!(k)), r.map(|t| json!(t)), c.map(|n| json!(n))),
             None => (None, None, None),
         };
-        store
+        let id = store
             .append(NewEvent {
                 kind: EventKind::ErrorClassified,
                 request_id: Some(request_id),
@@ -2366,7 +2435,22 @@ impl Forwarder {
                     "switch_cost_nano": switch_cost,
                 }),
             })
-            .ok()
+            .ok()?;
+        // The demotion's second landing, derived from the same object the
+        // payload carries (ADR-011 item 4; ADR-056 §2.5's "two sites, one
+        // source"): the `provider_cooldown` projection, anchored on the
+        // classification event this function just wrote.
+        if let Some((scope, provider, model, until_us)) = demotion_write {
+            let _ = store.project(ProjectionWrite::ProviderCooldown {
+                scope,
+                provider: &provider,
+                model: &model,
+                until_us,
+                reason: cls.class.as_str(),
+                last_event: id,
+            });
+        }
+        Some(id)
     }
 
     /// The next unattempted candidate after a failure, when the class may
@@ -2387,17 +2471,22 @@ impl Forwarder {
         // destination is named only if the walk will actually attempt it.
         // The loop's order is kept (provider entry, wire, key/transport,
         // not-attempted, not-in-cooldown) so both statements of one rule
-        // cannot drift again.
-        candidates
-            .iter()
-            .find(|c| {
-                !attempted_providers.contains(&c.provider)
+        // cannot drift again. ADR-056 §2.5 adds the advisory half the walk
+        // itself applies: a silence-cooling route is named only when no
+        // eligible non-cooling candidate exists — the narration must not
+        // promise a destination the walk would skip past.
+        let eligible = |c: &RouteSpec| {
+            !attempted_providers.contains(&c.provider)
                 && !self.provider_in_cooldown(&c.provider)
                 // The provider check doubles as existence: no entry, no
                 // `supports` to consult, no candidate.
                 && self.provider(c).is_some_and(|p| p.supports.contains(&proto_in))
                 && self.transports.contains_key(&c.provider)
-            })
+        };
+        candidates
+            .iter()
+            .find(|c| eligible(c) && !self.route_silence_cooling(c))
+            .or_else(|| candidates.iter().find(|c| eligible(c)))
             .cloned()
     }
 
@@ -2574,30 +2663,18 @@ impl Forwarder {
         self.record_plan_switch(request_id, policy, &from, &to, to_account, true, session);
     }
 
-    /// A demotion is state, not a local variable (ADR-011 item 4): the
-    /// `provider_cooldown` projection, provider-wide, TTL from the
-    /// provider's own clock or the declared default, anchored on the
-    /// classification event.
-    pub(crate) fn apply_demotion(
-        &self,
-        provider: &str,
-        cls: &Classification,
-        anchor: Option<vadis_core::EventId>,
-    ) {
-        let Some(store) = &self.store else {
-            return;
-        };
-        let Some(d) = cls.demotion else {
-            return;
-        };
-        let _ = store.project(ProjectionWrite::ProviderCooldown {
-            scope: "provider",
-            provider,
-            model: "",
-            until_us: now_us() + d.ttl.as_micros() as i64,
-            reason: cls.class.as_str(),
-            last_event: anchor.unwrap_or(vadis_core::EventId(0)),
-        });
+    /// ADR-056 §2.5 (spec §4.20.5): is THIS exact route silence-cooling
+    /// right now — the advisory half of the cooldown projection's read
+    /// side, through `availability`'s single owner. The binding question
+    /// ([`Self::provider_in_cooldown`]) is a different read and stays
+    /// untouched beside it.
+    pub(crate) fn route_silence_cooling(&self, route: &RouteSpec) -> bool {
+        crate::availability::route_silence_cooling(
+            self.store.as_ref(),
+            &route.provider,
+            &route.model,
+            now_us(),
+        )
     }
 
     /// `failover.triggered` (FULL), before the next intent (§12.10.5 row 8).
@@ -2731,6 +2808,43 @@ pub(crate) const SKIP_DEMOTED: &str = "demoted";
 pub(crate) fn skipped_entry_json((route, reason): &(RouteSpec, &'static str)) -> Value {
     json!({
         "route": route.to_string(),
+        "reason": reason,
+    })
+}
+
+/// ADR-056 §2.5.2: the route-scoped silence cooldown's TTL — **60 s, a
+/// code constant**, not a config key. A key would owe a default nobody
+/// measured, a reload story and a wizard decision; the audit's own
+/// recommendation was "a short window, e.g. 60 s", and the contract
+/// spends no knob on it.
+pub(crate) const STREAM_SILENCE_TTL_S: u64 = 60;
+
+/// ADR-056 §2.5 (spec §4.20.5): the advisory reason word — the one
+/// `reason` value whose `provider_cooldown` row may never be the sole
+/// cause of a refusal, never appears in `skipped[]`, and never produces
+/// `no_available_route`.
+pub(crate) const REASON_STREAM_SILENCE: &str = "stream_silence";
+
+/// The `demotion` object's ONE shape (ADR-056 §6.2): the six members
+/// `rebuild_cooldown` reads — `{scope, provider, model, until_us, ttl_s,
+/// reason}` — emitted by every writer (the classifier's provider-wide
+/// arm and the relay's route-scoped silence arm alike), so the live
+/// projection and a rebuild from the event log carry the same row
+/// (CONF-21's identity; repairs R74-0-F1).
+pub(crate) fn demotion_json(
+    scope: &str,
+    provider: &str,
+    model: &str,
+    until_us: i64,
+    ttl_s: u64,
+    reason: &str,
+) -> Value {
+    json!({
+        "scope": scope,
+        "provider": provider,
+        "model": model,
+        "until_us": until_us,
+        "ttl_s": ttl_s,
         "reason": reason,
     })
 }

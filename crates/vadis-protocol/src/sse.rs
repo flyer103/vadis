@@ -130,6 +130,15 @@ impl SseUsageExtractor {
         }
     }
 
+    /// Whether the wire's own terminal event was seen (`[DONE]` for
+    /// `chat`, the `responses` terminal events, `message_stop` for
+    /// `anthropic`) — the completeness fact spec §4.20.3's predicate
+    /// reads. Read-only: the tap's accounting is not the caller's to
+    /// mutate, and `finish()` already branches on the same field.
+    pub fn terminal_seen(&self) -> bool {
+        self.terminal_seen
+    }
+
     fn merged_anthropic(&self) -> Option<Usage> {
         // message_delta's usage is the later, cumulative one; where it
         // repeats an input field it wins over message_start.
@@ -249,6 +258,25 @@ impl SseUsageExtractor {
             _ => {}
         }
     }
+}
+
+/// Is this `content-type` value `text/event-stream` (spec §4.20.3's
+/// media gate)? Parameters are stripped, the comparison is ASCII
+/// case-insensitive, and `None` (an absent header) answers `false` — the
+/// wire's own claim that a terminal event is coming. This is the pure
+/// fact; the three-valued derivation that consumes it belongs to the
+/// relay, the only place that holds both of the predicate's facts.
+pub fn is_text_event_stream(content_type: Option<&str>) -> bool {
+    // Split off parameters ("text/event-stream; charset=utf-8"), trim the
+    // remaining spaces on both sides, compare case-insensitively against
+    // the one exact value.
+    content_type.is_some_and(|v| {
+        v.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case("text/event-stream")
+    })
 }
 
 /// Finds the next complete event in `buf`, scanning from `from` onward:
@@ -438,6 +466,32 @@ mod tests {
         ex.feed(b"data: [DONE]\n\n");
         // Terminal seen, but no usage carrier arrived: honest Missing.
         assert_eq!(ex.finish(), SseUsageOutcome::Missing);
+    }
+
+    #[test]
+    fn terminal_seen_accessor_reports_the_wire_fact() {
+        // Spec §4.20.3's predicate reads this accessor: false before the
+        // marker, true after — the same field `finish` branches on.
+        let mut ex = SseUsageExtractor::new(WireApi::Chat, false);
+        ex.feed(b"data: {\"choices\":[]}\n\n");
+        assert!(!ex.terminal_seen());
+        ex.feed(b"data: [DONE]\n\n");
+        assert!(ex.terminal_seen());
+    }
+
+    #[test]
+    fn the_media_gate_is_the_exact_value_with_parameters_stripped() {
+        // Spec §4.20.3: parameters stripped, ASCII case-insensitive,
+        // exactly `text/event-stream`; an absent header is not SSE.
+        assert!(is_text_event_stream(Some("text/event-stream")));
+        assert!(is_text_event_stream(Some("Text/Event-Stream")));
+        assert!(is_text_event_stream(Some("text/event-stream; charset=utf-8")));
+        assert!(is_text_event_stream(Some(" text/event-stream ")));
+        assert!(!is_text_event_stream(Some("application/json")));
+        assert!(!is_text_event_stream(Some("application/json; charset=utf-8")));
+        assert!(!is_text_event_stream(Some("text/event-streamx")));
+        assert!(!is_text_event_stream(Some("")));
+        assert!(!is_text_event_stream(None));
     }
 
     #[test]
