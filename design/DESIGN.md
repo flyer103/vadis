@@ -1833,9 +1833,11 @@ records both so the rule is checkable:** (i) the route and the body builder are 
 sentences that shipped with `R73-0` claimed nothing that tree did not do — they said *contracted, not
 served*, and `GET /v1/models` answered `404` on that HEAD (measured, 2026-10-17); `R73-1` landed the
 route, un-parked the case and flipped them. **What this register line may not
-claim:** **no `codex doctor` outcome is promised** — a probing client must carry
-the token when inbound auth is on, and whether codex's own probe attaches it is `R73-1`'s measurement,
-not this contract's assumption; a `200` from this surface says the process is up and *which names* it
+claim:** `codex doctor`'s reachability arm is **measured, not promised** — against a served instance with
+inbound auth on, the probe attaches **no** token and the guard's `401` still counts as reachable
+(`router API inference URL … reachable (HTTP 401)`, `0 fail`; measured 2026-10-17 on a `8393` instance;
+`404` was the only failing arm before the route existed). That is the probe's own leniency, not this
+surface's promise; a `200` from this surface says the process is up and *which names* it
 routes — it dials no upstream, so it says nothing about a provider's reachability; and a model reachable
 only as `provider/model` stays **unlisted** by design (the alias namespace is the whole surface, and the
 book says so). Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract
