@@ -2081,7 +2081,7 @@ exists and says what it can route.** It dials nothing, prices nothing, and write
 | Auth | behind `server.auth_token_env`'s guard, exactly as `/metrics` and `/state/events` (§4.7: *"Nothing else is exempt"*). The token arrives in `Authorization: Bearer *** or `x-api-key: *** (§4.7's two accepted forms) |
 | Success | `200`, `application/json` — the body below |
 | Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"models"`**, and no store row — §4.7's refusal table, unchanged |
-| Any other method on the path, admitted | `405` with `allow: GET`; **no** §8 error body, **no** trace record, no event row |
+| Any other method on the path, admitted | `405` with an `allow` header naming `GET` (axum's `get` route emits `GET,HEAD`; the contract names `GET` and accepts the wire value); **no** §8 error body, **no** trace record, no event row |
 | Auth precedes method dispatch | a non-`GET` **without** a valid token is the guard's `401` (with its one record), never a `405`: the guard is the route's own layer and decides before the method router does, exactly as on `/metrics` and `/state/events`. Both directions are asserted (`CONF-107`) |
 | Status set | admitted: exactly `{200, 405}`; refused: exactly `{401}`. Never `404` (the route is served), never `500`, never `501` |
 | Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it the configuration's `aliases:` map — nothing else: **not** the store, **not** the trace, **not** a config file, **not** the network |

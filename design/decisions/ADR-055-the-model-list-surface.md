@@ -49,12 +49,14 @@ contract; the wording there governs):
    the contract.)
 2. **Auth precedence, stated.** The guard runs at the route layer, so it decides **before** method
    dispatch: a non-`GET` **without a valid token** is the guard's `401` (with its one record), never
-   a `405`. This is the documented difference between axum's `Router::route_layer` (path-matched;
-   *"useful for middleware that return early (such as authorization) which would otherwise convert a
-   405 … into a 401"*) and `MethodRouter::route_layer` (method-matched) — the two surfaces already
-   built this way (`guarded_metrics_route`, `guarded_state_route`) use the former, and this route
-   joins them. Asserted in both directions, so a later wiring change that quietly flips the order is
-   caught.
+   a `405`. This is the documented difference between axum's `Router::route_layer` (path-matched; its
+   doc: *"useful for middleware that return early (such as authorization) which might otherwise
+   convert a `404 Not Found` into a `401 Unauthorized`"*) and `MethodRouter::route_layer`
+   (method-matched; its doc's own example answers an unauthenticated `POST` with `405 Method Not
+   Allowed`, because that layer wraps the per-method endpoints and not the method fallback) — the two
+   surfaces already built this way (`guarded_metrics_route`, `guarded_state_route`) use the former,
+   and this route joins them. Asserted in both directions, so a later wiring change that quietly
+   flips the order is caught.
 3. **Body: the OpenAI list shape, four keys per entry, alias names only.**
    `{"object":"list","data":[{"id":…,"object":"model","created":…,"owned_by":…}]}`. `id` is the alias
    name **verbatim**; the resolved `provider/model` appears **nowhere** in the body — not as `id`,
@@ -161,7 +163,8 @@ anything a future round adds is a **contract change**, not an extension.
   set is exactly `{object, data}`.
 - **(e)** the `200` arm's stage set is empty: over two admitted calls the trace directory gains no
   line, and after `serve` stops the store's event log holds only the boot's `config.applied` row —
-  the identical set read before the calls.
+  asserted as a total row count (`rows.len()` equals that one row), since the live store is not
+  re-opened mid-run for a before-read.
 - **(f)** `POST` **with** the token ⇒ `405` with an `allow` header naming `GET` and no record; `POST`
   **without** the token ⇒ `401` and one record (decision 2's precedence, both directions).
 - **(g)** one accepted reload that changes the alias set ⇒ the same process, the same port, the new
