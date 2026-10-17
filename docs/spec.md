@@ -2208,16 +2208,39 @@ startup-built object, breaks one of those two halves and is a defect.
 
 #### 4.20.3 A truncation names its cause: `details.stream_end`
 
-A stream is **complete iff the wire's own terminal event was seen** — `[DONE]` for `chat`, the `responses`
-terminal events, `message_stop` for `anthropic`. A body that ends without it is a **truncation**, never a
-completion. A truncation is recorded as it is today (a `200` head plus one `errors[]` entry with
+Completeness is a question about **SSE** bodies, and its predicate has **three** values — decided by two facts:
+the media type of the head that **answered** (`content-type`, parameters stripped, ASCII case-insensitive,
+exactly `text/event-stream`) and whether the wire's own terminal event was seen (`[DONE]` for `chat`, the
+`responses` terminal events, `message_stop` for `anthropic`).
+
+| Value | When | A body that ends (`StreamRead::Ended`) is |
+|---|---|---|
+| **satisfied** | SSE, terminal seen | complete |
+| **violated** | SSE, terminal not seen | a **truncation**, never a completion |
+| **not applicable** | **not** `text/event-stream` (an **absent** header included) | **complete** — a body with no terminal event has nothing left to wait for |
+
+The three **cut** shapes — the gap bound, our own deadline, a transport error — are truncations **whatever the
+media type**: they do not ask this predicate, because the body was cut mid-flight and a partial body is a
+partial body. The table above therefore decides exactly **one** arm: the clean end.
+
+**A `2xx` body that is not SSE is not a truncation, and its record says nothing at all.** `errors[]` is empty,
+there is **no** `details` object (so **no** `stream_end` key — absent, **not** `null`), `upstream.responded`'s
+`stream_completed` is `true`, `usage_missing` is `true` (no SSE carrier — §4.20.4's orthogonal axis), and the
+record lands in `succeeded`. Satisfied and not-applicable are deliberately **indistinguishable in the record**:
+a record states whether something went wrong, and a key for "the question was not asked" would give one absence
+two meanings. *The two costs, stated: a body mislabelled `text/event-stream` is judged by its label (a false
+incomplete on a real completion); an SSE body under a non-SSE label is never detected as truncated (a missed
+detection — today's behaviour, so no regression, and the conservative direction for a figure whose whole purpose
+is to stop overstating availability).*
+
+A truncation is recorded as it is today (a `200` head plus one `errors[]` entry with
 `kind: "upstream_error"` and `details.error_class: "stream_truncated"`, `details.stream: true`), and it
 **also** names its cause:
 
 | `details.stream_end` | The cause | Produced when | `details.window_ms` |
 |---|---|---|---|
 | **`idle_timeout`** | the upstream went **silent** | the per-read gap bound tripped with the connection still open | **present** — the window actually in force for that read (the `min()` above) |
-| **`upstream_ended_early`** | the upstream **closed first** | the body ended — a clean EOF, or a transport error — before the wire's terminal event | **absent** — no bound tripped |
+| **`upstream_ended_early`** | the upstream **closed first** | the body ended with **no bound tripped** — a clean EOF of an **SSE** body before its terminal event, or a transport error (any media type) | **absent** — no bound tripped |
 | **`request_timeout`** | **our own** outer bound | `server.request_timeout`'s deadline was reached | **present** — the effective window of the tripping read |
 
 The vocabulary is **closed** and `stream_end` is **never null** on a truncation entry. Alongside it, three
@@ -2229,9 +2252,9 @@ observables are always present on that entry:
 | `window_ms` | integer ms | the window in force for the tripping read — present **iff** a bound tripped (the table above) |
 | `since_last_byte_ms` | integer ms | the interval from the last byte received from the upstream to the verdict; measured from the head's arrival when no byte was ever received |
 
-The event log's `upstream.responded` carries the same two words (`stream_completed` = that same terminal
-predicate; `stream_end` present iff truncated), so the demotion rule of §4.20.5 is derivable from the
-event alone.
+The event log's `upstream.responded` carries the same two words (`stream_completed` = **not violated**, i.e.
+`true` unless the body was truncated — a body that is not SSE included; `stream_end` present iff truncated), so
+the demotion rule of §4.20.5 is derivable from the event alone.
 
 **Why the causes are separate, and not a boolean.** §4.20.5's instrument must be able to target **silence**
 alone: a graceful early close is not a stall, and punishing it would make a gateway fire on a route that is
@@ -2307,7 +2330,8 @@ optional object); no money, `usage` or ratio; no buffered-path timeout; no `over
 
 `CONF-108` (the key is its own, the three causes are distinguishable, a healthy stream and a slow head are
 untouched, reload reaches the next request only), `CONF-109` (the three buckets partition `requests`;
-`usage_missing` is orthogonal; `usage_missing` alone never moves the bucket), `CONF-110` (one silent
+`usage_missing` is orthogonal; `usage_missing` alone never moves the bucket; **a healthy body that is not SSE
+is a completion and lands `succeeded`, never an incomplete**), `CONF-110` (one silent
 truncation leaves one route-scoped advisory row with its 60 s bound; the next request walks away without a
 `failover.triggered` row; `QuotaExhausted` stays provider-wide; a lone cooling route is still served).
 `DESIGN` §12.8's rows carry them; `ADR-056` is the reasoning.
@@ -2385,8 +2409,12 @@ body bound refused (§4.13). The flag
 is what keeps such a record out of every rate, every sum and every gate — `vadis stats` counts it on
 its own line and prices it nowhere (§9.2) — and a record carrying it is never read as 0 usage.
 
-**A streamed response is complete only if its wire's terminal event arrived, and the record's bucket says so.**
-The terminal predicate is the wire's own (`[DONE]` for `chat`, the `responses` terminal events,
+**A streamed SSE response is complete only if its wire's terminal event arrived, and the record's bucket says so.**
+Completeness is asked **only of a `text/event-stream` body** (§4.20.3's three values: satisfied / violated /
+not applicable); a `2xx` body that is not SSE has no terminal event to wait for, so its clean end is a
+**completion** and it lands in `succeeded` — the cut shapes (the gap bound, our deadline, a transport error)
+remain truncations whatever the media type. For an SSE body the terminal predicate is the wire's own (`[DONE]`
+for `chat`, the `responses` terminal events,
 `message_stop` for `anthropic`); a body that ends without it is a **truncation** — a `200` head plus one
 `errors[]` entry with `details.error_class: "stream_truncated"` and a `details.stream_end` cause word
 (§4.20.3: `idle_timeout` / `upstream_ended_early` / `request_timeout`). The partition of `requests` is

@@ -5,6 +5,11 @@
   Until it lands, `server.stream_idle_timeout` is a key today's loader **refuses** (`deny_unknown_fields`),
   no trace record carries `details.stream_end`, `/metrics` has no incomplete series, and `CONF-108/109/110`
   are parked `#[ignore]`d.
+  *Amended in place (2026-10-17, `R74-0c`) before any code landed: the independent audit's two non-blocking
+  findings are folded into the text — §2.3's completeness predicate now has **three** values and is asked
+  only of an SSE body, §4.2 gains **CONF-109 limb (d)** (the false-incompletion control), and the new §6.1.1
+  writes the streaming client's two windows consumer by consumer. Nothing else moved: K = 1, the 60 s TTL and
+  the advisory rule are exactly as audited.*
 - Kind: **a contract change with no product byte.** It amends three documents (`docs/spec.md`,
   `design/DESIGN.md`, one dated note each on `ADR-053` and `ADR-011`), allocates three conformance IDs,
   writes their three case files **parked**, and freezes a short amendment list for three existing cases
@@ -29,7 +34,8 @@
   route"* is the door §5.4 walks through; `demotes_provider()` is untouched).
 - Cases: **`CONF-108`** (the gap bound is its own key, the three causes are distinguishable, the healthy
   stream is untouched, reload does not reach an in-flight request), **`CONF-109`** (the three buckets
-  partition `requests`, and `usage_missing` is orthogonal), **`CONF-110`** (a silent route orders one
+  partition `requests`; `usage_missing` is orthogonal; **a healthy body that is not SSE is a completion**,
+  never an incomplete), **`CONF-110`** (a silent route orders one
   short **route-scoped** advisory row; `QuotaExhausted` keeps its semantics). The three files land with
   this card, parked `#[ignore = "CONF-10N: depends on R74-1"]` (the `CONF-20…25` parking rule).
 - Related: `AGENTS.md` constraints **1** (no relayed byte changes — §2.5), **2** (determinism: nothing
@@ -167,7 +173,7 @@ present):
 | `stream_end` | The cause | Produced when | `window_ms` present? |
 |---|---|---|---|
 | `idle_timeout` | **the upstream went quiet** | the read's idle arm tripped with the connection still open | **yes** — the window that was in force for that read |
-| `upstream_ended_early` | **the upstream closed first** | the body ended (a clean EOF, or a transport error) **before the wire's terminal event** | **no** — no bound tripped |
+| `upstream_ended_early` | **the upstream closed first** | the body ended with **no bound tripped** — a clean EOF of an **SSE** body before its terminal event, or a transport error (any media type) | **no** — no bound tripped |
 | `request_timeout` | **our own outer bound** | `server.request_timeout`'s deadline was reached | **yes** — the effective window of the tripping read |
 
 and the three observables that make the causes checkable, each **always present on the entry**:
@@ -178,12 +184,53 @@ and the three observables that make the causes checkable, each **always present 
 | `window_ms` | the window that was **in force** for the tripping read, in integer ms — the `min()` above, never the configured key alone. Present iff a bound tripped (the table above) |
 | `since_last_byte_ms` | the interval from the last byte received from the upstream to the verdict, integer ms; when no byte was ever received, measured from the head's arrival. Always present |
 
-**The completeness rule that makes `upstream_ended_early` reachable.** A stream is **complete** iff the
-wire's own terminal event was seen (`[DONE]` for `chat`, the `responses` terminal events,
-`message_stop` for `anthropic` — `SseUsageExtractor::terminal_seen`, already computed). A clean body end
-without it is a truncation, not a completion; §1.2's last table row is the defect it retires. The event's
-`upstream.responded` payload keeps `stream_completed` as that same predicate and gains `stream_end`
-(present iff truncated).
+**The completeness rule that makes `upstream_ended_early` reachable.** Completeness is an **SSE** question, and
+its predicate has **three** values, not two. It is asked once, at the arm that ends the relay, and it reads
+two facts: **the media type of the head that answered** (`content-type`, parameters stripped,
+case-insensitive, exactly `text/event-stream`) and **whether the wire's own terminal event was seen**
+(`[DONE]` for `chat`, the `responses` terminal events, `message_stop` for `anthropic` —
+`SseUsageExtractor::terminal_seen`, already computed).
+
+| Value | When | A body that ends (`StreamRead::Ended`) is |
+|---|---|---|
+| **satisfied** | SSE, terminal seen | a completion |
+| **violated** | SSE, no terminal seen | a truncation — `stream_end: "upstream_ended_early"` when no bound tripped |
+| **not applicable** | the media type is **not** `text/event-stream` (an **absent** header included) | **a completion**: a body with no terminal event has nothing left to wait for |
+
+**Why the third value exists, and the harm it prevents.** Without it the predicate degenerates to
+`terminal_seen == true`, which is **false for every body that is not SSE** — so a *healthy* `2xx` body that is
+not SSE (a JSON answer to a `stream: true` request, a provider that ignored `stream`, an opaque body) would be
+filed as `stream_incomplete`: a **false accusation of an upstream that answered**, which is the same class of
+error §2.4 exists to remove, and it would turn this round's new figure into a new false one. The gate is the
+response's own **claim** — `text/event-stream` is the wire saying "a terminal event is coming" — which is the
+same kind of fact as `terminal_seen` itself: the wire's, never ours.
+
+**The cut arms are media-blind.** `idle_timeout`, `request_timeout` and the transport-error shape are
+truncations **whatever the media type**: those arms do not ask the predicate, because the body was cut
+mid-flight and a partial body is a partial body. The three-valued table therefore decides exactly **one** arm
+(the clean end); the other three keep §2.3's vocabulary unchanged, and an `idle_timeout` on a non-SSE body arms
+§2.5's advisory row like any other silence.
+
+**What a non-SSE `2xx` record carries: nothing new.** `errors[]` is **empty** — there is no truncation entry,
+so there is no `details` object at all: **no `stream_end`** (absent, not `null`), no `window_ms`, no
+`since_last_byte_ms`. The event's `stream_completed` stays `true` (the body ended and no completion was owed),
+and the record's `usage_missing` is `true` because no SSE carrier arrived — §2.4's orthogonal axis, which says
+nothing about completeness. The record is ordinary in every other respect and lands in `succeeded`.
+**Satisfied and not-applicable are deliberately indistinguishable in the record**: the record states whether
+something went wrong, and a key for "the question was not asked" would give one absence two meanings.
+`terminal_seen` stays a `bool` for the same reason — a tri-state in the tap would need the media type at the
+tap, and the tap sees bytes, never headers.
+
+**The two costs, stated.** (i) A body **mislabelled** `text/event-stream` (JSON under an SSE label, ending
+cleanly) is judged by its label and recorded as truncated: defensible, because a client parsing it as SSE would
+never see a terminal either, and the label is the wire's claim. (ii) A **SSE body under a non-SSE label** is
+never detected as truncated — a missed detection that is exactly today's behaviour, hence no regression, and
+the conservative direction: for a figure whose whole purpose is to stop overstating availability, a false
+incomplete is worse than a missed one.
+
+The event's `upstream.responded` payload keeps `stream_completed` as that same predicate's *not-violated*
+answer (`true` unless the body was truncated, a body that is not SSE included) and gains `stream_end` (present
+iff truncated).
 
 **Why this vocabulary and not "silence vs not".** F4's consequence must be able to target **silence**
 alone: `upstream_ended_early` is the shape an upstream's *graceful* early close takes (a provider-side
@@ -339,7 +386,7 @@ truncation rate. A route that has just stalled is de-preferred for the next minu
 provider fault can move traffic instead of holding it.
 
 **Paid.** `succeeded` drops by the truncation rate with no behavioural regression (a correction, §2.4).
-A **cleanly early-ended** stream that today reads as complete now reads as incomplete — a real change of
+A **cleanly early-ended SSE** stream that today reads as complete now reads as incomplete — a real change of
 recorded outcome for a real fault (§2.3). And a config file that today loads will, after R74-1, apply a
 30 s gap bound it never asked for: the one value that moves without an operator writing anything, which
 is why §4.15's reload clause and the `book/` sentence (§6.3) exist.
@@ -372,6 +419,7 @@ trace JSONL, the event log and `/metrics` as a stranger would, and asserts **val
 | **(a) the partition** | three requests in one window on one process: a clean `[DONE]` stream (2xx), an explicit failure (a streamed upstream `500` refused — non-2xx), and a silent-head-then-body-cut stream (2xx with a truncation entry) | `GET /metrics` | `vadis_requests == 3`, `vadis_requests_succeeded == 1`, `vadis_requests_failed == 1`, `vadis_requests_stream_incomplete == 1`, and the sum equals `vadis_requests` | the base tree (there is **no** incomplete series, and `succeeded == 2`) |
 | **(b) `usage_missing` is orthogonal** | the same run: none of the three carried a measurement (chat carries usage only when the client asks for it) | `/metrics` and the three records | `vadis_requests_usage_missing == 3` **and** the three buckets unchanged by it; the truncated record is counted in **both** `stream_incomplete` and `usage_missing` (its own record's `usage_missing: true` is asserted); the `vadis stats` equality is `CONF-87`'s (its aggregator adopts the same predicate under §5 A3) | an implementation that makes `usage_missing` a fourth bucket (the sum then misses the truncated record); one that excludes `usage_missing` records from the buckets; two derivations that disagree |
 | **(c) `errors[]` non-empty is not the discriminator** | a clean, byte-complete stream that carries **no usage** (no `stream_options.include_usage`, no usage carrier) — `[DONE]` seen, so the stream is complete, and `usage_missing: true` | the one record and `/metrics` | the record has `errors[]` **empty** and `usage_missing: true`; it is counted in `succeeded` **and** in `usage missing`, and **not** in `stream_incomplete` | an implementation that buckets on `usage_missing` or on "`errors[]` non-empty", which would file this healthy request as incomplete |
+| **(d) a healthy body that is not SSE is a completion, not an incomplete** — the false-incompletion control | **two requests, one window of its own** (so (a)'s counts stay as authored), one mock, **the same body bytes twice**, differing only in the header: request 1's answer is `200` + `content-type: text/event-stream` with one event and a clean close (no terminal); request 2's answer is `200` + `content-type: application/json` with the same bytes and a clean close | the two trace records and `GET /metrics` of that window | request 1: one `errors[]` entry with `details.error_class: "stream_truncated"`, `details.stream_end == "upstream_ended_early"`, `upstream.responded.stream_completed == false`; request 2: `errors[]` **empty**, **no** `details` object (so **no** `stream_end` key — absent, **not** `null`), `stream_completed == true`, `usage_missing: true`; `/metrics`: `vadis_requests == 2`, `succeeded == 1`, `stream_incomplete == 1`, `failed == 0`, and the sum equals `requests` | **the self-made red**: delete the media-type gate (ask `terminal_seen` at the `Ended` arm unconditionally, or make the media test answer `true`) and request 2 files as `stream_incomplete` — `succeeded == 0`, `stream_incomplete == 2`, a truncation entry carrying `stream_end: "upstream_ended_early"` on a body the upstream **finished**. Also red at the base tree, which has no incomplete series at all |
 
 ### 4.3 `CONF-110` — the short, route-scoped, advisory row
 
@@ -419,13 +467,42 @@ asserting fixture that ends before its wire's terminal event except the ones nam
 | File | Change |
 |---|---|
 | `crates/vadis-core/src/config.rs` | `ServerCfg.stream_idle_timeout` (default `30s`, range `1s..=300s`, load refusal naming the key), the example/embedded pair in step |
-| `crates/vadis-providers/src/stream.rs` | the client carries **two** windows (`head_timeout` = the attempt budget, `idle_timeout` = the new key); `read_chunk` keeps its signature; `open` keeps the head wrap. The client stays **per request** (it is today, `stream_forward.rs:891-892`) — hoisting it to a startup-built object would silently make the key reload-refused |
-| `crates/vadis-proxy/src/stream_forward.rs` | the driver reads the new key **once** at entry; `st.relayed` becomes a byte counter; `record_classified` / `record_terminal` write `stream_end`, `relayed_bytes`, `window_ms`, `since_last_byte_ms`; the `Ended` arm asks `terminal_seen` before declaring completeness; the truncation arm emits the `demotion` object and lands the projection |
-| `crates/vadis-protocol/src/sse.rs` | expose `terminal_seen` (it exists; `finish()` already branches on it) to the relay |
+| `crates/vadis-providers/src/stream.rs` | the client carries **two** windows — `head_timeout` (the attempt budget) and `idle_timeout` (the new key), each fed to the consumers listed in **§6.1.1**; `read_chunk` keeps its signature (its caller hands it one window); `open` keeps the head wrap, on the head window. The client stays **per request** (it is today, `stream_forward.rs:891-892`) — hoisting it to a startup-built object would silently make the key reload-refused |
+| `crates/vadis-proxy/src/stream_forward.rs` | the driver reads **both** keys **once** at entry and puts the pair on `RelayCtx` (`head_timeout`, `idle`); `st.relayed` becomes a byte counter and `st.content_type` carries the head that **answered**; `record_classified` / `record_terminal` write `stream_end`, `relayed_bytes`, `window_ms`, `since_last_byte_ms`; the `Ended` arm asks §2.3's **three-valued** predicate (media type × `terminal_seen`, §6.1.1 item 5) before declaring completeness; the truncation arm emits the `demotion` object and lands the projection |
+| `crates/vadis-protocol/src/sse.rs` | expose `terminal_seen` (it exists; `finish()` already branches on it) to the relay as a read-only accessor, **and** add the predicate's other fact as a pure helper: is this `content-type` `text/event-stream` (parameters stripped, ASCII case-insensitive, `None` ⇒ `false`). Both facts belong to the wire crate; the **derivation** (§2.3's three values) belongs to the relay, which is the only place that holds both |
 | `crates/vadis-proxy/src/forward.rs` | the demotion object's **one shape** (`scope, provider, model, until_us, ttl_s, reason` — §6.2), and the walk's per-candidate availability read passes the model (`Query::Cooldown { model: Some(..) }`) with the advisory rule |
 | `crates/vadis-core/src/error_class.rs` | the `Demotion` doc comment ("this round writes no route-scoped cooldowns") — comment only; **`demotes_provider()` is not touched** |
 | `crates/vadis-cli/src/stats.rs`, `src/metrics.rs` | the three-bucket predicate in **one** function; the new line/series |
 | `config.example.yaml` + the binary's embedded copy, `setup/sections.rs` if the key joins the askable set | the key with its default and a one-line comment. **Recommendation: not askable** — the wizard's set is bounded by §4.11 and the key has a good default; adding it is a separate §4.11 change |
+| `tests/conformance/tests/conf_109_the_three_buckets_partition_requests.rs` | gains **limb (d)** (§4.2) as its own test function — its own process, port and window, because (a)'s numbers are the contract's — with two queued answers carrying the **same** body bytes and differing only in the header: `CannedResponse::sse(vec![SseChunk::event(..)])` with **no** terminal chunk (clean close) and `CannedResponse::json(200, "OK", <the same bytes>)`. The `#[ignore]` attribute stays until `R74-1` un-parks the file; the other two case files keep their limbs as authored |
+
+### 6.1.1 The streaming client's two windows — every consumer, named
+
+**This is a landing entry, not an implication.** `ReqwestStreamClient` holds **one** field today, `idle_timeout`,
+and three unrelated consumers read it as three different bounds: `connect_timeout()` (`stream.rs:98`), `open()`'s
+head wrap (`:136`), and every `read_chunk` (`:50`, `:200`). One value, three meanings — §2.1's defect, one layer
+down. After `R74-1` the struct carries **two** windows, each with **exactly one source key**, and **no consumer
+composes, defaults or re-reads a value**:
+
+| # | Consumer (site) | Window it takes | Source |
+|---|---|---|---|
+| 1 | `reqwest::ClientBuilder::connect_timeout` (`stream.rs:98`) | `head_timeout` | `server.upstream_attempt_timeout` — connect stays on the attempt knob (§2.1) |
+| 2 | `open()`'s `tokio::time::timeout` around the send (`:136`) | `head_timeout` | the same key; head arrival is the attempt's clock (ADR-053 §2.1 item 1) |
+| 3 | `read_chunk` in the **relay** (`stream_forward.rs:1816`) | the caller's **composed** window, `min(idle, time-until-deadline)` (`:1815`) | `server.stream_idle_timeout` **composed with** `server.request_timeout` — composed by the relay, never by the client |
+| 4 | `read_chunk` inside `StreamHead::into_upstream_response` (`stream.rs:50`), i.e. a **failure** head's evidence body (`stream_forward.rs:1294`) | `idle_timeout` | `server.stream_idle_timeout` — **spec §4.2's existing sentence** ("bounded exactly as the relay's own reads are") already names it; that body is never relayed, but the contract has placed it on the gap bound, not on the attempt knob |
+| 5 | a client **built mid-request** by `failover_zero_byte` (`stream_forward.rs:1922-1924`, which today passes `ctx.idle` alone) | **both**, from the request's own frozen pair: `ctx.head_timeout` **and** `ctx.idle` | the two values the driver read **once** at `:891`; `RelayCtx` gains `head_timeout` beside `idle` |
+
+**Why item 5 is the one that must be written down.** That construction is the only place a client is built
+*after* the request has started, so it is the place where a single-field struct silently re-creates the old
+defect: pass `ctx.idle` to both consumers and the failover attempt gets a 30 s **connect and head** budget
+instead of the attempt knob's — a failover that fails fast for the wrong reason. Pass the config's live values
+instead of the pair on `ctx` and a reload lands inside an in-flight request, which §2.1's read site forbids and
+`CONF-108` limb (d) turns red on. **The pair comes from `ctx`, and only from `ctx`.**
+
+**And the gate's other fact has the same shape** (§2.3). `st.content_type` is the head that **answered**;
+`ctx.content_type` is the first head's — the one already written to the client — and `failover_zero_byte` does
+not refresh it, so after a zero-byte failover the two disagree (`R74-0-F7`, §9). One field on the relay state,
+set where a head is adopted, serves the predicate and the cache record's `content_type` together.
 
 ### 6.2 The `demotion` object's one shape (a repair R74 forces, stated so it is not hidden)
 
@@ -537,6 +614,7 @@ boundary, so both are `R74-1`'s to land (AGENTS constraint 8).
 | **`R74-0-F4`** | unmeasured-effect | F4's live effect (does traffic actually move?) | unobservable on the existing trace: no cooldown row ever existed, so there is nothing to correlate. `R74-1` asserts the mechanism on a rig (`CONF-110` limbs b/d) and the live window is read **after** deployment | `R74-1` | this round |
 | **`R74-0-F5`** | registered-bounded | `/health`'s `probe.blocked_by: "primary_cooling_down"` does not see a `stream_silence` row | deliberate (§2.5.4): a 60 s selection preference is not evidence about an account. A reader must not read the asymmetry as a bug | human | if a round revisits the probe gate |
 | **`R74-0-F6`** | registered-out-of-scope | `overhead_ms_p99` still measures the model's generation time for streamed requests (the audit's F3) | R74 changes the bucket, not the figure; the truncated records keep inflating it, so **no comparison of that figure across R74 is meaningful** | `R77` | R77 |
+| **`R74-0-F7`** | stale-answer-fact | `stream_forward.rs:1206` captures the **first** head's `content_type` into `ctx`, and `failover_zero_byte`'s success arm (`:1960-1970`) adopts a new head without refreshing it — so after a zero-byte failover `ctx.content_type` describes the **abandoned** attempt | two readers take it for the answer's: §2.3's media gate (new — it would judge the settling body by the abandoned head's label, i.e. exactly the false-incomplete class fix A exists to prevent) and `record_terminal`'s cache record (`:2138`, where a body could be stored and later replayed under the wrong `content-type`). **Repaired by `R74-1`** as a forced consequence of A's landing: one `st.content_type`, set where a head is adopted (§6.1.1). No decision moves | `R74-1` | this round |
 
 ---
 
@@ -551,6 +629,10 @@ boundary, so both are `R74-1`'s to land (AGENTS constraint 8).
 - **Not** *"`usage_missing` became a bucket."* It is a second partition, and the two are never added.
 - **Not** *"a cleanly-ended stream is now penalised."* `upstream_ended_early` is recorded as incomplete
   and **never** orders a cooldown; only `idle_timeout` does (§2.5).
+- **Not** *"a `2xx` body that is not SSE was judged and passed."* Completeness is asked **only** of a
+  `text/event-stream` body; everything else has no terminal event to wait for, and its clean end is a
+  completion **by the absence of the question** (§2.3). A record that says nothing is not a record that
+  passed a test — and the cut arms stay truncations whatever the media type.
 - **Not** *"silence demotes the provider."* The row is `scope: "route"`, TTL 60 s, advisory, and
   invisible to the probe gate. `QuotaExhausted` remains the only provider-wide demotion.
 - **Not** *"a silence row can refuse a request."* It cannot — that is the availability cliff §2.5.3
