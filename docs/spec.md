@@ -837,10 +837,16 @@ for a byte loop. Comparing the two lengths first is accepted and documented here
 **Exemption.** `GET /health` **always** answers without a token: it is the liveness probe, and a probe
 that needs a credential cannot be used by whatever supervises the process. Nothing else is exempt, and
 the exemption is **structural** — the guard is applied to the guarded routes' own layers (the three
-protocol endpoints, plus the guarded non-protocol routes `GET /metrics` §4.16 and `GET /state/events`
-§4.18, each with its own word), never to `/health` — not a path comparison inside the guard that a later
+protocol endpoints, plus the guarded non-protocol routes `GET /metrics` §4.16, `GET /state/events`
+§4.18 and `GET /v1/models` §4.19, each with its own word), never to `/health` — not a path comparison inside the guard that a later
 edit could get wrong. A guarded non-protocol route's refusal record carries that route's own word in
-`protocol.protocol_in` (`"metrics"`, `"state"`) — the vocabulary a §6 reader filters on.
+`protocol.protocol_in` (`"metrics"`, `"state"`, `"models"`) — the vocabulary a §6 reader filters on.
+
+**`GET /v1/models` is guarded, and that is a decision, not an oversight** (ADR-055 §3): its answer is a
+deployment fact — which names this process will route — not a liveness answer, so it is not
+`/health`'s class of probe. The client that asks for it holds the credential the way every other
+client does (`env_key` names the variable); a client that omits it is refused like anything else. A
+refusal is one trace record with `protocol.protocol_in = "models"`, exactly as the two surfaces above.
 
 **A refusal is not an upstream failure.**
 
@@ -2054,6 +2060,79 @@ and the window.
 the guard's four arms with `protocol_in: "state"`; the window bound; and `vadis stats`'s fallback resolving
 the figure against a live gateway. DESIGN §12.8's rows carry them.
 
+### 4.19 `GET /v1/models` (the configured alias names, as a model list)
+
+*Status: **contracted, not served.** The contract below was frozen on 2026-10-17 by the owner's ruling
+(ahead of the change that implements it), and §9.3's *"a documented-but-unreachable surface is a
+defect"* is the price this round pays knowingly: the route lands in a separate change, `CONF-107` is
+parked `#[ignore]`d with that change named in its reason, and the book and README say **contracted, not
+served** in the user's own words. Until then `GET /v1/models` answers `404` and this page describes the
+target, not the tree. The authority and the rejected alternatives are
+[ADR-055](../design/decisions/ADR-055-the-model-list-surface.md).*
+
+**One endpoint, one namespace, one reader: the loaded configuration's `aliases:` keys, read from the
+revision in force and answered as the OpenAI model-list shape — so a client that probes
+`<base_url>/models` for reachability (codex's `doctor` probe is one, measured) meets a surface that
+exists and says what it can route.** It dials nothing, prices nothing, and writes nothing.
+
+| Property | Value |
+|---|---|
+| Method / path | `GET /v1/models` (one route, one method; no query parameter is read, no pagination, no second path). `HEAD` is answered as `GET` is, with the body removed (axum's `get` route serves it): stated so a reader is not surprised, not asserted — one route, one method in the contract |
+| Auth | behind `server.auth_token_env`'s guard, exactly as `/metrics` and `/state/events` (§4.7: *"Nothing else is exempt"*). The token arrives in `Authorization: Bearer *** or `x-api-key: *** (§4.7's two accepted forms) |
+| Success | `200`, `application/json` — the body below |
+| Refused (a token is configured and the request carries none, or a wrong one) | `401` with §8's unified body (`error.type = "unauthorized"`, `details.header`), `X-Vadis-Request-Id` present, **one** trace record of §6's pre-pipeline class whose `protocol.protocol_in` is **`"models"`**, and no store row — §4.7's refusal table, unchanged |
+| Any other method on the path, admitted | `405` with `allow: GET`; **no** §8 error body, **no** trace record, no event row |
+| Auth precedes method dispatch | a non-`GET` **without** a valid token is the guard's `401` (with its one record), never a `405`: the guard is the route's own layer and decides before the method router does, exactly as on `/metrics` and `/state/events`. Both directions are asserted (`CONF-107`) |
+| Status set | admitted: exactly `{200, 405}`; refused: exactly `{401}`. Never `404` (the route is served), never `500`, never `501` |
+| Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it the configuration's `aliases:` map — nothing else: **not** the store, **not** the trace, **not** a config file, **not** the network |
+| Writes | nothing on the admitted arm (a refusal writes the guard's one record): no trace record, no event row, no cost, no session, no prefix block |
+
+**The body** (the alias names are illustrative; each entry has exactly four keys, in the order below):
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "chat-fast",   "object": "model", "created": 0, "owned_by": "vadis" },
+    { "id": "coding-bulk", "object": "model", "created": 0, "owned_by": "vadis" },
+    { "id": "coding-fast", "object": "model", "created": 0, "owned_by": "vadis" }
+  ]
+}
+```
+
+| Key | Type | Semantics |
+|---|---|---|
+| `object` | string | **the constant `"list"`.** The OpenAI list shape, so a client that already parses it needs no new code |
+| `data[]` | array | one entry per key of the configuration's `aliases:` (§4), **in ascending byte order of `id`** — the `BTreeMap`'s own order, stated as a contract because the wire order is observable. An empty `aliases:` ⇒ `[]` |
+| `data[].id` | string | the **alias name verbatim** — the string a client writes into `model`, and the only name this surface publishes. **Never a `provider/model` string**, never a provider name, never a member's route |
+| `data[].object` | string | **the constant `"model"`** — the OpenAI entry shape's own value |
+| `data[].created` | integer | **the constant `0`**, always. vadis holds no per-alias creation instant, so any other value would be invented; a constant also keeps the body a pure function of the roster (§4's determinism discipline — the wall clock, the process start and the file's mtime are each rejected) |
+| `data[].owned_by` | string | **the constant `"vadis"`.** The alias namespace is the operator's (and vadis's), not the provider's; naming the provider here would publish the routing this surface deliberately withholds |
+
+**Order and byte stability.** `data[]` is ascending by `id`; two calls answered by one revision are
+**byte-identical** (no clock, no random, no per-process state). The order is a property of the
+contract, not a promise a reader may infer from an implementation's choice of map.
+
+**Reload.** `aliases` is a reloadable face (§4.15): after an accepted reload the list follows the new
+revision **without a restart**, while a request already in flight is answered by the revision that
+admitted it (rule 3, the capture-once read). Nothing about this endpoint is a reload-refused key.
+
+**What may not be exported.** The body is `object` plus `data[]`; anything a later round adds is a
+contract change, not an extension. Specifically **not** carried here: the resolved `provider/model`
+route (it publishes the deployment's account topology), the provider list, the `account:` / plan
+family classification, per-model metadata (context window, price, the declared `supports` cells —
+price has one source, §4.0), any `/metrics` counter and any figure, and a per-call
+`X-Vadis-Request-Id` on the `200` arm (no request exists to correlate; `/metrics` and `/state/events`
+already answer the same way). Single-model retrieval (`GET /v1/models/{id}`) is a **non-goal** — it
+would turn the endpoint into an alias-name oracle — and a query string is **ignored** rather than
+refused (an OpenAI-compatible client appends one without meaning anything by it).
+
+**Assertions.** `CONF-107`: the three-alias roster's `200` with exactly three ids in order and two
+byte-identical calls; the route strings' absence from the body; the guard's `401` with exactly one
+`protocol_in: "models"` record; the empty roster's `200` with `data: []`; the `200` arm's empty stage
+set (no trace line, no event row, no cost, no session, no prefix); the method face (`405` admitted,
+`401` unauthenticated) and the reload. DESIGN §12.8's row carries them.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
@@ -2880,6 +2959,15 @@ computed for it), money is **integer fixed-point nano** with the window's curren
 surface does not invent decimals — and a window holding two currencies carries both, per §4.8, never a
 combined figure. Its assertions are `CONF-46` (the served surface and its refusal) and `CONF-87` (the
 figures are §9.2's).
+
+**`GET /v1/models` is contracted and not yet served — a dated, bounded exception to this rule.** Its
+contract is **§4.19**, frozen on 2026-10-17 by the owner's ruling
+([ADR-055](../design/decisions/ADR-055-the-model-list-surface.md)), so that the change which lands the
+route is written against a reviewed shape rather than against a proposal. The exception is bounded
+three ways: the route answers `404` today and §4.19's status line says exactly that; `CONF-107` is
+parked `#[ignore = "CONF-107: depends on R73-1"]`, so the suite is never red while the gap is open;
+and the change that closes it is named (`R73-1`, ADR-055 §6), after which this paragraph is removed
+and §4.19's status reads *served*. Nothing else may be added to this exception.
 
 The reason to name them here at all is the rule this section exists to keep: **a surface's shape is frozen by
 the change that implements it, and a documented-but-unreachable surface is a defect** — the same class of defect
