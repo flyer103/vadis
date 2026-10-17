@@ -874,6 +874,41 @@ pub async fn serve(config_path: &str) -> i32 {
             ))
     }
 
+    /// `GET /v1/models` (spec §4.19, ADR-055, DESIGN §12.8): the model
+    /// list surface — the configured alias names, and nothing else. The
+    /// fourth guarded non-protocol route: same guard middleware as
+    /// `/metrics`, its own word `"models"`, and — like `/metrics` — no
+    /// body extractor, no body layer, no request byte read. The handler
+    /// reads the revision the guard already captured (ADR-040 D2's
+    /// capture-once rule: the extensions copy, never a second cell
+    /// read), so the body follows the revision that admitted the call,
+    /// reload included. The body itself is the pure builder in
+    /// `vadis-proxy`'s `models_read`. The admitted arm writes nothing.
+    fn guarded_models_route(revision: vadis_proxy::SharedRevision) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/v1/models",
+                get(
+                    |axum::Extension(rev): axum::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >| async move {
+                        (
+                            StatusCode::OK,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            vadis_proxy::models_body_from_config(&rev.forwarder.config),
+                        )
+                    },
+                ),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(
+                GuardState {
+                    revision,
+                    proto_in: "models",
+                },
+                guard_mw,
+            ))
+    }
+
     /// `GET /state/events` (spec §4.18, ADR-054, DESIGN §12.24): the live
     /// event-log figure, answered by the running process from its own
     /// store. The third guarded non-protocol route: same guard middleware
@@ -1085,6 +1120,7 @@ pub async fn serve(config_path: &str) -> i32 {
             max_body_bytes,
         ))
         .merge(guarded_metrics_route(cell.clone(), state.clone()))
+        .merge(guarded_models_route(cell.clone()))
         .merge(guarded_state_route(cell.clone(), state.clone()))
         .with_state(());
 

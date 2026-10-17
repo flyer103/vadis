@@ -1646,10 +1646,11 @@ here — that branch is never switched, merged or deleted by this round; **the n
 tree's maximum and beyond that promise is `CONF-107`**, and this round takes it. **This round is the
 one case that lands its file ahead of its implementation**, by the owner's split of the work: the
 contract is reviewed on its own (`R73-0`), the route lands against it (`R73-1`), and in between the
-case is parked `#[ignore = "CONF-107: depends on R73-1"]` and spec §9.3 carries the same fact as a
+case was parked `#[ignore = "CONF-107: depends on R73-1"]` and spec §9.3 carried the same fact as a
 **dated, bounded exception** to its own *"a documented-but-unreachable surface is a defect"* rule
-(spec §4.19's status line says *contracted, not served*). `R73-1` removes the attribute; the row above
-does not change then (an ID and its assertion are the contract, the parking is not).
+(spec §4.19's status line said *contracted, not served* in the interim). `R73-1` has since removed
+the attribute; the row above did not change (an ID and its assertion are the contract, the parking
+is not).
 **One registry repair rides with this paragraph, forced by the measurement and not a new decision**:
 this section's **heading** moves from `` `CONF-01…CONF-106` `` to `` `CONF-01…CONF-107` `` — the same
 drift this section forbids (R50's/R66's/R69's/R71's precedent above). No existing assertion is touched:
@@ -1824,15 +1825,15 @@ event row, no cost, no session, no prefix block; the method face `{200, 405}` on
 `{401}` on the refused one, with **auth preceding method dispatch** (the route-layer wiring
 `guarded_metrics_route` / `guarded_state_route` already use); the empty roster's
 `200 {"object":"list","data":[]}`; and **one request = one revision** (capture-once, §4.15 rule 3), so a
-reload moves the list with no restart. `CONF-107` (§12.8's new row) is its witness, parked
-`#[ignore = "CONF-107: depends on R73-1"]`. **Two consequences land on named cards, and this line
+reload moves the list with no restart. `CONF-107` (§12.8's new row) is its witness. **Two consequences land on named cards, and this line
 records both so the rule is checkable:** (i) the route and the body builder are **`R73-1`**'s
 (`guarded_models_route` + the merge in `crates/vadis-cli/src/lib.rs`; the pure builder in
 `crates/vadis-proxy/src/models_read.rs`), and that card flips spec §4.19's status to *served*, deletes
 §9.3's exception paragraph, flips the book and README sentences, and un-parks the case; (ii) the
-sentences that ship **now** claim nothing the tree does not do — they say *contracted, not served*, and
-`GET /v1/models` answers `404` on this HEAD (measured, 2026-10-17). **What this register line may not
-claim:** nothing here is served; **no `codex doctor` outcome is promised** — a probing client must carry
+sentences that shipped with `R73-0` claimed nothing that tree did not do — they said *contracted, not
+served*, and `GET /v1/models` answered `404` on that HEAD (measured, 2026-10-17); `R73-1` landed the
+route, un-parked the case and flipped them. **What this register line may not
+claim:** **no `codex doctor` outcome is promised** — a probing client must carry
 the token when inbound auth is on, and whether codex's own probe attaches it is `R73-1`'s measurement,
 not this contract's assumption; a `200` from this surface says the process is up and *which names* it
 routes — it dials no upstream, so it says nothing about a provider's reachability; and a model reachable
