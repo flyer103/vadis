@@ -180,7 +180,6 @@ fn truncation(rec: &Value) -> &Value {
 
 /// (a) The silent stream: cut at the new key, with its cause named.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-108: depends on R74-1"]
 async fn conf_108_a_silence_is_cut_at_the_gap_bound() {
     let dir = testkit::tempdir("conf108a");
     let upstream = testkit::MockUpstream::start().await.unwrap();
@@ -278,7 +277,6 @@ async fn conf_108_a_silence_is_cut_at_the_gap_bound() {
 /// (b) A clean early end is a truncation with a *different* cause — and the
 /// base tree calls it complete.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-108: depends on R74-1"]
 async fn conf_108_b_clean_early_end_is_its_own_cause() {
     let dir = testkit::tempdir("conf108b");
     let upstream = testkit::MockUpstream::start().await.unwrap();
@@ -397,7 +395,6 @@ async fn head_delayed_listener(head_delay_ms: u64, events: Vec<Vec<u8>>) -> u16 
 /// A healthy stream is untouched — and the new key does not bound the
 /// head.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-108: depends on R74-1"]
 async fn conf_108_c_healthy_stream_and_head_are_unaffected() {
     let dir = testkit::tempdir("conf108c");
     // The head is written only after 800 ms: over the 400 ms gap bound (which
@@ -459,7 +456,6 @@ async fn conf_108_c_healthy_stream_and_head_are_unaffected() {
 
 /// (d) Reload reaches the next request, never the one in flight.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-108: depends on R74-1"]
 async fn conf_108_d_reload_applies_to_the_next_request_only() {
     let dir = testkit::tempdir("conf108d");
     let upstream = testkit::MockUpstream::start().await.unwrap();

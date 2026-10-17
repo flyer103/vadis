@@ -191,7 +191,6 @@ async fn start_vadis(
 /// (a)+(b) One silent truncation leaves one route-scoped row, and the next
 /// request walks away.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-110: depends on R74-1"]
 async fn conf_110_a_b_one_silence_steers_the_next_selection() {
     let dir = testkit::tempdir("conf110ab");
     let p1 = testkit::MockUpstream::start().await.unwrap();
@@ -289,7 +288,6 @@ async fn conf_110_a_b_one_silence_steers_the_next_selection() {
 
 /// (c) `QuotaExhausted` keeps its provider-wide shape, side by side.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-110: depends on R74-1"]
 async fn conf_110_c_quota_exhaustion_stays_provider_wide() {
     let dir = testkit::tempdir("conf110c");
     let p1 = testkit::MockUpstream::start().await.unwrap();
@@ -357,7 +355,6 @@ async fn conf_110_c_quota_exhaustion_stays_provider_wide() {
 
 /// (d) The row is advisory: a lone cooling route is still attempted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-110: depends on R74-1"]
 async fn conf_110_d_advisory_row_never_refuses() {
     let dir = testkit::tempdir("conf110d");
     let p1 = testkit::MockUpstream::start().await.unwrap();

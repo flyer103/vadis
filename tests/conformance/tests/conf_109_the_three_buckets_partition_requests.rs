@@ -149,7 +149,6 @@ async fn start_vadis(
 
 /// (a)+(b) The partition, and `usage_missing` as an orthogonal axis.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-109: depends on R74-1"]
 async fn conf_109_a_three_buckets_partition_requests() {
     let dir = testkit::tempdir("conf109a");
     let upstream = testkit::MockUpstream::start().await.unwrap();
@@ -247,7 +246,6 @@ async fn conf_109_a_three_buckets_partition_requests() {
 
 /// (c) A complete stream with no usage carrier stays in `succeeded`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-109: depends on R74-1"]
 async fn conf_109_c_a_complete_stream_without_usage_is_still_a_success() {
     let dir = testkit::tempdir("conf109c");
     let upstream = testkit::MockUpstream::start().await.unwrap();
