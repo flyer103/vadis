@@ -148,12 +148,12 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 /// Waits until the accepted reload shows on `/health` (the digest
 /// moved) — the buffered case's own reload observation, verbatim.
 fn wait_for_reload(addr: &str, before: &str) {
-    for _ in 0..100 {
+    for _ in 0..240 {
         let h = http_get(addr, "/health");
         if h["config"]["config_digest"].as_str() != Some(before) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(250));
     }
     panic!("the reload never showed on /health");
 }

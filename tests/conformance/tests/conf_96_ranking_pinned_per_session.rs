@@ -137,13 +137,15 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
 }
 
 /// Waits until the accepted reload shows on `/health` (the digest moved).
+/// 240 x 250ms = 60s: the same window CONF-107 limb (g) landed — an
+/// 18s reload was measured under load, 60s is ~3x that, still bounded.
 fn wait_for_reload(addr: &str, before: &str) {
-    for _ in 0..100 {
+    for _ in 0..240 {
         let h = http_get(addr, "/health");
         if h["config"]["config_digest"].as_str() != Some(before) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(250));
     }
     panic!("the reload never showed on /health");
 }
