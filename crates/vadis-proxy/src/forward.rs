@@ -2380,11 +2380,7 @@ impl Forwarder {
         let demotion = cls
             .demotion
             .map(|d| {
-                let scope: &'static str = if d.provider_wide {
-                    "provider"
-                } else {
-                    "route"
-                };
+                let scope: &'static str = if d.provider_wide { "provider" } else { "route" };
                 let (provider, model) = match route {
                     Some(r) => (
                         r.provider.clone(),
@@ -2402,14 +2398,7 @@ impl Forwarder {
             })
             .map(|(scope, ttl_s)| {
                 let (_, provider, model, until_us) = demotion_write.as_ref().unwrap();
-                demotion_json(
-                    scope,
-                    provider,
-                    model,
-                    *until_us,
-                    ttl_s,
-                    cls.class.as_str(),
-                )
+                demotion_json(scope, provider, model, *until_us, ttl_s, cls.class.as_str())
             });
         let (key_index, reprefill, switch_cost) = match rotation {
             Some((k, r, c)) => (Some(json!(k)), r.map(|t| json!(t)), c.map(|n| json!(n))),

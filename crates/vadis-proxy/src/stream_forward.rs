@@ -1734,8 +1734,7 @@ impl Forwarder {
         // non-cooling candidate exists, so the narration and the walk
         // cannot disagree about where the request lands.
         let eligible = |c: &Candidate| {
-            !attempted.contains(&c.route.provider)
-                && !self.provider_in_cooldown(&c.route.provider)
+            !attempted.contains(&c.route.provider) && !self.provider_in_cooldown(&c.route.provider)
         };
         candidates
             .iter()
@@ -1932,20 +1931,20 @@ fn relay_stream(
                         // terminal seen ⇒ completion. SSE without it ⇒ a
                         // truncation whose cause is `upstream_ended_early`
                         // — no bound tripped, so no `window_ms`.
-                        let truncated =
-                            if vadis_protocol::sse::is_text_event_stream(st.content_type.as_deref())
-                                && !st.tap.terminal_seen()
-                            {
-                                Some(TruncationInfo {
-                                    reason: "the upstream closed the body before its wire's \
+                        let truncated = if vadis_protocol::sse::is_text_event_stream(
+                            st.content_type.as_deref(),
+                        ) && !st.tap.terminal_seen()
+                        {
+                            Some(TruncationInfo {
+                                reason: "the upstream closed the body before its wire's \
                                              terminal event"
-                                        .to_string(),
-                                    stream_end: "upstream_ended_early",
-                                    window_ms: None,
-                                })
-                            } else {
-                                None
-                            };
+                                    .to_string(),
+                                stream_end: "upstream_ended_early",
+                                window_ms: None,
+                            })
+                        } else {
+                            None
+                        };
                         if let Some(t) = truncated.as_ref() {
                             record_classified(&ctx, &st, t);
                         }
@@ -2059,7 +2058,8 @@ async fn failover_zero_byte(
         // reach into an in-flight request) and never `idle` alone (the
         // failover attempt would get the gap bound as its connect/head
         // budget and fail fast for the wrong reason).
-        let Ok(client) = vadis_providers::stream::ReqwestStreamClient::new(ctx.head_timeout, ctx.idle)
+        let Ok(client) =
+            vadis_providers::stream::ReqwestStreamClient::new(ctx.head_timeout, ctx.idle)
         else {
             return false;
         };

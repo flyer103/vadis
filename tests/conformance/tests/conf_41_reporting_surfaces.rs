@@ -200,7 +200,10 @@ async fn conf_41_health_plan_section_and_stats_match_the_records() {
         .count() as u64;
     assert_eq!(rep.figures.succeeded, succeeded, "succeeded");
     assert_eq!(rep.figures.failed, failed, "failed");
-    assert_eq!(rep.figures.stream_incomplete, incomplete, "stream incomplete");
+    assert_eq!(
+        rep.figures.stream_incomplete, incomplete,
+        "stream incomplete"
+    );
     assert_eq!(
         rep.figures.succeeded + rep.figures.failed + rep.figures.stream_incomplete,
         rep.figures.requests,

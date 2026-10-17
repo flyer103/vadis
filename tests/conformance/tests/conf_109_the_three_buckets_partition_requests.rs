@@ -350,8 +350,7 @@ async fn conf_109_d_a_body_that_is_not_sse_is_a_completion() {
         .find(|e| e["details"]["error_class"] == "stream_truncated")
         .expect("the SSE-labelled body truncates");
     assert_eq!(
-        e1["details"]["stream_end"],
-        "upstream_ended_early",
+        e1["details"]["stream_end"], "upstream_ended_early",
         "a clean early end of an SSE body: {e1:?}"
     );
     // Request 2: the same bytes under a non-SSE label — the question is
@@ -360,7 +359,10 @@ async fn conf_109_d_a_body_that_is_not_sse_is_a_completion() {
     let errors2 = records[1]["errors"].as_array().expect("errors array");
     assert!(errors2.is_empty(), "not SSE ⇒ no entry: {errors2:?}");
     assert!(
-        records[1].get("errors").and_then(|e| e.as_array()).is_some(),
+        records[1]
+            .get("errors")
+            .and_then(|e| e.as_array())
+            .is_some(),
         "errors[] is an array"
     );
 

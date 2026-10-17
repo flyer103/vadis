@@ -1132,7 +1132,10 @@ mod tests {
         assert_eq!(bucket_of(&rec(502, truncated.clone())), Bucket::Failed);
         assert_eq!(bucket_of(&rec(502, serde_json::json!([]))), Bucket::Failed);
         // A clean 2xx is succeeded.
-        assert_eq!(bucket_of(&rec(200, serde_json::json!([]))), Bucket::Succeeded);
+        assert_eq!(
+            bucket_of(&rec(200, serde_json::json!([]))),
+            Bucket::Succeeded
+        );
         // The two success shapes that ride a non-empty errors[]: only the
         // class word moves a record out of succeeded.
         let transform = serde_json::json!([{
@@ -1159,8 +1162,14 @@ mod tests {
             rec(502, serde_json::json!([])),
             rec(200, serde_json::json!([])),
         ];
-        let succeeded = all.iter().filter(|r| bucket_of(r) == Bucket::Succeeded).count();
-        let failed = all.iter().filter(|r| bucket_of(r) == Bucket::Failed).count();
+        let succeeded = all
+            .iter()
+            .filter(|r| bucket_of(r) == Bucket::Succeeded)
+            .count();
+        let failed = all
+            .iter()
+            .filter(|r| bucket_of(r) == Bucket::Failed)
+            .count();
         let incomplete = all
             .iter()
             .filter(|r| bucket_of(r) == Bucket::StreamIncomplete)
@@ -1168,7 +1177,12 @@ mod tests {
         assert_eq!(succeeded + failed + incomplete, all.len());
         let figs = aggregate(&all);
         assert_eq!(
-            (figs.succeeded, figs.failed, figs.stream_incomplete, figs.requests),
+            (
+                figs.succeeded,
+                figs.failed,
+                figs.stream_incomplete,
+                figs.requests
+            ),
             (1, 1, 1, 3),
             "aggregate renders the same partition"
         );

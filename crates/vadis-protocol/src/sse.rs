@@ -485,10 +485,14 @@ mod tests {
         // exactly `text/event-stream`; an absent header is not SSE.
         assert!(is_text_event_stream(Some("text/event-stream")));
         assert!(is_text_event_stream(Some("Text/Event-Stream")));
-        assert!(is_text_event_stream(Some("text/event-stream; charset=utf-8")));
+        assert!(is_text_event_stream(Some(
+            "text/event-stream; charset=utf-8"
+        )));
         assert!(is_text_event_stream(Some(" text/event-stream ")));
         assert!(!is_text_event_stream(Some("application/json")));
-        assert!(!is_text_event_stream(Some("application/json; charset=utf-8")));
+        assert!(!is_text_event_stream(Some(
+            "application/json; charset=utf-8"
+        )));
         assert!(!is_text_event_stream(Some("text/event-streamx")));
         assert!(!is_text_event_stream(Some("")));
         assert!(!is_text_event_stream(None));
