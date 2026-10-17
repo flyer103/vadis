@@ -382,10 +382,20 @@ mod tests {
         }
         fn query(&self, q: Query<'_>) -> Result<QueryRow, StoreError> {
             match q {
-                Query::Cooldown { model, .. } => Ok(QueryRow::Cooldown(if model.is_some() {
-                    self.row_for_route.clone()
-                } else {
-                    self.row_for_provider.clone()
+                // The double must answer the question the *real* store
+                // answers: a route row is returned only for the route it
+                // names. Answering any `Some(model)` with `row_for_route`
+                // would let this double report a provider-wide answer and
+                // the test below would pass for the wrong reason.
+                Query::Cooldown { provider, model } => Ok(QueryRow::Cooldown(match model {
+                    Some(m) => self
+                        .row_for_route
+                        .clone()
+                        .filter(|r| r.provider == provider && r.model == m),
+                    None => self
+                        .row_for_provider
+                        .clone()
+                        .filter(|r| r.provider == provider),
                 })),
                 _ => Ok(QueryRow::Count(0)),
             }
