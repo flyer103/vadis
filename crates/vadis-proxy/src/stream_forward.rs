@@ -2029,7 +2029,7 @@ async fn failover_zero_byte(
         st.remaining
             .iter()
             .position(|c| eligible(c) && !silence_cooling(ctx, &c.route))
-            .or_else(|| st.remaining.iter().position(|c| eligible(c)))
+            .or_else(|| st.remaining.iter().position(eligible))
     } {
         let cand = st.remaining.remove(idx);
         event(
