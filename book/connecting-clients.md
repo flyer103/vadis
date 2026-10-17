@@ -261,7 +261,7 @@ export VADIS_TOKEN=$(openssl rand -hex 32)
 # 2. write server.auth_token_env in the vadis process's config: it names the
 #    variable whose value is the expected token — the name, never the value
 server: { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
-          auth_token_env: VADIS_TOKEN }
+          stream_idle_timeout: 30s, auth_token_env: VADIS_TOKEN }
 ```
 
 3. Give the same value to each client. Either accepted header form works, so send whichever you

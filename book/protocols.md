@@ -113,17 +113,21 @@ lines, and it does not add a terminal marker of its own.
 
 Three consequences worth knowing before you point an agent at it:
 
-- **The relay is bounded twice, and neither bound is a stall.** The configured **upstream attempt
-  timeout** bounds two things on the relay: how long the upstream may take to produce its response
-  **head**, and the **gap** between upstream bytes, one read at a time. A stream that is *continuously
-  busy* is **not** cut off by it — a long reasoning stream now runs to completion as long as it is
-  never idle for longer than that timeout. What ends a busy stream is the **whole-request** bound,
-  `server.request_timeout`: it caps the entire request, the head phase and the relay together. Either
-  way the client sees a truncated stream rather than a hang, and **which knob to raise depends on the
-  symptom** — a stream that dies while it was still sending bytes has outrun the **request timeout**;
-  one that dies mid-body after going quiet has outrun the **upstream attempt timeout** for its
-  provider's gaps. The exact rule is [`docs/spec.md` §4.2](../docs/spec.md) and DESIGN §12.10.3 R4
-  ([`ADR-053`](../design/decisions/ADR-053-the-bound-is-head-arrival-only.md)).
+- **The relay is bounded three ways, and none of them is a stall.** The **upstream attempt
+  timeout** bounds how long the upstream may take to produce its response **head** (connect
+  included). Once the head is in, the **gap** between two forwarded body bytes is bounded by
+  its own key, `server.stream_idle_timeout`: a stream that is *continuously busy* is not cut
+  off by it — a long reasoning stream runs to completion as long as it is never silent for
+  longer than that. What ends a busy stream is the **whole-request** bound,
+  `server.request_timeout`: it caps the entire request, the head phase and the relay together.
+  A streamed response may go silent for at most `server.stream_idle_timeout` (30 s by
+  default) between bytes; past that the stream is ended and recorded as incomplete, and the
+  request is not a success. The client sees a truncated stream rather than a hang either way,
+  and **which knob to raise depends on the symptom** — a stream that dies while it was still
+  sending bytes has outrun the **request timeout**; one that dies mid-body after going quiet
+  has outrun the **stream idle timeout** for its provider's gaps. The exact rule is
+  [`docs/spec.md` §4.20](../docs/spec.md) and DESIGN §12.10.3 R4
+  ([`ADR-056`](../design/decisions/ADR-056-the-silence-of-a-stream.md)).
 - **A failure after the first event cannot be failed over.** Once events have reached the
   client, the output is committed; vadis terminates the stream using the protocol's own
   in-band failure shape where one exists, and otherwise simply ends it without the

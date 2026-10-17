@@ -1809,6 +1809,26 @@ contract itself.
 | the 60 s TTL as a constant (`R74-0-F2`), the 106 records' unrecoverable cause split (`R74-0-F3`), F4's live effect (`R74-0-F4`), the probe gate's blindness to route rows (`R74-0-F5`), `overhead_ms_p99` (`R74-0-F6`, R77's) | **registered** — ADR-056 §9 carries each with its owner and due |
 | a **layered** / per-route override of the gap bound; a configurable silence TTL; a streak counter | **not built and not registered as wanted** — each is an additive key or a new state shape with its own ADR (ADR-056 §7's alternatives) |
 
+**Register line (2026-10-17, R74-1 — the silence of a stream, landed).** The implementing card against
+`ADR-056`: every row above moved from *contracted* to **served**. `server.stream_idle_timeout` (default
+30 s) loads, validates and reloads (read once per request at the streaming driver's entry); the streaming
+client carries the two windows (`head_timeout` on the attempt knob, `idle_timeout` on the new key —
+`failover_zero_byte`'s mid-request client takes the pair from the request's frozen context, ADR-056
+§6.1.1 item 5); a truncation entry carries `stream_end` (`idle_timeout` | `upstream_ended_early` |
+`request_timeout`) beside `relayed_bytes`, `window_ms` (iff a bound tripped) and `since_last_byte_ms`,
+with the three-valued SSE completeness predicate asked only at the clean-end arm (`R74-0-F7`'s stale
+`ctx.content_type` repaired by `st.content_type`, set where a head is adopted); the three-bucket
+partition lives in one owner (`stats::bucket_of`) rendered by both `/metrics` and `vadis stats`
+(`vadis_requests_stream_incomplete`, `CONF-87`'s frozen set 21 → 22); one `idle_timeout` truncation
+writes the route-scoped advisory `stream_silence` row (TTL the 60 s constant) whose `demotion` object
+and projection share one `until_us` (`R74-0-F1` repaired — one shape for both arms,
+`rebuild_cooldown`-sufficient), and the walks (buffered, streaming pre-relay, zero-byte failover,
+failover narration) prefer a non-silence candidate without ever refusing, skipping or narrating a
+`failover.triggered` row. `CONF-108/109/110` are un-parked and green (CONF-109 gaining limb (d), the
+false-incompletion control); amendments A1 (conf_105), A2 (conf_41) and A3 (conf_87) landed as frozen.
+One conflict the contract carried internally is resolved and recorded at spec §4.20.1's range row: the
+1 s floor contradicted the same contract's 400 ms rigs; the rigs win, the floor is 100 ms.
+
 **Register line (2026-10-06, R69-2b): ADR-051 §2.5.3 — the shipped root's second `plan_policies:`
 family — deferred.** Reason: the obstacle is the wizard's anchoring contract, not the parser (the
 list spelling has parsed since ADR-049, `stats.rs:846`); the shipped pair's own contract sentences
