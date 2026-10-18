@@ -114,6 +114,13 @@ pub fn exposition(
         &[],
         &f.failed.to_string(),
     );
+    series(
+        &mut out,
+        "vadis_requests_stream_incomplete",
+        "Requests answered 2xx whose stream was truncated before its terminal event (the third bucket, spec §4.20.4 — succeeded + failed + stream_incomplete == requests).",
+        &[],
+        &f.stream_incomplete.to_string(),
+    );
     // #7 — the failed split, only for kinds the window produced (never a
     // synthetic zero for a kind nothing carried). `kind` is §8's closed
     // vocabulary, bounded by the code, never by traffic.

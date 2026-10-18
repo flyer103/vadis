@@ -95,8 +95,12 @@ impl ErrorClass {
 }
 
 /// The demotion a classification may order (ADR-011 items 4–5). The scope
-/// is the provider for billing-class failures, nothing for the rest — this
-/// round writes no route-scoped cooldowns.
+/// is the provider for billing-class failures, nothing for the rest —
+/// the classifier's own arm still writes no route-scoped cooldowns; the
+/// one route-scoped row the product carries (`reason:
+/// "stream_silence"`, ADR-056 §2.5) is written by the streaming relay's
+/// truncation arm, not through this type, so `demotes_provider()`'s
+/// answer for every class is exactly what it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Demotion {
     /// `true` = provider-wide (all of its models unavailable until the TTL).

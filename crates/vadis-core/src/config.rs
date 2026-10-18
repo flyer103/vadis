@@ -597,6 +597,28 @@ fn default_max_body_bytes() -> i64 {
 /// error, not a quiet default.
 pub const MIN_MAX_BODY_BYTES: i64 = 1024;
 
+/// Spec §4.20.1: the gap bound's default — a product choice (half the
+/// shipped attempt knob, inside the band the 13-day audit recommended),
+/// not a measured optimum.
+fn default_stream_idle_timeout() -> DurationVal {
+    DurationVal(30_000)
+}
+
+/// Spec §4.20.1: the smallest silence the gap bound accepts. The
+/// contract's own conformance rigs (ADR-056 §4.1, CONF-108/109/110)
+/// drive `400ms` windows — "so no limb rests on machine speed" — so the
+/// floor sits below them at 100 ms; the section text's original 1 s
+/// floor contradicted the same document's rig table and the rigs win
+/// (an assertion is not a card's to edit, AGENTS constraint 9). Under
+/// 100 ms the bound is indistinguishable from "cut the stream at
+/// random" against real network jitter.
+pub const MIN_STREAM_IDLE_TIMEOUT_MS: u64 = 100;
+
+/// Spec §4.20.1: the largest silence the gap bound accepts. Above 300 s
+/// it is indistinguishable from no bound at all under a 10 m
+/// whole-request default.
+pub const MAX_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerCfg {
@@ -613,6 +635,18 @@ pub struct ServerCfg {
     /// validation, at the one consumer.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: i64,
+    /// Spec §4.20.1: the maximum **silence between two forwarded bytes**
+    /// of a streamed response body — the per-read gap bound, and only
+    /// that. Connect and head arrival stay on
+    /// [`ServerCfg::upstream_attempt_timeout`] (ADR-053); the whole
+    /// request stays on [`ServerCfg::request_timeout`]. The relay's
+    /// per-read window is `min(this, time-until-deadline)`. Read once per
+    /// request at the streaming driver's entry (spec §4.15 rule 3), so
+    /// the key is reloadable and an in-flight request keeps the window it
+    /// entered with. A value at or above `request_timeout` is inert (the
+    /// outer bound fires first) — a stated fact, not a refusal.
+    #[serde(default = "default_stream_idle_timeout")]
+    pub stream_idle_timeout: DurationVal,
     /// Spec §4.7: the **name** of the env var whose value this process
     /// expects as the inbound token. Absent ⇒ no inbound auth (today's
     /// behaviour; the backward-compatibility clause). A plain string the
@@ -2029,6 +2063,21 @@ impl VadisConfig {
                      (there is deliberately no 'unlimited' spelling; write a large \
                      number where a reader can see it)",
                     self.server.max_body_bytes, MIN_MAX_BODY_BYTES
+                ),
+            ));
+        }
+
+        // Spec §4.20.1: the gap bound's range. Outside it the load is
+        // refused naming the key — the loader is the same gate the reload
+        // uses (spec §4.15 rule 1).
+        let idle_ms = self.server.stream_idle_timeout.0;
+        if !(MIN_STREAM_IDLE_TIMEOUT_MS..=MAX_STREAM_IDLE_TIMEOUT_MS).contains(&idle_ms) {
+            return Err(ConfigError::new(
+                "server.stream_idle_timeout",
+                format!(
+                    "{idle_ms}ms — the gap bound must be between 100ms and 300s \
+                     (spec §4.20.1: under 100ms it cuts streams at random against \
+                     network jitter, over 300s it is no bound at all)"
                 ),
             ));
         }

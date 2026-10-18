@@ -156,15 +156,59 @@ async fn conf_41_health_plan_section_and_stats_match_the_records() {
     let recs = trace_records(&dir);
     assert!(!recs.is_empty(), "the run produced trace rows");
     assert_eq!(rep.figures.requests, recs.len() as u64, "requests");
+    // ADR-056 §5 amendment A2: the independent computation is spec
+    // §4.20.4's THREE-bucket partition — failed = non-2xx,
+    // stream_incomplete = 2xx with a `stream_truncated` entry,
+    // succeeded = every other 2xx — and the sum invariant is asserted.
+    // `failed` is its own count, no longer `len − succeeded`. This rig
+    // holds no truncated record, so the numbers do not move; only the
+    // assertion's statement of the rule does.
     let succeeded = recs
         .iter()
         .filter(|r| {
             let s = r["result"]["status"].as_u64().unwrap_or(0);
             (200..300).contains(&s)
+                && !r["errors"]
+                    .as_array()
+                    .map(|es| {
+                        es.iter()
+                            .any(|e| e["details"]["error_class"] == "stream_truncated")
+                    })
+                    .unwrap_or(false)
+        })
+        .count() as u64;
+    let failed = recs
+        .iter()
+        .filter(|r| {
+            let s = r["result"]["status"].as_u64().unwrap_or(0);
+            !(200..300).contains(&s)
+        })
+        .count() as u64;
+    let incomplete = recs
+        .iter()
+        .filter(|r| {
+            let s = r["result"]["status"].as_u64().unwrap_or(0);
+            (200..300).contains(&s)
+                && r["errors"]
+                    .as_array()
+                    .map(|es| {
+                        es.iter()
+                            .any(|e| e["details"]["error_class"] == "stream_truncated")
+                    })
+                    .unwrap_or(false)
         })
         .count() as u64;
     assert_eq!(rep.figures.succeeded, succeeded, "succeeded");
-    assert_eq!(rep.figures.failed, recs.len() as u64 - succeeded, "failed");
+    assert_eq!(rep.figures.failed, failed, "failed");
+    assert_eq!(
+        rep.figures.stream_incomplete, incomplete,
+        "stream incomplete"
+    );
+    assert_eq!(
+        rep.figures.succeeded + rep.figures.failed + rep.figures.stream_incomplete,
+        rep.figures.requests,
+        "the three buckets PARTITION requests (spec §4.20.4)"
+    );
     let mut input_total = 0u64;
     let mut input_cached = 0u64;
     let mut total_nano = 0u64;

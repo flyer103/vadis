@@ -781,6 +781,7 @@ mod tests {
                 request_timeout: DurationVal(600_000),
                 auth_token_env: None,
                 max_body_bytes: 2_097_152,
+                stream_idle_timeout: DurationVal(30_000),
             },
             session: SessionCfg {
                 key_sources: vec!["prompt_cache_key".into()],

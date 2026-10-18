@@ -6,7 +6,8 @@
 //! are the bytes the upstream sent, in arrival order (§12.10.3 R1); each
 //! read is written as soon as it is available (§12.10.3 R2); the head goes
 //! first and is never given an invented `content-length` (§12.10.3 R3); an
-//! idle gap past `upstream_attempt_timeout` ends the relay (§12.10.3 R4);
+//! idle gap past `server.stream_idle_timeout` — the gap bound's own key,
+//! spec §4.20 — ends the relay (§12.10.3 R4);
 //! dropping the response future drops the upstream stream, closing the
 //! connection (§12.10.3 R5); a
 //! mid-stream failure **after the first relayed byte** truncates —
@@ -124,7 +125,17 @@ struct RelayCtx {
     /// for every candidate on the chain (the failover answer is priced
     /// at its own provider's table).
     accounting: HashMap<String, RouteAccounting>,
+    /// The body's gap bound (spec §4.20.1): `server.stream_idle_timeout`,
+    /// read ONCE at the streaming driver's entry — the value this request
+    /// drives with (a reload reaches the next request, never this one,
+    /// CONF-108 limb (d)). Each relay read's window is
+    /// `min(this, time-until-deadline)`, composed below.
     idle: Duration,
+    /// The head/connect window (ADR-053 §2.1 item 1):
+    /// `server.upstream_attempt_timeout`, read once beside `idle`. The
+    /// zero-byte failover builds its mid-request client from the PAIR on
+    /// this context — never from the live config (ADR-056 §6.1.1 item 5).
+    head_timeout: Duration,
     /// ADR-053 §3's single-owner `server.request_timeout` deadline, an
     /// ABSOLUTE instant measured from the moment the request entered
     /// the streaming driver. The relay's own reads trip against it
@@ -172,8 +183,6 @@ struct RelayCtx {
         Arc<dyn vadis_core::response_cache::ResponseCache>,
         vadis_core::response_cache::ResponseKey,
     )>,
-    /// The answering head's content-type — a recorded response replays it.
-    content_type: Option<String>,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -182,8 +191,10 @@ struct RelayState {
     head: vadis_providers::stream::StreamHead,
     /// The accounting tap over a copy of the relayed bytes (R7).
     tap: SseUsageExtractor,
-    /// Whether any byte has been relayed — R6's boundary.
-    relayed: bool,
+    /// How many body bytes this request has written through to the
+    /// client — R6's boundary is `== 0`, and spec §4.20.3's
+    /// `relayed_bytes` observable is the count itself.
+    relayed: u64,
     /// Candidates not yet attempted (fallback chain minus the primary).
     remaining: Vec<Candidate>,
     /// Providers already attempted in this request (exclusion, §4.2).
@@ -216,6 +227,18 @@ struct RelayState {
     /// Whether the answering provider's pool is real (>1 present key) —
     /// `decision.key_index` is null on the single-credential spelling.
     multi_key: bool,
+    /// The ANSWERING head's content-type (R74-0-F7's repair): set where a
+    /// head is adopted — the pre-relay 2xx arm and the zero-byte
+    /// failover's answering arm — so the media gate (spec §4.20.3) and
+    /// the cache record read the head that answered, never the first
+    /// head's label after a failover moved away from it.
+    content_type: Option<String>,
+    /// When the last body byte arrived from the upstream — spec §4.20.3's
+    /// `since_last_byte_ms` is measured from here (from `head_arrived`
+    /// while no byte has ever arrived).
+    last_byte_at: Option<Instant>,
+    /// When the answering head arrived.
+    head_arrived: Instant,
 }
 
 fn now_us() -> i64 {
@@ -888,8 +911,17 @@ impl Forwarder {
             }
         }
 
-        let idle = Duration::from_millis(self.config.server.upstream_attempt_timeout.0);
-        let client = match vadis_providers::stream::ReqwestStreamClient::new(idle) {
+        // ADR-056 §2.1/§6.1.1: the TWO windows, read once at this
+        // driver's entry — `head_timeout` (connect + head arrival, on
+        // the attempt knob) and `idle` (the body's gap bound, on its own
+        // key). Every later consumer — the relay's per-read composition,
+        // the zero-byte failover's mid-request client — takes the pair
+        // from the request's own frozen context, never from the live
+        // config, so a reload reaches the next request only
+        // (CONF-108 limb (d)).
+        let head_timeout = Duration::from_millis(self.config.server.upstream_attempt_timeout.0);
+        let idle = Duration::from_millis(self.config.server.stream_idle_timeout.0);
+        let client = match vadis_providers::stream::ReqwestStreamClient::new(head_timeout, idle) {
             Ok(c) => c,
             Err(e) => {
                 return StreamOutcome::Failure(ForwardFailure {
@@ -1057,6 +1089,27 @@ impl Forwarder {
                     }
                     continue;
                 }
+                // ADR-056 §2.5 (spec §4.20.5): the advisory silence skip,
+                // the streaming twin of the buffered walk's. A route whose
+                // own `stream_silence` row is live is preferred against,
+                // never refused — the walk moves past it only when the
+                // chain holds another candidate it would actually attempt,
+                // and attempts it as usual otherwise. The skip narrates
+                // `failover_from` (ADR-024's pre-attempt shape) and writes
+                // NO `skipped[]` entry and no `failover.triggered` row: an
+                // advisory row must never read binding (§2.5.3).
+                if self.route_silence_cooling(&cand.route)
+                    && candidates.iter().any(|c| {
+                        !attempted.contains(&c.route.provider)
+                            && !self.provider_in_cooldown(&c.route.provider)
+                            && !self.route_silence_cooling(&c.route)
+                    })
+                {
+                    if failover_from.is_none() {
+                        failover_from = Some(cand.route.clone());
+                    }
+                    continue;
+                }
                 attempted.push(cand.route.provider.clone());
                 let route_label = format!("{}/{}", cand.route.provider, cand.route.model);
                 facts.attempted_route = Some(cand.route.clone());
@@ -1214,6 +1267,7 @@ impl Forwarder {
                                     trace: self.trace.clone(),
                                     accounting,
                                     idle,
+                                    head_timeout,
                                     request_deadline: deadline,
                                     request_id: request_id.to_string(),
                                     proto_in,
@@ -1241,12 +1295,11 @@ impl Forwarder {
                                         }
                                         _ => None,
                                     },
-                                    content_type: content_type.clone(),
                                 };
                                 let state = RelayState {
                                     tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
                                     head,
-                                    relayed: false,
+                                    relayed: 0,
                                     // The tail of the chain after the answering
                                     // candidate — owned, because this loop
                                     // consumed the vector (into_iter).
@@ -1262,6 +1315,9 @@ impl Forwarder {
                                     record_buf: ctx.cache.is_some().then(Vec::new),
                                     key_index: cand.key_index,
                                     multi_key: cand.api_keys.len() > 1,
+                                    content_type: content_type.clone(),
+                                    last_byte_at: None,
+                                    head_arrived: Instant::now(),
                                 };
                                 // ADR-049 §5.6 (the buffered path's twin):
                                 // this 2xx head is where the walk settled —
@@ -1322,13 +1378,17 @@ impl Forwarder {
                                 attempt_index += 1;
                                 continue 'keys;
                             }
-                            let classified_id = self.record_classification(
+                            // ADR-056 §6.2: the classification row carries its
+                            // demotion's one object and lands the projection
+                            // from the same `until_us` — one call, no second
+                            // writer to drift from the payload.
+                            self.record_classification(
                                 request_id,
                                 attempt_index,
                                 Some(status),
                                 &cls,
+                                Some(&cand.route),
                             );
-                            self.apply_demotion(&cand.route.provider, &cls, classified_id);
                             // The plan policy's only account-moving signal
                             // (ADR-014 item 2; ADR-049 §5.2 across the
                             // tier — the buffered path's twin): a 403
@@ -1525,9 +1585,13 @@ impl Forwarder {
                                 attempt_index += 1;
                                 continue 'keys;
                             }
-                            let classified_id =
-                                self.record_classification(request_id, attempt_index, None, &cls);
-                            self.apply_demotion(&cand.route.provider, &cls, classified_id);
+                            self.record_classification(
+                                request_id,
+                                attempt_index,
+                                None,
+                                &cls,
+                                Some(&cand.route),
+                            );
                             if let Some(next) =
                                 self.next_candidate_for(&candidates, &attempted, cls.class)
                             {
@@ -1665,12 +1729,17 @@ impl Forwarder {
         if !class.fails_over() {
             return None;
         }
+        // ADR-056 §2.5's advisory half, mirroring the walk's own skip: a
+        // silence-cooling route is named only when no eligible
+        // non-cooling candidate exists, so the narration and the walk
+        // cannot disagree about where the request lands.
+        let eligible = |c: &Candidate| {
+            !attempted.contains(&c.route.provider) && !self.provider_in_cooldown(&c.route.provider)
+        };
         candidates
             .iter()
-            .find(|c| {
-                !attempted.contains(&c.route.provider)
-                    && !self.provider_in_cooldown(&c.route.provider)
-            })
+            .find(|c| eligible(c) && !self.route_silence_cooling(&c.route))
+            .or_else(|| candidates.iter().find(|c| eligible(c)))
             .map(|c| c.route.clone())
     }
 }
@@ -1786,6 +1855,17 @@ async fn open_head(
     }
 }
 
+/// One truncation's declared shape (spec §4.20.3): the prose reason the
+/// entry's message carries beside its fixed prefix, the closed-vocabulary
+/// cause word (`idle_timeout` | `upstream_ended_early` |
+/// `request_timeout`), and the window that was in force for the tripping
+/// read — present **iff** a bound tripped.
+struct TruncationInfo {
+    reason: String,
+    stream_end: &'static str,
+    window_ms: Option<u64>,
+}
+
 /// The byte relay (§12.10.3 R1/R2) with the accounting tap and
 /// wired in. One item per upstream chunk, verbatim; the stream ends when
 /// the upstream ends, and ends without any fabricated terminal marker
@@ -1813,13 +1893,15 @@ fn relay_stream(
                     .checked_duration_since(tokio::time::Instant::now())
                     .unwrap_or_default();
                 let idle = std::cmp::min(ctx.idle, window);
+                let window_ms = idle.as_millis() as u64;
                 match vadis_providers::stream::read_chunk(&mut st.head, idle).await {
                     vadis_providers::stream::StreamRead::Chunk(b) => {
                         if !b.is_empty() {
                             // §12.10.3 R2 write-through: this chunk is the item; the
                             // tap reads a copy (§12.10.3 R7).
                             st.tap.feed(&b);
-                            st.relayed = true;
+                            st.relayed += b.len() as u64;
+                            st.last_byte_at = Some(Instant::now());
                             // The cache's recording copy (spec §4.17): kept only
                             // within the store's byte bound — a body past it is
                             // never a candidate, so the buffer is dropped rather
@@ -1839,7 +1921,34 @@ fn relay_stream(
                         // poll again within this same call.
                     }
                     vadis_providers::stream::StreamRead::Ended => {
-                        record_terminal(&ctx, &st, None);
+                        // Spec §4.20.3's three-valued completeness predicate,
+                        // asked ONLY at this arm (the cut arms are
+                        // media-blind truncations by construction). Two
+                        // facts, both the wire's own: the answering head's
+                        // media type and `terminal_seen`. Not SSE (an
+                        // absent header included) ⇒ a body that ends is a
+                        // completion — nothing was owed. SSE with the
+                        // terminal seen ⇒ completion. SSE without it ⇒ a
+                        // truncation whose cause is `upstream_ended_early`
+                        // — no bound tripped, so no `window_ms`.
+                        let truncated = if vadis_protocol::sse::is_text_event_stream(
+                            st.content_type.as_deref(),
+                        ) && !st.tap.terminal_seen()
+                        {
+                            Some(TruncationInfo {
+                                reason: "the upstream closed the body before its wire's \
+                                             terminal event"
+                                    .to_string(),
+                                stream_end: "upstream_ended_early",
+                                window_ms: None,
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(t) = truncated.as_ref() {
+                            record_classified(&ctx, &st, t);
+                        }
+                        record_terminal(&ctx, &st, truncated);
                         return None;
                     }
                     vadis_providers::stream::StreamRead::Failed { message, timed_out } => {
@@ -1856,22 +1965,41 @@ fn relay_stream(
                         // either — every further attempt would run past
                         // the bound the trip just named.
                         if !request_bound
-                            && !st.relayed
+                            && st.relayed == 0
                             && failover_zero_byte(&mut ctx, &mut st, &cleaned, &message).await
                         {
                             continue;
                         }
-                        let reason = if request_bound {
-                            "server.request_timeout exceeded: the whole-request bound \
-                             expired before the stream completed"
-                                .to_string()
+                        // Spec §4.20.3's closed vocabulary: the cause word
+                        // and, iff a bound tripped, the window that was in
+                        // force for the tripping read (the `min()` above,
+                        // never the configured key alone).
+                        let trunc = if request_bound {
+                            TruncationInfo {
+                                reason: "server.request_timeout exceeded: the whole-request \
+                                         bound expired before the stream completed"
+                                    .to_string(),
+                                stream_end: "request_timeout",
+                                window_ms: Some(window_ms),
+                            }
                         } else if timed_out {
-                            format!("idle bound exceeded: {message}")
+                            TruncationInfo {
+                                reason: format!("idle bound exceeded: {message}"),
+                                stream_end: "idle_timeout",
+                                window_ms: Some(window_ms),
+                            }
                         } else {
-                            message
+                            // A transport error mid-body: the upstream (or
+                            // the path to it) cut the stream — no bound of
+                            // ours tripped, so no window is reported.
+                            TruncationInfo {
+                                reason: message,
+                                stream_end: "upstream_ended_early",
+                                window_ms: None,
+                            }
                         };
-                        record_classified(&ctx, st.attempted.len() as u32 - 1, &reason);
-                        record_terminal(&ctx, &st, Some(reason));
+                        record_classified(&ctx, &st, &trunc);
+                        record_terminal(&ctx, &st, Some(trunc));
                         return None;
                     }
                 }
@@ -1890,9 +2018,19 @@ async fn failover_zero_byte(
     cleaned: &[u8],
     reason: &str,
 ) -> bool {
-    while let Some(idx) = st.remaining.iter().position(|c| {
-        !st.attempted.contains(&c.route.provider) && !in_cooldown(ctx, &c.route.provider)
-    }) {
+    while let Some(idx) = {
+        // ADR-056 §2.5's advisory half, the mid-relay twin: prefer a
+        // candidate whose route is not silence-cooling, fall back to the
+        // first eligible one otherwise — the row steers, it never
+        // refuses.
+        let eligible = |c: &Candidate| {
+            !st.attempted.contains(&c.route.provider) && !in_cooldown(ctx, &c.route.provider)
+        };
+        st.remaining
+            .iter()
+            .position(|c| eligible(c) && !silence_cooling(ctx, &c.route))
+            .or_else(|| st.remaining.iter().position(eligible))
+    } {
         let cand = st.remaining.remove(idx);
         event(
             ctx,
@@ -1913,7 +2051,16 @@ async fn failover_zero_byte(
         // rewrite failure falls through to the next candidate — no
         // unrewritten bytes may reach a provider. Composed before the
         // intent so the wire still opens only after the commit (CONF-20).
-        let Ok(client) = vadis_providers::stream::ReqwestStreamClient::new(ctx.idle) else {
+        //
+        // ADR-056 §6.1.1 item 5: the mid-request client takes the PAIR
+        // the driver froze on the context at its entry — `head_timeout`
+        // AND `idle` — never the config's live values (a reload must not
+        // reach into an in-flight request) and never `idle` alone (the
+        // failover attempt would get the gap bound as its connect/head
+        // budget and fail fast for the wrong reason).
+        let Ok(client) =
+            vadis_providers::stream::ReqwestStreamClient::new(ctx.head_timeout, ctx.idle)
+        else {
             return false;
         };
         let outbound = match crate::forward::rewrite_outbound_model(
@@ -1965,10 +2112,16 @@ async fn failover_zero_byte(
                     ps.settled_on(&route_label);
                 }
                 st.route_label = route_label;
+                // R74-0-F7's repair: the answering head's own label, from
+                // the head that just answered — the media gate and the
+                // cache record read this, never the abandoned attempt's.
+                st.content_type = h.content_type.clone();
                 st.head = h;
                 st.wire = cand.wire;
                 st.head_ms = Some(attempt_started.elapsed().as_millis() as u32);
                 st.intent = intent;
+                st.head_arrived = Instant::now();
+                st.last_byte_at = None;
                 // Zero bytes were relayed, so re-arming the tap for the
                 // new provider's wire format is lossless (R7 invariant).
                 st.tap = SseUsageExtractor::new(cand.wire, ctx.client_requested_usage);
@@ -2003,20 +2156,59 @@ fn in_cooldown(ctx: &RelayCtx, provider: &str) -> bool {
     crate::availability::provider_in_cooldown(ctx.store.as_ref(), provider, now_us())
 }
 
-fn record_classified(ctx: &RelayCtx, attempt_index: u32, reason: &str) {
-    event(
-        ctx,
-        EventKind::ErrorClassified,
-        json!({
-            "attempt_index": attempt_index,
-            "status": Value::Null,
-            "reason": "stream_truncated",
-            "action": "abort",
-            "matched": false,
-            "detail": reason,
-            "stream": true,
-        }),
-    );
+/// ADR-056 §2.5's advisory read, the relay's own leg: is THIS route
+/// silence-cooling right now? Same single owner as the walk's.
+fn silence_cooling(ctx: &RelayCtx, route: &RouteSpec) -> bool {
+    crate::availability::route_silence_cooling(
+        ctx.store.as_ref(),
+        &route.provider,
+        &route.model,
+        now_us(),
+    )
+}
+
+/// `error.classified` for a mid-body truncation (§12.10.5 row 7, the
+/// relay's arm). When — and only when — the cause is `idle_timeout`
+/// (ADR-056 §2.5: a graceful early close and our own deadline order
+/// nothing), the payload carries the demotion object in its ONE shape
+/// and the route-scoped `provider_cooldown` projection lands from the
+/// SAME `until_us` value (CONF-21's identity: the rebuild reads the
+/// payload, the live row reads this write, and the two cannot differ).
+fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
+    let mut payload = json!({
+        "attempt_index": st.attempted.len() as u32 - 1,
+        "status": Value::Null,
+        "reason": "stream_truncated",
+        "action": "abort",
+        "matched": false,
+        "detail": trunc.reason,
+        "stream": true,
+    });
+    let mut cooldown_write: Option<(String, String, i64)> = None;
+    if trunc.stream_end == "idle_timeout" {
+        let (provider, model) = split_route_label(&st.route_label);
+        let until_us = now_us() + (crate::forward::STREAM_SILENCE_TTL_S as i64) * 1_000_000;
+        payload["demotion"] = crate::forward::demotion_json(
+            "route",
+            provider,
+            model,
+            until_us,
+            crate::forward::STREAM_SILENCE_TTL_S,
+            crate::forward::REASON_STREAM_SILENCE,
+        );
+        cooldown_write = Some((provider.to_string(), model.to_string(), until_us));
+    }
+    let anchor = event(ctx, EventKind::ErrorClassified, payload);
+    if let (Some(store), Some((provider, model, until_us))) = (&ctx.store, cooldown_write) {
+        let _ = store.project(vadis_core::store::ProjectionWrite::ProviderCooldown {
+            scope: "route",
+            provider: &provider,
+            model: &model,
+            until_us,
+            reason: crate::forward::REASON_STREAM_SILENCE,
+            last_event: anchor.unwrap_or(EventId(0)),
+        });
+    }
 }
 
 /// The terminal `upstream.responded` (R8/R11) **and** the buffered
@@ -2026,33 +2218,41 @@ fn record_classified(ctx: &RelayCtx, attempt_index: u32, reason: &str) {
 /// accounting rows commit at stream end, before the last byte is
 /// written through). A truncation rides in `errors[]`, never presented
 /// as completeness; nothing is charged twice.
-fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
+fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<TruncationInfo>) {
     let (usage, usage_missing) = match st.tap.finish() {
         SseUsageOutcome::Complete(u) => (Some(u), false),
         SseUsageOutcome::Missing => (None, true),
     };
-    event(
-        ctx,
-        EventKind::UpstreamResponded,
-        json!({
-            "status": 200,
-            "route": st.route_label,
-            "attempt_index": st.attempted.len() as u32 - 1,
-            "wrote_full_request": true,
-            "stream": true,
-            "stream_completed": truncated.is_none(),
-            "stream_truncated_reason": truncated,
-            "bytes_relayed": st.relayed,
-            "usage": usage.map(|u| json!({
-                "input_total": u.input_total,
-                "input_cached": u.input_cached,
-                "cache_write": u.cache_write,
-                "output": u.output,
-                "reasoning": u.reasoning,
-            })),
-            "usage_missing": usage_missing,
-        }),
-    );
+    // Spec §4.20.3: measured from the last byte received from the
+    // upstream, or from the answering head's arrival when no byte ever
+    // arrived. Always present on a truncation entry.
+    let since_last_byte_ms = Instant::now()
+        .duration_since(st.last_byte_at.unwrap_or(st.head_arrived))
+        .as_millis() as u64;
+    // `stream_end` rides the event only when the stream was truncated —
+    // absent on a completion, never a null with a key (spec §4.20.3).
+    let mut responded = json!({
+        "status": 200,
+        "route": st.route_label,
+        "attempt_index": st.attempted.len() as u32 - 1,
+        "wrote_full_request": true,
+        "stream": true,
+        "stream_completed": truncated.is_none(),
+        "stream_truncated_reason": truncated.as_ref().map(|t| t.reason.clone()),
+        "bytes_relayed": st.relayed > 0,
+        "usage": usage.map(|u| json!({
+            "input_total": u.input_total,
+            "input_cached": u.input_cached,
+            "cache_write": u.cache_write,
+            "output": u.output,
+            "reasoning": u.reasoning,
+        })),
+        "usage_missing": usage_missing,
+    });
+    if let Some(t) = &truncated {
+        responded["stream_end"] = json!(t.stream_end);
+    }
+    event(ctx, EventKind::UpstreamResponded, responded);
 
     // The ledger (§12.10.5 note R2's order): measure continuity against
     // the PREVIOUS block set, compute cost, write the trace line, commit
@@ -2063,15 +2263,29 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
         attribute_tokens(&mut blocks, u);
     }
     let mut errors: Vec<TraceError> = Vec::new();
-    if let Some(reason) = &truncated {
+    if let Some(t) = &truncated {
+        // Spec §4.20.3: the entry names its cause and carries its three
+        // observables. `window_ms` is present iff a bound tripped — the
+        // window in force for the tripping read, never the configured key
+        // alone.
+        let mut details = json!({
+            "error_class": "stream_truncated",
+            "stream": true,
+            "stream_end": t.stream_end,
+            "relayed_bytes": st.relayed,
+            "since_last_byte_ms": since_last_byte_ms,
+        });
+        if let Some(w) = t.window_ms {
+            details["window_ms"] = json!(w);
+        }
         errors.push(TraceError {
             kind: "upstream_error".to_string(),
-            message: format!("stream truncated before its terminal event; not retried: {reason}"),
+            message: format!(
+                "stream truncated before its terminal event; not retried: {}",
+                t.reason
+            ),
             plugin: None,
-            details: Some(json!({
-                "error_class": "stream_truncated",
-                "stream": true,
-            })),
+            details: Some(details),
         });
     }
     let (provider, model) = split_route_label(&st.route_label);
@@ -2135,7 +2349,9 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<String>) {
                 key.clone(),
                 vadis_core::response_cache::RecordedResponse {
                     status: 200,
-                    content_type: ctx.content_type.clone(),
+                    // R74-0-F7: the ANSWERING head's label, kept fresh
+                    // across a zero-byte failover.
+                    content_type: st.content_type.clone(),
                     body: buf.clone(),
                     source: vadis_core::response_cache::SourceRef {
                         request_id: ctx.request_id.clone(),

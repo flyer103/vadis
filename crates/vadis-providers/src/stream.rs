@@ -84,18 +84,32 @@ pub enum StreamOpen {
 }
 
 /// The streaming transport (DESIGN §12.10.1's seam, stream side). One
-/// instance per provider, built at startup like the buffered client.
+/// instance per **request**, built by the streaming driver at its entry
+/// (`stream_forward.rs`) — and again mid-request by the zero-byte
+/// failover, from the pair the driver froze on its context. It carries
+/// **two** windows, each with exactly one source key (ADR-056 §6.1.1):
+/// `head_timeout` (`server.upstream_attempt_timeout`) bounds connect and
+/// head arrival; `idle_timeout` (`server.stream_idle_timeout`) is the
+/// body's gap bound, handed to `read_chunk` by the caller — which
+/// composes it with the whole-request deadline itself, never here. No
+/// consumer composes, defaults or re-reads a value: hoisting this client
+/// to a startup-built object would silently make the gap bound
+/// reload-refused.
 pub struct ReqwestStreamClient {
     client: reqwest::Client,
-    /// §12.10.3 R4's bound: no upstream bytes for this long (after the head, or
-    /// before it) is a failed relay. `server.upstream_attempt_timeout`.
+    /// Connect + head arrival (ADR-053 §2.1 item 1):
+    /// `server.upstream_attempt_timeout`.
+    pub head_timeout: Duration,
+    /// The body's gap bound (spec §4.20.1): `server.stream_idle_timeout`.
+    /// A per-read bound only — the relay composes the window it hands
+    /// `read_chunk` as `min(this, time-until-deadline)`.
     pub idle_timeout: Duration,
 }
 
 impl ReqwestStreamClient {
-    pub fn new(idle_timeout: Duration) -> Result<Self, String> {
+    pub fn new(head_timeout: Duration, idle_timeout: Duration) -> Result<Self, String> {
         let client = reqwest::Client::builder()
-            .connect_timeout(idle_timeout)
+            .connect_timeout(head_timeout)
             .redirect(reqwest::redirect::Policy::none())
             // R9: no accept-encoding, no transparent decompression — a
             // compressed body travels as opaque bytes with its header.
@@ -107,6 +121,7 @@ impl ReqwestStreamClient {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             client,
+            head_timeout,
             idle_timeout,
         })
     }
@@ -129,11 +144,12 @@ impl ReqwestStreamClient {
         // wrap is isomorphic with `read_chunk`'s own — a
         // `tokio::time::timeout` around the send — so the clock stops
         // when the head arrives, whichever way it arrives. The body is
-        // bounded per-read by the idle arm inside `read_chunk` alone; a
-        // stream that never idles is never truncated by this knob.
+        // bounded per-read by the idle arm inside `read_chunk` alone (on
+        // the gap bound's own key, spec §4.20.2); a stream that never
+        // idles is never truncated by this knob.
         let send = out.body(body).send();
         let mut send = std::pin::pin!(send);
-        match tokio::time::timeout(self.idle_timeout, &mut send).await {
+        match tokio::time::timeout(self.head_timeout, &mut send).await {
             Ok(Ok(resp)) => {
                 let status = resp.status().as_u16();
                 let retry_after = resp
@@ -194,9 +210,12 @@ impl ReqwestStreamClient {
     }
 }
 
-/// Reads the next upstream body chunk under §12.10.3 R4's idle bound. The bound
-/// maps to `StreamRead::Failed { timed_out: true }` — the relay ends, it
-/// never hangs.
+/// Reads the next upstream body chunk under the caller's window (spec
+/// §4.20.2: the relay composes `min(stream_idle_timeout,
+/// time-until-deadline)` and hands the result here; a failure head's
+/// evidence body hands the gap bound alone). The bound maps to
+/// `StreamRead::Failed { timed_out: true }` — the relay ends, it never
+/// hangs.
 pub async fn read_chunk(head: &mut StreamHead, idle_timeout: Duration) -> StreamRead {
     let mut body = std::pin::pin!(head.response.chunk());
     match tokio::time::timeout(idle_timeout, &mut body).await {
@@ -209,8 +228,7 @@ pub async fn read_chunk(head: &mut StreamHead, idle_timeout: Duration) -> Stream
             timed_out: false,
         },
         Err(_) => StreamRead::Failed {
-            message: "idle bound exceeded: no upstream bytes within upstream_attempt_timeout"
-                .into(),
+            message: "idle bound exceeded: no upstream bytes within the read window".into(),
             timed_out: true,
         },
     }

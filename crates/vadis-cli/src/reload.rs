@@ -1796,10 +1796,18 @@ fallback: []
     /// a startup-window landing to reach the publish. 15 s was the old
     /// value and measured too small on this machine's fseventsd under
     /// test parallelism (F-R66-1e-1: a stalled stream start outlived
-    /// it); 30 s is the same order with the observed stall inside it.
-    /// It bounds a diagnostic wait only — no serving-path behaviour
-    /// reads it.
-    const READINESS_BUDGET: Duration = Duration::from_secs(30);
+    /// it); 30 s was the second value and measured too small again in a
+    /// *full-workspace* run (R74-PRE2, 2026-10-18: four of these rigs
+    /// timed out at 30 s while a 122-target suite held the machine, and
+    /// the same four passed 20/20 in isolation — the conformance half of
+    /// this class measured a 71.61 s reload the same day).
+    ///
+    /// 150 s is that measurement doubled, and it is deliberately the same
+    /// number `testkit::RELOAD_DIGEST_BUDGET` carries: one class of wait,
+    /// one budget, whichever surface is asking. It bounds a diagnostic
+    /// wait only — no serving-path behaviour reads it, so a genuinely
+    /// hung reload still fails, merely later.
+    const READINESS_BUDGET: Duration = Duration::from_secs(150);
 
     /// The card's hot-directory rig arm: store and trace writes in the
     /// watched directory produce **no look and no line** (ADR-040 D12.4's
@@ -2144,10 +2152,16 @@ fallback: []
 
         // The switch, delivered: poll /health for the new digest rather
         // than sleeping a fixed window (delivery + coalesce + the
-        // publish, all off the request path).
+        // publish, all off the request path). The pass count is whatever
+        // spends READINESS_BUDGET exactly, so this rig cannot keep a
+        // second, narrower opinion about how long a reload may take — it
+        // did (15 passes = 30 s) and timed out here under a full-workspace
+        // run while the same rig passed in isolation (R74-PRE2).
+        const POLLS_PER_PASS: u64 = 10;
+        let passes = READINESS_BUDGET.as_millis() as u64 / (POLLS_PER_PASS * 200);
         let mut switched = false;
-        for _ in 0..15 {
-            for _ in 0..10 {
+        for _ in 0..passes {
+            for _ in 0..POLLS_PER_PASS {
                 if health_digest(&addr) == expected {
                     switched = true;
                     break;

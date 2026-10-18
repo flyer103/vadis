@@ -190,7 +190,10 @@ your conversations" surface at all.
 - **Cooldown**: a failure that is about the *account* (an exhausted plan, a billing refusal)
   marks the whole provider unavailable for a cooldown, so requests stop being spent
   rediscovering a dead route one request at a time. A rate limit cools the route instead.
-  The cooldown is state: it survives a restart, is reported by `/health` and counted by
+  A stream that went silent past `server.stream_idle_timeout` cools its **route** for a
+  short advisory window (60 s): the next request prefers another eligible route, and a
+  deployment with only that route still serves it — a stall is never allowed to become an
+  outage. The cooldown is state: it survives a restart, is reported by `/health` and counted by
   `vadis stats`. It is **not** the plan's probe deadline: a provider cooldown is route
   availability, while the probe deadline is the family's own cooldown, and `/health`'s plan
   section reports them separately — a cooling provider makes a probe wait without moving the

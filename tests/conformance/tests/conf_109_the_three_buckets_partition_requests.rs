@@ -149,7 +149,6 @@ async fn start_vadis(
 
 /// (a)+(b) The partition, and `usage_missing` as an orthogonal axis.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-109: depends on R74-1"]
 async fn conf_109_a_three_buckets_partition_requests() {
     let dir = testkit::tempdir("conf109a");
     let upstream = testkit::MockUpstream::start().await.unwrap();
@@ -247,7 +246,6 @@ async fn conf_109_a_three_buckets_partition_requests() {
 
 /// (c) A complete stream with no usage carrier stays in `succeeded`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-109: depends on R74-1"]
 async fn conf_109_c_a_complete_stream_without_usage_is_still_a_success() {
     let dir = testkit::tempdir("conf109c");
     let upstream = testkit::MockUpstream::start().await.unwrap();
@@ -298,4 +296,132 @@ async fn conf_109_c_a_complete_stream_without_usage_is_still_a_success() {
         "`usage_missing` is not an error entry: {errors:?}"
     );
     assert_eq!(records[0]["usage_missing"], true);
+}
+
+/// (d) A healthy body that is not SSE is a completion, not an incomplete
+/// — the false-incompletion control (ADR-056 §4.2 row (d)). Two requests,
+/// one window of its own: the SAME body bytes twice, differing only in
+/// the answering head's `content-type`. Under the SSE label the clean
+/// close before any terminal event is a truncation
+/// (`upstream_ended_early`); under `application/json` the identical
+/// bytes are a body that finished — `errors[]` empty, no `details`
+/// object at all (so no `stream_end` key — absent, not `null`),
+/// `stream_completed: true`, and the record lands in `succeeded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conf_109_d_a_body_that_is_not_sse_is_a_completion() {
+    let dir = testkit::tempdir("conf109d");
+    let upstream = testkit::MockUpstream::start().await.unwrap();
+    // The same bytes twice: one SSE event with no terminal chunk, then a
+    // clean close. Request 1's answer labels them `text/event-stream`;
+    // request 2's labels them `application/json`.
+    let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n";
+    upstream.queue(testkit::CannedResponse::sse(vec![SseChunk::event(body)]));
+    upstream.queue(
+        testkit::CannedResponse::json(200, "OK", body)
+            .with_header("content-type", "application/json"),
+    );
+
+    let listen_port = testkit::free_port();
+    let addr = format!("127.0.0.1:{listen_port}");
+    let config_path = dir.join("config.yaml");
+    std::fs::write(&config_path, config_yaml(upstream.addr.port(), listen_port)).unwrap();
+    let serve_task = start_vadis(&config_path, listen_port).await;
+
+    let (s1, b1, _h1) =
+        testkit::http_post(&addr, "/v1/chat/completions", STREAM_BODY.as_bytes(), &[]);
+    let (s2, b2, _h2) =
+        testkit::http_post(&addr, "/v1/chat/completions", STREAM_BODY.as_bytes(), &[]);
+    let (m_status, m_body, _mh) = http_get(&addr, "/metrics");
+    serve_task.abort();
+    let _ = serve_task.await;
+
+    assert_eq!(s1, 200);
+    assert_eq!(s2, 200, "the finished body is served, not refused");
+    assert_eq!(testkit::dechunk(&b1), body);
+    assert_eq!(testkit::dechunk(&b2), body, "the bytes are the same bytes");
+
+    let records = read_records(&dir.join("state/traces"));
+    assert_eq!(records.len(), 2, "one record per request");
+    // Request 1: SSE, no terminal — a truncation with its cause named.
+    let e1 = records[0]["errors"]
+        .as_array()
+        .expect("errors array")
+        .iter()
+        .find(|e| e["details"]["error_class"] == "stream_truncated")
+        .expect("the SSE-labelled body truncates");
+    assert_eq!(
+        e1["details"]["stream_end"], "upstream_ended_early",
+        "a clean early end of an SSE body: {e1:?}"
+    );
+    // Request 2: the same bytes under a non-SSE label — the question is
+    // never asked, so the record says NOTHING: errors[] empty, no
+    // details object, no stream_end key (absent, not null).
+    let errors2 = records[1]["errors"].as_array().expect("errors array");
+    assert!(errors2.is_empty(), "not SSE ⇒ no entry: {errors2:?}");
+    assert!(
+        records[1]
+            .get("errors")
+            .and_then(|e| e.as_array())
+            .is_some(),
+        "errors[] is an array"
+    );
+
+    let events = read_events_(&dir);
+    let responded: Vec<&(String, Value, i64)> = events
+        .iter()
+        .filter(|(k, _, _)| k == "upstream.responded")
+        .collect();
+    assert_eq!(responded.len(), 2, "one terminal event per request");
+    assert_eq!(
+        responded[0].1["stream_completed"], false,
+        "the SSE-labelled body did not complete"
+    );
+    assert_eq!(responded[0].1["stream_end"], "upstream_ended_early");
+    assert_eq!(
+        responded[1].1["stream_completed"], true,
+        "the not-SSE body completed — nothing was owed"
+    );
+    assert!(
+        responded[1].1.get("stream_end").is_none(),
+        "no cause word on a completion: {:?}",
+        responded[1].1
+    );
+    assert_eq!(records[1]["usage_missing"], true, "the orthogonal axis");
+
+    // The window's partition: one incomplete, one succeeded, zero failed.
+    assert_eq!(m_status, 200);
+    let text = String::from_utf8_lossy(&m_body).to_string();
+    assert_eq!(sample(&text, "vadis_requests").expect("requests"), 2.0);
+    assert_eq!(
+        sample(&text, "vadis_requests_succeeded").expect("succeeded"),
+        1.0,
+        "the finished body is a success:\n{text}"
+    );
+    assert_eq!(
+        sample(&text, "vadis_requests_stream_incomplete").expect("incomplete"),
+        1.0,
+        "the SSE-labelled truncation:\n{text}"
+    );
+    assert_eq!(sample(&text, "vadis_requests_failed").expect("failed"), 0.0);
+    assert_eq!(
+        sample(&text, "vadis_requests_succeeded").expect("s")
+            + sample(&text, "vadis_requests_failed").expect("f")
+            + sample(&text, "vadis_requests_stream_incomplete").expect("i"),
+        sample(&text, "vadis_requests").expect("r"),
+        "the three buckets PARTITION requests:\n{text}"
+    );
+}
+
+/// Every stored event as (kind_raw, payload, ts_us), read after the
+/// server stopped — CONF-109's own copy of the reader (the store's
+/// writer lock is `serve`'s while it runs).
+fn read_events_(dir: &std::path::Path) -> Vec<(String, Value, i64)> {
+    use vadis_core::store::{Query, QueryRow, Store as _};
+    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
+    let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
+        panic!("events query");
+    };
+    rows.into_iter()
+        .map(|r| (r.kind_raw, r.payload, r.ts_us))
+        .collect()
 }

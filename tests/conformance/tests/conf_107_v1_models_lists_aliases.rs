@@ -554,20 +554,16 @@ async fn conf_107_v1_models_lists_aliases() {
     .unwrap();
 
     // Wait for the accepted revision (the digest moved) — CONF-96's
-    // technique, with a window that survives a loaded machine: 60s at
-    // 250ms polling (the architect measured an 18s reload under load;
-    // 60s is ~3x that worst case, and still bounded).
-    let mut moved = false;
-    for _ in 0..240 {
-        match health_digest(&addr_g) {
-            Some(now) if now != before => {
-                moved = true;
-                break;
-            }
-            _ => std::thread::sleep(std::time::Duration::from_millis(250)),
-        }
-    }
-    assert!(moved, "the reload was accepted on the running process");
+    // technique, through the testkit's shared window: the single budget
+    // ([`testkit::RELOAD_DIGEST_BUDGET`]) instead of this case's own
+    // window constant. A reload measured at 71.61 s under the R74-1b
+    // full-suite load is why the budget is 150 s (>= 2x that worst
+    // observation); a reload that never lands still fails, just later.
+    testkit::wait_for_digest_move(
+        &addr_g,
+        &before,
+        "the reload was accepted on the running process",
+    );
 
     let (status, raw, _h) = models_raw(&addr_g, "tok-conf107-l7");
     assert_eq!(status, 200, "the same process answers the new revision");

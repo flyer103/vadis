@@ -123,8 +123,16 @@ the consistency changes its own figures force (§6.4).
 | Bounds | the **maximum silence between two forwarded bytes** of a streamed response body — the per-read gap bound, and *only* that |
 | Grammar | the config duration grammar (spec §9.2's own: `300ms`, `90s`, `15m`, `1h30m`; no `d` unit) |
 | Default | **30 s** — a product default, not a measured optimum (§2.6) |
-| Range | **1 s ≤ value ≤ 300 s**; outside the range the load is **refused** naming the key (the loader is the same gate the reload uses, spec §4.15 rule 1) |
+| Range | **100 ms ≤ value ≤ 300 s**; outside the range the load is **refused** naming the key (the loader is the same gate the reload uses, spec §4.15 rule 1) |
 | Read site | **once per request**, at the streaming driver's entry — the value the request drives with |
+
+*Amended by `R74-1` (2026-10-17) — the Range row's floor, and nothing else. The floor was `1s` as
+contracted here, which contradicted this ADR's **own** rig table: §4.1's limbs and the three case files
+drive `400ms` windows ("so no limb rests on machine speed"), so a 1 s floor would have refused every one
+of them **at load** — the contract would have rejected the contract's own cases. The executable cases are
+the fixed point (AGENTS constraint 9), so the floor sits below them at **100 ms**; the ceiling (`300 s`) and
+the refusal behaviour are unchanged. `docs/spec.md` §4.20.1 carries the same note at its range row, and
+`design/DESIGN.md`'s R74 register line records it.*
 
 And the three bounds are now **named apart**, because two of them used to share a value:
 
@@ -440,22 +448,57 @@ is stated here rather than hidden in the fixture.
 
 ## 5. The conformance amendment list (frozen, owner-authorised)
 
-Three existing cases cannot stay byte-identical once this contract lands, and **an assertion is not a
+Four existing cases cannot stay byte-identical once this contract lands, and **an assertion is not a
 card's to edit** (AGENTS constraint 9). The owner's round ruling authorises exactly the edits below; the
 list is frozen here so `R74-1` re-decides nothing. Every other case file stays **byte-identical**, and if
 `R74-1`'s suite run turns one red, that is a **finding for the owner** (recorded, not repaired under this
-authorisation).
+authorisation). A1–A3 follow from §2.3/§2.4 and are `R74-1`'s; **A4** follows from §6.2's repair of
+`R74-0-F1` and was added by `R74-0e` after `R74-1`'s own suite run found the case this list had missed
+(the dated note below the table says how).
 
 | # | File | Edit | Why |
 |---|---|---|---|
 | **A1** | `tests/conformance/tests/conf_105_attempt_bound_is_head_arrival.rs` — limb (d) only | the fixture config gains `stream_idle_timeout: 2s` (equal to its attempt knob, so the rig's story is unchanged), and the limb adds one assertion: the truncation entry's `details.stream_end == "idle_timeout"` | limb (d) asserts *the idle arm fires at the attempt knob*. After §2.2 the idle arm reads the new key, so the limb's **fixture** must name it; without the key the rig would idle for the 30 s default and the limb would be asserting a different bound than it says |
 | **A2** | `tests/conformance/tests/conf_41_reporting_surfaces.rs` — limb (c)'s partition assertions only | the independent computation becomes the **three-bucket** one (spec §6's predicate), and `failed` stops being `len − succeeded` and becomes the non-2xx count; the sum invariant is asserted | the case's own job is to recompute the contract independently; a two-way partition is the old contract. Its rig holds no truncated record, so the numbers do not move — only the assertion's statement of the rule |
 | **A3** | `tests/conformance/tests/conf_87_metrics_single_owner.rs` — `FROZEN_SERIES` and its own aggregator | the frozen set gains `vadis_requests_stream_incomplete` (21 → **22**), and the case's independent aggregator adopts the three-bucket predicate | spec §4.16's series set is a **frozen list** asserted by name; a new series is a contract change, and the case that freezes the list must be moved by the same change that adds it (otherwise the case fails the moment the series appears) |
+| **A4** | `tests/conformance/tests/conf_82_failure_head_evidence.rs` — `spill_facts`'s `quota_exhausted` arm and leg (b)'s cross-arm comparator | the whole-object equality against `{"scope", "ttl_s"}` becomes: the **five value members** (`scope` = `provider`, `provider` = `p-plan`, `model` = `""`, `ttl_s` = 1, `reason` = `quota_exhausted`) asserted by value, the **key set** asserted to be exactly the six names a rebuild reads, and `until_us` asserted **equal to the projection row's own `until_us`** (read through `projection_rows(Projection::ProviderCooldown)` — the serving `Query::Cooldown` filters `until_us > now` and this row lives one second, so it could answer *no row* on a slow run), with `until_us − ts_us` of the `error.classified` row bounded to `0..=2 s`; leg (b)'s comparator strips `until_us` before comparing the two arms | §6.2's repair of **`R74-0-F1`** gives *every* demotion **one** shape of six members — the ones `rebuild_cooldown` reads — and this case still pinned the retired two-member `{scope, ttl_s}`: two members cannot rebuild a row (`provider`/`model`/`until_us`/`reason` missing), which is exactly the defect F1 registers. `until_us` is a wall-clock instant (`now_us() + ttl`), so it cannot be a literal, and it cannot be equal across leg (b)'s two rigs — the amendment has to say where the value is *read from*, and it reads it from the row F1 makes it share |
+
+*Amended by `R74-0e` (2026-10-18) — **A4**, and the rule it settles. This list was incomplete. `R74-1` landed
+§6.2's one shape and `conf_82`'s three `quota_exhausted` limbs went red at
+`conf_82_failure_head_evidence.rs:349` against the retired `{"scope", "ttl_s"}` literal — deterministic, 3 of
+6 limbs, 0.21 s, *"the Retry-After: 1 shrinks the demotion to one second"* with the six-member object on
+`left`. That is the **second** time this round that a consequence of a decision was not enumerated: the
+first was §2.1's `1 s` floor against this ADR's own `400 ms` rigs (`R74-0d`). One class, both times — **a
+frozen list that is asserted by an executable case has to be swept against every case that pins the thing
+being changed**, and neither §5 nor §9's site column did that for the payload shape §6.2 changes.*
+
+*The rule A4 states: **an unstable member is asserted against the row it was written with, never against a
+literal and never across two runs.** `until_us` is `now_us() + ttl`, so a literal either encodes a second
+clock read or fails; the ledger already had the right idiom (`CONF-110` limb (a): *"the payload and the
+projection carry ONE value"*), and A4 adopts it — the payload's five stable members by value, its key set
+by name, and `until_us` by identity with the projection row. A4 reads the row through the projection dump
+rather than `Query::Cooldown` for a determinism reason: the serving read is `until_us > now`, and this
+rig's demotion lives exactly **1 s** (`Retry-After: 1`), so a post-stop serving read could answer "the row
+is gone" merely because the suite was slow. The row's live-ness is already witnessed where it belongs —
+`/health`'s `probe.blocked_by: "primary_cooling_down"` while the rig runs — and `design/DESIGN.md`'s
+`CONF-82` row names the read it now uses. The bound is not left to the label either: `until_us − ts_us` of
+the classification event must land in `0..=2 s`, so a demotion that quietly took the 60 s route default or
+the 11 h session TTL fails — the `Retry-After: 1` shrink is measured in time, not only in `ttl_s`.*
+
+*`CONF-21` is **not** amended, and that is a ruling, not an omission. Its `scenario()` hand-writes an
+`error.classified` payload whose `demotion` carries five members (no `ttl_s`) — a shape §6.2's writer cannot
+emit. But the case's claim is the projection/rebuild identity, and `rebuild_cooldown` reads
+`{scope, provider, model, until_us, reason}` and **never** `ttl_s`: adding the member would move no row and
+no assertion, and a hand-built fixture cannot police what the writer emits (it asserts a relation between
+two stores). A4's key-set assertion is the one that can, so the five-member fixture there is not a hole
+this list leaves open; editing a passing fixture outside the list for cosmetic alignment would only blur
+which case owns the payload shape.*
 
 **Not amended, and why not:** `CONF-30`'s and `CONF-13`'s truncation limbs use a mid-stream **abort**
 (a transport error), which `CONF-108` limb (b) reclassifies only in its *cause word* — both limbs assert
 `error_class == "stream_truncated"`, which does not move. `CONF-82`'s failure-head limbs use aborts, not
-stalls. `CONF-90`'s limbs end with `[DONE]`. A corpus read at this card's HEAD found **no** completeness-
+stalls (its demotion-shape amendment is **A4**, forced by §6.2's repair, not by this section's silence
+rule). `CONF-90`'s limbs end with `[DONE]`. A corpus read at this card's HEAD found **no** completeness-
 asserting fixture that ends before its wire's terminal event except the ones named above.
 
 ---
@@ -466,7 +509,7 @@ asserting fixture that ends before its wire's terminal event except the ones nam
 
 | File | Change |
 |---|---|
-| `crates/vadis-core/src/config.rs` | `ServerCfg.stream_idle_timeout` (default `30s`, range `1s..=300s`, load refusal naming the key), the example/embedded pair in step |
+| `crates/vadis-core/src/config.rs` | `ServerCfg.stream_idle_timeout` (default `30s`, range `100ms..=300s` — the floor amended in §2.1, load refusal naming the key), the example/embedded pair in step |
 | `crates/vadis-providers/src/stream.rs` | the client carries **two** windows — `head_timeout` (the attempt budget) and `idle_timeout` (the new key), each fed to the consumers listed in **§6.1.1**; `read_chunk` keeps its signature (its caller hands it one window); `open` keeps the head wrap, on the head window. The client stays **per request** (it is today, `stream_forward.rs:891-892`) — hoisting it to a startup-built object would silently make the key reload-refused |
 | `crates/vadis-proxy/src/stream_forward.rs` | the driver reads **both** keys **once** at entry and puts the pair on `RelayCtx` (`head_timeout`, `idle`); `st.relayed` becomes a byte counter and `st.content_type` carries the head that **answered**; `record_classified` / `record_terminal` write `stream_end`, `relayed_bytes`, `window_ms`, `since_last_byte_ms`; the `Ended` arm asks §2.3's **three-valued** predicate (media type × `terminal_seen`, §6.1.1 item 5) before declaring completeness; the truncation arm emits the `demotion` object and lands the projection |
 | `crates/vadis-protocol/src/sse.rs` | expose `terminal_seen` (it exists; `finish()` already branches on it) to the relay as a read-only accessor, **and** add the predicate's other fact as a pure helper: is this `content-type` `text/event-stream` (parameters stripped, ASCII case-insensitive, `None` ⇒ `false`). Both facts belong to the wire crate; the **derivation** (§2.3's three values) belongs to the relay, which is the only place that holds both |

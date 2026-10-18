@@ -22,6 +22,11 @@ pub struct TraceFigures {
     pub requests: u64,
     pub succeeded: u64,
     pub failed: u64,
+    /// Spec §4.20.4's third bucket: 2xx records carrying an `errors[]`
+    /// entry with `details.error_class == "stream_truncated"` — a head
+    /// the client received, a body it did not complete. Part of the
+    /// partition `succeeded + failed + stream_incomplete == requests`.
+    pub stream_incomplete: u64,
     /// `errors[].kind -> count`, failed records only (sorted on print).
     pub failure_kinds: BTreeMap<String, u64>,
     pub usage_missing: u64,
@@ -78,6 +83,50 @@ pub struct EventFigures {
     pub source: &'static str,
 }
 
+/// Spec §4.20.4's three-way bucket predicate, in its one owned place
+/// (spec §6 defines it; `aggregate` computes it; `/metrics` and the text
+/// report render the result, never re-derive it). `failed` = non-2xx;
+/// `stream_incomplete` = 2xx with an `errors[]` entry whose
+/// `details.error_class` is `stream_truncated`; `succeeded` = every
+/// other 2xx. `usage_missing` is a second, orthogonal partition and is
+/// never a fourth bucket; "errors[] non-empty" is deliberately NOT the
+/// discriminator (`transform_error` and `trace_write_failed` ride a
+/// success).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bucket {
+    Failed,
+    StreamIncomplete,
+    Succeeded,
+}
+
+/// The bucket one record lands in (spec §4.20.4). Works on both record
+/// vintages: the predicate needs no `stream_end`.
+pub fn bucket_of(record: &Value) -> Bucket {
+    let status = record
+        .get("result")
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_u64);
+    if !matches!(status, Some(s) if (200..300).contains(&s)) {
+        return Bucket::Failed;
+    }
+    let truncated = record
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errs| {
+            errs.iter().any(|e| {
+                e.get("details")
+                    .and_then(|d| d.get("error_class"))
+                    .and_then(Value::as_str)
+                    == Some("stream_truncated")
+            })
+        });
+    if truncated {
+        Bucket::StreamIncomplete
+    } else {
+        Bucket::Succeeded
+    }
+}
+
 /// Pure aggregation over the window's records (spec §9.2's provenance
 /// table, one row per field). Records with `usage_missing: true`
 /// contribute to nothing but their own count line.
@@ -86,19 +135,16 @@ pub fn aggregate(records: &[Value]) -> TraceFigures {
     for r in records {
         f.requests += 1;
         let usage_missing = r.get("usage_missing").and_then(Value::as_bool) == Some(true);
-        let status = r
-            .get("result")
-            .and_then(|v| v.get("status"))
-            .and_then(Value::as_u64);
-        let succeeded = matches!(status, Some(s) if (200..300).contains(&s));
-        if succeeded {
-            f.succeeded += 1;
-        } else {
-            f.failed += 1;
-            if let Some(errs) = r.get("errors").and_then(Value::as_array) {
-                for e in errs {
-                    if let Some(kind) = e.get("kind").and_then(Value::as_str) {
-                        *f.failure_kinds.entry(kind.to_string()).or_insert(0) += 1;
+        match bucket_of(r) {
+            Bucket::Succeeded => f.succeeded += 1,
+            Bucket::StreamIncomplete => f.stream_incomplete += 1,
+            Bucket::Failed => {
+                f.failed += 1;
+                if let Some(errs) = r.get("errors").and_then(Value::as_array) {
+                    for e in errs {
+                        if let Some(kind) = e.get("kind").and_then(Value::as_str) {
+                            *f.failure_kinds.entry(kind.to_string()).or_insert(0) += 1;
+                        }
                     }
                 }
             }
@@ -680,6 +726,11 @@ fn write_text(
     let _ = writeln!(w);
     let _ = writeln!(w, "requests                         {}", f.requests);
     let _ = writeln!(w, "  succeeded                      {}", f.succeeded);
+    let _ = writeln!(
+        w,
+        "  stream incomplete              {}   (2xx with a truncated body — the third bucket, spec §4.20.4)",
+        f.stream_incomplete
+    );
     let kinds = if f.failure_kinds.is_empty() {
         String::new()
     } else {
@@ -861,6 +912,7 @@ pub fn report_json(
             "total": f.requests,
             "succeeded": f.succeeded,
             "failed": f.failed,
+            "stream_incomplete": f.stream_incomplete,
             "failure_kinds": f.failure_kinds,
             "usage_missing": f.usage_missing,
         },
@@ -1048,6 +1100,94 @@ mod tests {
         VadisConfig,
     };
 
+    // Spec §4.20.4's three-way predicate, unit-pinned on the shapes the
+    // audit actually saw: a truncated 2xx (the 106's own shape, counted
+    // once in stream_incomplete and never in succeeded), a non-2xx, a
+    // clean 2xx, and the two success shapes whose non-empty `errors[]`
+    // must NOT move the bucket (`transform_error`, `trace_write_failed`).
+    // `usage_missing` is asserted orthogonal: it changes nothing.
+    #[test]
+    fn bucket_of_partitions_on_the_class_word_not_on_errors_non_empty() {
+        let rec = |status: u64, errors: serde_json::Value| {
+            serde_json::json!({
+                "result": {"status": status},
+                "errors": errors,
+                "usage_missing": false,
+            })
+        };
+        let truncated = serde_json::json!([{
+            "kind": "upstream_error",
+            "message": "stream truncated before its terminal event; not retried",
+            "details": {"error_class": "stream_truncated", "stream": true,
+                        "stream_end": "idle_timeout", "relayed_bytes": 4096,
+                        "window_ms": 30000, "since_last_byte_ms": 30104},
+        }]);
+        // The audit's 106: 200 + a truncation entry + usage_missing — the
+        // record satisfies all three at once, and lands in exactly one
+        // bucket of the three.
+        let mut r = rec(200, truncated.clone());
+        r["usage_missing"] = serde_json::json!(true);
+        assert_eq!(bucket_of(&r), Bucket::StreamIncomplete);
+        // A non-2xx is failed whatever its errors carry.
+        assert_eq!(bucket_of(&rec(502, truncated.clone())), Bucket::Failed);
+        assert_eq!(bucket_of(&rec(502, serde_json::json!([]))), Bucket::Failed);
+        // A clean 2xx is succeeded.
+        assert_eq!(
+            bucket_of(&rec(200, serde_json::json!([]))),
+            Bucket::Succeeded
+        );
+        // The two success shapes that ride a non-empty errors[]: only the
+        // class word moves a record out of succeeded.
+        let transform = serde_json::json!([{
+            "kind": "transform_error",
+            "message": "a failing transform falls back to the original",
+        }]);
+        assert_eq!(bucket_of(&rec(200, transform)), Bucket::Succeeded);
+        let trace_write = serde_json::json!([{"kind": "trace_write_failed"}]);
+        assert_eq!(bucket_of(&rec(200, trace_write)), Bucket::Succeeded);
+        // A pre-R74 vintage truncation (no stream_end) buckets the same.
+        let vintage = serde_json::json!([{
+            "kind": "upstream_error",
+            "message": "stream truncated before its terminal event; not retried: ...",
+            "details": {"error_class": "stream_truncated", "stream": true},
+        }]);
+        assert_eq!(bucket_of(&rec(200, vintage)), Bucket::StreamIncomplete);
+        // usage_missing alone never moves the bucket (limb (c)'s rule).
+        let mut clean_missing = rec(200, serde_json::json!([]));
+        clean_missing["usage_missing"] = serde_json::json!(true);
+        assert_eq!(bucket_of(&clean_missing), Bucket::Succeeded);
+        // The partition invariant over this very set.
+        let all = vec![
+            rec(200, truncated),
+            rec(502, serde_json::json!([])),
+            rec(200, serde_json::json!([])),
+        ];
+        let succeeded = all
+            .iter()
+            .filter(|r| bucket_of(r) == Bucket::Succeeded)
+            .count();
+        let failed = all
+            .iter()
+            .filter(|r| bucket_of(r) == Bucket::Failed)
+            .count();
+        let incomplete = all
+            .iter()
+            .filter(|r| bucket_of(r) == Bucket::StreamIncomplete)
+            .count();
+        assert_eq!(succeeded + failed + incomplete, all.len());
+        let figs = aggregate(&all);
+        assert_eq!(
+            (
+                figs.succeeded,
+                figs.failed,
+                figs.stream_incomplete,
+                figs.requests
+            ),
+            (1, 1, 1, 3),
+            "aggregate renders the same partition"
+        );
+    }
+
     /// A minimal-but-complete `ResolvedConfig` — `report_json` and
     /// `write_text` read only `rc.vadis` (the plan-policy list) and
     /// `rc.trace_dir`, so the identities and paths are placeholders and
@@ -1065,6 +1205,7 @@ mod tests {
                     request_timeout: DurationVal(600_000),
                     auth_token_env: None,
                     max_body_bytes: 2_097_152,
+                    stream_idle_timeout: DurationVal(30_000),
                 },
                 session: SessionCfg {
                     key_sources: vec!["prompt_cache_key".into()],

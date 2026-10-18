@@ -15,7 +15,6 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
 
 use vadis_conformance::testkit;
 use vadis_conformance::testkit::CannedResponse;
@@ -145,19 +144,6 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("health json")
 }
 
-/// Waits until the accepted reload shows on `/health` (the digest
-/// moved) — the buffered case's own reload observation, verbatim.
-fn wait_for_reload(addr: &str, before: &str) {
-    for _ in 0..240 {
-        let h = http_get(addr, "/health");
-        if h["config"]["config_digest"].as_str() != Some(before) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    panic!("the reload never showed on /health");
-}
-
 fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir.join("state/traces")).expect("trace dir") {
@@ -209,7 +195,13 @@ async fn conf_96_streaming_twin_the_pin_holds_on_the_streamed_medium() {
         ),
     )
     .unwrap();
-    wait_for_reload(&r.listen_addr, &before);
+    // The shared reload window: the testkit's single budget
+    // ([`testkit::RELOAD_DIGEST_BUDGET`]), not this case's own constant.
+    testkit::wait_for_digest_move(
+        &r.listen_addr,
+        &before,
+        "the reload never showed on /health",
+    );
 
     // Turn 2 of the SAME session, streamed: the pin holds.
     let s2 = post_stream(&r.listen_addr, "S");

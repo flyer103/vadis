@@ -154,7 +154,8 @@ that route's id too (§2).
 server:   { addr: "127.0.0.1:8790", upstream_attempt_timeout: 60s, request_timeout: 10m,
             stream_idle_timeout: 30s,        # §4.20: the longest SILENCE between two forwarded bytes of a
                                              #   streamed response body — the per-read gap bound, and only
-                                             #   that (default 30s; 1s ≤ value ≤ 300s). It is **not** the
+                                             #   that (default 30s; 100ms ≤ value ≤ 300s, the floor
+                                             #   amended by R74-1 — §4.20.1). It is **not** the
                                              #   attempt budget (which bounds connect + head arrival) and
                                              #   **not** the whole-request deadline (`request_timeout`,
                                              #   which always wins when it is nearer: min(gap, deadline))
@@ -2149,12 +2150,14 @@ set (no trace line, no event row, no cost, no session, no prefix); the method fa
 
 ### 4.20 The silence of a stream (the gap bound, a truncation's cause, the three buckets, and a silent route's cooldown)
 
-*Status: **contracted, not served** — R74-0 (`ADR-056`) freezes the contract on the owner's 2026-10-17
-round ruling; `R74-1` implements it. Until then a config file that carries `server.stream_idle_timeout`
-is **refused** by today's loader (the schema has no such key), no trace record carries
-`details.stream_end`, `/metrics` has no incomplete series, the gap bound still reads
-`server.upstream_attempt_timeout`, and `CONF-108/109/110` are parked `#[ignore]`d. This section is the
-contract the implementing change lands against; it is not a description of today's build.*
+*Status: **served** — `R74-0` (`ADR-056`) froze this contract on the owner's 2026-10-17 round ruling;
+`R74-1` (same date) implemented it: the loader accepts the key, a truncation entry carries
+`details.stream_end` + its three observables, `/metrics` and `vadis stats` render
+`vadis_requests_stream_incomplete`, the gap bound reads `server.stream_idle_timeout`, the route-scoped
+advisory `stream_silence` row lands with its 60 s constant TTL, and `CONF-108/109/110` are un-parked
+and green. One amendment `R74-1` was forced to make is recorded at §4.20.1's range row: the contract's
+own rig table (§4.20.7's cases) drives `400ms` windows, which the section text's original 1 s floor
+would have refused — the rigs win (an assertion is not a card's to edit), and the floor is 100 ms.*
 
 Three facts about a streamed response are stated here, because each was measured on a 13-day trace window
 and each was previously either absent or expressed by the wrong knob: **how long a stream may stay
@@ -2166,7 +2169,13 @@ bytes: the per-chunk write-through, the ordering and the "never fabricate a term
 
 | Key | Type | Default | Range | Semantics |
 |---|---|---|---|---|
-| `server.stream_idle_timeout` | duration | **`30s`** | **`1s` … `300s`** — outside it the **load is refused, naming the key** | the maximum **silence between two forwarded bytes** of a streamed response body: the per-read gap bound, and only that |
+| `server.stream_idle_timeout` | duration | **`30s`** | **`100ms` … `300s`** — outside it the **load is refused, naming the key** | the maximum **silence between two forwarded bytes** of a streamed response body: the per-read gap bound, and only that |
+
+*Amended by `R74-1` (2026-10-17): the range's floor was `1s` as contracted, which contradicted the same
+contract's rig table — ADR-056 §4.1 and the three case files drive `400ms` windows "so no limb rests on
+machine speed", and a 1 s floor would have refused every one of them at load. The executable cases are
+the fixed point (AGENTS constraint 9), so the floor sits below them at 100 ms; the ceiling and the
+refusal behaviour are unchanged.*
 
 Three bounds now have three names (`§4.20.2` states how they combine):
 
@@ -2181,7 +2190,7 @@ Three bounds now have three names (`§4.20.2` states how they combine):
   claims none.
 - A value **at or above** `server.request_timeout` is **inert** — the outer bound fires first. That is a
   stated fact, not a refusal: a default may not make an otherwise-valid file unloadable.
-- A value below the range is refused because a gap bound under a second is indistinguishable from "cut the
+- A value below the range is refused because a gap bound under 100 ms is indistinguishable from "cut the
   stream at random" against real network jitter; above 300 s it is indistinguishable from no bound at all
   under a 10 m whole-request default.
 - **It is not in §4.11's askable set.** `vadis setup` neither asks for nor rewrites it (§4.11's `server` row
