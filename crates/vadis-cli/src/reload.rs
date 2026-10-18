@@ -2152,10 +2152,16 @@ fallback: []
 
         // The switch, delivered: poll /health for the new digest rather
         // than sleeping a fixed window (delivery + coalesce + the
-        // publish, all off the request path).
+        // publish, all off the request path). The pass count is whatever
+        // spends READINESS_BUDGET exactly, so this rig cannot keep a
+        // second, narrower opinion about how long a reload may take — it
+        // did (15 passes = 30 s) and timed out here under a full-workspace
+        // run while the same rig passed in isolation (R74-PRE2).
+        const POLLS_PER_PASS: u64 = 10;
+        let passes = READINESS_BUDGET.as_millis() as u64 / (POLLS_PER_PASS * 200);
         let mut switched = false;
-        for _ in 0..15 {
-            for _ in 0..10 {
+        for _ in 0..passes {
+            for _ in 0..POLLS_PER_PASS {
                 if health_digest(&addr) == expected {
                     switched = true;
                     break;
