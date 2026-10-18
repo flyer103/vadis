@@ -671,7 +671,8 @@ Neither spelling is a reshaped section (the `state:` / `retention` precedent).
    a trace field of its own: it follows from `decision.provider`'s `account`.
 5. **A switch is priced as a failover**, because it changes the account's upstream cache namespace: the trace
    records the re-prefill (`result.plan_switch.reprefill_tokens` / `switch_cost_nano`), `inferred` at decision
-   time and `verified` once the switched attempt's usage has landed (§6; ADR-011 item 9's convention).
+   time and `measured` once the switched attempt's usage has landed (§6; ADR-011 item 9's convention,
+   restated in ADR-058's vocabulary).
 
 **The `plan.switched` payload (spec amendment).** Besides the fields ADR-014 item 8 lists (`family`,
 `from_account` / `to_account`, `from_route` / `to_route`, `reason`, `probe`, `reprefill_tokens` +
@@ -1899,7 +1900,7 @@ ratios carry the report's own four decimal places, `overhead_ms_p99` is integer 
 | `vadis_prefix_continuity_p50` | `provenance` | ratio | `continuity p50` |
 | `vadis_transform_savings_tokens` | `provenance` | tokens | the two savings lines, one series per label present |
 | `vadis_plan_switches` | `family` | count | `switches` |
-| `vadis_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `switch cost (verified, <currency>)` |
+| `vadis_plan_switch_cost_nano` | `family`, `currency`, `provenance` | integer nano | `switch cost (measured, <currency>)` |
 | `vadis_plan_switch_reprefill_tokens` | `family`, `provenance` | tokens | `switch re-prefill (inferred)` — the token sum |
 | `vadis_plan_switch_reprefill_cost_nano` | `family`, `currency`, `provenance` | integer nano | the same line's cost sum |
 | `vadis_plan_switches_without_usage` | `family` | count | `switches without usage` |
@@ -1910,8 +1911,10 @@ The five plan series exist **only when the loaded config declares a `plan_policy
 no-fabricated-plan-section rule); `family` is that policy's `family` verbatim.
 
 **`provenance` is §9.2's own label, machine-readable.** Its value is exactly the label column of §9.2's
-provenance table row for that figure — `verified`, `inferred`, `measured` or `count` — so a consumer may
-select `provenance="verified"` and can neither average an inferred figure into a measured one nor present
+provenance table row for that figure — `measured`, `verified`, `inferred` or `count`: the cost tiers, the
+two cache token counters, the hit rate and the switch cost are single observations and carry **`measured`**
+(§7, ADR-058); the savings series alone carries `verified`, because it is the one delta. So a consumer may
+select `provenance="measured"` and can neither average an inferred figure into a measured one nor present
 one as the other (§7, AGENTS constraint 4). The two savings series are the case where the label *is* the
 distinction: `{provenance="verified"}` and `{provenance="inferred"}` are one metric name and are never to be
 summed together.
@@ -3100,11 +3103,11 @@ requests                         61
   usage missing                   3   (a second axis, never a bucket — counted here AND in its own bucket
                                       above; excluded from every rate and sum below, never read as 0)
 
-cost (verified, USD)       184000 nano
+cost (measured, USD)       184000 nano
   input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
 
 cache
-  hit rate (verified)        0.9898   (17536 / 17716 input tokens)
+  hit rate (measured)        0.9898   (17536 / 17716 input tokens)
   continuity p50 (inferred)   1.000   (a predictor, not a measurement of what the provider did)
 
 transforms
@@ -3113,7 +3116,7 @@ transforms
 
 plan family 'glm-5.3'
   switches                        1   (requests whose result.plan_switch is present)
-  switch cost (verified, USD)     184000 nano
+  switch cost (measured, USD)     184000 nano
   switch re-prefill (inferred)  10000 tokens | 20000 nano | USD
   switches without usage          0   (they keep the inferred label and say so)
 
@@ -3129,9 +3132,9 @@ header names both — the report states every figure it has and deliberately sta
 ```
 currencies:  USD, CNY             (money is reported per currency and never summed across them)
 ...
-cost (verified, USD)       184000 nano
+cost (measured, USD)       184000 nano
   input_miss 160000 | input_hit 4000 | cache_write 0 | output 20000
-cost (verified, CNY)         8400 nano
+cost (measured, CNY)         8400 nano
   input_miss 8000 | input_hit 400 | cache_write 0 | output 0
 ```
 
@@ -3147,25 +3150,18 @@ Provenance of every figure:
 | `requests` | count | one per trace line whose `ts` is in the window | count | — |
 | `succeeded` / `failed` / `stream incomplete` | the three-bucket partition of §4.20.4 — non-2xx ⇒ `failed`; 2xx with a `stream_truncated` entry ⇒ `stream incomplete`; 2xx without one ⇒ `succeeded` — with `succeeded + failed + stream incomplete == requests`; `failed` is split by `errors[].kind` | trace `result.status`, `errors[]` | count | — |
 | `usage missing` | count of records with `usage_missing: true` — a **second axis over the same records**, never a bucket | trace `usage_missing` | count | those records contribute to nothing priced or averaged below — but they are still **counted** in whichever of the three buckets they belong to |
-| `cost` and its four tiers | Σ per tier, **per currency** | trace `cost.*`, **grouped by `cost.currency`** (§4.8) — computed by the serving path from measured `usage` priced by the config table | **verified** | records with `usage_missing: true`; an uncomputed cost is never 0; a currency's figures never enter another currency's line |
-| `hit rate` | §6's `cache_hit_rate` | trace `usage` | **verified** | records with `usage_missing: true` |
+| `cost` and its four tiers | Σ per tier, **per currency** | trace `cost.*`, **grouped by `cost.currency`** (§4.8) — computed by the serving path from measured `usage` priced by the config table | **measured** | records with `usage_missing: true`; an uncomputed cost is never 0; a currency's figures never enter another currency's line |
+| `hit rate` | §6's `cache_hit_rate` | trace `usage` | **measured** | records with `usage_missing: true` |
 | `continuity p50` | §6's `prefix_continuity_p50` | trace `prefix.continuity` | **inferred** | records whose `continuity` is null (a session's first request — an absent measurement is absent, not 1.0) |
 | `verified savings tokens` | §6's `verified_savings_tokens` | trace `transforms[]` where `verdict == verified` | **verified** | every `inferred` record |
 | `inferred savings tokens` | Σ saved tokens over `verdict == inferred` | trace `transforms[]` | **inferred** | never added to the line above |
 | `switches` | count of records with `result.plan_switch` present | trace `result.plan_switch` | count | — |
-| `switch cost (verified, <currency>)` | Σ, over those records, of the **record's own `cost.total`**, per currency | the trace, as above | **verified** | records with `usage_missing: true`, counted on the next line instead |
-| `switch re-prefill (inferred)` | Σ `reprefill_tokens` and Σ `switch_cost_nano` per currency | trace `result.plan_switch.reprefill_tokens` / `.switch_cost_nano`, grouped by `.cost_currency` | **inferred** | never added into `switch cost (verified)` — see below; a currency's figures never enter another's line |
-| `switches without usage` | count of displaced records excluded from `switch cost (verified)` | trace | count | — |
+| `switch cost (measured, <currency>)` | Σ, over those records, of the **record's own `cost.total`**, per currency | the trace, as above | **measured** | records with `usage_missing: true`, counted on the next line instead |
+| `switch re-prefill (inferred)` | Σ `reprefill_tokens` and Σ `switch_cost_nano` per currency | trace `result.plan_switch.reprefill_tokens` / `.switch_cost_nano`, grouped by `.cost_currency` | **inferred** | never added into `switch cost (measured)` — see below; a currency's figures never enter another's line |
+| `switches without usage` | count of displaced records excluded from `switch cost (measured)` | trace | count | — |
 | `stateful inbound rate` | §6's `stateful_inbound_rate` | trace `state.stateful_inbound` | count | always 0 in v0.1 (gap G-F), which is why it is printed at all |
 | `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
 | `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` **− `result.upstream_ms`** (the derivation §6 defines) | measured | records whose `upstream_ms` is `null` — §6's definition excludes them from the sample, so an unreadable denominator is never read as 0 ms |
-
-**Three rows of this table carry a legacy word.** `cost` and its four tiers, `hit rate` and `switch cost`
-are **`measured`** figures in §7's vocabulary — single observations, not deltas (ADR-058) — while the report
-prints them as `verified` and `/metrics` publishes that same word as their `provenance` value. The printed
-word is served text, so relabelling it is a code change with its own case review and is owed by a separate
-card (ADR-058 §5, §7). Until it lands: **no figure in this section may be reported as a saving on the
-strength of that word** — the only saving figure is `verified savings tokens`, and only when a pair exists.
 
 Five conventions this report obeys, each of which has bitten someone:
 
@@ -3190,11 +3186,11 @@ Five conventions this report obeys, each of which has bitten someone:
   `cost.currency` is absent is a v1 record and is USD (§6), which is why an old trace file and a new one can sit
   in one window.
 
-- **`switch_cost_nano` is the *inferred* column, never the verified one.** §6 fixes what verifies a switch: the
-  switched request's own measured usage and `cost.*`, whose measured `cost.total` **is** the switch's verified
-  cost (the destination account's re-prefill is inside it). Adding the decision-time `switch_cost_nano` on top
+- **`switch_cost_nano` is the *inferred* column, never the measured one.** §6 fixes what a switch's cost
+  is: the switched request's own measured usage and `cost.*`, whose measured `cost.total` **is** the switch's
+  measured cost (the destination account's re-prefill is inside it). Adding the decision-time `switch_cost_nano` on top
   would count the same money twice — once as an estimate, once as a measurement. A switch whose destination is
-  in-plan verifies at 0 by the same rule (§4.6 rule 4: an in-plan destination's marginal price is 0), so one sum
+  in-plan is measured at 0 by the same rule (§4.6 rule 4: an in-plan destination's marginal price is 0), so one sum
   over the displaced records' `cost.total` is right in both directions.
 - **What is not counted.** In-plan requests are 0 in every cost bucket (§4.6 rule 4) and therefore contribute 0:
   the difference between "the plan's marginal price" and "the metered account's real price" shows up as the plan

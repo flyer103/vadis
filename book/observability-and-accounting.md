@@ -160,7 +160,9 @@ truth, and neither prices anything you cannot already find in a record:
 
 The point of the report is the **label on every figure**, `measured`, `verified` or `inferred` (the three
 conventions are the table above): you can tell a single observation, a verified saving and an estimate apart
-while you read the report, not afterwards. The field-by-field shape, each figure's provenance and which record
+while you read the report, not afterwards. The cost lines, the hit rate and the switch cost all print
+`measured` — single observations — and the only `verified` figure in the report is the savings line, and
+only when a pair exists. The field-by-field shape, each figure's provenance and which record
 it comes from are [`docs/spec.md` §9](../docs/spec.md).
 
 ### `vadis steps` — one session, one line per request

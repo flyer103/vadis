@@ -53,13 +53,15 @@ pub struct TraceFigures {
     pub overhead_ms: Vec<u64>,
     // plan family (present only when the config declares a policy)
     pub switches: u64,
-    /// Σ the displaced records' own `cost.total` — the verified switch
+    /// Σ the displaced records' own `cost.total` — the measured switch
     /// cost, **per currency**; excludes `usage_missing` records (counted
-    /// in `switches_without_usage` instead).
+    /// in `switches_without_usage` instead). The field *name* keeps
+    /// `verified` as a code identifier (ADR-058 §5): identifiers are not
+    /// printed words.
     pub switch_cost_verified_nano: BTreeMap<String, u64>,
     pub switches_without_usage: u64,
     /// Σ `reprefill_tokens` / Σ `switch_cost_nano` over the switch records
-    /// (the inferred columns; never added into the verified sum). The
+    /// (the inferred columns; never added into the measured sum). The
     /// token sum is currency-free; the cost sum is grouped by
     /// `plan_switch.cost_currency` (spec §9.2's provenance row).
     pub reprefill_tokens: u64,
@@ -245,8 +247,8 @@ pub fn aggregate(records: &[Value]) -> TraceFigures {
                 f.switches_without_usage += 1;
             } else {
                 // The switched request's own measured total IS the switch's
-                // verified cost (the destination's re-prefill is inside it);
-                // an in-plan destination verifies at 0 by the same rule.
+                // measured cost (the destination's re-prefill is inside it);
+                // an in-plan destination measures at 0 by the same rule.
                 // Grouped by the record's `cost.currency` — the record, not
                 // the switch, is what was measured.
                 let cur = r
@@ -655,7 +657,7 @@ fn cost_json(f: &TraceFigures) -> serde_json::Value {
     if cs.len() == 1 {
         let cur = cs[0];
         serde_json::json!({
-            "label": "verified",
+            "label": "measured",
             "currency": cur,
             "input_miss_nano": f.input_miss_nano.get(cur).copied().unwrap_or(0),
             "input_hit_nano": f.input_hit_nano.get(cur).copied().unwrap_or(0),
@@ -664,7 +666,7 @@ fn cost_json(f: &TraceFigures) -> serde_json::Value {
         })
     } else {
         serde_json::json!({
-            "label": "verified",
+            "label": "measured",
             "by_currency": {
                 "input_miss_nano": &f.input_miss_nano,
                 "input_hit_nano": &f.input_hit_nano,
@@ -774,7 +776,7 @@ fn write_text(
         let out = f.output_nano.get(cur).copied().unwrap_or(0);
         let _ = writeln!(
             w,
-            "cost (verified, {cur})       {} nano",
+            "cost (measured, {cur})       {} nano",
             miss + hit + write + out
         );
         let _ = writeln!(
@@ -791,7 +793,7 @@ fn write_text(
         .unwrap_or_else(|| String::from("0.0000"));
     let _ = writeln!(
         w,
-        "  hit rate (verified)        {rate}   ({} / {} input tokens)",
+        "  hit rate (measured)        {rate}   ({} / {} input tokens)",
         f.input_cached_tokens, f.input_total_tokens
     );
     let cont = median(&mut f.continuity.clone());
@@ -828,7 +830,7 @@ fn write_text(
         for cur in f.currencies.keys() {
             let _ = writeln!(
                 w,
-                "  switch cost (verified, {cur})     {} nano",
+                "  switch cost (measured, {cur})     {} nano",
                 f.switch_cost_verified_nano.get(cur).copied().unwrap_or(0)
             );
         }
@@ -922,7 +924,7 @@ pub fn report_json(
         "cost": cost_json(f),
         "cache": {
             "hit_rate": {
-                "label": "verified",
+                "label": "measured",
                 "value": cache_hit_rate(f),
                 "input_cached": f.input_cached_tokens,
                 "input_total": f.input_total_tokens,

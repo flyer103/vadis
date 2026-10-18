@@ -173,7 +173,9 @@ pub fn exposition(
                     &[
                         ("tier", tier),
                         ("currency", cur),
-                        ("provenance", "verified"),
+                        // ADR-058: one observation (price arithmetic over
+                        // measured usage), so `measured`, never `verified`.
+                        ("provenance", "measured"),
                     ],
                     &map.get(cur).copied().unwrap_or(0).to_string(),
                 );
@@ -186,14 +188,14 @@ pub fn exposition(
         &mut out,
         "vadis_cache_input_cached_tokens",
         "Cached input tokens in the window (the hit rate's numerator).",
-        &[("provenance", "verified")],
+        &[("provenance", "measured")],
         &f.input_cached_tokens.to_string(),
     );
     series(
         &mut out,
         "vadis_cache_input_tokens",
         "Input tokens in the window (the hit rate's denominator).",
-        &[("provenance", "verified")],
+        &[("provenance", "measured")],
         &f.input_total_tokens.to_string(),
     );
 
@@ -204,7 +206,7 @@ pub fn exposition(
             &mut out,
             "vadis_cache_hit_rate",
             "Cache hit rate over the window (cached / total input tokens).",
-            &[("provenance", "verified")],
+            &[("provenance", "measured")],
             &format!("{r:.4}"),
         ),
         None => {
@@ -283,7 +285,7 @@ pub fn exposition(
                     &[
                         ("family", fam),
                         ("currency", cur),
-                        ("provenance", "verified"),
+                        ("provenance", "measured"),
                     ],
                     &f.switch_cost_verified_nano
                         .get(cur)
@@ -296,7 +298,7 @@ pub fn exposition(
         series(
             &mut out,
             "vadis_plan_switch_reprefill_tokens",
-            "Re-prefill tokens over the switch records (the inferred column — never added into the verified sum).",
+            "Re-prefill tokens over the switch records (the inferred column — never added into the measured sum).",
             &[("family", fam), ("provenance", "inferred")],
             &f.reprefill_tokens.to_string(),
         );

@@ -77,13 +77,19 @@ const FROZEN_SERIES: [&str; 22] = [
 
 /// §9.2's own label per series (limb (f)): `None` = the series carries
 /// no `provenance` label at all.
+///
+/// The five `measured` arms were `"verified"` until the owner ruling of
+/// 2026-10-18 (ADR-058 §5's owed work): those figures are single
+/// observations, not deltas, and the relabel was authorized together
+/// with this case's amendment — the assertion still demands exactly one
+/// label per sample and still distinguishes the one delta series.
 fn expected_provenance(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "vadis_cost_nano"
         | "vadis_cache_input_cached_tokens"
         | "vadis_cache_input_tokens"
         | "vadis_cache_hit_rate"
-        | "vadis_plan_switch_cost_nano" => Some(&["verified"]),
+        | "vadis_plan_switch_cost_nano" => Some(&["measured"]),
         "vadis_prefix_continuity_p50"
         | "vadis_plan_switch_reprefill_tokens"
         | "vadis_plan_switch_reprefill_cost_nano" => Some(&["inferred"]),
@@ -513,7 +519,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
                         &[
                             ("tier", tier),
                             ("currency", cur),
-                            ("provenance", "verified")
+                            ("provenance", "measured")
                         ]
                     ),
                     Some(map.get(cur).copied().unwrap_or(0).to_string().as_str()),
@@ -526,7 +532,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         value_of(
             samples,
             "vadis_cache_input_cached_tokens",
-            &[("provenance", "verified")]
+            &[("provenance", "measured")]
         ),
         Some(own.input_cached.to_string().as_str())
     );
@@ -534,7 +540,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
         value_of(
             samples,
             "vadis_cache_input_tokens",
-            &[("provenance", "verified")]
+            &[("provenance", "measured")]
         ),
         Some(own.input_total.to_string().as_str())
     );
@@ -552,7 +558,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
             value_of(
                 samples,
                 "vadis_cache_hit_rate",
-                &[("provenance", "verified")]
+                &[("provenance", "measured")]
             ),
             Some(want.as_str())
         );
@@ -601,7 +607,7 @@ fn assert_figures(samples: &[Sample], comments: &[String], own: &Own, family: Op
                         &[
                             ("family", fam),
                             ("currency", cur),
-                            ("provenance", "verified")
+                            ("provenance", "measured")
                         ]
                     ),
                     Some(
@@ -823,13 +829,26 @@ async fn conf_87_the_figures_are_the_derivations() {
         "files_read is the derivation's count"
     );
     assert_eq!(json["requests"]["total"].as_u64().unwrap(), own.requests);
+    // The relabel's own pin (owner ruling of 2026-10-18): a measured
+    // figure's --json `label` says the same word the exposition carries,
+    // so the two surfaces cannot drift back apart unnoticed.
+    assert_eq!(
+        json["cost"]["label"].as_str(),
+        Some("measured"),
+        "the --json cost label is the measured word"
+    );
+    assert_eq!(
+        json["cache"]["hit_rate"]["label"].as_str(),
+        Some("measured"),
+        "the --json hit-rate label is the measured word"
+    );
     let json_rate = json["cache"]["hit_rate"]["value"].as_f64().expect("rate");
     let want_rate = format!("{json_rate:.4}");
     assert_eq!(
         value_of(
             &samples,
             "vadis_cache_hit_rate",
-            &[("provenance", "verified")]
+            &[("provenance", "measured")]
         ),
         Some(want_rate.as_str()),
         "the served ratio is report_json's ratio, one derivation"
@@ -1048,7 +1067,7 @@ async fn conf_87_zero_is_not_absent() {
         value_of(
             &samples,
             "vadis_cache_input_tokens",
-            &[("provenance", "verified")]
+            &[("provenance", "measured")]
         ),
         Some("0"),
         "the token series is present as a real zero"
@@ -1216,7 +1235,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
             &[
                 ("tier", "cache_write"),
                 ("currency", "USD"),
-                ("provenance", "verified")
+                ("provenance", "measured")
             ]
         ),
         Some("0")
@@ -1227,13 +1246,13 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
             &[
                 ("tier", "input_miss"),
                 ("currency", "USD"),
-                ("provenance", "verified")
+                ("provenance", "measured")
             ]
         ),
         Some("10")
     );
     assert_eq!(
-        at("vadis_cache_hit_rate", &[("provenance", "verified")]),
+        at("vadis_cache_hit_rate", &[("provenance", "measured")]),
         Some("0.2500")
     );
     assert_eq!(
@@ -1263,7 +1282,7 @@ fn conf_87_the_formatter_renders_exactly_the_figures_it_is_handed() {
             &[
                 ("family", "fam-x"),
                 ("currency", "USD"),
-                ("provenance", "verified")
+                ("provenance", "measured")
             ]
         ),
         Some("40")

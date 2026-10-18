@@ -467,7 +467,7 @@ not in this repository yet, and this chapter will not invent them.
 - [`docs/spec.md` §6](../docs/spec.md) — cache metrics exposed to the user
   (`cache_hit_rate`, `prefix_continuity` percentiles).
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `vadis stats`' report, each
-  figure's provenance and its `verified` / `inferred` label, and what is not served yet.
+  figure's provenance and its `measured` / `verified` / `inferred` label, and what is not served yet.
 - [`design/DESIGN.md` §5](../design/DESIGN.md) and [§6](../design/DESIGN.md) — the cost
   engine and the cache policy.
 - [`docs/spec.md` §4.6](../docs/spec.md) — `account` and `plan_policy`: the per-key

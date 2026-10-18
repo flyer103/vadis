@@ -1993,7 +1993,12 @@ prints `cost (verified, <currency>)` and `switch cost (verified, <currency>)`, a
 (`crates/vadis-cli/src/metrics.rs:176,189,196,207,286`; `:246` is the delta and stays) while `:360` already
 emits `provenance="measured"` — two words for one quantity on one surface. Relabelling that is a served
 contract (§9.2, §4.16) with a conformance case attached, so it is **owed by a follow-up card** and §9.2
-carries the reading rule in the meantime. `AGENTS.md` constraint 4 is **read, not reworded**: its parenthetical
+carries the reading rule in the meantime.
+
+**Update (2026-10-18, later the same day): the owed relabel landed.** The owner authorized the narrow
+`CONF-87` amendment (five series → `provenance="measured"` at the 14 literal sites; the savings arm keeps
+`verified`), `spec` §9.2/§4.16 and the book moved with it, and the ruling is recorded in ADR-058 §5/§7.
+`AGENTS.md` constraint 4 is **read, not reworded**: its parenthetical
 *"measured usage difference"* is exactly the delta scope, and `measured` names the observation that the
 difference is taken over — the ruling does not need the constitution changed. No code identifier is renamed
 (`verified_savings_tokens` counts deltas and keeps its name), no gate / threshold / corpus / L1 envelope
@@ -3028,7 +3033,7 @@ configuration". Both read what is already recorded and neither prices anything:
   `primary_cooling_down` → `window_not_reset`), so the surface and the guard cannot disagree about *why*;
 - `vadis stats` sums the trace's own `cost.*`, `usage`, `transforms[]` and `plan_switch` fields under spec §6's
   metric definitions, and reads the event log **read-only** for the one figure only the log holds
-  (`unknown_outcome_requests`, ADR-010 item 4). Its `switch cost (verified)` is one sum over the displaced
+  (`unknown_outcome_requests`, ADR-010 item 4). Its `switch cost (measured)` is one sum over the displaced
   records' measured `cost.total` — `switch_cost_nano` stays the `inferred` column, or the same money would be
   counted twice (spec §9.2).
 

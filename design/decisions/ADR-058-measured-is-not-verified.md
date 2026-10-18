@@ -158,6 +158,15 @@ alone; rewriting it would be a second, larger change with no contract behind it.
   report prints is a served contract (`spec §9.2`, §4.16) and its change needs a code change plus whatever
   `CONF-87` asserts — so it is a **follow-up card**, not this text-only change. Until it lands, `spec §9.2`
   carries the reading rule in-band.
+- **Update (2026-10-18, later the same day) — the deferred item landed, by owner ruling.** The follow-up card
+  found `CONF-87` pinning the literal `"verified"` at fourteen sites (the `expected_provenance` map plus
+  eleven `value_of` assertions), so per this ADR's own stop condition it stopped and reported. The owner
+  authorized the amendment narrowly: the five measured series → `"measured"` at exactly those fourteen sites,
+  the savings arm (`:90`, `:1246`) keeps `"verified"`, the three `--json` `"label"` sites that rode along
+  (`stats.rs:655/:664/:922`) move too and are pinned in the same commit, field *names*
+  (`switch_cost_verified_nano`, `verified_savings_tokens`) stay — identifiers, not printed words — and no
+  predicate, series, threshold or N-vs-10N arm is touched. The case was not weakened: every sample still
+  demands exactly one provenance label and the delta series is still distinguished.
 - **No code identifier is renamed.** `verified_savings_tokens` (`crates/vadis-core/src/trace.rs:437`) keeps its
   name: it counts deltas, which is what the word means.
 - **Nothing else moves.** No gate definition, threshold, corpus, L1 envelope or conformance case; no trace
@@ -182,3 +191,4 @@ alone; rewriting it would be a second, larger change with no contract behind it.
 | **`ADR-058`** | this file |
 | — | **no `CONF` id, no `GAP-Q` id, no round number**: the census is a grep, not a gate, and the served relabel is the follow-up card's to witness |
 | **owed** | the served relabel: `crates/vadis-cli/src/metrics.rs:176,189,196,207,286` → `provenance="measured"` (the delta at `:246` stays `verified`), `spec §9.2`'s three table rows and its two sample lines, `spec §4.16`'s wording, and whatever `CONF-87` asserts about the value set — one card, one case amendment, no gate |
+| **paid** | the §5 owed item, landed 2026-10-18 by the owner ruling recorded in §5's update bullet: relabel + the fourteen-site `CONF-87` amendment (not weakened — one label per sample, delta series still distinguished) + the three `--json` label sites, pinned; `spec` §4.6/§9.2/§4.16, `DESIGN` §12.9/§12.10 and the book moved in the same change |
