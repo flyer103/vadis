@@ -1,0 +1,62 @@
+{
+  "model": "deepseek-flash",
+  "stream": false,
+  "store": false,
+  "max_output_tokens": 512,
+  "prompt_cache_key": "vadis-paired-run-0001",
+  "instructions": "You are a coding agent working in the widget-kit workspace. Answer briefly from the tool output you are given.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "exec_command",
+      "description": "Run a shell command and return its combined output",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
+  ],
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Build the workspace and show me what failed."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_1",
+      "name": "exec_command",
+      "arguments": "{\"command\":[\"cargo\",\"build\",\"--workspace\"]}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": "    Finished `dev` profile [unoptimized + debuginfo] target(s)\n     Running `target/debug/widgets --check`\nwarning: unused variable: `depth`\n --> widget-core/src/depth.rs:42:17\n  |\n42 |     let depth = context.depth();\n  |         ^^^^^ help: if it is intentional, prefix it with an underscore\n  |\nwarning: 1 warning emitted\nnote: the dependency tree was resolved with 47 crates and the lockfile at widget-kit.lock was written with a checksum for every entry so that a later build in a clean checkout reproduces the same versions without contacting the registry aga...\nhelp: the full backtrace of the failing task was captured to target/debug/widgets.dSYM/00000000-1111-2222-3333-444444444444.txt and can be re-opened with `widgets bug-report --attach target/debug/widgets.dSYM/00000000-1111-2222-3333-4444444...\nerror[E0308]: mismatched types\n  --> widget-core/src/depth.rs:58:23\n   |\n58 |     let scale: u32 = context.depth();\n   |                    ^^^^^^^^^^^^^ expected `u32`, found `usize`\n   |\nerror: could not compile `widget-core` (lib) due to 1 previous error; 1 warning emitted\n"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Summarize the failures in two lines."
+        }
+      ]
+    }
+  ]
+}

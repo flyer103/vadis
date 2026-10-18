@@ -1,0 +1,509 @@
+{
+  "schema": "vadis/paired-run-report@1",
+  "basis": "measurement",
+  "verdict": "figure",
+  "refusal": null,
+  "figures": {
+    "net_input_tokens": {
+      "value": 1599,
+      "label": "verified",
+      "unit": "tokens",
+      "scope": "input-side only; net = saved − added; one fixture body, one rule set",
+      "from": {
+        "request_id": "req-3",
+        "role": "measured control #3 (passthrough, warm)",
+        "usage_input_total": 2299
+      },
+      "to": {
+        "request_id": "req-4",
+        "role": "measured treatment #4 (transform, warm)",
+        "usage_input_total": 700
+      }
+    },
+    "predicted_net_tokens": {
+      "value": 1281,
+      "label": "inferred",
+      "note": "Σ(saved_input_tokens − added_input_tokens) of #4's transforms[] — printed beside, never summed with the net (ADR-031 D4.3)"
+    },
+    "estimator_error_tokens": {
+      "value": 318,
+      "label": "diagnostic",
+      "note": "net − predicted_net; the first measurement of GAP-Q14's estimator error"
+    },
+    "net_input_cost": {
+      "value_nano": 14058,
+      "label": "verified",
+      "currency": "USD",
+      "peak_applied_pct": 100,
+      "scope": "pre-peak tier delta over cost.{input_miss,input_hit,cache_write}; output excluded (§4.3)",
+      "m_off_nano": 43794,
+      "m_on_nano": 29736,
+      "from": {
+        "request_id": "req-3"
+      },
+      "to": {
+        "request_id": "req-4"
+      }
+    }
+  },
+  "conditions": {
+    "P1": {
+      "observed": {
+        "config_digests": [
+          "77333dd8cc0c515c"
+        ],
+        "one_serve": true,
+        "porcelain_empty": true,
+        "commit": "0dda58a4bc5d6074db390dba2445434acb3ef659"
+      },
+      "pass": true
+    },
+    "P2": {
+      "observed": {
+        "providers": [
+          "deepseek"
+        ],
+        "models": [
+          "deepseek-flash"
+        ],
+        "key_indexes": [
+          null
+        ],
+        "failover_rows": []
+      },
+      "pass": true
+    },
+    "P3": {
+      "observed": {
+        "rows": [
+          {
+            "r": "req-1",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-2",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-3",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-4",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-5",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-6",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-7",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          },
+          {
+            "r": "req-8",
+            "s": 200,
+            "m": false,
+            "e": 0,
+            "c": false
+          }
+        ]
+      },
+      "pass": true
+    },
+    "P4": {
+      "observed": {
+        "quartet_modes": [
+          "passthrough",
+          "transform",
+          "passthrough",
+          "transform"
+        ],
+        "null_quartet_modes": [
+          "passthrough",
+          "passthrough",
+          "passthrough",
+          "passthrough"
+        ]
+      },
+      "pass": true
+    },
+    "P5": {
+      "observed": {
+        "edited_nodes": 1,
+        "edits": [
+          {
+            "path": "input[2].output",
+            "bytes_in": 6215,
+            "bytes_out": 1090
+          }
+        ]
+      },
+      "pass": true
+    },
+    "P6": {
+      "observed": {
+        "block_counts": [
+          5,
+          5
+        ],
+        "differing_block_indices": [
+          3
+        ],
+        "edited_nodes": 1
+      },
+      "pass": true
+    },
+    "P7": {
+      "observed": {
+        "currencies": [
+          "USD"
+        ],
+        "peak_applied_pct": [
+          100
+        ],
+        "plan_rows": [],
+        "entry_account": "api"
+      },
+      "plan_ok": true,
+      "money_ok": true
+    },
+    "P8": {
+      "observed": {
+        "regime": "warm",
+        "control": {
+          "input_cached": 2048,
+          "input_total": 2299
+        },
+        "treatment": {
+          "input_cached": 512,
+          "input_total": 700
+        }
+      },
+      "pass": true
+    },
+    "P9": {
+      "observed": {
+        "null_control_input_total": 2299,
+        "null_treatment_input_total": 2299,
+        "delta": 0,
+        "body_hash_pair_equal": true,
+        "rows": [
+          "req-7",
+          "req-8"
+        ]
+      },
+      "pass": true
+    }
+  },
+  "run": {
+    "quartet": [
+      {
+        "request_id": "req-1",
+        "event_id": 2,
+        "ts": "2026-10-18T06:35:54.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 0
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-1",
+          "file": "2026-10-18T06.jsonl",
+          "line": 1
+        }
+      },
+      {
+        "request_id": "req-2",
+        "event_id": 9,
+        "ts": "2026-10-18T06:35:56.000Z",
+        "transform_mode": "transform",
+        "usage": {
+          "input_total": 700,
+          "input_cached": 256
+        },
+        "body_hash": "3865835c2ef80111",
+        "row_ref": {
+          "request_id": "req-2",
+          "file": "2026-10-18T06.jsonl",
+          "line": 2
+        }
+      },
+      {
+        "request_id": "req-3",
+        "event_id": 15,
+        "ts": "2026-10-18T06:35:58.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 2048
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-3",
+          "file": "2026-10-18T06.jsonl",
+          "line": 3
+        }
+      },
+      {
+        "request_id": "req-4",
+        "event_id": 21,
+        "ts": "2026-10-18T06:35:59.000Z",
+        "transform_mode": "transform",
+        "usage": {
+          "input_total": 700,
+          "input_cached": 512
+        },
+        "body_hash": "3865835c2ef80111",
+        "row_ref": {
+          "request_id": "req-4",
+          "file": "2026-10-18T06.jsonl",
+          "line": 4
+        }
+      }
+    ],
+    "null_quartet": [
+      {
+        "request_id": "req-5",
+        "event_id": 27,
+        "ts": "2026-10-18T06:36:01.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 2048
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-5",
+          "file": "2026-10-18T06.jsonl",
+          "line": 5
+        }
+      },
+      {
+        "request_id": "req-6",
+        "event_id": 33,
+        "ts": "2026-10-18T06:36:02.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 2048
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-6",
+          "file": "2026-10-18T06.jsonl",
+          "line": 6
+        }
+      },
+      {
+        "request_id": "req-7",
+        "event_id": 39,
+        "ts": "2026-10-18T06:36:04.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 2048
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-7",
+          "file": "2026-10-18T06.jsonl",
+          "line": 7
+        }
+      },
+      {
+        "request_id": "req-8",
+        "event_id": 45,
+        "ts": "2026-10-18T06:36:06.000Z",
+        "transform_mode": "passthrough",
+        "usage": {
+          "input_total": 2299,
+          "input_cached": 2048
+        },
+        "body_hash": "f78b7df9f54adc4b",
+        "row_ref": {
+          "request_id": "req-8",
+          "file": "2026-10-18T06.jsonl",
+          "line": 8
+        }
+      }
+    ]
+  },
+  "provenance": {
+    "rows": [
+      {
+        "request_id": "req-1",
+        "event_id": 2,
+        "ts": "2026-10-18T06:35:54.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 1
+      },
+      {
+        "request_id": "req-2",
+        "event_id": 9,
+        "ts": "2026-10-18T06:35:56.000Z",
+        "body_hash": "3865835c2ef80111",
+        "file": "2026-10-18T06.jsonl",
+        "line": 2
+      },
+      {
+        "request_id": "req-3",
+        "event_id": 15,
+        "ts": "2026-10-18T06:35:58.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 3
+      },
+      {
+        "request_id": "req-4",
+        "event_id": 21,
+        "ts": "2026-10-18T06:35:59.000Z",
+        "body_hash": "3865835c2ef80111",
+        "file": "2026-10-18T06.jsonl",
+        "line": 4
+      },
+      {
+        "request_id": "req-5",
+        "event_id": 27,
+        "ts": "2026-10-18T06:36:01.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 5
+      },
+      {
+        "request_id": "req-6",
+        "event_id": 33,
+        "ts": "2026-10-18T06:36:02.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 6
+      },
+      {
+        "request_id": "req-7",
+        "event_id": 39,
+        "ts": "2026-10-18T06:36:04.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 7
+      },
+      {
+        "request_id": "req-8",
+        "event_id": 45,
+        "ts": "2026-10-18T06:36:06.000Z",
+        "body_hash": "f78b7df9f54adc4b",
+        "file": "2026-10-18T06.jsonl",
+        "line": 8
+      }
+    ],
+    "fixture": {
+      "path": "design/paired-run/fixture.json",
+      "sha256": "33de7f708fe1b4180ebb9b93013438d5e89003a4706e4a769b0a34e0cb2768da",
+      "source_class": "composed"
+    },
+    "rule_set": {
+      "rules_file": "rules/tool_output.toml",
+      "sha256": "411925e7058d2a554c99d48547ff7de80b8b18733f244f0835bf20f9b953d24e",
+      "plugin_config": "id=tool-output-rules, kind=builtin/transform_rules, rules_file=rules/tool_output.toml (repo copy, by absolute path)"
+    },
+    "commit_gates": {
+      "commit": "0dda58a4bc5d6074db390dba2445434acb3ef659",
+      "porcelain_empty": true,
+      "binary_sha256": "dca4a2c023e45f9d1071b44e580f55d453f5ee1b77bb200593cf66fca56bcb3d",
+      "gates": {
+        "build": true,
+        "test": true,
+        "clippy": true,
+        "fmt": true
+      }
+    },
+    "price_entry": {
+      "route": "deepseek/deepseek-flash",
+      "currency": "USD",
+      "per_1k_usd": {
+        "input_miss": 0.00015,
+        "input_hit": 0.000003,
+        "cache_write": 0.0,
+        "output": 0.0006
+      },
+      "peak_multiplier": 2.0,
+      "source": "https://api-docs.deepseek.com/quick_start/pricing",
+      "read_date": "2026-09-21"
+    }
+  },
+  "diagnostics": {
+    "cache_regime": "warm",
+    "edited_paths": [
+      {
+        "path": "input[2].output",
+        "bytes_in": 6215,
+        "bytes_out": 1090
+      }
+    ],
+    "block_diff": {
+      "differing_block_indices": [
+        3
+      ],
+      "control_hashes": [
+        "a6a65f040b7ae6e4",
+        "bc9e9404b89d9e9c",
+        "af6ddeaa17ea8da1",
+        "5ebf8765386e5e7b",
+        "d7646645d737edd9"
+      ],
+      "treatment_hashes": [
+        "a6a65f040b7ae6e4",
+        "bc9e9404b89d9e9c",
+        "af6ddeaa17ea8da1",
+        "438159403744c9c2",
+        "d7646645d737edd9"
+      ]
+    },
+    "ts_seconds": [
+      "2026-10-18T06:35:54.000Z",
+      "2026-10-18T06:35:56.000Z",
+      "2026-10-18T06:35:58.000Z",
+      "2026-10-18T06:35:59.000Z",
+      "2026-10-18T06:36:01.000Z",
+      "2026-10-18T06:36:02.000Z",
+      "2026-10-18T06:36:04.000Z",
+      "2026-10-18T06:36:06.000Z"
+    ],
+    "ts_gaps_seconds": [
+      2,
+      2,
+      1,
+      2,
+      1,
+      2,
+      2
+    ],
+    "note": "ts is second-granular; gaps of 0 mean same-second, not simultaneous"
+  }
+}

@@ -402,19 +402,42 @@ the code. What it settles:
 - **An edit that drops bytes can still cost money.** The cache is keyed on the prefix, so rewriting
   something the provider had already cached is paid for once at the miss price — and that is why a rule
   is admitted only with its inline tests green, the cache regression measured, and its net gain
-  measured rather than estimated (the D3 gate). Until such a pair of measurements exists, every
-  per-transform figure in `vadis stats` is an estimate and must be read as one: nothing here is a
-  reported saving yet.
+  measured rather than estimated (the D3 gate). One such pair of measurements now exists — for one
+  rule, on one fixture; see the verified figure below. Every other per-transform figure in
+  `vadis stats` is an estimate and must be read as one.
 
 To turn the mode on: declare the rule file in your config under `plugins:` (an entry of kind
 `builtin/transform_rules` with `config.rules_file` pointing at it — see
 [`config.example.yaml`](../config.example.yaml)), and have the **client** send
 `X-Vadis-Transform: transform` on the requests that want it. Both halves are required: the
 config decides which rules exist, the request decides whether they run, and a request without
-the header is byte-for-byte your own bytes no matter what is configured. Every figure a rule
-reports is an estimate until a paired on/off measurement exists, so the report gains its
-measured per-transform saving only when that measurement lands — until then the rule file's
-numbers are shapes, not savings.
+the header is byte-for-byte your own bytes no matter what is configured.
+
+### The first verified saving (one rule, one fixture, one run)
+
+A paired on/off measurement now exists for the shipped `bash-log-noise` rule — one composed
+fixture (a 6.2 KB shell-log payload behind an `exec_command` tool result, `responses` wire),
+four requests alternating the header plus a four-request null control, against a metered
+`deepseek/deepseek-flash` route. The full report — nine conditions with observed values,
+eight falsification checks, and the six provenance artefacts — is committed at
+[`design/paired-run/report.json`](../design/paired-run/report.json) with its recipe; the
+headline:
+
+- **verified net: 1,599 input tokens per request on that fixture** (the provider's own
+  count went 2,299 → 700, a 69.5 % smaller prompt), input-side only, both arms cache-warm;
+- the paired money delta was 14,058 nano-USD pre-peak at the route's off-peak window rate,
+  priced by the config entry whose source is the provider's official pricing page (read
+  2026-09-21) — never an estimated price;
+- the ledger's local estimate for the same edit was 1,281 tokens, labelled `inferred` —
+  318 tokens below the verified net, the first measured error of the bytes-per-token
+  estimator, printed beside the net and never summed with it.
+
+What that number is not: it is one body, one rule and one route — not your traffic (the
+fixture is composed, not captured, and says nothing about how often such a payload occurs).
+It covers no output tokens, no later-turn cache dynamics, and no session total
+("per session = n × 1,599" is a multiplication without evidence). And `vadis stats` still
+reports 0 verified savings tokens by design: a single record cannot see its counterfactual,
+so the pair lives in the committed report, not in the served surface.
 
 For the second half — making the client send the header — you have a per-client recipe and a
 shortcut:

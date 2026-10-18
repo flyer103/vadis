@@ -1,0 +1,62 @@
+{
+  "model": "paired-run",
+  "stream": false,
+  "store": false,
+  "max_output_tokens": 512,
+  "prompt_cache_key": "vadis-paired-run-0001",
+  "instructions": "You are a coding agent working in the widget-kit workspace. Answer briefly from the tool output you are given.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "exec_command",
+      "description": "Run a shell command and return its combined output",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
+  ],
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Build the workspace and show me what failed."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_1",
+      "name": "exec_command",
+      "arguments": "{\"command\":[\"cargo\",\"build\",\"--workspace\"]}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": "   Compiling widget-001 v0.1.0 (https://example.invalid/crates/widget-001)\n   Compiling widget-002 v0.2.0 (https://example.invalid/crates/widget-002)\n   Compiling widget-003 v0.3.0 (https://example.invalid/crates/widget-003)\n   Compiling widget-004 v0.4.0 (https://example.invalid/crates/widget-004)\n   Compiling widget-005 v0.5.0 (https://example.invalid/crates/widget-005)\n   Compiling widget-006 v0.6.0 (https://example.invalid/crates/widget-006)\n   Compiling widget-007 v0.7.0 (https://example.invalid/crates/widget-007)\n   Compiling widget-008 v0.8.0 (https://example.invalid/crates/widget-008)\n   Compiling widget-009 v0.9.0 (https://example.invalid/crates/widget-009)\n   Compiling widget-010 v0.10.0 (https://example.invalid/crates/widget-010)\n   Compiling widget-011 v0.11.0 (https://example.invalid/crates/widget-011)\n   Compiling widget-012 v0.12.0 (https://example.invalid/crates/widget-012)\n   Compiling widget-013 v0.13.0 (https://example.invalid/crates/widget-013)\n   Compiling widget-014 v0.14.0 (https://example.invalid/crates/widget-014)\n   Compiling widget-015 v0.15.0 (https://example.invalid/crates/widget-015)\n   Compiling widget-016 v0.16.0 (https://example.invalid/crates/widget-016)\n   Compiling widget-017 v0.17.0 (https://example.invalid/crates/widget-017)\n   Compiling widget-018 v0.18.0 (https://example.invalid/crates/widget-018)\n   Compiling widget-019 v0.19.0 (https://example.invalid/crates/widget-019)\n   Compiling widget-020 v0.20.0 (https://example.invalid/crates/widget-020)\n   Compiling widget-021 v0.21.0 (https://example.invalid/crates/widget-021)\n   Compiling widget-022 v0.22.0 (https://example.invalid/crates/widget-022)\n   Compiling widget-023 v0.23.0 (https://example.invalid/crates/widget-023)\n   Compiling widget-024 v0.24.0 (https://example.invalid/crates/widget-024)\n   Compiling widget-025 v0.25.0 (https://example.invalid/crates/widget-025)\n   Compiling widget-026 v0.26.0 (https://example.invalid/crates/widget-026)\n   Compiling widget-027 v0.27.0 (https://example.invalid/crates/widget-027)\n   Compiling widget-028 v0.28.0 (https://example.invalid/crates/widget-028)\n   Compiling widget-029 v0.29.0 (https://example.invalid/crates/widget-029)\n   Compiling widget-030 v0.30.0 (https://example.invalid/crates/widget-030)\n   Compiling widget-031 v0.31.0 (https://example.invalid/crates/widget-031)\n   Compiling widget-032 v0.32.0 (https://example.invalid/crates/widget-032)\n   Compiling widget-033 v0.33.0 (https://example.invalid/crates/widget-033)\n   Compiling widget-034 v0.34.0 (https://example.invalid/crates/widget-034)\n   Compiling widget-035 v0.35.0 (https://example.invalid/crates/widget-035)\n   Compiling widget-036 v0.36.0 (https://example.invalid/crates/widget-036)\n   Compiling widget-037 v0.37.0 (https://example.invalid/crates/widget-037)\n   Compiling widget-038 v0.38.0 (https://example.invalid/crates/widget-038)\n   Compiling widget-039 v0.39.0 (https://example.invalid/crates/widget-039)\n   Compiling widget-040 v0.40.0 (https://example.invalid/crates/widget-040)\n   Compiling widget-041 v0.41.0 (https://example.invalid/crates/widget-041)\n   Compiling widget-042 v0.42.0 (https://example.invalid/crates/widget-042)\n   Compiling widget-043 v0.43.0 (https://example.invalid/crates/widget-043)\n   Compiling widget-044 v0.44.0 (https://example.invalid/crates/widget-044)\n   Compiling widget-045 v0.45.0 (https://example.invalid/crates/widget-045)\n   Compiling widget-046 v0.46.0 (https://example.invalid/crates/widget-046)\n   Compiling widget-047 v0.47.0 (https://example.invalid/crates/widget-047)\n   Compiling widget-048 v0.48.0 (https://example.invalid/crates/widget-048)\n   Compiling widget-049 v0.49.0 (https://example.invalid/crates/widget-049)\n   Compiling widget-050 v0.50.0 (https://example.invalid/crates/widget-050)\n   Compiling widget-051 v0.51.0 (https://example.invalid/crates/widget-051)\n   Compiling widget-052 v0.52.0 (https://example.invalid/crates/widget-052)\n   Compiling widget-053 v0.53.0 (https://example.invalid/crates/widget-053)\n   Compiling widget-054 v0.54.0 (https://example.invalid/crates/widget-054)\n   Compiling widget-055 v0.55.0 (https://example.invalid/crates/widget-055)\n   Compiling widget-056 v0.56.0 (https://example.invalid/crates/widget-056)\n   Compiling widget-057 v0.57.0 (https://example.invalid/crates/widget-057)\n   Compiling widget-058 v0.58.0 (https://example.invalid/crates/widget-058)\n   Compiling widget-059 v0.59.0 (https://example.invalid/crates/widget-059)\n   Compiling widget-060 v0.60.0 (https://example.invalid/crates/widget-060)\n  Downloaded quote-sym v1.4.2 (registry `example-registry-invalid`)\n  Downloaded 13 crates (2.1 MB) in 0.52s\n[ 11%] Building object widget-core\n\n[ 28%] Building object widget-core\n\n[ 45%] Building object widget-core\n\n[ 62%] Building object widget-core\n\n[ 79%] Building object widget-core\n\n[ 96%] Building object widget-core\n\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.47s\n     Running `target/debug/widgets --check` in 1.28s\nwarning: unused variable: `depth`\n --> widget-core/src/depth.rs:42:17\n  |\n42 |     let depth = context.depth();\n  |         ^^^^^ help: if it is intentional, prefix it with an underscore\n  |\nwarning: 1 warning emitted\nnote: the dependency tree was resolved with 47 crates and the lockfile at widget-kit.lock was written with a checksum for every entry so that a later build in a clean checkout reproduces the same versions without contacting the registry again; this line exists to be longer than two hundred and forty characters and be truncated by the rule\nhelp: the full backtrace of the failing task was captured to target/debug/widgets.dSYM/00000000-1111-2222-3333-444444444444.txt and can be re-opened with `widgets bug-report --attach target/debug/widgets.dSYM/00000000-1111-2222-3333-444444444444.txt` which uploads nothing and prints a summary to the terminal so a reader can see what the failing task was doing when it stopped\nerror[E0308]: mismatched types\n  --> widget-core/src/depth.rs:58:23\n   |\n58 |     let scale: u32 = context.depth();\n   |                    ^^^^^^^^^^^^^ expected `u32`, found `usize`\n   |\nerror: could not compile `widget-core` (lib) due to 1 previous error; 1 warning emitted\n"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Summarize the failures in two lines."
+        }
+      ]
+    }
+  ]
+}
