@@ -35,9 +35,11 @@ question is about a number, the answer is a link, never a number.
   origin route and what the switch cost the prefix cache, so the decision is auditable rather
   than unexplained.
 - **"How do I know a saving is real, and what do I look at when cost goes up?"** Look at the
-  verdict first: only a measured (`verified`) difference may be reported as a saving, local
-  estimates are labelled `inferred`. When cost moves, check prefix continuity between turns
-  in the same session before anything else, then the per-transform accounting.
+  verdict first: only a `verified` difference — a paired comparison, or a replay computing the
+  other world with the same code — may be reported as a saving. A single request is `measured`,
+  never a saving, and a local estimate is labelled `inferred`. When cost moves, check prefix
+  continuity between turns in the same session before anything else, then the per-transform
+  accounting.
 - **"Can I configure both the China-mainland and the international endpoint of the same vendor?"**
   Yes — they are two provider entries, because the endpoint and the key belong to the deployment
   rather than to the model. Each entry declares which deployment it is (`region`) and, separately,

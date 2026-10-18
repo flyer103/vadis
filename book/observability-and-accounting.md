@@ -94,12 +94,18 @@ types is [`docs/spec.md` §6](../docs/spec.md) and the Rust form is
 (The money fields above are fixed-point integers in nano-USD; this chapter shows shape, not
 amounts — price figures live in exactly one place, your config.)
 
-## Verified versus inferred — the only accounting question that matters
+## Measured, verified, inferred — the only accounting question that matters
 
 | Convention | Where the number comes from | What you may do with it |
 |---|---|---|
-| `verified` | a measured difference in the upstream's own usage: a control turn with a transform on and off in the same session, or an attributable change in cached tokens | report it as a saving, and use it in a gate |
-| `inferred` | a local estimate, with no control | diagnose with it; label it, and never present it as measured |
+| `measured` | a number the provider itself reported for one request (the token counts in `usage`), a fact of the bytes vadis forwarded (the block hashes), or the money that usage costs at your own prices | read it, compare it with another request, print it — it is **one observation, never a saving** |
+| `verified` | a *difference* between two worlds: the same content with a transform on and off in one session, or a replay that recomputes the counterfactual with the same code | **report it as a saving, and use it in a gate** |
+| `inferred` | a local estimate, with no control | diagnose with it; label it, and never present it as measured or verified |
+
+**A difference between two `measured` numbers is not `verified` by itself.** The pair has to be a *designed*
+comparison — the same content, one treatment removed, the two readings attributable to that removal. Two
+neighbouring turns of one session are two observations, and their difference mixes whatever the client changed
+with whatever the gateway did.
 
 Two consequences that surprise people, both deliberate:
 
@@ -112,9 +118,9 @@ Two consequences that surprise people, both deliberate:
 
 - **A figure computed from local estimates stays `inferred` even when its inputs are
   measured.** The replay cost of a failover, for instance, is computed at decision time
-  from prefix block token estimates, so it is inferred then; it becomes verified only once
-  the switched attempt's real usage lands, and a failover with no following turn keeps the
-  inferred label and says so.
+  from prefix block token estimates, so it is inferred then; it becomes **`measured`** once
+  the switched attempt's real usage lands (that cost is an observation of the switch, still not a
+  saving), and a failover with no following turn keeps the inferred label and says so.
 - **An absent number is not zero.** When the upstream reports no usage (a streamed chat
   response whose terminal usage was not requested is the common case, and a stream that
   ended before its terminal event is another), the record says usage is missing, the cost
@@ -147,15 +153,15 @@ truth, and neither prices anything you cannot already find in a record:
   Prometheus text exposition format, behind the same token guard as the three protocol
   endpoints, with each labelled figure carried as a machine-readable `provenance` value.
 - **`vadis stats --config config.yaml --window 24h`** reads the traces in that window and prints
-  the cost and cache report, the measured savings per transform, the plan family's switches and
+  the cost and cache report, the labelled savings per transform, the plan family's switches and
   what they cost, and how many requests in the window have an outcome vadis cannot verify (see
   [Operations](operations.md)). The window is **required** — a saving that does not state its
   window cannot be checked — and `--json` prints the same figures for a script.
 
-The point of the report is the **label on every figure**, `verified` or `inferred` (the two
-conventions are the table above): you can tell a measured number from an estimate while you read the
-report, not afterwards. The field-by-field shape, each figure's provenance and which record it comes
-from are [`docs/spec.md` §9](../docs/spec.md).
+The point of the report is the **label on every figure**, `measured`, `verified` or `inferred` (the three
+conventions are the table above): you can tell a single observation, a verified saving and an estimate apart
+while you read the report, not afterwards. The field-by-field shape, each figure's provenance and which record
+it comes from are [`docs/spec.md` §9](../docs/spec.md).
 
 ### `vadis steps` — one session, one line per request
 
@@ -254,8 +260,8 @@ that disagree, with the records each was reduced from left out of the repository
 **What these numbers do not say.** No figure compares this gateway with any other, or with a
 different design: each one is *this machine, this commit, this upstream, this stimulus, this number
 of samples*, and nothing about your traffic, your model or your load. And latency and fidelity
-figures are not savings figures: `verified` and `inferred` (the table above) are the labels of the
-*money* convention, and a latency number puts on neither.
+figures are not savings figures: `measured`, `verified` and `inferred` (the table above) are the labels of the
+*money* convention, and a latency number puts on none.
 
 ## When cost goes up, look in this order
 
@@ -281,7 +287,7 @@ figures are not savings figures: `verified` and `inferred` (the table above) are
   definition of prefix blocks and their hashes, and the metric definitions.
 - [`docs/spec.md` §9](../docs/spec.md) — the reporting surfaces: `/health`'s plan section, the
   `vadis stats` report with each figure's provenance and label, and what is not served yet.
-- [`docs/spec.md` §7](../docs/spec.md) — accounting: `verified` versus `inferred`.
+- [`docs/spec.md` §7](../docs/spec.md) — accounting: `measured`, `verified` and `inferred`.
 - [`docs/spec.md` §2.1](../docs/spec.md) — the transform mode: the exact byte promise when a content
   transform is enabled, and why a saving measured there is an estimate until a pair exists
   ([`ADR-019`](../design/decisions/ADR-019-transform-mode-and-the-content-edit-contract.md),

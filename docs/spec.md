@@ -2681,8 +2681,9 @@ A **displacement** and a **state transition** are therefore not the same thing (
 **destination** entry's currency (ADR-006 + ADR-018; `plan_switch.cost_currency` states which, §4.8), where an
 **in-plan** destination's marginal miss price is 0 (spec §4.6 rule 4, DESIGN §5) — so a return trip records the
 work in `reprefill_tokens` and a money cost of 0, by the same price table the whole accounting uses. Both
-figures become `verified` through the switched request's own measured usage and `cost.*` fields (the in-plan
-marginal price is 0, so the first post-spill request's measured total *is* the switch's verified cost); a switch
+figures become **`measured`** through the switched request's own usage and `cost.*` fields (the in-plan
+marginal price is 0, so the first post-spill request's measured total *is* the switch's cost — an observation
+of what the switch cost, never a saving, §7 and ADR-058); a switch
 with no following request keeps the `inferred` label and says so (§7's reporting rule).
 
 **`prefix.continuity` is a predictor; the upstream's usage is the fact.** Two different numbers describe
@@ -2693,10 +2694,12 @@ the same request and they are not rivals:
   upstream's prefix cache will hit. It is a diagnostic, not a measurement of what the upstream did.
 - The cache **hit rate as a fact** comes only from the upstream's own normalized `usage`:
   `usage.input_cached / usage.input_total` (§6 `cache_hit_rate` is its aggregate form), and is therefore
-  **verified**. When `usage_missing: true` the ratio is **unknown** — it is not 0, and it must never be
+  **`measured`** — a ratio of the provider's own counters is one observation, not a difference between two
+  worlds (ADR-058). When `usage_missing: true` the ratio is **unknown** — it is not 0, and it must never be
   treated as 0 in a verdict or a report; an absent measurement is absent.
-- A gate or an external saving claim adjudicates on the **verified** number only (AGENTS constraint 4);
-  `prefix.continuity` falling below 1.0 is a trigger to go look, not a verdict that cache was lost.
+- A gate or an external saving claim adjudicates on the **`verified` delta** only, and a `measured` figure is
+  never substituted for one (AGENTS constraint 4); `prefix.continuity` falling below 1.0 is a trigger to go
+  look, not a verdict that cache was lost.
 
 **Definition of `prefix_blocks[]`** (the precondition for comparability; two implementations must not
 each improvise):
@@ -2726,7 +2729,8 @@ each improvise):
   stateful (gap G-F)
 - `prefix_continuity_p50` = median of the longest common prefix-block ratio over adjacent requests in the
   same session (**the fidelity metric**: when it drops, some transform is breaking the cache)
-- `verified_savings_tokens` = counts only the transform gains with `verdict=verified`
+- `verified_savings_tokens` = counts only the transform gains with `verdict=verified` — the `verified` delta
+  of §7; a `measured` figure never enters it (ADR-058)
 - `stream_incomplete_requests` = the count of records in the `stream_incomplete` bucket (§4.20.4: a 2xx
   record carrying an `errors[]` entry with `details.error_class == "stream_truncated"`). A count over the
   same population as `requests`; it is **not** a class of `failed`, and a record counted here may also be
@@ -2747,18 +2751,27 @@ The surfaces that print these (the invocation, each figure's provenance and its 
 
 | Convention | Definition | Use |
 |---|---|---|
-| `verified` | the **measured delta** from upstream `usage`: a control turn with the transform on/off within the same session, or an attributable change in `cached_tokens` | **only it can enter a gate or be reported externally** |
+| `measured` | **one observation**, no counterfactual: a number the provider itself reported for this request (`usage.*`), a fact of the bytes vadis forwarded (block hashes, `lcp`, `ts`, byte lengths), or the price arithmetic over those two (`cost.*`, a hit ratio) — every input reported or published, none estimated | usable per observation, and as an operand; **never a saving, and never entered into a gate as one** |
+| `verified` | the **delta between two worlds**: a control turn with the transform on/off within the same session, or an attributable change in `cached_tokens` — minted only by a paired control or the replay ladder (ADR-031 D4.2, ADR-058) | **only it can enter a gate as a saving or be reported externally as one** |
 | `inferred` | local tokenizer estimate, no control | only for debugging and direction judgment; must be labeled |
+
+**`measured` is one observation, never a saving; `verified` is the pair, and nothing else is a saving**
+(ADR-058). The three words are not a confidence scale — `measured` and `verified` are different quantities —
+and **a difference of two `measured` figures is not `verified` by itself**: the pair has to be a *designed*
+counterfactual (the same content, one treatment removed, the two readings attributable to that removal). Two
+adjacent requests of one session are two observations, and their difference confounds the content change with
+the treatment.
 
 Reporting requirement: any statement of "how much was saved" must state the convention, the sample size
 and the time window; mixing conventions counts as an error.
 
-**A saving is a difference between two worlds, and the trace holds one of them.** This is why the
-convention is binary rather than a confidence scale: the request that was served is measured by the
-upstream's own `usage`, but the counterfactual — the same content served *without* the edit — does not
-appear anywhere in the record. A single observation therefore measures **the request**, never the
-saving, and any figure derived from it by arithmetic on local byte lengths stays `inferred` (the
-dependency allowlist has no tokenizer, GAP-Q14). A `verified` figure needs the pair to exist: a control
+**A saving is a difference between two worlds, and the trace holds one of them.** This is why the convention
+spends one word on the observation and one on the pair rather than being a confidence scale: the request that
+was served is measured by the upstream's own `usage` — that figure is `measured` — but the counterfactual, the
+same content served *without* the edit, does not appear anywhere in the record. A single observation
+therefore measures **the request**, never the saving, and any figure derived from it by arithmetic on local
+byte lengths stays `inferred` (the dependency allowlist has no tokenizer, GAP-Q14). A `verified` figure needs
+the pair to exist: a control
 turn with the transform on and off over the same content in the same session, read from the upstream's
 `usage` — or the replay path computing the counterfactual with the same code, which is designed and
 **not served** (§9.3). Three consequences follow, and all three are rules rather than advice:
@@ -3147,6 +3160,13 @@ Provenance of every figure:
 | `unknown outcome requests` | §6's `unknown_outcome_requests` | the **event log**, read-only (§9.2 above) | count | nothing — the ambiguity *is* the number |
 | `overhead p99` | §6's `overhead_ms_p99` | trace `result.overhead_ms` **− `result.upstream_ms`** (the derivation §6 defines) | measured | records whose `upstream_ms` is `null` — §6's definition excludes them from the sample, so an unreadable denominator is never read as 0 ms |
 
+**Three rows of this table carry a legacy word.** `cost` and its four tiers, `hit rate` and `switch cost`
+are **`measured`** figures in §7's vocabulary — single observations, not deltas (ADR-058) — while the report
+prints them as `verified` and `/metrics` publishes that same word as their `provenance` value. The printed
+word is served text, so relabelling it is a code change with its own case review and is owed by a separate
+card (ADR-058 §5, §7). Until it lands: **no figure in this section may be reported as a saving on the
+strength of that word** — the only saving figure is `verified savings tokens`, and only when a pair exists.
+
 Five conventions this report obeys, each of which has bitten someone:
 
 - **The three request buckets are a partition; `usage missing` is not one of them** (§4.20.4). `succeeded`,
@@ -3264,7 +3284,7 @@ longest common prefix of `L(n−1)` and `L(n)`.
 | `shorten` | `lcp == len(L(n))` and `len(L(n)) < len(L(n−1))` |
 | `rewrite` | `0 ≤ lcp < min(len(L(n−1)), len(L(n)))` — the row also covers the **empty common prefix** (`lcp == 0`, the first block itself differs); such a row prints `kept 0` with `at #0:<kind>` |
 
-`class` is a **name over a verified relation**, never a statement of the client's intent: `shorten` does
+`class` is a **name over a `measured` relation**, never a statement of the client's intent: `shorten` does
 not say "compaction" and `rewrite` does not say "edited message". Every row therefore carries the
 relation itself (`kept`, `blocks`, `at`), and a reader who needs the fact reads those.
 
@@ -3285,19 +3305,24 @@ block list.
 | 2 | `start` | RFC3339 | `ts` (§6), the request's start | measured |
 | 3 | `gap_ms` | integer \| null | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; printed as measured, including a negative value; **null** when the two `ts` are identical (equal at the record's millisecond resolution — the honest hole), or for `n = 1` | derived |
 | 4 | `route` | string | `decision.provider` + `/` + `decision.model`; the empty route prints as null | measured |
-| 5 | `in` | integer \| null | `usage.input_total` | **verified** |
-| 6 | `cached` | integer \| null | `usage.input_cached` | **verified** |
-| 7 | `out` | integer \| null | `usage.output` | **verified** |
+| 5 | `in` | integer \| null | `usage.input_total` | **measured** |
+| 6 | `cached` | integer \| null | `usage.input_cached` | **measured** |
+| 7 | `out` | integer \| null | `usage.output` | **measured** |
 | 8 | `money` | amount \| `"plan"` \| null | `cost.total` with `cost.currency`; the literal `plan` when the serving provider's roster entry declares `account: coding_plan` (§4.6) | measured / config-derived |
-| 9 | `blocks` | integer | `len(L(n)) − lcp` when positive (printed `+k`), `lcp − len(L(n))` when negative (`−k`), `0` for `repeat` | **verified** |
-| 10 | `kept` | integer | `lcp` | **verified** |
-| 11 | `at` | `"#<index>:<kind>"` \| null | the first diverging block's index and `kind`; null for `append`, `first`, `repeat` | **verified** |
+| 9 | `blocks` | integer | `len(L(n)) − lcp` when positive (printed `+k`), `lcp − len(L(n))` when negative (`−k`), `0` for `repeat` | **measured** |
+| 10 | `kept` | integer | `lcp` | **measured** |
+| 11 | `at` | `"#<index>:<kind>"` \| null | the first diverging block's index and `kind`; null for `append`, `first`, `repeat` | **measured** |
 | 12 | `new_tok` | integer | `Σ prefix.blocks[i ≥ lcp].tokens` — a proportional attribution of the measured total (GAP-Q14) | **inferred** |
 | 13 | `class` | enum(5) | §9.4.2 | derived |
 | 14 | `wall_ms` | integer | `result.overhead_ms`. **On a streamed record this spans the whole request, so it is not the gateway's own overhead** — `result.upstream_ms` is head arrival on that path | measured |
 | 15 | `head_ms` | integer \| null | `result.upstream_ms` | measured |
 | 16 | `status` | integer, or `"<status>→<upstream_status>"` | `result.status`, plus the upstream's when the two differ | measured |
 | 17 | `flags` | array of strings | §9.4.4 | derived |
+
+**This surface uses §7's `measured` and `inferred` labels only, and it prints no `verified` figure at all** —
+a ledger row is one observation and the ledger holds no counterfactual, so nothing on it can be a saving
+(§7, ADR-058). `measured` is on the provider's counters and on the block facts, `inferred` on `new_tok`, and
+`derived` names the rows that are not quantities.
 
 **Absence is printed as an absence.** A null in columns 3, 4, 5-8, 11 and 15 means the record cannot
 carry the figure — never `0`, never a guess (§7). A record with `usage_missing: true` prints null in

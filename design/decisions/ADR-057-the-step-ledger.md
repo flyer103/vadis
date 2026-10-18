@@ -7,6 +7,12 @@
   `ts` at the record's resolution", not "the two `ts` fall in one second" — the pre-repair clock's
   one-second floor is what that older wording described, and with §2.6 landed it would contradict
   both §2.6 and limb (f).
+  *Corrected in place (2026-10-18, before it was ever ruled):* `ADR-058` split the accounting word —
+  `measured` for one observation, `verified` for a difference between two worlds — and this draft's counter
+  columns were using `verified` for single observations. §1.2, §1.4, §2.2, §2.3, §2.4, §2.5 and §7 now say
+  `measured`, and §2.5 states that **no `verified` figure exists on this surface**. No column, value,
+  predicate or refusal moved; the correction is a word, and it was made in the body because nothing here had
+  been frozen yet (the same reason §2.6's finding is registered rather than repaired).
 - Kind: **a new read-out surface with no product byte.** It adds one subcommand that reads the trace
   files, one spec section, and one two-line repair to the clock the trace writes (§2.6) — that repair is
   the only thing here that touches `crates/`, and it is a *prerequisite*, not scope.
@@ -68,8 +74,8 @@ the step**:
 | the two lists share a prefix and then **differ**, and the earlier list's tail reappears later | the client changed something **early**: an edited turn, a different first message, a reordered tool set |
 | the lists are **identical**, block for block | the same bytes were sent twice: a retry |
 
-Every one of those four statements is a statement about **hash equality**, which is a verified fact about
-the bytes vadis forwarded. What it is *not* is a statement about why the client did it — §2.2 makes that
+Every one of those four statements is a statement about **hash equality**, which is a `measured` fact about
+the bytes vadis forwarded (spec §7, ADR-058). What it is *not* is a statement about why the client did it — §2.2 makes that
 boundary explicit, because the temptation to print "the agent compacted" is exactly the place a gateway's
 ledger starts lying about a client it cannot see.
 
@@ -128,7 +134,7 @@ And two facts about the corpus's own limits, stated because they bound every num
 The reducer is ~300 lines of pure function over JSONL, and the temptation is to ship it as a script in
 someone's dotfiles. Three things make that wrong here:
 
-- **The labels are the product.** `verified` / `inferred` / unresolvable, the currency rule, the `plan`
+- **The labels are the product.** `measured` / `inferred` / unresolvable, the currency rule, the `plan`
   label, the ratio's denominator — each is a §7 convention that already exists, and a second
   implementation of them is a second reading of the accounting contract. ADR-041 made the same argument
   for `/metrics` and `vadis stats` sharing one definition of a figure.
@@ -206,7 +212,7 @@ already inside its contract. No code, no class, no case, no `CONF` id and no oth
 (AGENTS constraint 9: this ruling *is* the human decision that constraint asks for — a case pins behaviour,
 and no behaviour changed).
 
-**The rule that keeps these words honest: the class is a *name over a verified relation*, and the record
+**The rule that keeps these words honest: the class is a *name over a `measured` relation*, and the record
 it is printed from carries the relation, not the name.** Hence §2.3's `kept`, `at` and `blocks` columns
 sit *beside* `class`, and the header of the text output says so in one line. A reader who needs the fact
 reads `lcp` and the index; a reader who needs the shape reads the word. Nothing in this surface claims
@@ -218,7 +224,7 @@ the client's intent, because intent is not on the wire.
   `input` before `tools`; the provider's template puts `tools` first (`prefix.rs:77`, `:323`). So "the
   block at index 4 changed" is true of the bytes vadis forwarded and is *not* a statement about the
   provider's prompt position — and that is precisely why the cache column is the provider's own
-  `usage.input_cached` and not a block-derived ratio (§2.5, and the metric-vs-verified-counter pitfall
+  `usage.input_cached` and not a block-derived ratio (§2.5, and the metric-versus-provider-counter pitfall
   this repository already paid for once).
 - **The relation is computed across files, not within one.** The rollover is hourly
   (`state/traces/YYYY-MM-DDTHH.jsonl`); a session that crosses an hour boundary must still be diffed
@@ -235,19 +241,24 @@ Column names are the `--json` keys verbatim (snake_case). The text output prints
 | 2 | `start` | RFC3339 | `ts` — the request's **start** (§2.6) | measured | never |
 | 3 | `gap_ms` | i64 \| `—` | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; **negative values are printed as measured**, never clamped | derived | `—` when the two `ts` are **identical** (equal at the record's millisecond resolution — *amended at the landing*: the draft said "when the two `ts` share a second", which described the pre-§2.6 clock's floor and contradicted §2.6 and limb (f)), or when n = 1 |
 | 4 | `route` | string | `decision.provider` + `/` + `decision.model` | measured | `—` when both are empty (a refusal before any route resolved) |
-| 5 | `in` | u64 \| `—` | `usage.input_total` | **verified** (the provider's own count) | `—` when `usage_missing` |
-| 6 | `cached` | u64 \| `—` | `usage.input_cached` | **verified** | same |
-| 7 | `out` | u64 \| `—` | `usage.output` | **verified** | same |
+| 5 | `in` | u64 \| `—` | `usage.input_total` | **measured** (the provider's own count) | `—` when `usage_missing` |
+| 6 | `cached` | u64 \| `—` | `usage.input_cached` | **measured** | same |
+| 7 | `out` | u64 \| `—` | `usage.output` | **measured** | same |
 | 8 | `money` | amount + `currency`, or `plan` | `cost.total`, `cost.currency`; `plan` when the `decision.provider` entry declares `account: coding_plan` | measured / config-derived label | `—` when `usage_missing` (the cost was never computed, §7) |
-| 9 | `blocks` | signed count | new blocks: `len(L(n)) − lcp` (`+k`), dropped: `lcp − len(L(n))` (`−k`), `0` | **verified** (hash equality) | never |
-| 10 | `kept` | u64 | `lcp` | **verified** | never |
-| 11 | `at` | `#<index>:<kind>` | the first block where the lists diverge, its index and its `kind` (`system`/`message`/`tool`/`input_item`) | **verified** | `—` for `append`, `first`, `repeat` |
+| 9 | `blocks` | signed count | new blocks: `len(L(n)) − lcp` (`+k`), dropped: `lcp − len(L(n))` (`−k`), `0` | **measured** (hash equality) | never |
+| 10 | `kept` | u64 | `lcp` | **measured** | never |
+| 11 | `at` | `#<index>:<kind>` | the first block where the lists diverge, its index and its `kind` (`system`/`message`/`tool`/`input_item`) | **measured** | `—` for `append`, `first`, `repeat` |
 | 12 | `new_tok` | u64 | `Σ prefix.blocks[i≥lcp].tokens` | **inferred** (GAP-Q14: a proportional attribution of the measured total) | never (`0` on `repeat`) |
-| 13 | `class` | enum(5) | §2.2 | derived name over a verified relation | never |
+| 13 | `class` | enum(5) | §2.2 | derived name over a measured relation | never |
 | 14 | `wall_ms` | u32 | `result.overhead_ms` | measured — **and it includes the upstream's generation time on a streamed row** (§2.7) | never |
 | 15 | `head_ms` | u32 \| `—` | `result.upstream_ms` | measured (head arrival on the streaming path) | `—` when null |
 | 16 | `status` | u16 (`→` u16) | `result.status`, plus `→` `result.upstream_status` when the two differ | measured | never |
 | 17 | `flags` | space-joined vocabulary | presence checks, each on a named field (§2.3.1) | derived from measured facts | empty string |
+
+**No row of this table carries `verified`.** A ledger row is one observation and the ledger holds no
+counterfactual, so the label its counters take is §7's `measured` — a difference between two worlds is what
+`verified` names, and no such difference exists on this surface (ADR-058). `inferred` stays where it was
+(`new_tok`, the GAP-Q14 attribution), and `—` stays the mark of a figure the record cannot carry.
 
 **§2.3.1 The flag vocabulary is closed.** Each flag is one predicate over one field, never an
 interpretation:
@@ -281,7 +292,7 @@ restatement of rows already printed — this surface computes nothing the rows d
 | `money` | one line per currency, plus `plan rows: P (marginal 0)` | **sums never cross a currency** (§4.8: a family may span two); the plan rows are counted, not added to any currency line |
 | `by class` | the five counts, each with `new_tok` (inferred) and money (same currency/`plan` rule) | the row-level labels carry through; no class figure is a new measurement |
 | `top steps` | the five largest `new_tok`, as `#step (class, +k blocks)` | the "where did this session's prompt grow" answer |
-| `cache` | `Σcached / Σin` over rows that carry usage | **verified**, the provider's own counters; `—` when no row carries usage. It is a ratio of measured figures, never presented as a saving (§7) |
+| `cache` | `Σcached / Σin` over rows that carry usage | **measured**, the provider's own counters; `—` when no row carries usage. It is a ratio of measured figures, never presented as a saving (§7) |
 
 **A reused session key is not a new session.** Clients generate the key; nothing stops a client from
 reusing one after a day, and the store's own session TTL is what normally bounds the gap. The summary
@@ -290,13 +301,20 @@ the middle is the reader's evidence. Inventing a boundary would be a fabricated 
 
 ### 2.5 The three labels, and the two accounting rules that decide the money columns
 
-The labels are §7's, unchanged; this surface adds no fourth:
+The labels are §7's, unchanged; this surface adds no fourth and uses three of them:
 
 | Label | On this surface | Example |
 |---|---|---|
-| **verified** | a figure the provider itself counted, or a fact of the bytes (`usage.*`, block hashes, `lcp`) | `cached 167,552` |
+| **measured** | a figure the provider itself counted, or a fact of the bytes (`usage.*`, block hashes, `lcp`) — **one observation, no counterfactual** | `cached 167,552` |
 | **inferred** | a figure derived locally with no control (§7), and every block-token arithmetic (GAP-Q14) | `new_tok 5,844` |
 | **unresolvable** | a figure the record cannot carry, printed `—` — **never `0`, never a guess** | `gap_ms` within one second; `in · out · money` on a `usage_missing` row |
+
+**There is no `verified` figure on this surface, on purpose.** `verified` is §7's word for a difference
+between two worlds (a control turn, the replay ladder), and a ledger row is one observation of one request:
+the column that would tempt a reader into the forbidden inference — *"this step saved N tokens, `cached` is
+high"* — is `measured`, and the surface's refusals (§2.7) keep it there. This is the ADR-058 correction:
+the draft of this table labelled those counters `verified`, which is exactly the inference AGENTS
+constraint 4 forbids.
 
 And the two rules that the money column exists to keep:
 
@@ -484,7 +502,7 @@ A capability that lands only in `crates/` and `book/` is invisible on the three 
 | fold it into `vadis stats` | §2.1: a window of aggregates and an ordered session have different output shapes, and `stats` is the one surface with a live-gateway fallback |
 | expose it as `/metrics` series | unbounded label cardinality on a process-wide scrape surface (§2.1) |
 | read the **store** for session state (bindings, cooldowns, plan rows) | the store is EXCLUSIVE-locked while `serve` runs, so the surface would be unusable exactly when it is most wanted. The trace carries what this ledger needs; the event log is state truth for a different question (ADR-010) |
-| derive the cache column from block continuity | measured to disagree with the provider's verified counter by a factor of four on real codex traffic (block order vs template order, §2.2) |
+| derive the cache column from block continuity | measured to disagree with the provider's own counter by a factor of four on real codex traffic (block order vs template order, §2.2) |
 | name the unit a **turn** | vadis sees requests, not the agent loop's turn boundary (§2.1) |
 | print the step classes without the underlying counts | a word without its relation is an interpretation; §2.2 puts `kept`/`blocks`/`at` beside it |
 | classify by `identity.turn_index` | the field is not an ordinal in production (every row after a session's first reports `2` — §9 F2) |

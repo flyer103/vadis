@@ -1966,6 +1966,36 @@ no listed predicate") and `:992` still calls `0 < lcp` "the listed predicate"; `
 to its parent by this card's own acceptance, so the residue is registered **`S-R1`** — due: the next card
 that opens `steps.rs`.
 
+**Register line (2026-10-18, `ADR-058` — one word, one meaning: `measured` is not `verified`).**
+`ADR-058` (`design/decisions/ADR-058-measured-is-not-verified.md`) rules the vocabulary that three frozen
+documents had been using for two different quantities: **`measured` = one observation** (a number the provider
+reported, or a fact of the bytes — `usage.*`, block hashes, `lcp`, and the price arithmetic over those two),
+usable per observation and **never a saving**; **`verified` = the delta between two worlds**, minted only by a
+paired control or the replay ladder (`ADR-031` D4.2), and the only number that may be reported as a saving;
+`inferred` unchanged; `count`/`derived` for the rows that are not quantities. The composition rule is part of
+the ruling, because without it the split is cosmetic: **a difference of two `measured` figures is not
+`verified` by itself** — the pair has to be a *designed* counterfactual. What moved: `docs/spec.md` **§7** (the
+definition table plus the scope sentence and the composition rule), **§6** (hit rate, switch cost, the
+gate clause, and the `verified_savings_tokens` note), **§9.2** (a note naming its three legacy rows),
+**§9.4** (six label cells, contracted and not served); `ADR-031` **D4** gains an appended scope note (its body
+is append-only); `ADR-057` **§1.2/§1.4/§2.2/§2.3/§2.4/§2.5/§7** are corrected in place — it was never ruled —
+and its §2.5 now states that **no `verified` figure exists on that surface**; the `book/` label table and four
+sentences; and P8's row below. **What it deliberately does not do:** the *served* word stays. `vadis stats`
+prints `cost (verified, <currency>)` and `switch cost (verified, <currency>)`, and `/metrics` publishes
+`provenance="verified"` on six series of which four are `measured` figures
+(`crates/vadis-cli/src/metrics.rs:176,189,196,207,286`; `:246` is the delta and stays) while `:360` already
+emits `provenance="measured"` — two words for one quantity on one surface. Relabelling that is a served
+contract (§9.2, §4.16) with a conformance case attached, so it is **owed by a follow-up card** and §9.2
+carries the reading rule in the meantime. `AGENTS.md` constraint 4 is **read, not reworded**: its parenthetical
+*"measured usage difference"* is exactly the delta scope, and `measured` names the observation that the
+difference is taken over — the ruling does not need the constitution changed. No code identifier is renamed
+(`verified_savings_tokens` counts deltas and keeps its name), no gate / threshold / corpus / L1 envelope
+moves, and the census is a grep: the word applied to a figure (`grep -ro '\*\*verified\*\*'` — a bold label
+cell) falls **20 → 4**, the four being §9.2's three named legacy rows plus the one delta metric, while the raw
+`grep -rn 'verified'` line count rises 123 → 131 and the term count (backticked or bold) 71 → 79, because a
+ruling has to name the word it governs: `ADR-031`'s scope note, `ADR-057`'s status correction, `spec §7`'s
+scope sentence and this line are sentences *about* the word, not labels on a figure.
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**
@@ -4612,7 +4642,7 @@ primitive updates §13.3 **in its own round** — a register allowed to drift is
 | P5 | `decision-record` | one record per request; additive fields keep `schema_version`; joins the log on `request_id` + `identity.event_id`; the only product → analysis-loop channel | ADR-005; spec §6, §7; §8, §12.6 | `vadis-core/src/trace.rs:22,27,88,311`; writer `vadis-proxy/src/accounting.rs:358`; sink `vadis-store/src/trace_sink.rs:40,73` | wired |
 | P6 | `transform-chain` | every content change is pure in (content, stable config), individually accounted and labelled, invertible, prefix-preserving — and active **only** in a mode the request itself asked for (ADR-019) | ADR-003; ADR-008; **ADR-019**; spec §2.1, §4.4, §6, §7; §6, §12.3, **§12.12** | engine `vadis-plugins/src/transform_rules.rs` (loads `rules/tool_output.toml`, its 13 inline tests are the acceptance test); mode `vadis-core/src/transform.rs`; composition step `vadis-proxy/src/forward.rs::compose_transform_stage`; assembly `vadis-plugins/src/assembly.rs` (mounts the engine from the `plugins:` list, **R41-3**); wiring `vadis-cli/src/lib.rs:273` (one `assemble` call); invariants CONF-60..63 | **wired in v0.1 for tier 1** (the mode channel, the rule engine over the landed rule file, the ledger with per-rule attribution and inferred labels; the paired `verified` measurement is ⑥ and stays open; P4-class rewriting stays excluded by I2) — and **mounted from the `plugins:` list since R41-3** (the first migration: the launcher mounts what the list declares, `inject`/`disabled` honoured) |
 | P7 | `state-truth` | the event log is the truth, projections are rebuildable and never the truth, an intent commits before the effect, one writer per state dir | ADR-009; ADR-010; spec §4.5; §8, §12.10.4 | `vadis-core/src/store.rs:26,180,361,412,442`; `vadis-store/src/lib.rs:218` | wired |
-| P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `verified`/`inferred`; only `verified` enters a gate; an absent measurement is never 0 | ADR-006; ADR-018; spec §7, §4.0, §4.8; §5, §12.4 | `vadis-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
+| P8 | `accounting` | integer `Nano` amounts on the five tiers (+ peak), each carrying its `currency` (ADR-018); every figure carries `measured`, `verified` or `inferred` — one observation, one pair, one estimate (ADR-058); only `verified` may be reported as a saving and a `measured` figure never stands in for one; an absent measurement is never 0 | ADR-006; ADR-018; **ADR-058**; spec §7, §4.0, §4.8; §5, §12.4 | `vadis-core/src/cost.rs:11,44,55`; `peak.rs`; `quota.rs`; `trace.rs:297` | wired |
 | P9 | `plugin-runtime` | every registration carries its inverse (LIFO); dependents deactivate first; realms coexist; intercept rebinds nothing; config applies as a keyed diff | ADR-002; **ADR-036**; §4, §12.2, **§13.6** | `vadis-runtime/src/{lib,service,effect,ctx,fiber,loader}.rs` (R41-2); the assembly `vadis-plugins/src/assembly.rs` (**R41-3**) drives the loader from the `plugins:` list; `vadis-plugin-sdk/src/lib.rs:1-4` still a stub; `inject`/`isolate`/`intercept` parse at `config.rs:1004-1019`, validate at `config.rs:1744-1804` — `inject` is consumed by the assembly (an unmet declaration is a named loading wait), `isolate`/`intercept` by nobody | **the mechanism is wired** — the contract is frozen by **ADR-036** (R41-1), the machinery landed in **R41-2** (minus the four service-key constants, whose traits do not exist; §12.2's status says why), and **R41-3**'s assembly drives it from the `plugins:` list with exactly one mountable kind (`builtin/transform_rules`); `inject` and `disabled` are live, `isolate`/`intercept` stay inert, the keyed config diff and live reload stay out (specified-not-in-service), and the other surfaces are **not** migrated — the three always-resident builtins stay resident |
 
 ### 13.2 Module → primitive map

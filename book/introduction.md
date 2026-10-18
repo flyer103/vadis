@@ -18,9 +18,9 @@ cache, and records every decision and every cent into a replayable trace.
 - **How it saves money**: prefix stability first, payload discipline second, provider
   arbitrage third.
 - **How to read the reports**: the `plan` section of `GET /health` and `vadis stats` (both
-  served), and the difference between a measured (`verified`) and an estimated (`inferred`)
-  saving. `vadis replay` and `vadis trace tail` are planned, not served — the list is
-  `docs/spec.md` §9.
+  served), and the difference between a measured observation, a `verified` saving and an
+  estimated (`inferred`) one. `vadis replay` and `vadis trace tail` are planned, not served — the
+  list is `docs/spec.md` §9.
 - **How to extend it** with plugins and rule files, and what is stable enough to rely on.
 - **What is coming next** and where the authoritative current state lives.
 

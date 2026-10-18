@@ -212,3 +212,23 @@ working tree (its file paths and round-record names, its state record, charter, 
 model and replay contract, its scripts and module names, and the kanban card ids), each
 replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
 threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
+
+## Scope note (ADR-058, 2026-10-18)
+
+**D4's `verified` is the delta scope, and it is neither relaxed nor narrowed by this note.** ADR-058 split
+the accounting vocabulary: `measured` names **one observation** (a number the provider reported, or a fact of
+the bytes), `verified` names **the delta between two worlds**, minted only by a paired control or the replay
+ladder. Read D4 with that split in front:
+
+- **D4.2 is the stricter half of the split and stands exactly as written.** *"`verified` is not mintable by
+  an analysis"* is now also the statement that no arithmetic over two `measured` figures mints one: the pair
+  has to be a designed counterfactual (the same content, one treatment removed, the two readings attributable
+  to that removal), or the difference confounds the content change with the treatment.
+- **D4.1's "no measured evidence" means no `verified` evidence.** A ranking row that rests on a single
+  `measured` observation — a cost the provider reported, a hit rate over a window — carries `inferred` and
+  prints its assumption, because an observation is not evidence that a *lever* moved anything.
+- **D1's arithmetic, D3's band rule, D5's row shape and D6's seven refusals are untouched.** D6 item 1
+  ("mint `verified`") keeps its exact meaning and gains a companion in ADR-058 §2: a `measured` figure may be
+  an operand of a row and may never be presented as the row's Δ.
+- **Nothing in this document is rewritten.** ADR-031's body is append-only; this note is appended, and D4's
+  text above is the text the owner ruled on 2026-10-03.

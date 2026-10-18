@@ -41,13 +41,14 @@ stable**, and choosing a cheaper model is second-order.
   future work. Anything that rewrites history in place — summarising, trimming by position,
   a rolling window — is deliberately out, because it breaks the upstream prefix cache and *raises* the
   bill (ADR-019). How to turn the mode on is described below under *Payload compression*.
-- **Verified versus inferred**: only a measured usage difference counts as a saving, and a saving is a
-  *difference between two worlds* — the request that ran and the one that did not. A local estimate is
-  labelled `inferred` and can never be reported as measured; where no comparison happened, the honest
-  figure is none at all ([`docs/spec.md` §7](../docs/spec.md)).
+- **Measured, verified, inferred**: a single request is `measured` — the provider's own counts, and the
+  money they cost at your prices — and no single request is ever a saving. A saving is a *difference
+  between two worlds* — the request that ran and the one that did not — and only a paired comparison (a
+  control turn, a replay) mints one, under the label `verified`. A local estimate is labelled `inferred`;
+  where no comparison happened, the honest figure is none at all ([`docs/spec.md` §7](../docs/spec.md)).
 - **Response caching**: an exact-match, session-scoped *replay* of a response vadis recorded — **off by
   default**, and the one lever whose saving can never be measured (so it is excluded from every gate). The
-  `verified`/`inferred` rule above is what makes that exclusion checkable; see *Response caching* below.
+  `measured`/`verified`/`inferred` rule above is what makes that exclusion checkable; see *Response caching* below.
 - **How to check the claim**: `vadis stats --config config.yaml --window 24h` to read the
   cost and cache report (the window is required, because a saving that does not state its window
   cannot be checked), and its `plan family` section for what the switches cost. `vadis replay`,
@@ -78,7 +79,7 @@ returns no usage at all; the fact is authoritative but only as good as the provi
 reporting. When no usage came back, the hit rate is simply **unknown** — not zero, and never
 written down as zero.
 
-The precise definitions (what a block is, the block order, and the inferred/verified
+The precise definitions (what a block is, the block order, and the measured/verified/inferred
 accounting convention that decides which number a claim may rest on) live in one place:
 [`docs/spec.md` §6](../docs/spec.md) and [§7](../docs/spec.md).
 
@@ -272,12 +273,13 @@ no policy at all.
 **How you read it.** On the request whose account moved, the trace's `result.plan_switch` says
 `from` → `to`, why (`primary_exhausted`, `primary_cooling_down`, `primary_recovered`), whether
 it was a probe, the re-prefill size and its price. That price starts as an *inferred* figure
-(it is computed from the prefix, not from a bill); it becomes *verified* in the shadow of the
-switched request's own measured usage. When the route you moved to publishes its prices in
+(it is computed from the prefix, not from a bill); it becomes *measured* in the shadow of the
+switched request's own usage — an observation of what the switch cost, never a saving. When the route
+you moved to publishes its prices in
 input-length bands, that decision-time figure is computed from the model's lowest band — it is an
 estimate made before the next request exists, and the band that request actually falls in is what
 its own cost line shows. `GET /health` shows the current account and the probe
-deadline, and `vadis stats` counts the switches and their verified cost — the two surfaces,
+deadline, and `vadis stats` counts the switches and their measured cost — the two surfaces,
 their fields and the rule that decides which of the two numbers a claim may rest on are
 [`docs/spec.md` §9](../docs/spec.md).
 
