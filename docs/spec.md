@@ -3249,11 +3249,16 @@ longest common prefix of `L(n−1)` and `L(n)`.
 | `append` | `lcp == len(L(n−1))` and `len(L(n)) > lcp` |
 | `repeat` | `L(n−1) == L(n)` |
 | `shorten` | `lcp == len(L(n))` and `len(L(n)) < len(L(n−1))` |
-| `rewrite` | `0 < lcp < min(len(L(n−1)), len(L(n)))` |
+| `rewrite` | `0 ≤ lcp < min(len(L(n−1)), len(L(n)))` — the row also covers the **empty common prefix** (`lcp == 0`, the first block itself differs); such a row prints `kept 0` with `at #0:<kind>` |
 
 `class` is a **name over a verified relation**, never a statement of the client's intent: `shorten` does
 not say "compaction" and `rewrite` does not say "edited message". Every row therefore carries the
 relation itself (`kept`, `blocks`, `at`), and a reader who needs the fact reads those.
+
+An `lcp == 0` row's `kept 0` is a **measured zero** — nothing of the previous block list survived — never
+the absence this section's row table prints as `—` (§9.4.3), and its `at #0:<kind>` names the first block
+itself. The `lcp == 0` clause is the owner's ruling of 2026-10-18 (ADR-057 §2.2's dated amendment): the
+command already printed this shape with the relation beside it, and this table now describes it.
 
 The block index is vadis's own enumeration order of the client's bytes, **not** the provider's template
 order; the cache column is therefore the provider's own counter (§9.4.3), never a figure derived from the

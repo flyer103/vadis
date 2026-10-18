@@ -1945,6 +1945,22 @@ prerequisite: one formatter, microseconds, `AccountCtx` carrying the same read's
 tests moved (`ADR-057` §5, §6.1). Nothing here moves a gate definition, a threshold, the corpus, the loop replay
 contract or the L1 envelope (AGENTS 9 / ADR-012), and no surface shape is frozen until the owner rules.
 
+**Register line (2026-10-18, S — the `rewrite` row's empty prefix: registered *open* by the L review,
+*ruled* by the owner, written back).** `docs/spec.md` §9.4.2's `rewrite` predicate as frozen read
+`0 < lcp < min(…)`, which admitted **no** row when the common prefix is empty, while
+`crates/vadis-cli/src/steps.rs:328-336` classifies that case `rewrite` and prints `kept 0` /
+`at #0:<kind>` beside it (disclosed in the comment, pinned by the reducer's unit test). **Open** from the
+L review (`t_82f1b093`, finding F-QA1; measured there at 103 of 8,388 non-first steps — 1.2 % — in 28 of
+198 sessions over the 182-file corpus); **ruled 2026-10-18 by the owner**: the row covers `lcp == 0` and
+the code does not change. Written back in the same commit — §9.4.2's row (predicate widened to
+`0 ≤ lcp < min(…)`, the printed `kept 0` + `at #0:<kind>` stated in the row itself) and `ADR-057` §2.2
+(a dated amendment that quotes the superseded predicate) — docs only: no product byte, no gate
+definition, no corpus, no `CONF` id (`CONF-111…118` unchanged), no round number. **One residue, named
+rather than fixed:** `steps.rs:329-334`'s comment still narrates the pre-amendment contract ("satisfies
+no listed predicate") and `:992` still calls `0 < lcp` "the listed predicate"; `crates/` is byte-identical
+to its parent by this card's own acceptance, so the residue is registered **`S-R1`** — due: the next card
+that opens `steps.rs`.
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**

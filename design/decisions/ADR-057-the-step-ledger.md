@@ -186,7 +186,25 @@ For step *n* > 1, let `L(n)` be the ordered list of block hashes `prefix.blocks[
 | `append` | `lcp == len(L(n−1))` and `len(L(n)) > lcp` | not "a new tool result" — an appended block can be a message the *client* appended |
 | `repeat` | `L(n−1) == L(n)` | not "a provider retry" — the client resending the same bytes is indistinguishable from it, and that ambiguity is the row's honest content |
 | `shorten` | `lcp == len(L(n))` and `len(L(n)) < len(L(n−1))` | not "a compaction" — a trim and a rewind look the same here |
-| `rewrite` | `0 < lcp < min(len(L(n−1)), len(L(n)))` | not "an edited message" — only "the first differing block is at index `lcp`" |
+| `rewrite` | `0 ≤ lcp < min(len(L(n−1)), len(L(n)))` — the empty common prefix (`lcp == 0`) is this row, and the row prints `kept 0` with `at #0:<kind>` | not "an edited message" — only "the first differing block is at index `lcp`" |
+
+**Amendment 2026-10-18 (owner ruling; prose only — the implementation does not move).** As drafted, the
+`rewrite` row read `0 < lcp < min(len(L(n−1)), len(L(n)))`, a predicate that left a divergence with an
+**empty** common prefix in no row of the table at all. The implementation never had that hole: it
+classified that case `rewrite` and printed the relation beside the word (`kept 0`, `at #0:<kind>`,
+`crates/vadis-cli/src/steps.rs:328-336`), disclosed the classification in its own comment and pinned it
+with the reducer's unit test — measured before the ruling at **103 of 8,388 non-first steps (1.2 %), in
+28 of 198 sessions** over the 182-file corpus (`t_82f1b093`'s scan, and the L review's finding F-QA1;
+re-measured for this amendment on a newer pinned window — 185 files, 94,565,313 bytes, 8,725 records,
+201 sessions — at **106 of 8,490 non-first steps (1.25 %), in 28 of 201 sessions**, so the rate is stable
+and the count grows with the corpus).
+The owner ruled on **2026-10-18** that the row **covers** `lcp == 0`: the predicate above is widened and
+the reasoning below is untouched, because none of it was wrong — what was wrong was a table that did not
+describe the row the command prints. §2.3 needs nothing: column 10 prints the measured `lcp` (a `0`, not
+an absent figure) and column 11's `at` is null only for `append`/`first`/`repeat`, so `#0:<kind>` was
+already inside its contract. No code, no class, no case, no `CONF` id and no other class word moves
+(AGENTS constraint 9: this ruling *is* the human decision that constraint asks for — a case pins behaviour,
+and no behaviour changed).
 
 **The rule that keeps these words honest: the class is a *name over a verified relation*, and the record
 it is printed from carries the relation, not the name.** Hence §2.3's `kept`, `at` and `blocks` columns
