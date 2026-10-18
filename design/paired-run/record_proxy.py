@@ -12,7 +12,11 @@ Sits between the instrument's `serve` and the upstream. Two modes:
   forward   records the exact outbound bytes to <log-dir>/NN.off.body /
             NN.on.body (named by the run script) plus a meta.jsonl line
             (ts, path, len, sha256, sha16), then relays the request to the
-            real upstream over TLS and relays the response back unchanged.
+            real upstream over TLS, records the upstream's response bytes to
+            <log-dir>/NN.resp.body plus its own meta.jsonl line (kind: resp,
+            status, len, sha256, sha16 — the independent copy of every usage
+            figure; quote these digests in the F3 receipt), and relays the
+            response back unchanged.
 
 Never started on the operator's port, never reads the operator's config.
 """
@@ -65,7 +69,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.args.mode == "mock":
             self._mock(seq, body)
         else:
-            self._forward(body)
+            self._forward(body, seq)
 
     def _mock(self, seq: int, body: bytes):
         try:
@@ -99,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _forward(self, body: bytes):
+    def _forward(self, body: bytes, seq: int):
         ctx = ssl.create_default_context()
         conn = http.client.HTTPSConnection(self.args.upstream_host,
                                            timeout=120, context=ctx)
@@ -108,6 +112,23 @@ class Handler(BaseHTTPRequestHandler):
         conn.request("POST", self.path, body=body, headers=fwd)
         resp = conn.getresponse()
         data = resp.read()
+        # The upstream's response is recorded too (F3's last step): without it,
+        # every usage figure in the report is the router's parse of this body
+        # with no independent copy — a systematic parse error would be invisible
+        # to P1–P9, because the null control shares the same parse.
+        rmeta = {
+            "seq": seq,
+            "kind": "resp",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": resp.status,
+            "len": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "sha16": sha16(data),
+        }
+        with open(self.args.log_dir + "/meta.jsonl", "a") as f:
+            f.write(json.dumps(rmeta) + "\n")
+        with open(self.args.log_dir + "/%03d.resp.body" % seq, "wb") as f:
+            f.write(data)
         self.send_response(resp.status)
         ctype = resp.getheader("content-type")
         if ctype:

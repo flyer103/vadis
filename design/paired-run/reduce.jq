@@ -16,7 +16,8 @@
 #             --argjson artefacts_consistent true \
 #             --argjson body_hashes '<{"<request_id>":"<sha16>",...}> from events upstream.submitted>' \
 #             --argjson row_refs '<[{"request_id","file","line"},...]>' \
-#             --argjson price_entry '<the route price block + source URL + read date>'
+#             --argjson price_entry '<the route price block + source URL + read date>' \
+#             --argjson response_receipt '<[{"seq":n,"req_sha16":…,"status":200,"sha256":…},…] one per proxy meta.jsonl kind=resp line>'
 # Output: report.json — either a verified net with P1–P9 observed values and
 #         the six provenance artefacts, or the first failing condition.
 #
@@ -98,7 +99,10 @@ sort_by(.identity.event_id)
             pass: (($ctrl.prefix.blocks | length) == ($trmt.prefix.blocks | length)
                    and ($diff_idx | length) >= 1 and ($diff_idx | length) == $n_edits)},
        P7: {observed: {currencies: $currencies, peak_applied_pct: $peaks,
-                       plan_rows: $plan_rows, entry_account: "api"},
+                       plan_rows: $plan_rows},
+            # no entry_account field: no input produces it (§6 item 5 requires
+            # observed values to be ones a reader can disagree with); the plan
+            # detector is quota_after / plan_switch in $plan_rows above.
             plan_ok: (($plan_rows | length) == 0),
             money_ok: (($currencies | length) == 1 and ($peaks | length) == 1)},
        P8: {observed: {regime: (if $warm then "warm" elif $cold then "cold" else "mixed" end),
@@ -184,6 +188,11 @@ sort_by(.identity.event_id)
                         peak_applied_pct: $peaks[0],
                         scope: "pre-peak tier delta over cost.{input_miss,input_hit,cache_write}; output excluded (§4.3)",
                         m_off_nano: $m_off, m_on_nano: $m_on,
+                        cache_coverage: {control: {input_cached: $ctrl.usage.input_cached,
+                                                    input_total: $ctrl.usage.input_total},
+                                          treatment: {input_cached: $trmt.usage.input_cached,
+                                                       input_total: $trmt.usage.input_total},
+                                          note: "residual cache coverage of the two measured rows, printed beside the money figure (§5.1's R6 diagnostic): the money delta is bounded by this coverage, not attributable"},
                         from: {request_id: $ctrl.identity.request_id},
                         to: {request_id: $trmt.identity.request_id}}
                      end)}
@@ -216,7 +225,8 @@ sort_by(.identity.event_id)
                      plugin_config: $plugin_config},
           commit_gates: {commit: $commit, porcelain_empty: $porcelain_empty,
                          binary_sha256: $binary_sha256, gates: $gates},
-          price_entry: $price_entry},
+          price_entry: $price_entry,
+          response_receipt: $response_receipt},
 
        diagnostics:
          {cache_regime: $P.P8.observed.regime,

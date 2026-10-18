@@ -196,11 +196,15 @@ compute the two sides only locally: from payload-text lengths via `estimate_toke
 - `estimator_error = net − Σ(saved_input_tokens − added_input_tokens)` is a **published diagnostic of the local
   estimator**, not a saving. It is the first measurement of GAP-Q14's error this repository will own — a genuinely
   useful by-product, and the only place two labels may sit in one table as long as neither is added to the other.
-- One structural reason the estimate *must* miss, and it is not a rounding detail: `edited_paths[].bytes_in` /
-  `bytes_out` are **payload text** lengths, while the tokens the upstream counts are over the **JSON-escaped span**.
-  A `\n` is one character in the payload and two bytes in the body, so a rule that removes line breaks — every rule
-  in `rules/tool_output.toml` that drops or joins lines — also changes the escaping. Only the provider's count sees
-  that, which is one more reason the measured pair is not a luxury version of the ledger.
+- One structural reason the estimate *must* miss — now measured, not assumed. Of the first run's 318-token
+  estimator error, **~300 tokens are the estimator's 4-bytes-per-token constant** (the measured pair is 5,199 B
+  over 1,599 tokens = **3.25 B/token**, so the constant over-counts the byte savings) and only **~18 tokens are
+  JSON escaping**: `edited_paths[].bytes_in` / `bytes_out` are **payload text** lengths, while the tokens the
+  upstream counts are over the **JSON-escaped span** — a newline is one character in the payload and two bytes
+  in the body, so a rule that removes line breaks — every rule in `rules/tool_output.toml` that drops or joins
+  lines — also changes the escaping. The escaping effect is real but second-order; the constant is the dominant
+  term. Only the provider's count sees both, which is one more reason the measured pair is not a luxury
+  version of the ledger.
 
 ### 4.3 Output is outside the pair
 
@@ -302,9 +306,13 @@ the four clauses that make a figure *citable*. Together they bind six artefacts.
 `inferred`-graded at best, and the report says which one is missing.
 
 1. **The producing rows.** For each of the four: `identity.request_id`, `ts`, the hourly trace file
-   (`YYYY-MM-DDTHH.jsonl`) and the JSONL line number; and from the event log, the `request.received` row's
-   `body_hash` — the sha16 of the **outbound** body, computed by the serving path itself. That digest is the byte
-   anchor: the object the provider actually received, named by the process that sent it.
+   (`YYYY-MM-DDTHH.jsonl`) and the JSONL line number; and from the event log, the `upstream.submitted` row's
+   `body_hash` — the sha16 of that attempt's **byte-final outbound** body (post transform and post model
+   rewrite), computed by the serving path itself. That digest is the byte anchor: the object the provider
+   actually received, named by the process that sent it. The `request.received` row's `body_hash` is a
+   different domain — the vadis-visible **inbound** bytes after the vadis-owned-key deletion and before the
+   rewrite (DESIGN §12.10.5 R4), which on the transform path are already the transformed bytes — and using it
+   as this anchor makes F3 red on a correct build.
 2. **The fixture.** The body bytes at a **tracked** path with their sha256 (the full digest, not the 16-hex block
    form), its `source` class (`composed` | `captured-sanitised`), and — optionally and preferably — the two
    outbound bodies `off.out.json` / `on.out.json`, so a stranger can recompute both `body_hash`es without running
@@ -433,7 +441,10 @@ The method may be run **on top of** the operator's production trace, and the bou
   the trace carries no payload text and no tool name; and the counterfactual, which is the point (spec §7). A record
   is one world, so no window of production traffic is an arm of this pair.
 - **What that means for the report.** "Runnable against the owner's own traces" therefore has one honest reading:
-  the **pre-flight** (shape, reachability, and every refusal path) is run against the production trace at `$0.00`;
+  the **pre-flight** (shape, reachability, and every refusal path) is run against the production trace at `$0.00`
+  — a read-only pass over a pinned window. **Status of the first run (97816e7): this pre-flight was not run and
+  no result from it is claimed**; the plumbing and the refusal table were exercised by the mock dry run and its
+  doctored-row limbs instead. Any run that wants to claim the pre-flight must name its window;
   the **pair** is run against the fixture on the operator's route, and its report names the fixture's class. A
   report that prints a production-window figure as the pair's delta would be reading `measured` rows as a saving —
   `ADR-058` §2.2's named defect, and the one this section exists to close.
@@ -499,7 +510,8 @@ below is executable from the repository alone.
   config's price block at the row's `cost.peak_applied_pct`; both must match the record's `cost.*` to the nano. This
   is D1's red control applied to a pair, and a mismatch is either a wrong window or a re-derived arithmetic.
 - **F3 — recompute the bytes.** `sha16(off.out.json)` and `sha16(on.out.json)` must equal the two
-  `request.received` events' `body_hash`; the two files must differ in exactly the spans named by `edited_paths[]`;
+  `upstream.submitted` events' `body_hash` (the byte-final outbound body — post transform, post model rewrite;
+  `request.received`'s hash is the pre-rewrite inbound domain and is not this anchor); the two files must differ in exactly the spans named by `edited_paths[]`;
   and the control's outbound body must equal the fixture modulo mutations (a) and (b) (a fixture carrying a
   vadis-owned top-level field is where (a) shows up). A reader who finds a third difference has found an edit nobody
   declared — the defect class constraint 1 exists for.

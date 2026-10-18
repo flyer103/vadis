@@ -116,8 +116,13 @@ jq -s -f design/paired-run/reduce.jq <scratch>/state/traces/*.jsonl \
    --argjson body_hashes '{...from the sqlite step...}' \
    --argjson row_refs '[{"request_id":…,"file":"….jsonl","line":n}, …]' \
    --argjson price_entry '{… the route, the per-1K tiers, the source URL + read date …}' \
+   --argjson response_receipt '[{"seq":1,"req_sha16":"…","status":200,"len":…,"sha256":"…"}, …]' \
    > design/paired-run/report.json
 ```
+
+`response_receipt` is one entry per proxy `meta.jsonl` line of `kind: resp` — the recorded
+upstream response's `status`, `len` and `sha256`, keyed by the request's own `req_sha16` —
+so the report carries the independent copy of every `usage` figure it quotes.
 
 `body_hash` here is the `upstream.submitted` event's — the sha16 of the **byte-final**
 outbound body (post transform **and** post model rewrite), unlike `request.received`'s
@@ -131,7 +136,12 @@ outbound body (post transform **and** post model rewrite), unlike `request.recei
 3. the null quartet's own #3/#4 wire bodies must be byte-identical;
 4. the control's wire body must equal the fixture modulo mutation (b) (the `model` value
    replacement) — the fixture carries no vadis-owned top-level field, so mutation (a) is
-   empty here.
+   empty here;
+5. the recorded upstream responses (`<seq>.resp.body`, digests in `meta.jsonl`'s `kind: resp`
+   lines and in the report's `response_receipt`) must contain the provider's own `usage`
+   objects — this is the independent copy that makes "reproduce without trusting the author"
+   true at the last step: recompute both `usage.input_total` figures from these bodies, not
+   from the router's parse.
 
 ### 8. Shut down by pid
 

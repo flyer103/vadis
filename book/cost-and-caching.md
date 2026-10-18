@@ -418,16 +418,20 @@ the header is byte-for-byte your own bytes no matter what is configured.
 A paired on/off measurement now exists for the shipped `bash-log-noise` rule — one composed
 fixture (a 6.2 KB shell-log payload behind an `exec_command` tool result, `responses` wire),
 four requests alternating the header plus a four-request null control, against a metered
-`deepseek/deepseek-flash` route. The full report — nine conditions with observed values,
-eight falsification checks, and the six provenance artefacts — is committed at
+`deepseek/deepseek-flash` route. The full report — nine conditions with observed values
+and the six provenance artefacts — is committed at
 [`design/paired-run/report.json`](../design/paired-run/report.json) with its recipe; the
-headline:
+falsification checks live in ADR-059 §10, which defines seven (F1–F7), of which this run
+executed four (F1–F4 — the report itself carries no F-references). The headline:
 
 - **verified net: 1,599 input tokens per request on that fixture** (the provider's own
-  count went 2,299 → 700, a 69.5 % smaller prompt), input-side only, both arms cache-warm;
+  count went 2,299 → 700, a 69.6 % smaller prompt), input-side only, both arms cache-warm;
 - the paired money delta was 14,058 nano-USD pre-peak at the route's off-peak window rate,
   priced by the config entry whose source is the provider's official pricing page (read
-  2026-09-21) — never an estimated price;
+  2026-09-21) — never an estimated price. That money figure is **bounded by the two rows'
+  residual cache coverage** (10.9 % of the control's and 26.9 % of the treatment's input
+  tokens were still billed at the uncached rate), not attributable to the transform: the
+  same token pair spans a 4.8× range across coverage regimes;
 - the ledger's local estimate for the same edit was 1,281 tokens, labelled `inferred` —
   318 tokens below the verified net, the first measured error of the bytes-per-token
   estimator, printed beside the net and never summed with it.
