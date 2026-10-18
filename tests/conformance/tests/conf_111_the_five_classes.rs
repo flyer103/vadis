@@ -65,6 +65,14 @@ async fn conf_111_the_five_classes_in_the_canned_order() {
         (2, -1, Some("#2:message")),
         "the earlier list's tail was dropped, not rewritten"
     );
+    // A shorten re-sends a KEPT PREFIX: `lcp == len(L(n))`, so column
+    // 12 (Σ blocks[i ≥ lcp].tokens) is empty BY CONSTRUCTION — the 0
+    // is the defined measure, not the kept-prefix token count (the
+    // review's trap: "fixing" it would swap measures, silently).
+    assert_eq!(
+        shorten.new_tok, 0,
+        "a shorten attributes no new tokens — the kept prefix is not new"
+    );
     // The mid-prefix change: [A,B] -> [A,X,C] — kept 1, +2 blocks, the
     // first differing block named at #1.
     let rewrite = &rep.rows[5];
@@ -84,5 +92,26 @@ async fn conf_111_the_five_classes_in_the_canned_order() {
     // reading it as an ordinal is off by the sticky hits).
     for (i, row) in rep.rows.iter().enumerate() {
         assert_eq!(row.step as usize, i + 1);
+    }
+
+    // Each `by class` new_tok is the SUM of that class's printed rows —
+    // a relation, never a constant (a constant would survive a reducer
+    // that miscounts the very rows it labels; the review's arm).
+    for (class, agg) in &rep.by_class {
+        let sum: u64 = rep
+            .rows
+            .iter()
+            .filter(|r| r.class == *class)
+            .map(|r| r.new_tok)
+            .sum();
+        assert_eq!(
+            agg.new_tok, sum,
+            "by-class new_tok restates the rows it summarises ({class})"
+        );
+        let count: u64 = rep.rows.iter().filter(|r| r.class == *class).count() as u64;
+        assert_eq!(
+            agg.count, count,
+            "by-class count restates the rows ({class})"
+        );
     }
 }

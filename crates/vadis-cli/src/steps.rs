@@ -86,10 +86,28 @@ pub struct StepRow {
     /// request — it is **not** the gateway's own overhead (§9.4.3).
     pub wall_ms: u32,
     pub head_ms: Option<u32>,
-    /// `result.status`, plus `→ upstream_status` when the two differ.
-    pub status: String,
+    /// `result.status`. The JSON form emits the **integer** when
+    /// `upstream_status` is absent or equal, the `"<status>→<upstream>"`
+    /// string otherwise (§9.4.3 column 16); the text form always
+    /// prints the composed cell (`status_text`).
+    pub status: u16,
+    /// `result.upstream_status`, when the record carries one — the
+    /// arrow form of column 16 exists only when it differs from
+    /// `status`.
+    pub upstream_status: Option<u16>,
     /// The closed §9.4.4 vocabulary, in table order.
     pub flags: Vec<String>,
+}
+
+impl StepRow {
+    /// The text form's status cell (§9.4.3 column 16): the integer, or
+    /// the arrow composition when the upstream's status differs.
+    pub fn status_text(&self) -> String {
+        match self.upstream_status {
+            Some(us) if us != self.status => format!("{}→{us}", self.status),
+            _ => self.status.to_string(),
+        }
+    }
 }
 
 /// The per-class aggregate of the summary's `by class` block.
@@ -174,7 +192,7 @@ pub fn steps(config_path: &str, session: &str, last: Option<usize>, json: bool) 
         }
     };
     if json {
-        print_json(&rep);
+        print_json(&rep, last);
     } else {
         print_text(&rep, last);
     }
@@ -409,10 +427,6 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
             .and_then(|r| r.get("upstream_status"))
             .and_then(Value::as_u64)
             .map(|s| s as u16);
-        let status = match upstream_status {
-            Some(us) if us != rstatus => format!("{rstatus}→{us}"),
-            _ => rstatus.to_string(),
-        };
         let wall_ms = result
             .and_then(|r| r.get("overhead_ms"))
             .and_then(Value::as_u64)
@@ -451,7 +465,8 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
             class,
             wall_ms,
             head_ms,
-            status,
+            status: rstatus,
+            upstream_status,
             flags: flags_of(rec, &provider),
         });
 
@@ -602,6 +617,21 @@ fn number_as_u32(v: &Value) -> u32 {
 
 // -- output -------------------------------------------------------------------
 
+/// §9.4.2's five words, in the table's order — `by class` prints all
+/// five (§9.4.5): a class that never occurs prints `count 0`, a count,
+/// never a zero the reader infers from an absence.
+pub const CLASSES: [&str; 5] = ["first", "append", "repeat", "shorten", "rewrite"];
+
+/// The rows `--last <n>` selects (§9.4.1): the SAME tail slice in both
+/// output forms — one rule, so `--json` cannot silently diverge from
+/// the text form. `n` at or above the row count shows them all.
+fn shown_rows(rows: &[StepRow], last: Option<usize>) -> &[StepRow] {
+    match last {
+        Some(n) if n < rows.len() => &rows[rows.len() - n..],
+        _ => rows,
+    }
+}
+
 fn money_text(m: &Option<Money>) -> String {
     match m {
         None => "—".into(),
@@ -615,13 +645,12 @@ fn money_text(m: &Option<Money>) -> String {
 
 /// The text report: the header (with the ordering rule and the
 /// `wall_ms` caveat stated, §9.4.1/§9.4.3), the 17-column rows, then
-/// the §9.4.5 summary.
-pub fn print_text(rep: &Report, last: Option<usize>) {
+/// the §9.4.5 summary. `print_text`'s whole body over a String — the
+/// seam the unit tests and the CONF cases drive (a rendering rule is
+/// tested at the renderer, not through a process's stdout).
+pub fn render_text(rep: &Report, last: Option<usize>) -> String {
     let mut out = String::new();
-    let shown: &[StepRow] = match last {
-        Some(n) if n < rep.rows.len() => &rep.rows[rep.rows.len() - n..],
-        _ => &rep.rows[..],
-    };
+    let shown: &[StepRow] = shown_rows(&rep.rows, last);
     let _ = writeln!(
         out,
         "vadis steps — session {}   (trace files read: {})",
@@ -633,7 +662,7 @@ pub fn print_text(rep: &Report, last: Option<usize>) {
     );
     let _ = writeln!(
         out,
-        "wall_ms spans the whole request on a streamed row (not the gateway's own overhead); new_tok is inferred; in/cached/out and the block facts are verified"
+        "wall_ms spans the whole request on a streamed row (not the gateway's own overhead); new_tok is inferred; in/cached/out and the block facts are verified; class names the verified block relation (kept/blocks/at), not what the client did"
     );
     if let Some(n) = last.filter(|n| *n < rep.rows.len()) {
         let _ = writeln!(out, "showing the last {n} of {}", rep.rows.len());
@@ -666,7 +695,7 @@ pub fn print_text(rep: &Report, last: Option<usize>) {
             r.class,
             r.wall_ms,
             r.head_ms.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
-            r.status,
+            r.status_text(),
             r.flags.join(" "),
         );
     }
@@ -707,23 +736,30 @@ pub fn print_text(rep: &Report, last: Option<usize>) {
         }
         let _ = writeln!(out, "{line}");
     }
-    for (class, agg) in &rep.by_class {
+    // §9.4.5: the FIVE counts, in §9.4.2's table order — an absent
+    // class prints `count 0` (a count, never a zero the reader infers
+    // from an absence; the same five keys the JSON form carries).
+    for class in CLASSES {
+        let agg = rep.by_class.get(class);
+        let count = agg.map(|a| a.count).unwrap_or(0);
+        let new_tok = agg.map(|a| a.new_tok).unwrap_or(0);
         let mut money_bits: Vec<String> = agg
-            .money_nano
-            .iter()
-            .map(|(cur, nano)| format!("{nano} nano {cur}"))
-            .collect();
-        if agg.plan_rows > 0 {
-            money_bits.push(format!("plan×{}", agg.plan_rows));
+            .map(|a| {
+                a.money_nano
+                    .iter()
+                    .map(|(cur, nano)| format!("{nano} nano {cur}"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if agg.is_some_and(|a| a.plan_rows > 0) {
+            money_bits.push(format!("plan×{}", agg.map(|a| a.plan_rows).unwrap_or(0)));
         }
-        if agg.without_usage > 0 {
-            money_bits.push(format!("—×{}", agg.without_usage));
+        if agg.is_some_and(|a| a.without_usage > 0) {
+            money_bits.push(format!("—×{}", agg.map(|a| a.without_usage).unwrap_or(0)));
         }
         let _ = writeln!(
             out,
-            "  {class:<8} count {:<4} new_tok {:<8} money {}",
-            agg.count,
-            agg.new_tok,
+            "  {class:<8} count {count:<4} new_tok {new_tok:<8} money {}",
             if money_bits.is_empty() {
                 "—".into()
             } else {
@@ -760,7 +796,13 @@ pub fn print_text(rep: &Report, last: Option<usize>) {
             );
         }
     }
-    print!("{out}");
+    out
+}
+
+/// The text report to stdout (§9.4.1): `render_text`'s one caller on
+/// the CLI path.
+pub fn print_text(rep: &Report, last: Option<usize>) {
+    print!("{}", render_text(rep, last));
 }
 
 fn format_blocks(b: i64) -> String {
@@ -773,10 +815,15 @@ fn format_blocks(b: i64) -> String {
 
 /// The `--json` form (§9.4.1): the same fields under the same names,
 /// one `rows` array plus the `summary` object — a field never appears
-/// in one form and not the other.
-pub fn print_json(rep: &Report) {
-    let rows: Vec<serde_json::Value> = rep
-        .rows
+/// in one form and not the other. `report_json` is the builder the
+/// CONF cases read, so the contract's typing is pinned where the bytes
+/// are made, not through a process's stdout.
+pub fn report_json(rep: &Report, last: Option<usize>) -> serde_json::Value {
+    // §9.4.1: `--last` selects the SAME tail slice in both forms —
+    // `rows` is the slice, `steps` stays the pre-`--last` count
+    // (§9.4.5), and the summary states the fact the text header does.
+    let shown = shown_rows(&rep.rows, last);
+    let rows: Vec<serde_json::Value> = shown
         .iter()
         .map(|r| {
             serde_json::json!({
@@ -800,15 +847,24 @@ pub fn print_json(rep: &Report) {
                 "class": r.class,
                 "wall_ms": r.wall_ms,
                 "head_ms": r.head_ms,
-                "status": r.status,
+                // §9.4.3 column 16: an INTEGER when `upstream_status`
+                // is absent or equal, the arrow string only when the
+                // two differ — the extension point ADR-057 §6.1 names.
+                "status": match r.upstream_status {
+                    Some(us) if us != r.status => serde_json::json!(r.status_text()),
+                    _ => serde_json::json!(r.status),
+                },
                 "flags": r.flags,
             })
         })
         .collect();
-    let by_class: serde_json::Value = rep
-        .by_class
+    // §9.4.5's five counts, in §9.4.2's table order: an absent class
+    // carries count 0 (the same zeros the text form prints — a count,
+    // never a zero inferred from an absence).
+    let by_class: serde_json::Value = CLASSES
         .iter()
-        .map(|(class, agg)| {
+        .map(|class| {
+            let agg = rep.by_class.get(class).cloned().unwrap_or_default();
             (
                 class.to_string(),
                 serde_json::json!({
@@ -822,40 +878,49 @@ pub fn print_json(rep: &Report) {
         })
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
-    let v = serde_json::json!({
+    let mut summary = serde_json::json!({
         "session": rep.session,
-        "rows": rows,
-        "summary": {
-            "session": rep.session,
-            "span": {
-                "from": rep.rows.first().map(|r| r.start.clone()),
-                "to": rep.rows.last().map(|r| r.start.clone()),
-                "files_read": rep.files_read,
-            },
-            "steps": rep.rows.len(),
-            "succeeded": rep.succeeded,
-            "failed": rep.failed,
-            "stream_incomplete": rep.stream_incomplete,
-            "usage_missing": rep.usage_missing,
-            "money_nano": rep.money_nano,
-            "plan_rows": rep.plan_rows,
-            "by_class": by_class,
-            "top_steps": rep.top_steps.iter().map(|(s, c, b)| serde_json::json!({
-                "step": s, "class": c, "blocks": b,
-            })).collect::<Vec<_>>(),
-            "cache": match rep.cache {
-                None => serde_json::Value::Null,
-                Some((cached, intotal)) => serde_json::json!({
-                    "cached": cached,
-                    "in": intotal,
-                    "excluded": rep.cache_excluded,
-                }),
-            },
+        "span": {
+            "from": rep.rows.first().map(|r| r.start.clone()),
+            "to": rep.rows.last().map(|r| r.start.clone()),
+            "files_read": rep.files_read,
+        },
+        "steps": rep.rows.len(),
+        "succeeded": rep.succeeded,
+        "failed": rep.failed,
+        "stream_incomplete": rep.stream_incomplete,
+        "usage_missing": rep.usage_missing,
+        "money_nano": rep.money_nano,
+        "plan_rows": rep.plan_rows,
+        "by_class": by_class,
+        "top_steps": rep.top_steps.iter().map(|(s, c, b)| serde_json::json!({
+            "step": s, "class": c, "blocks": b,
+        })).collect::<Vec<_>>(),
+        "cache": match rep.cache {
+            None => serde_json::Value::Null,
+            Some((cached, intotal)) => serde_json::json!({
+                "cached": cached,
+                "in": intotal,
+                "excluded": rep.cache_excluded,
+            }),
         },
     });
+    if let Some(n) = last.filter(|n| *n < rep.rows.len()) {
+        summary["showing"] = serde_json::json!({ "last": n, "of": rep.rows.len() });
+    }
+    serde_json::json!({
+        "session": rep.session,
+        "rows": rows,
+        "summary": summary,
+    })
+}
+
+/// The `--json` report to stdout (§9.4.1): `report_json`'s one caller
+/// on the CLI path.
+pub fn print_json(rep: &Report, last: Option<usize>) {
     println!(
         "{}",
-        serde_json::to_string_pretty(&v).expect("the report is JSON")
+        serde_json::to_string_pretty(&report_json(rep, last)).expect("the report is JSON")
     );
 }
 
@@ -971,5 +1036,110 @@ mod tests {
         assert!(r.flags.contains(&"no_usage".to_string()));
         assert_eq!(rep.usage_missing, 1);
         assert_eq!(rep.cache, None, "no ratio over unmeasured rows");
+    }
+
+    /// §9.4.1's `--last <n>` under `--json`: `rows` is the SAME tail
+    /// slice the text form prints, the summary states the fact, and
+    /// `steps` stays the pre-`--last` count (§9.4.5). A silent no-op
+    /// here was the review's defect 1.
+    #[test]
+    fn json_last_is_the_same_tail_slice() {
+        let rep = report(vec![
+            rec("2026-10-18T05:00:00.100Z", &[("a", 10)]),
+            rec("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)]),
+            rec("2026-10-18T05:00:02.100Z", &[("a", 10), ("b", 5), ("c", 1)]),
+        ]);
+        let v = report_json(&rep, Some(2));
+        let rows = v["rows"].as_array().expect("rows is an array");
+        assert_eq!(rows.len(), 2, "the same tail slice the text form prints");
+        let steps_shown: Vec<u64> = rows
+            .iter()
+            .map(|r| r["step"].as_u64().expect("step is an integer"))
+            .collect();
+        assert_eq!(steps_shown, vec![2, 3]);
+        assert_eq!(
+            v["summary"]["steps"], 3,
+            "steps stays the pre---last count (§9.4.5)"
+        );
+        assert_eq!(v["summary"]["showing"]["last"], 2);
+        assert_eq!(v["summary"]["showing"]["of"], 3);
+        // Without --last there is nothing to state: no showing member.
+        let full = report_json(&rep, None);
+        assert_eq!(full["rows"].as_array().unwrap().len(), 3);
+        assert!(
+            full["summary"].get("showing").is_none(),
+            "showing exists only when --last actually truncated"
+        );
+    }
+
+    /// §9.4.3 column 16 in the JSON form: `status` is an **integer**
+    /// when `upstream_status` is absent or equal, the `"<status>→<upstream>"`
+    /// string only when the two differ. An unconditional string was the
+    /// review's defect 2.
+    #[test]
+    fn json_status_is_integer_unless_the_upstream_differs() {
+        let mut differed = rec("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)]);
+        differed["result"]["upstream_status"] = serde_json::json!(502);
+        let rep = report(vec![
+            rec("2026-10-18T05:00:00.100Z", &[("a", 10)]),
+            differed,
+        ]);
+        let v = report_json(&rep, None);
+        let rows = v["rows"].as_array().unwrap();
+        assert!(
+            rows[0]["status"].is_u64(),
+            "a normal row's status is an integer: {:?}",
+            rows[0]["status"]
+        );
+        assert_eq!(
+            rows[1]["status"].as_str(),
+            Some("200→502"),
+            "the arrow string only when the two differ"
+        );
+        // The text form keeps the composed cell either way (§9.4.3).
+        let text = render_text(&rep, None);
+        assert!(text.contains("200→502"));
+        assert!(text.lines().any(|l| l.contains(" 200 ")));
+    }
+
+    /// §9.4.5's `by class` is **the five counts** (§9.4.2's words, in
+    /// table order), a class that never occurs printing `count 0` in
+    /// both forms — a count, never a zero inferred from an absence.
+    /// Printing only the classes present was the review's defect 4.
+    #[test]
+    fn by_class_is_the_five_counts_in_both_forms() {
+        // first + append only: no repeat, no shorten, no rewrite.
+        let rep = report(vec![
+            rec("2026-10-18T05:00:00.100Z", &[("a", 10)]),
+            rec("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)]),
+        ]);
+        let text = render_text(&rep, None);
+        assert!(
+            text.contains("class names the verified block relation"),
+            "the header carries ADR-057 §2.2's caveat (defect 3)"
+        );
+        for (word, count) in [
+            ("first", "count 1"),
+            ("append", "count 1"),
+            ("repeat", "count 0"),
+            ("shorten", "count 0"),
+            ("rewrite", "count 0"),
+        ] {
+            assert!(
+                text.lines()
+                    .any(|l| l.trim_start().starts_with(word) && l.contains(count)),
+                "the {word} line prints {count}"
+            );
+        }
+        let v = report_json(&rep, None);
+        for word in ["first", "append", "repeat", "shorten", "rewrite"] {
+            assert!(
+                v["summary"]["by_class"].get(word).is_some(),
+                "the JSON by_class carries all five words ({word})"
+            );
+        }
+        assert_eq!(v["summary"]["by_class"]["rewrite"]["count"], 0);
+        assert_eq!(v["summary"]["by_class"]["first"]["count"], 1);
+        assert_eq!(v["summary"]["by_class"]["append"]["count"], 1);
     }
 }

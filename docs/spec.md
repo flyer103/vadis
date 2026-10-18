@@ -3215,9 +3215,9 @@ promise, and no implementation has yet taken it.
 ### 9.4 `vadis steps` — one line per request in a session
 
 Status: **served.** The command reads the trace files a real `serve` wrote and prints the ledger below;
-`CONF-111…CONF-117` are the cases that witness it (the five classes, absence-as-absence, the `plan`
-label, the provider's own cache column, ADR-056's partition, the `ts` prerequisite, and the refusal
-arms), over traces **generated** by the real assembly — never hand-written fixtures. Design rationale,
+`CONF-111…CONF-118` are the cases that witness it (the five classes, absence-as-absence, the `plan`
+label, the provider's own cache column, ADR-056's partition, the `ts` prerequisite, the refusal
+arms, and the `--json` form), over traces **generated** by the real assembly — never hand-written fixtures. Design rationale,
 alternatives and the findings it registers:
 [`design/decisions/ADR-057-the-step-ledger.md`](../design/decisions/ADR-057-the-step-ledger.md).
 
@@ -3231,7 +3231,7 @@ cache say, which account paid, what did it cost — and when the prefix broke, w
 | Form | `vadis steps --session <key> --config <file> [--last <n>] [--json]` |
 | `--session` | **required**; the key is `identity.session` verbatim (the client's `prompt_cache_key`). A record whose `identity.session` is null belongs to no session and is never shown |
 | `--config` | **required**, as for `stats` (§9.2): the money column needs the price table that priced the record, and the `plan` label needs the roster's `account:` (§4.6) |
-| `--last <n>` | optional; prints the last *n* steps with the header stating `showing the last n of N` |
+| `--last <n>` | optional; prints the last *n* steps with the header stating `showing the last n of N`. Under `--json` the same rule selects the `rows` array (the same tail slice), the summary states it as `showing: {last, of}`, and `steps` stays the pre-`--last` count (§9.4.5) — the flag is never a no-op in either form |
 | `--json` | the same fields under the same names, plus the summary object — a field never appears in one form and not the other |
 | Input medium | the trace files under the config's `trace.dir` (§4.1), **only**. The command does not read the store (§4.5), `/state/events` (§4.18), `/health` (§9.1) or `/metrics` (§4.16), and it makes no upstream call |
 | Concurrency with `serve` | none required: the trace is append-only and readable while the gateway runs, so this surface has **no live-gateway fallback mode** and no `(gateway)` label |

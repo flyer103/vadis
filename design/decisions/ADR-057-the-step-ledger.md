@@ -483,6 +483,7 @@ A capability that lands only in `crates/` and `book/` is invisible on the three 
 | **`ADR-057`** | this file |
 | **spec `§9.4`** | the surface's contract (`§9.1`/`§9.2` are the served read-outs, `§9.3` the not-served list; numbering is by landing time, as `§4.20` followed `§4.19`) |
 | **`CONF-111…CONF-117`** | spent by the implementing card (the seven limbs of §4, one case each), allocated from `DESIGN` §12.8's `CONF-01…CONF-110` heading — the draft itself allocated none, as promised |
+| **`CONF-118`** | spent by the review-repair card that followed the L review's REQUEST CHANGES (2026-10-18): the `--json` form read where the bytes are made (`report_json`/`render_text`), pinning `--last`'s tail slice, column 16's integer typing, §9.4.5's five counts in both forms and §2.2's header caveat. No §2 ruling moved — the fixes implement §2.1–§2.5 as written; §2.4's `showing: {last, of}` summary member is the one shape addition (§9.4.1's `--last` row states it) |
 
 ### 8.2 What this draft adds to the documents
 
