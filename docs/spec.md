@@ -3187,12 +3187,12 @@ Five conventions this report obeys, each of which has bitten someone:
 
 ### 9.3 Surfaces that are **not** served in v0.1
 
-`vadis replay --trace … --config …` (DESIGN §9's same-code-path replay) and `vadis trace tail` are
-**planned, not served**:
+`vadis replay --trace … --config …` (DESIGN §9's same-code-path replay), `vadis trace tail` and
+`vadis steps` (§9.4) are **planned, not served**:
 
-- `vadis replay` and `vadis trace tail` are not subcommands of this binary: the CLI accepts `serve` and
-  `stats`, and any other subcommand is refused by the argument parser with a usage error and a **non-zero
-  exit** — never a silently ignored flag.
+- none of the three is a subcommand of this binary: the CLI accepts `serve`, `stats` and `setup`, and any
+  other subcommand is refused by the argument parser with a usage error and a **non-zero exit** — never a
+  silently ignored flag.
 
 **`GET /metrics` has left this list.** It is **served**, and its shape was frozen by the change that
 implements it, exactly as the bullet that stood here said it would be: the metric contract is **§4.16**, the
@@ -3211,6 +3211,138 @@ the trace record of §6 **is** the interface: append-only JSONL, one decision re
 any JSON tool. `vadis replay` in particular is the analysis harness's prerequisite (DESIGN §9, ADR-005 item 3)
 and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
 promise, and no implementation has yet taken it.
+
+### 9.4 `vadis steps` — one line per request in a session
+
+Status: **contracted, not served.** The command does not exist in this binary (§9.3). The contract below
+is frozen by the change that implements it — its shape may not drift between now and then without an
+amendment to this section, and the change that lands it flips this line to **served** and names the case
+that witnesses it. Design rationale, alternatives and the findings it registers:
+[`design/decisions/ADR-057-the-step-ledger.md`](../design/decisions/ADR-057-the-step-ledger.md).
+
+The surface answers one question: **inside this session, what did each step send, what did the provider's
+cache say, which account paid, what did it cost — and when the prefix broke, which block broke it.**
+
+#### 9.4.1 The command and its inputs
+
+| Property | Contract |
+|---|---|
+| Form | `vadis steps --session <key> --config <file> [--last <n>] [--json]` |
+| `--session` | **required**; the key is `identity.session` verbatim (the client's `prompt_cache_key`). A record whose `identity.session` is null belongs to no session and is never shown |
+| `--config` | **required**, as for `stats` (§9.2): the money column needs the price table that priced the record, and the `plan` label needs the roster's `account:` (§4.6) |
+| `--last <n>` | optional; prints the last *n* steps with the header stating `showing the last n of N` |
+| `--json` | the same fields under the same names, plus the summary object — a field never appears in one form and not the other |
+| Input medium | the trace files under the config's `trace.dir` (§4.1), **only**. The command does not read the store (§4.5), `/state/events` (§4.18), `/health` (§9.1) or `/metrics` (§4.16), and it makes no upstream call |
+| Concurrency with `serve` | none required: the trace is append-only and readable while the gateway runs, so this surface has **no live-gateway fallback mode** and no `(gateway)` label |
+| Ordering | by `(ts, the order the rows appear in the trace files)`. `ts` is the request's **start** (§6) and a row is written when the request ends, so a tie is ordered by **completion**, which the header states |
+| Exit code | `0` when a report is printed; `2` on a load or parse refusal, a bad flag, or a session with no records — the convention `stats` uses |
+
+#### 9.4.2 The step relation
+
+For step *n*, `L(n)` is the ordered list of `prefix.blocks[i].hash` (§6). `lcp` is the length of the
+longest common prefix of `L(n−1)` and `L(n)`.
+
+| `class` | Predicate |
+|---|---|
+| `first` | *n* is the session's first record |
+| `append` | `lcp == len(L(n−1))` and `len(L(n)) > lcp` |
+| `repeat` | `L(n−1) == L(n)` |
+| `shorten` | `lcp == len(L(n))` and `len(L(n)) < len(L(n−1))` |
+| `rewrite` | `0 < lcp < min(len(L(n−1)), len(L(n)))` |
+
+`class` is a **name over a verified relation**, never a statement of the client's intent: `shorten` does
+not say "compaction" and `rewrite` does not say "edited message". Every row therefore carries the
+relation itself (`kept`, `blocks`, `at`), and a reader who needs the fact reads those.
+
+The block index is vadis's own enumeration order of the client's bytes, **not** the provider's template
+order; the cache column is therefore the provider's own counter (§9.4.3), never a figure derived from the
+block list.
+
+#### 9.4.3 The row
+
+| # | Key | Type | Source | Label |
+|---|---|---|---|---|
+| 1 | `step` | integer | assigned by the command, 1-based within the session — **not** `identity.turn_index` | derived |
+| 2 | `start` | RFC3339 | `ts` (§6), the request's start | measured |
+| 3 | `gap_ms` | integer \| null | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; printed as measured, including a negative value; **null** when the two `ts` fall in one second, or for `n = 1` | derived |
+| 4 | `route` | string | `decision.provider` + `/` + `decision.model`; the empty route prints as null | measured |
+| 5 | `in` | integer \| null | `usage.input_total` | **verified** |
+| 6 | `cached` | integer \| null | `usage.input_cached` | **verified** |
+| 7 | `out` | integer \| null | `usage.output` | **verified** |
+| 8 | `money` | amount \| `"plan"` \| null | `cost.total` with `cost.currency`; the literal `plan` when the serving provider's roster entry declares `account: coding_plan` (§4.6) | measured / config-derived |
+| 9 | `blocks` | integer | `len(L(n)) − lcp` when positive (printed `+k`), `lcp − len(L(n))` when negative (`−k`), `0` for `repeat` | **verified** |
+| 10 | `kept` | integer | `lcp` | **verified** |
+| 11 | `at` | `"#<index>:<kind>"` \| null | the first diverging block's index and `kind`; null for `append`, `first`, `repeat` | **verified** |
+| 12 | `new_tok` | integer | `Σ prefix.blocks[i ≥ lcp].tokens` — a proportional attribution of the measured total (GAP-Q14) | **inferred** |
+| 13 | `class` | enum(5) | §9.4.2 | derived |
+| 14 | `wall_ms` | integer | `result.overhead_ms`. **On a streamed record this spans the whole request, so it is not the gateway's own overhead** — `result.upstream_ms` is head arrival on that path | measured |
+| 15 | `head_ms` | integer \| null | `result.upstream_ms` | measured |
+| 16 | `status` | integer, or `"<status>→<upstream_status>"` | `result.status`, plus the upstream's when the two differ | measured |
+| 17 | `flags` | array of strings | §9.4.4 | derived |
+
+**Absence is printed as an absence.** A null in columns 3, 4, 5-8, 11 and 15 means the record cannot
+carry the figure — never `0`, never a guess (§7). A record with `usage_missing: true` prints null in
+columns 5-8 (the cost was never computed) and carries the `no_usage` flag.
+
+#### 9.4.4 The flag vocabulary (closed)
+
+Each flag is one predicate over one field of the record:
+
+| Flag | Predicate |
+|---|---|
+| `trunc` | `errors[]` holds an entry with `details.error_class == "stream_truncated"` (§6, §4.20) |
+| `no_usage` | `usage_missing == true` |
+| `cachereplay` | the record carries the `cache` group (§4.17, ADR-042) |
+| `xform` | `transforms[]` is non-empty |
+| `failover=<route>` | `result.failover_from` present; the value verbatim |
+| `plan=<from>→<to>` | `result.plan_switch` present (§4.6); the two routes verbatim |
+| `no_route` | `decision.provider` is empty — a refusal after the guard and before any attempt |
+| `key=<i>` | `decision.key_index` present (§4.6, ADR-049) — the index, never a credential |
+
+#### 9.4.5 The summary
+
+Printed after the rows; under `--json` it is the `summary` object. Every figure restates printed rows —
+the surface computes nothing the rows do not carry, and defines no metric (§6's definitions are the only
+ones).
+
+| Line | Content | Rule |
+|---|---|---|
+| `session` | the key verbatim | never normalised |
+| `span` | `first ts .. last ts`, and the number of trace files read | this is the surface's window, stated by the session's own ends |
+| `steps` | the number of rows printed before `--last` | — |
+| `succeeded` / `failed` / `stream_incomplete` | three counts | **§6's three-bucket predicate, reused verbatim**; the sum equals `steps` |
+| `usage missing` | a count | orthogonal to the three buckets (§6); those rows are excluded from every ratio and from every money sum |
+| `money` | one line per currency, plus `plan rows: P (marginal 0)` | a sum never crosses a currency (§4.8); plan rows are counted and never added to a currency line |
+| `by class` | the five counts, each with `new_tok` and money under the same labels | carries the row-level labels through |
+| `top steps` | the five largest `new_tok`, as `#step (class, +k blocks)` | — |
+| `cache` | `Σcached / Σin` over rows that carry usage, with the excluded count | a ratio of measured figures; null when no row carries usage. It is not a saving (§7) |
+
+A **reused session key** is not split into several sessions: the span and a large `gap_ms` are the
+reader's evidence, and the command invents no boundary.
+
+#### 9.4.6 What the surface must not print
+
+- **Content** of any kind — messages, tool schemas' text, tool arguments, tool results, reasoning, or the
+  response. The trace carries hashes and counts (§6, ADR-005); content capture is `tee` (§4.4), which this
+  surface does not read.
+- A **duration for an in-flight request** — a record exists only when the request ends.
+- A **saving**, a "tokens saved", or any counterfactual: `new_tok` is a cost, `cache` is a measured ratio
+  (§7).
+- A **ratio derived from the block list** — the provider's own `input_cached` is the only cache figure.
+- Any **window, rate or extrapolation** beyond the session's own span; `stats` (§9.2) is the window
+  surface.
+- A **client column** — `identity.client` is a constant in this build (ADR-057 §9 F1); the column arrives
+  with the change that fills the field.
+
+#### 9.4.7 The prerequisite this section depends on
+
+Column 2 and column 3 are arithmetic over `ts`, and `ts` carries the fraction §6 says it carries **only
+after** the writer's repair (ADR-057 §2.6, §6.1): today's writer passes a whole second to a formatter
+that multiplies by 1000, so every record in a 14-day corpus ends `.000Z`. The contract here takes §6's
+sentence as normative — the fraction is present — and a record whose fraction is `000` is read as the
+older vintage (truncated to the second), never as an instant that fell exactly on the second. The
+command may not ship before the repair: with a one-second floor both `start` and `gap_ms` would be wrong
+whenever they are small.
 
 ## Publication note (2026-10-03, R62-2)
 

@@ -1914,6 +1914,29 @@ only as `provider/model` stays **unlisted** by design (the alias namespace is th
 book says so). Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract
 or the L1 envelope (AGENTS 9 / ADR-012).
 
+**Register line (2026-10-18, `ADR-057` — the step ledger; **drafted, not ruled**, spelling that out because every
+other paragraph here records a decision).** `ADR-057` (`design/decisions/ADR-057-the-step-ledger.md`) proposes
+one read-out surface, `vadis steps --session <key> --config <file>`: one line per request of a session, its
+**step class** derived from the block-hash relation between two consecutive `prefix.blocks[]`
+(`append`/`shorten`/`rewrite`/`repeat`/`first`), the provider's own `usage.input_cached` as the cache column,
+the currency-labelled cost with the literal `plan` for a `coding_plan` route, the first diverging block's index
+and kind, and an **inferred** `new_tok`. `docs/spec.md` **§9.4** is the contract text, written in the
+*contracted, not served* shape `§9.3` names; **no `CONF` id, no `GAP-Q` id and no round number are spent** —
+this line is a proposal, and the card that lands the reducer takes the next free `CONF` id from §12.8's heading
+(`CONF-01…CONF-110` at this HEAD) and freezes §4's limb outline into files. **Three findings ride with it, and
+none is repaired here** (they are `ADR-057` §9's, not this section's): (i) `identity.client` is the literal
+`"other"` at **every** writer while its contract names four values (`trace.rs:84-86`; measured 8,260/8,260
+records) — so the surface prints **no** client column; (ii) `identity.turn_index` is `requests_seen + 1` where
+`requests_seen` counts **bindings**, not requests (`forward.rs:377-389`, `vadis-store/src/lib.rs:416-445`;
+measured 7,036/8,260 records report `2`) — the surface assigns its **own** step ordinal and never reads the
+field, and a repair must leave ADR-014's probe gate (`turn_index == 1`) untouched; (iii) `ts` is written by a
+formatter that is *named* for milliseconds and *given* seconds (`accounting.rs:724-730`, called at `:535`) while
+a correct µs twin lives in the same crate (`health.rs:461-475`) — measured: every record in a 14-day corpus
+ends `.000Z`. **(iii) is the one thing here that touches product code**, and only as the surface's
+prerequisite: one formatter, microseconds, `AccountCtx` carrying the same read's `now_us`, and two in-crate unit
+tests moved (`ADR-057` §5, §6.1). Nothing here moves a gate definition, a threshold, the corpus, the loop replay
+contract or the L1 envelope (AGENTS 9 / ADR-012), and no surface shape is frozen until the owner rules.
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**

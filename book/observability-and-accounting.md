@@ -157,11 +157,13 @@ conventions are the table above): you can tell a measured number from an estimat
 the report, not afterwards. The field-by-field shape, each figure's provenance and which record
 it comes from are [`docs/spec.md` §9](../docs/spec.md).
 
-Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and
-cache over a fixed trace through the same code path that served it) and **`vadis trace tail`**
-(follow the live decision stream). They are planned; the report above does not
-depend on them. Until they land, the trace file itself is the interface — one decision record
-per request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
+Three things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
+fixed trace through the same code path that served it), **`vadis trace tail`** (follow the live decision
+stream), and **`vadis steps`** (one line per request of a session — what each step sent, what the provider's
+cache said, which account paid, what it cost, and which block broke the prefix when one did; its contract is
+[`docs/spec.md` §9.4](../docs/spec.md), written but not yet implemented). They are planned; the report above
+does not depend on them. Until they land, the trace file itself is the interface — one decision record per
+request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
 reason a surface's shape is frozen only by the change that implements it is the rule in
 [`docs/spec.md` §9.3](../docs/spec.md).
 
