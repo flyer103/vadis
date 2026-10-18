@@ -67,6 +67,14 @@
 //!   asserted as a computed relation, never a snapshot. Green on
 //!   both trees; a failure here is a stop-and-report.
 //!
+//! The demotion assertion is ADR-056 §5 **A4**: the payload's shape is
+//! §6.2's one shape — the six members `rebuild_cooldown` reads — so the
+//! case asserts the five value members and the key set, and takes
+//! `until_us` (a wall-clock instant, different every run) from the
+//! projection row it was written with: the payload and the projection
+//! carry ONE value. Leg (b)'s two arms are compared on the five value
+//! members only, because each arm's `until_us` belongs to its own run.
+//!
 //! (The R29-1 freeze §5(d)'s optional idle-bound form reaches the
 //! same `StreamRead::Failed` arm `read_chunk` already maps for
 //! CONF-13/CONF-30's fixtures; the abort fixtures here drive both
@@ -78,7 +86,7 @@
 #![forbid(unsafe_code)]
 
 use vadis_conformance::testkit::{self, CannedResponse, PlanRig, RecordedRequest, SseChunk};
-use vadis_core::store::{Query, QueryRow, Store as _};
+use vadis_core::store::{Projection, Query, QueryRow, Store as _};
 
 /// The testkit plan rig's configured `session.ttl: 11h`, in µs
 /// (CONF-80(a)'s relation, the same constant CONF-81 asserts).
@@ -193,12 +201,43 @@ fn events(dir: &std::path::Path) -> Vec<vadis_core::store::StoredEvent> {
     events
 }
 
-/// The `error.classified` rows of one request, in event order.
-fn classified(dir: &std::path::Path, request_id: &str) -> Vec<serde_json::Value> {
+/// The `error.classified` rows of one request, in event order, with the
+/// row's own `ts_us` — the instant the row's `demotion.until_us` is
+/// anchored on (A4's arithmetic bound).
+fn classified(dir: &std::path::Path, request_id: &str) -> Vec<(serde_json::Value, i64)> {
     events(dir)
         .into_iter()
         .filter(|e| e.kind_raw == "error.classified" && e.request_id.as_deref() == Some(request_id))
-        .map(|e| e.payload)
+        .map(|e| (e.payload, e.ts_us))
+        .collect()
+}
+
+/// Every `provider_cooldown` projection row, verbatim:
+/// `(scope, provider, model, until_us, reason)`.
+///
+/// Read through the projection dump, **not** `Query::Cooldown`: the
+/// serving read is `until_us > now`, and this rig's demotion lives
+/// exactly **one second** (`Retry-After: 1`), so a post-stop serving
+/// read could answer "no row" merely because the test was slow. The
+/// row's live-ness is witnessed separately, through `/health`, while
+/// the rig runs; this is the same row without the liveness predicate.
+fn cooldown_rows(dir: &std::path::Path) -> Vec<(String, String, String, i64, String)> {
+    let store = vadis_store::SqliteStore::open_read_only(&dir.join("state/vadis.db")).unwrap();
+    store
+        .projection_rows(Projection::ProviderCooldown)
+        .unwrap()
+        .into_iter()
+        .map(|r| {
+            let f: Vec<&str> = r.split('|').collect();
+            assert_eq!(f.len(), 6, "provider_cooldown row shape: {r}");
+            (
+                f[0].to_string(),
+                f[1].to_string(),
+                f[2].to_string(),
+                f[3].parse::<i64>().expect("until_us"),
+                f[4].to_string(),
+            )
+        })
         .collect()
 }
 
@@ -329,7 +368,7 @@ fn spill_facts(
     // Fact 1 — the classification row and its demotion member.
     let rows = classified(dir, &spill_req);
     assert_eq!(rows.len(), 1, "exactly one error.classified row");
-    let p = &rows[0];
+    let (p, ts_us) = (&rows[0].0, rows[0].1);
     assert_eq!(
         p["reason"].as_str().unwrap(),
         expect_reason,
@@ -346,10 +385,69 @@ fn spill_facts(
     assert_eq!(p["matched"].as_str().unwrap(), expect_matched);
     let demotion = p["demotion"].clone();
     if expect_reason == "quota_exhausted" {
+        // A4 (ADR-056 §5): the payload is §6.2's ONE shape — the six
+        // members `rebuild_cooldown` reads. Five of them are values this
+        // rig fixes; `until_us` is a wall-clock instant (`now + ttl`),
+        // so it is asserted against the projection row it was written
+        // with, never against a literal.
+        let d = demotion.as_object().expect("the demotion is an object");
+        let mut keys: Vec<&str> = d.keys().map(String::as_str).collect();
+        keys.sort_unstable();
         assert_eq!(
-            demotion,
-            serde_json::json!({"scope": "provider", "ttl_s": 1}),
+            keys,
+            ["model", "provider", "reason", "scope", "ttl_s", "until_us"],
+            "the demotion carries exactly the six members a rebuild reads \
+             (ADR-056 §6.2) — no more, no fewer"
+        );
+        assert_eq!(d["scope"], "provider", "a quota demotion is provider-wide");
+        assert_eq!(d["provider"], "p-plan", "the provider that answered");
+        assert_eq!(
+            d["model"], "",
+            "a provider-wide row carries no model (the route rows do)"
+        );
+        assert_eq!(
+            d["ttl_s"], 1,
             "the Retry-After: 1 shrinks the demotion to one second"
+        );
+        assert_eq!(d["reason"], "quota_exhausted", "the taxonomy's own word");
+        let until_us = d["until_us"].as_i64().expect("until_us is an integer");
+
+        // The projection: the same row `rebuild_cooldown` produces, and
+        // the SAME `until_us` the payload carries (CONF-21's identity,
+        // CONF-110's idiom) — F1's whole point is that the two landings
+        // come from one number.
+        let cooldowns = cooldown_rows(dir);
+        assert_eq!(
+            cooldowns.len(),
+            1,
+            "exactly one projected row: a provider-wide demotion writes no \
+             route-scoped twin"
+        );
+        let (scope, provider, model, row_until_us, reason) = &cooldowns[0];
+        assert_eq!(
+            (
+                scope.as_str(),
+                provider.as_str(),
+                model.as_str(),
+                reason.as_str()
+            ),
+            ("provider", "p-plan", "", "quota_exhausted"),
+            "the projection row carries the payload's stable members"
+        );
+        assert_eq!(
+            until_us, *row_until_us,
+            "the payload and the projection carry ONE value (ADR-056 §6.2's \
+             two sites, one source)"
+        );
+
+        // And the shrink is measured in time, not only in the `ttl_s`
+        // label: the row's own bound is the one-second Retry-After, not
+        // the 60 s route default and not the 11 h session TTL.
+        let ttl_us = until_us - ts_us;
+        assert!(
+            (0..=2_000_000).contains(&ttl_us),
+            "the row's bound is the one-second Retry-After: {ttl_us} µs \
+             after the classification event"
         );
     } else {
         assert_eq!(demotion, serde_json::Value::Null, "no demotion");
@@ -626,13 +724,25 @@ async fn conf_82_b_streamed_arm_matches_the_buffered_element_for_element() {
     );
 
     // The comparator: strip both arms' rows to their comparable
-    // fields and assert equality.
+    // fields and assert equality. `until_us` is stripped because it is
+    // a wall-clock instant, one per run (two rigs, two clocks); each
+    // arm's own value is pinned to its own projection row inside
+    // `spill_facts` (A4), which is where the one-number identity is
+    // asserted. What the comparator states is what the two media must
+    // agree on: the five members that are *values*.
+    let stable = |d: &serde_json::Value| {
+        let mut d = d.clone();
+        if let Some(o) = d.as_object_mut() {
+            o.remove("until_us");
+        }
+        d
+    };
     assert_eq!(
         (
             str_facts.reason.as_str(),
             str_facts.action.as_str(),
             str_facts.matched.as_str(),
-            str_facts.demotion,
+            stable(&str_facts.demotion),
             str_facts.switch,
             str_facts.failover_from,
             str_facts.failover_reason.as_str(),
@@ -641,7 +751,7 @@ async fn conf_82_b_streamed_arm_matches_the_buffered_element_for_element() {
             buf_facts.reason.as_str(),
             buf_facts.action.as_str(),
             buf_facts.matched.as_str(),
-            buf_facts.demotion,
+            stable(&buf_facts.demotion),
             buf_facts.switch,
             buf_facts.failover_from,
             buf_facts.failover_reason.as_str(),
