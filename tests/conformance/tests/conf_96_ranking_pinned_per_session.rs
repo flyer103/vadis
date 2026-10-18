@@ -21,7 +21,6 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
 
 use vadis_conformance::testkit;
 
@@ -136,20 +135,6 @@ fn http_get(addr: &str, path: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("health json")
 }
 
-/// Waits until the accepted reload shows on `/health` (the digest moved).
-/// 240 x 250ms = 60s: the same window CONF-107 limb (g) landed — an
-/// 18s reload was measured under load, 60s is ~3x that, still bounded.
-fn wait_for_reload(addr: &str, before: &str) {
-    for _ in 0..240 {
-        let h = http_get(addr, "/health");
-        if h["config"]["config_digest"].as_str() != Some(before) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    panic!("the reload never showed on /health");
-}
-
 fn trace_records(dir: &std::path::Path) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir.join("state/traces")).expect("trace dir") {
@@ -200,7 +185,13 @@ async fn conf_96_a_live_session_keeps_its_candidate_across_a_reload() {
         ),
     )
     .unwrap();
-    wait_for_reload(&r.listen_addr, &before);
+    // The shared reload window: the testkit's single budget
+    // ([`testkit::RELOAD_DIGEST_BUDGET`]), not this case's own constant.
+    testkit::wait_for_digest_move(
+        &r.listen_addr,
+        &before,
+        "the reload never showed on /health",
+    );
 
     // Turn 2 of the SAME session: the pin holds.
     let (s2, _b2, _h2) = post(&r.listen_addr, "S");

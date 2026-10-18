@@ -715,6 +715,57 @@ pub mod testkit {
     }
 
     // -----------------------------------------------------------------
+    // Reload observation (CONF-96/107/108's shared window)
+    // -----------------------------------------------------------------
+
+    /// The single budget for observing an accepted config reload through
+    /// `/health` (CONF-96's technique: rewrite the file, then wait until
+    /// `config_digest` moves). Measured evidence: under the R74-1b
+    /// full-suite load the reload reached `/health` at 71.61 s
+    /// (conf_107 limb (g)); an isolated run of the same limb lands in
+    /// 25.87 s. The budget is >= 2x the worst observation
+    /// (2 x 71.61 s ≈ 143 s, rounded to 150 s). The window is patience,
+    /// not an assertion: a reload that never lands still fails — just
+    /// later.
+    pub const RELOAD_DIGEST_BUDGET: Duration = Duration::from_secs(150);
+
+    /// Waits until `/health`'s `config_digest` moves away from `before`,
+    /// polling every 250 ms for at most [`RELOAD_DIGEST_BUDGET`]. On
+    /// exhaustion, panics with `message` — the calling case's own failure
+    /// sentence — plus the budget it waited.
+    pub fn wait_for_digest_move(addr: &str, before: &str, message: &str) {
+        let polls = (RELOAD_DIGEST_BUDGET.as_millis() / 250) as u32;
+        for _ in 0..polls {
+            if health_config_digest(addr) != before {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        panic!("{message} — the digest never moved within {RELOAD_DIGEST_BUDGET:?}");
+    }
+
+    /// `/health`'s `config.config_digest`. The body is the server's own
+    /// serde_json output, so the key is located by its exact serialized
+    /// form (the lib target does not depend on serde_json; dev-target
+    /// cases parse the body with serde proper).
+    fn health_config_digest(addr: &str) -> String {
+        let mut s = TcpStream::connect(addr).expect("/health connects");
+        let req = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).unwrap();
+        let mut buf = String::new();
+        s.read_to_string(&mut buf).expect("/health answers");
+        let (head, body) = buf.split_once("\r\n\r\n").expect("/health body");
+        assert!(
+            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200"),
+            "/health answers 200, got {head}"
+        );
+        body.split_once("\"config_digest\":\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(digest, _)| digest.to_string())
+            .expect("config_digest is a string")
+    }
+
+    // -----------------------------------------------------------------
     // The plan-first rig (CONF-32…, spec §4.6 / ADR-014): two mock
     // upstreams — one `account: coding_plan`, one `account: api` serving
     // the same model id — plus the real `serve` assembly, so every

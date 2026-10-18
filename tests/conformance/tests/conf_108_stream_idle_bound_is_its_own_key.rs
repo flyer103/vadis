@@ -501,22 +501,17 @@ async fn conf_108_d_reload_applies_to_the_next_request_only() {
     .unwrap();
 
     // The reload is applied (not refused): the digest moves, no restart.
-    // The window is the repo's load-tolerant value (CONF-107 limb (g),
-    // R74-PRE): 240 × 250 ms = 60 s. A measured reload reaches `/health`
-    // in ~18 s under a full-suite load, so a 10 s window judged a healthy
-    // landing red two runs in five; the window is patience, not an
-    // assertion — a reload that never happens still fails at 60 s.
-    let mut applied = false;
-    for _ in 0..240 {
-        if config_digest(&addr) != digest_before {
-            applied = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(250));
-    }
-    assert!(
-        applied,
-        "the new key is RELOADABLE (spec §4.15): the digest must move"
+    // The window is the testkit's shared one
+    // ([`testkit::RELOAD_DIGEST_BUDGET`], 150 s): a reload measured at
+    // 71.61 s under the R74-1b full-suite load outlived this case's own
+    // 60 s window, so the budget — one owner, >= 2x that worst
+    // observation — lives in the testkit now. The window is patience,
+    // not an assertion: a reload that never happens still fails, just
+    // later.
+    testkit::wait_for_digest_move(
+        &addr,
+        &digest_before,
+        "the new key is RELOADABLE (spec §4.15): the digest must move",
     );
 
     let (status1, elapsed1) = first.join().expect("request #1 finished");
