@@ -119,7 +119,7 @@ pub fn mode_refused_record(
     request_id: &str,
     proto_in: WireApi,
     failure: &ForwardFailure,
-    now_epoch_s: u64,
+    now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
 ) -> vadis_core::trace::DecisionRecord {
@@ -131,7 +131,7 @@ pub fn mode_refused_record(
 
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
-        ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        ts: crate::accounting::rfc3339_millis(now_us),
         config_digest: config_digest.to_string(),
         identity: IdentityRec {
             request_id: request_id.to_string(),
@@ -737,6 +737,7 @@ impl Forwarder {
                 decision_ms: facts.decision_ms,
                 started: facts.started,
                 now_epoch_s: facts.now_epoch_s,
+                now_us: facts.now_us,
                 plan_switch: facts.plan_switch.clone(),
                 // The one value (spec §6): read at session resolution,
                 // before this request's binding write — not recomputed
@@ -1065,6 +1066,7 @@ impl Forwarder {
                     decision_ms,
                     started,
                     now_epoch_s,
+                    now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
@@ -1147,6 +1149,7 @@ impl Forwarder {
                     decision_ms,
                     started,
                     now_epoch_s,
+                    now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
@@ -1646,6 +1649,7 @@ impl Forwarder {
                                 decision_ms,
                                 started,
                                 now_epoch_s,
+                                now_us: facts.now_us,
                                 plan_switch: facts.plan_switch.clone(),
                                 sticky_hit,
                                 transform_mode: facts.transform_mode,

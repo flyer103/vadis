@@ -62,13 +62,13 @@ pub fn too_large_record(
     proto_in: WireApi,
     limit: usize,
     content_length: Option<u64>,
-    now_epoch_s: u64,
+    now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
 ) -> DecisionRecord {
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
-        ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        ts: crate::accounting::rfc3339_millis(now_us),
         config_digest: config_digest.to_string(),
         identity: IdentityRec {
             request_id: request_id.to_string(),
@@ -169,7 +169,7 @@ mod tests {
             WireApi::Chat,
             4096,
             Some(5000),
-            1_789_256_462,
+            1_789_256_462_000_000,
             2,
             "0123456789abcdef",
         );

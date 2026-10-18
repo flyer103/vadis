@@ -115,7 +115,7 @@ pub fn refused_message(verdict: &AuthVerdict) -> String {
 
 /// The refused request's record (spec §6's pre-pipeline class, field by
 /// field — the spec table is authoritative; this is where it is built).
-/// `now_epoch_s` and `overhead_ms` are the guard's own clock reads; the
+/// `now_us` (µs) and `overhead_ms` are the guard's own clock reads; the
 /// `ts` uses the record formatter this crate already owns (§12.6) rather
 /// than a second copy of it. `config_digest` is the loaded
 /// configuration's identity (spec §6's boundary table: the same value
@@ -136,7 +136,7 @@ pub fn refused_record(
     request_id: &str,
     proto_in: &str,
     verdict: &AuthVerdict,
-    now_epoch_s: u64,
+    now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
 ) -> DecisionRecord {
@@ -146,7 +146,7 @@ pub fn refused_record(
     };
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
-        ts: crate::accounting::rfc3339_millis(now_epoch_s),
+        ts: crate::accounting::rfc3339_millis(now_us),
         config_digest: config_digest.to_string(),
         identity: IdentityRec {
             request_id: request_id.to_string(),
@@ -370,7 +370,14 @@ mod tests {
     fn refused_record_matches_the_spec6_table() {
         let g = AuthGate::new("tok-conf45-secret".into());
         let v = g.admits(&hdrs(&[("authorization", "Bearer nope")]));
-        let rec = refused_record("req-1", "chat", &v, 1_789_256_462, 3, "0123456789abcdef");
+        let rec = refused_record(
+            "req-1",
+            "chat",
+            &v,
+            1_789_256_462_000_000,
+            3,
+            "0123456789abcdef",
+        );
         let j = serde_json::to_value(&rec).unwrap();
         assert_eq!(j["schema_version"], 2); // v2: cost.currency (ADR-018)
         assert_eq!(j["config_digest"], "0123456789abcdef"); // additive, version unmoved (ADR-037 D6)

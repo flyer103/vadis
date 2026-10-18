@@ -33,6 +33,9 @@ pub const TRACE_SCHEMA_VERSION: u16 = 2;
 pub struct DecisionRecord {
     pub schema_version: u16,
     /// RFC3339 UTC with millisecond precision, e.g. `2026-09-19T07:41:02.123Z`.
+    /// The value is the request's **start**. A record whose fraction is
+    /// `000` says the writing vintage truncated to the second (pre
+    /// ADR-057 §2.6), never that the request began exactly on the second.
     pub ts: String,
     /// The identity of the **effective configuration** that priced this
     /// record (ADR-037 D6; spec §6, §4.14): the byte digest

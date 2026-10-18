@@ -499,15 +499,15 @@ pub async fn serve(config_path: &str) -> i32 {
                 // Write, then answer — the same order the auth guard uses
                 // (the observation exists before the client is told); a
                 // trace write failure is §8's non-blocking case.
-                let now_epoch_s = std::time::SystemTime::now()
+                let now_us = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_micros() as i64)
                     .unwrap_or(0);
                 let record = vadis_proxy::mode_refused_record(
                     &request_id,
                     proto_in,
                     &f,
-                    now_epoch_s,
+                    now_us,
                     0,
                     forwarder
                         .trace
@@ -719,16 +719,16 @@ pub async fn serve(config_path: &str) -> i32 {
             .and_then(|s| s.parse::<u64>().ok());
         let refuse = |declared: Option<u64>| {
             let request_id = request_id();
-            let now_epoch_s = std::time::SystemTime::now()
+            let now_us = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
+                .map(|d| d.as_micros() as i64)
                 .unwrap_or(0);
             let record = vadis_proxy::too_large_record(
                 &request_id,
                 st.proto_in,
                 st.limit,
                 declared,
-                now_epoch_s,
+                now_us,
                 started.elapsed().as_millis() as u32,
                 rev.forwarder
                     .trace
@@ -1045,15 +1045,15 @@ pub async fn serve(config_path: &str) -> i32 {
             Some(verdict @ vadis_proxy::AuthVerdict::Refused { .. }) => {
                 let request_id = request_id();
                 let started = std::time::Instant::now();
-                let now_epoch_s = std::time::SystemTime::now()
+                let now_us = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_micros() as i64)
                     .unwrap_or(0);
                 let record = vadis_proxy::refused_record(
                     &request_id,
                     st.proto_in,
                     &verdict,
-                    now_epoch_s,
+                    now_us,
                     started.elapsed().as_millis() as u32,
                     rev.forwarder
                         .trace

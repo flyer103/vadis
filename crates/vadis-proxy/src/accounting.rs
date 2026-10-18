@@ -101,9 +101,10 @@ pub fn quota_plan_from_cfg(cfg: &QuotaCfg) -> QuotaPlan {
 }
 
 /// Everything the accounting engine needs from the request's own facts.
-/// `now_epoch_s` is the request's single wall-clock read, threaded
-/// through — never a second read inside a computation (AGENTS
-/// constraint 2).
+/// `now_epoch_s` is the request's single wall-clock read in whole
+/// seconds (window/quota comparisons), threaded through — never a second
+/// read inside a computation (AGENTS constraint 2); `now_us` is the SAME
+/// read untruncated, the word `ts` renders (ADR-057 §2.6).
 pub struct AccountCtx<'a> {
     pub request_id: &'a str,
     /// The `request.received` row id — the trace's join anchor (CONF-24).
@@ -126,6 +127,9 @@ pub struct AccountCtx<'a> {
     pub decision_ms: u32,
     pub started: Instant,
     pub now_epoch_s: u64,
+    /// The same clock read as `now_epoch_s`, untruncated (µs) — what
+    /// `ts` renders (ADR-057 §2.6).
+    pub now_us: i64,
     /// spec §6 `result.plan_switch`: set by the forwarding path when the
     /// plan policy displaced this request's account (ADR-014); `None` on
     /// every other request (present-and-null on the wire).
@@ -532,7 +536,7 @@ impl<'a> Accountant<'a> {
 
         let mut record = DecisionRecord {
             schema_version: TRACE_SCHEMA_VERSION,
-            ts: rfc3339_millis(ctx.now_epoch_s),
+            ts: rfc3339_millis(ctx.now_us),
             // The identity of the configuration that priced this record
             // (ADR-037 D6; spec §6): the one value every record of this
             // process carries, sourced from the trace writer the record
@@ -720,12 +724,18 @@ impl<'a> Accountant<'a> {
 }
 
 /// RFC3339 UTC, millisecond precision — from the request's single clock
-/// read (`now_epoch_s`), never a second one.
-pub fn rfc3339_millis(epoch_s: u64) -> String {
-    let ms_total = epoch_s * 1000;
-    let secs = ms_total / 1000;
-    let millis = ms_total % 1000;
-    let (y, mo, d, h, mi, s) = civil_from_epoch(secs as i64);
+/// read (`now_us`, µs), never a second one. ONE implementation of the
+/// civil conversion per crate (ADR-057 §2.6): `health`'s `Option`
+/// adapter delegates here. A `.000` fraction means the instant carried
+/// no sub-second part — a record from a pre-ADR-057 vintage truncated
+/// to the second, never that the request began exactly on the second.
+pub fn rfc3339_millis(now_us: i64) -> String {
+    // div/rem_euclid so a pre-epoch instant floors into the previous
+    // civil second (and keeps a positive fraction) instead of rounding
+    // toward zero.
+    let secs = now_us.div_euclid(1_000_000);
+    let millis = now_us.rem_euclid(1_000_000) / 1_000;
+    let (y, mo, d, h, mi, s) = civil_from_epoch(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
 }
 
@@ -762,8 +772,22 @@ mod tests {
         // Anchors verified with `date -u -r` (not a snapshot: the epoch →
         // civil relation round-trips through civil_from_epoch below).
         assert_eq!(rfc3339_millis(0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(rfc3339_millis(1_789_256_462), "2026-09-12T23:41:02.000Z");
-        assert_eq!(rfc3339_millis(951_827_696), "2000-02-29T12:34:56.000Z");
+        assert_eq!(
+            rfc3339_millis(1_789_256_462_000_000),
+            "2026-09-12T23:41:02.000Z"
+        );
+        assert_eq!(
+            rfc3339_millis(951_827_696_000_000),
+            "2000-02-29T12:34:56.000Z"
+        );
+        // The whole point of the µs-taking twin (ADR-057 §2.6): a
+        // non-zero fraction must survive the formatter. Without this
+        // anchor a seconds-truncating implementation passes everything
+        // above.
+        assert_eq!(
+            rfc3339_millis(1_789_256_462_789_500),
+            "2026-09-12T23:41:02.789Z"
+        );
     }
 
     #[test]

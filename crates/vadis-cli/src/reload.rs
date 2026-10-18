@@ -1683,7 +1683,7 @@ fallback: []
             "req-in-flight",
             vadis_core::config::WireApi::Chat.as_str(),
             &verdict,
-            1_800_000_000,
+            1_800_000_000_000_000,
             0,
             &stamped,
         );

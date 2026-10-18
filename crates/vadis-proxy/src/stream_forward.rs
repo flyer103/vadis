@@ -153,6 +153,10 @@ struct RelayCtx {
     decision_ms: u32,
     started: Instant,
     now_epoch_s: u64,
+    /// The same clock read as `now_epoch_s`, untruncated (µs) — the word
+    /// the terminal record's `ts` renders (ADR-057 §2.6), carried from
+    /// the pre-flight's ONE read (never re-read in the relay).
+    now_us: i64,
     received_event: Option<EventId>,
     /// Prefix blocks of the cleaned body (hashes only until usage
     /// attribution runs at stream end).
@@ -646,6 +650,7 @@ impl Forwarder {
                     decision_ms,
                     started,
                     now_epoch_s,
+                    now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
                     // The one value (spec §6): the read from session
                     // resolution, before this binding write.
@@ -717,6 +722,7 @@ impl Forwarder {
                     decision_ms,
                     started,
                     now_epoch_s,
+                    now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
@@ -1278,6 +1284,7 @@ impl Forwarder {
                                     decision_ms,
                                     started,
                                     now_epoch_s,
+                                    now_us: facts.now_us,
                                     received_event: facts.received_event,
                                     blocks: facts.blocks.clone(),
                                     client_requested_usage,
@@ -2309,6 +2316,7 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<Truncation
         decision_ms: ctx.decision_ms,
         started: ctx.started,
         now_epoch_s: ctx.now_epoch_s,
+        now_us: ctx.now_us,
         plan_switch: ctx.plan_switch.clone(),
         sticky_hit: ctx.sticky_hit,
         transform_mode: ctx.transform_mode,

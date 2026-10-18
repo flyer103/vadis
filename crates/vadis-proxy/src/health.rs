@@ -458,18 +458,11 @@ fn now_us() -> i64 {
 
 /// RFC3339 UTC with millisecond precision (spec §9.1's `since` format).
 /// `None` for non-positive instants (a family that never switched).
+/// This is ONLY the `Option` adapter for that sentinel (ADR-057 §2.6):
+/// the civil conversion itself is `accounting`'s single implementation,
+/// which this delegates to — no second arithmetic in this crate.
 fn rfc3339_millis(us: i64) -> Option<String> {
-    if us <= 0 {
-        return None;
-    }
-    let s = (us / 1_000_000) as u64;
-    let ms = ((us % 1_000_000) / 1_000) as u64;
-    let (y, mo, d, minute, _) = vadis_core::peak::timestamp_parts(s, vadis_core::peak::Tz::Utc);
-    let (h, mi) = (minute / 60, minute % 60);
-    let sec = s % 60;
-    Some(format!(
-        "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{sec:02}.{ms:03}Z"
-    ))
+    (us > 0).then(|| crate::accounting::rfc3339_millis(us))
 }
 
 // ADR-016 §13.3 L1c/L1d, fixed R10: the route-availability read and the
