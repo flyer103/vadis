@@ -1,5 +1,5 @@
-//! `vadis serve` / `stats` / `steps` / `setup` (DESIGN §12.1; `replay`
-//! and `trace` are named in the plan, not yet served).
+//! `vadis serve` / `stats` / `steps` / `setup` / `wrap` (DESIGN §12.1;
+//! `replay` and `trace` are named in the plan, not yet served).
 //!
 //! `serve` is fully config-driven (CONF-25) — the listen address, the
 //! plugin set and the roster come from the config file; no hardcoded
@@ -81,6 +81,7 @@ fn main() {
             force,
             backup,
         }),
+        Command::Wrap { client, args } => vadis_cli::wrap::run(&client, &args),
     };
     std::process::exit(code);
 }

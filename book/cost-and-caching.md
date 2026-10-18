@@ -414,6 +414,25 @@ reports is an estimate until a paired on/off measurement exists, so the report g
 measured per-transform saving only when that measurement lands — until then the rule file's
 numbers are shapes, not savings.
 
+For the second half — making the client send the header — you have a per-client recipe and a
+shortcut:
+
+- **codex** — declare the header on the provider entry your `model_provider`
+  names (here `router`), with the value read from an environment variable at
+  request time (codex ≥ 0.163):
+  `env_http_headers = { "X-Vadis-Transform" = "VADIS_TRANSFORM" }` in
+  `~/.codex/config.toml`, with `VADIS_TRANSFORM=transform` exported. A one-shot
+  form needs no config edit at all:
+  `codex -c 'model_providers.router.env_http_headers={"X-Vadis-Transform"="VADIS_TRANSFORM"}' …`.
+- **Claude Code** — export `ANTHROPIC_CUSTOM_HEADERS='X-Vadis-Transform: transform'` (comma-
+  separate additional headers; the client reads the variable itself).
+- **the shortcut** — `vadis wrap codex -- …` / `vadis wrap claude -- …` starts the client with
+  exactly the wiring above already applied (for codex it reads the provider id from your
+  `config.toml`'s top-level `model_provider` — read-only — and passes the override on the
+  command line). `wrap` supplies the client's own request; it is not a vadis-side switch, and
+  a client launched *without* it is still byte-identical, promise unchanged
+  ([docs/spec.md §9.3](../docs/spec.md)).
+
 ## Response caching: exact match only, off unless you ask
 
 A different kind of cache, and the smallest useful one. When a request is **byte-identical** to one this

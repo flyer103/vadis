@@ -14,13 +14,17 @@ vadis-core = { path = "../../crates/vadis-core" }
 # The testkit's mock upstream needs an async runtime (CONF-01…CONF-14);
 # declared as a normal dependency because it lives in the lib target.
 tokio = { workspace = true }
+# vadis-cli: CONF-25 drives the real `serve` assembly (lib target)
+# in-process from the cases, and CONF-120's test double
+# (`src/bin/wrap_child_double.rs`) calls the real `vadis wrap` launcher —
+# a bin target may only use normal dependencies, so the entry sits here
+# rather than under [dev-dependencies].
+vadis-cli = { path = "../../crates/vadis-cli" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-# CONF-25 drives the real `serve` assembly (lib target) in-process;
 # CONF-20..23 drive the real SQLite store; CONF-20's pipeline twin drives
 # the real Forwarder with a fake transport.
-vadis-cli = { path = "../../crates/vadis-cli" }
 vadis-store = { path = "../../crates/vadis-store" }
 vadis-proxy = { path = "../../crates/vadis-proxy" }
 # CONF-63 loads the real builtin/transform_rules engine indirectly through

@@ -3190,9 +3190,22 @@ Five conventions this report obeys, each of which has bitten someone:
 `vadis replay --trace … --config …` (DESIGN §9's same-code-path replay) and `vadis trace tail` are
 **planned, not served**:
 
-- neither is a subcommand of this binary: the CLI accepts `serve`, `stats`, `steps` and `setup`, and
-  any other subcommand is refused by the argument parser with a usage error and a **non-zero exit** —
-  never a silently ignored flag.
+- neither is a subcommand of this binary: the CLI accepts `serve`, `stats`, `steps`,
+  `setup` and `wrap`, and any other subcommand is refused by the argument parser with
+  a usage error and a **non-zero exit** — never a silently ignored flag.
+
+**`vadis wrap` is served, and it is not a read-out.** `vadis wrap <client> -- <client args…>`
+starts the named client (`codex` | `claude`) with the transform-mode header supplied through the
+client's **own** configuration mechanism — Claude Code's `ANTHROPIC_CUSTOM_HEADERS`, codex's
+`-c … env_http_headers` provider override with the value in `VADIS_TRANSFORM` — and then execs
+it: the client inherits the stdio, the process group, the signals and the exit code untouched.
+It exists because §2.1's opt-in is a request header no shipped client sends (measured: 0 of
+8,461 records), and it changes nothing about the contract it serves: the client asks, vadis
+never decides (§2.1, ADR-019), the user's client config is only ever read (never written), an
+unknown client name or a codex config naming no `model_provider` is refused with exit `2`, and
+a request from a client launched *without* `wrap` is byte-identical as before. Its witness is
+`CONF-120` (both arms: a wrapped child's record carries a non-empty `transforms[]`; the control
+child's carries none).
 
 **`GET /metrics` has left this list.** It is **served**, and its shape was frozen by the change that
 implements it, exactly as the bullet that stood here said it would be: the metric contract is **§4.16**, the

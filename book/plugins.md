@@ -37,7 +37,11 @@ fashion.
 - **Your request decides, not the config file.** A content transform happens only when the request
   itself asks for it (the `X-Vadis-Transform` header, `docs/spec.md` §2.1). There is no config key
   that enables transforming a request that did not ask, and that absence is what the passthrough
-  promise rests on.
+  promise rests on. The launcher `vadis wrap <client> -- <client args…>` exists for exactly this
+  reason: it starts the client with the header supplied through *the client's own* configuration
+  mechanism (`ANTHROPIC_CUSTOM_HEADERS` for Claude Code, a `-c … env_http_headers` override for
+  codex), so the client asks and vadis never decides — see
+  [Cost and caching](cost-and-caching.md#payload-compression-an-opt-in-mode-off-by-default).
 - **Three plugins are always resident** with no config entry of their own: the cost ledger, the quota
   guard and the sticky (session) table. They are compiled in and always on.
 - **Explicit model selection.** `auto` is an empty slot: explicit selection is the behaviour, and a

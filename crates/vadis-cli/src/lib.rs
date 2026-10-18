@@ -10,6 +10,7 @@ pub mod reload;
 pub mod setup;
 pub mod stats;
 pub mod steps;
+pub mod wrap;
 
 use clap::{Parser, Subcommand};
 
@@ -110,6 +111,19 @@ pub enum Command {
         /// Before a write, copy the target to <target>.bak
         #[arg(long)]
         backup: bool,
+    },
+    /// Launch a client with the transform-mode header supplied through the
+    /// client's own configuration mechanism (spec §2.1: the request must
+    /// ask; wrap makes the client ask, it never makes vadis decide)
+    Wrap {
+        /// The client to launch: codex | claude (the message on an unknown
+        /// name lists the supported set)
+        #[arg(value_name = "CLIENT")]
+        client: String,
+        /// The client's own args, verbatim — only collected after `--`,
+        /// so a leading `-c`/flag is never mistaken for vadis's
+        #[arg(last = true, value_name = "ARGS")]
+        args: Vec<String>,
     },
 }
 
