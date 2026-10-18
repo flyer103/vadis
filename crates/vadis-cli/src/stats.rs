@@ -456,7 +456,10 @@ pub fn stats(config_path: &str, window: &str, json: bool) -> i32 {
 // -- input -------------------------------------------------------------------
 
 /// RFC3339 UTC (`2026-09-19T07:41:02.123Z`) → epoch milliseconds.
-fn ts_to_epoch_ms(ts: &str) -> Option<i64> {
+/// `pub(crate)` for the step ledger (spec §9.4): one ts parser, two
+/// readers — `steps`' `gap_ms` and this report's window filter must
+/// never disagree about what a `ts` is worth.
+pub(crate) fn ts_to_epoch_ms(ts: &str) -> Option<i64> {
     let (date, rest) = ts.split_once('T')?;
     let mut d = date.split('-');
     let y: i64 = d.next()?.parse().ok()?;

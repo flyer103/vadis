@@ -3187,12 +3187,12 @@ Five conventions this report obeys, each of which has bitten someone:
 
 ### 9.3 Surfaces that are **not** served in v0.1
 
-`vadis replay --trace … --config …` (DESIGN §9's same-code-path replay), `vadis trace tail` and
-`vadis steps` (§9.4) are **planned, not served**:
+`vadis replay --trace … --config …` (DESIGN §9's same-code-path replay) and `vadis trace tail` are
+**planned, not served**:
 
-- none of the three is a subcommand of this binary: the CLI accepts `serve`, `stats` and `setup`, and any
-  other subcommand is refused by the argument parser with a usage error and a **non-zero exit** — never a
-  silently ignored flag.
+- neither is a subcommand of this binary: the CLI accepts `serve`, `stats`, `steps` and `setup`, and
+  any other subcommand is refused by the argument parser with a usage error and a **non-zero exit** —
+  never a silently ignored flag.
 
 **`GET /metrics` has left this list.** It is **served**, and its shape was frozen by the change that
 implements it, exactly as the bullet that stood here said it would be: the metric contract is **§4.16**, the
@@ -3214,10 +3214,11 @@ promise, and no implementation has yet taken it.
 
 ### 9.4 `vadis steps` — one line per request in a session
 
-Status: **contracted, not served.** The command does not exist in this binary (§9.3). The contract below
-is frozen by the change that implements it — its shape may not drift between now and then without an
-amendment to this section, and the change that lands it flips this line to **served** and names the case
-that witnesses it. Design rationale, alternatives and the findings it registers:
+Status: **served.** The command reads the trace files a real `serve` wrote and prints the ledger below;
+`CONF-111…CONF-117` are the cases that witness it (the five classes, absence-as-absence, the `plan`
+label, the provider's own cache column, ADR-056's partition, the `ts` prerequisite, and the refusal
+arms), over traces **generated** by the real assembly — never hand-written fixtures. Design rationale,
+alternatives and the findings it registers:
 [`design/decisions/ADR-057-the-step-ledger.md`](../design/decisions/ADR-057-the-step-ledger.md).
 
 The surface answers one question: **inside this session, what did each step send, what did the provider's
@@ -3264,7 +3265,7 @@ block list.
 |---|---|---|---|---|
 | 1 | `step` | integer | assigned by the command, 1-based within the session — **not** `identity.turn_index` | derived |
 | 2 | `start` | RFC3339 | `ts` (§6), the request's start | measured |
-| 3 | `gap_ms` | integer \| null | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; printed as measured, including a negative value; **null** when the two `ts` fall in one second, or for `n = 1` | derived |
+| 3 | `gap_ms` | integer \| null | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; printed as measured, including a negative value; **null** when the two `ts` are identical (equal at the record's millisecond resolution — the honest hole), or for `n = 1` | derived |
 | 4 | `route` | string | `decision.provider` + `/` + `decision.model`; the empty route prints as null | measured |
 | 5 | `in` | integer \| null | `usage.input_total` | **verified** |
 | 6 | `cached` | integer \| null | `usage.input_cached` | **verified** |
@@ -3336,13 +3337,15 @@ reader's evidence, and the command invents no boundary.
 
 #### 9.4.7 The prerequisite this section depends on
 
-Column 2 and column 3 are arithmetic over `ts`, and `ts` carries the fraction §6 says it carries **only
-after** the writer's repair (ADR-057 §2.6, §6.1): today's writer passes a whole second to a formatter
-that multiplies by 1000, so every record in a 14-day corpus ends `.000Z`. The contract here takes §6's
-sentence as normative — the fraction is present — and a record whose fraction is `000` is read as the
-older vintage (truncated to the second), never as an instant that fell exactly on the second. The
-command may not ship before the repair: with a one-second floor both `start` and `gap_ms` would be wrong
-whenever they are small.
+Column 2 and column 3 are arithmetic over `ts`, and `ts` carries the fraction §6 says it carries only
+after the writer's repair (ADR-057 §2.6): before it, the writer passed a whole second to a formatter
+that multiplies by 1000, so every record in a 14-day corpus ended `.000Z`. **The repair has landed**
+(same branch, commit `9731e69`): the writers take the microsecond instant, and a record whose fraction
+is `000` is read as the older vintage (truncated to the second), never as an instant that fell exactly
+on the second — which is why §9.4.3's null rule is "identical `ts`", not "one second apart". The
+command may not ship before the repair: with a one-second floor both `start` and `gap_ms` would be
+wrong whenever they are small; `CONF-116` witnesses both halves (the live repaired clock, and the
+vintage record's honest null).
 
 ## Publication note (2026-10-03, R62-2)
 

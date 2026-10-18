@@ -1,6 +1,11 @@
 //! Conformance host crate. Cases are numbered CONF-01…CONF-28 per DESIGN
 //! §12.8, living in `tests/conf_<NN>_<slug>.rs`; unimplemented paths all
 //! carry `#[ignore = "CONF-NN: depends on <item>"]`.
+//!
+//! The step-ledger rig (CONF-111…117, spec §9.4) lives in
+//! `tests/common/mod.rs` instead: it drives the real `vadis_cli::serve`
+//! assembly, which is a dev-dependency — only the mock upstream and the
+//! small blocking-HTTP helpers need to live in this lib target.
 
 #![forbid(unsafe_code)]
 

@@ -1,5 +1,5 @@
-//! `vadis serve` / `stats` / `setup` (DESIGN §12.1; `replay` and `trace`
-//! are named in the plan, not yet served).
+//! `vadis serve` / `stats` / `steps` / `setup` (DESIGN §12.1; `replay`
+//! and `trace` are named in the plan, not yet served).
 //!
 //! `serve` is fully config-driven (CONF-25) — the listen address, the
 //! plugin set and the roster come from the config file; no hardcoded
@@ -44,6 +44,17 @@ fn main() {
                 }
             };
             vadis_cli::stats::stats(&resolved.path.to_string_lossy(), &window, json)
+        }
+        Command::Steps {
+            config,
+            session,
+            last,
+            json,
+        } => {
+            // `--config` is required (spec §9.4.1): this surface takes
+            // the path as given — no discovery order behind a flag the
+            // contract says is a parse refusal when absent (limb (g)).
+            vadis_cli::steps::steps(&config, &session, last, json)
         }
         Command::Setup {
             section,

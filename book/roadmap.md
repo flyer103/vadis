@@ -14,9 +14,10 @@ record; a change that fails its gates leaves documentation and no broken code.
   and every terminal outcome lands in the trace. A content translator — the mode that would serve a
   client on a cell its provider does not declare — is still to come; the
   reporting surfaces that read those traces back out are partly served — `vadis stats`,
-  `/health` and `/metrics` — while `vadis replay`, `vadis trace tail` and `vadis steps` (one line per
-  request of a session; contract in [`docs/spec.md` §9.4](../docs/spec.md)) are planned
-  and not served ([`docs/spec.md` §9](../docs/spec.md)).
+  `/health` and `/metrics` — while `vadis replay` and `vadis trace tail` are planned
+  and not served ([`docs/spec.md` §9](../docs/spec.md)). `vadis steps` (one line per
+  request of a session) has landed since this outline was written — its contract is
+  [`docs/spec.md` §9.4](../docs/spec.md).
 - **The next step**: the content translator and the trace/observation wiring, which is what
   turns the cache, cost and latency gates from "cannot be judged" into judgeable. Until then, a
   passing change means only the parts that were measurable passed.

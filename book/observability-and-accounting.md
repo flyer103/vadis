@@ -153,16 +153,49 @@ truth, and neither prices anything you cannot already find in a record:
   window cannot be checked — and `--json` prints the same figures for a script.
 
 The point of the report is the **label on every figure**, `verified` or `inferred` (the two
-conventions are the table above): you can tell a measured number from an estimate while you read
-the report, not afterwards. The field-by-field shape, each figure's provenance and which record
-it comes from are [`docs/spec.md` §9](../docs/spec.md).
+conventions are the table above): you can tell a measured number from an estimate while you read the
+report, not afterwards. The field-by-field shape, each figure's provenance and which record it comes
+from are [`docs/spec.md` §9](../docs/spec.md).
 
-Three things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
-fixed trace through the same code path that served it), **`vadis trace tail`** (follow the live decision
-stream), and **`vadis steps`** (one line per request of a session — what each step sent, what the provider's
-cache said, which account paid, what it cost, and which block broke the prefix when one did; its contract is
-[`docs/spec.md` §9.4](../docs/spec.md), written but not yet implemented). They are planned; the report above
-does not depend on them. Until they land, the trace file itself is the interface — one decision record per
+### `vadis steps` — one session, one line per request
+
+Where `stats` answers a window-wide question, `vadis steps --session <key> --config <file>` answers a
+session-shaped one: **inside this session, which step broke my prefix, and what did each step cost?**
+It reads the trace files only (it never opens the store, so it runs while `serve` is live), orders the
+session's requests by when they started, and classifies each one by the relation between its prefix
+blocks and the previous request's — a pure hash comparison, so the class is a *name over a verified
+relation*, never a claim about what the client intended. Every row also carries the relation itself:
+how many blocks were kept, added or dropped, and the index and kind of the first block that diverged.
+
+A worked example (values illustrative — no price numbers live in this book; the authoritative price
+table is your config's):
+
+```text
+$ vadis steps --session 5f3a… --config config.yaml
+step start                  gap_ms route        in  cached out money     blocks kept at           new_tok class   wall_ms head_ms status flags
+1    2026-10-18T05:17:54.312Z —    deepseek/deepseek-chat 14409 960  512 412n USD  +22   0    —          14409  first  812    790    200
+5    2026-10-18T05:24:02.881Z 4120  deepseek/deepseek-chat 14520 14400 498 118n USD  +1    12   —           120  append 344    291    200
+9    2026-10-18T05:31:47.004Z 918  deepseek/deepseek-chat 12877 1024  812 5128n USD +4    1    #1:message  11876  rewrite 1204   990    200
+```
+
+Row 9 is the one the command exists for: the client changed something early (block `#1`, a message),
+so the twelve blocks after it were re-sent and re-priced at the cache-miss rate — `new_tok 11876`
+(**inferred**: a proportional attribution, not a count the provider made), while the `cached` column
+stays the provider's own counter (**verified**) and never a figure derived from the blocks. A row
+whose upstream reported no usage prints `—` in the token and money columns — an absence, never a zero
+— and a row served by a `coding_plan` provider prints `plan` in the money column, because allowance
+headroom is not a price.
+
+The summary after the rows restates them: the session's span, the three outcome buckets, the money per
+currency (a sum never crosses a currency, and plan rows are counted, never added), the five class
+counts, the largest five steps, and the cache ratio over the rows that carry usage. The full column
+contract is [`docs/spec.md` §9.4](../docs/spec.md); the design reasoning is
+[ADR-057](../design/decisions/ADR-057-the-step-ledger.md).
+
+Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
+fixed trace through the same code path that served it) and **`vadis trace tail`** (follow the live
+decision stream). They are planned; the reports above do not depend on them. Until they land, the
+trace file itself is the interface — one decision record per
 request, appended to `<trace.dir>/YYYY-MM-DDTHH.jsonl`, readable with any JSON tool — and the
 reason a surface's shape is frozen only by the change that implements it is the rule in
 [`docs/spec.md` §9.3](../docs/spec.md).

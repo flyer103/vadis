@@ -9,6 +9,7 @@ pub mod metrics;
 pub mod reload;
 pub mod setup;
 pub mod stats;
+pub mod steps;
 
 use clap::{Parser, Subcommand};
 
@@ -41,6 +42,27 @@ pub enum Command {
         window: String,
         /// Emit the machine-readable form (the same figures, plus the
         /// notes the human form prints on stderr)
+        #[arg(long)]
+        json: bool,
+    },
+    /// One line per request of one session, from the trace files only
+    /// (spec §9.4): what each step sent, what the provider's cache
+    /// said, which account paid, and which block broke the prefix
+    Steps {
+        /// Path to the vadis config file (resolves `trace.dir` and the
+        /// roster's `account:` entries). **Required** (spec §9.4.1): no
+        /// discovery order — a refusal, never a silent default
+        #[arg(long)]
+        config: String,
+        /// The session key, `identity.session` verbatim (the client's
+        /// `prompt_cache_key`). Required: an unkeyed request belongs to
+        /// no session and the command cannot invent one
+        #[arg(long)]
+        session: String,
+        /// Print only the last <n> steps; the header says so
+        #[arg(long)]
+        last: Option<usize>,
+        /// Emit the machine-readable form (the same fields, same names)
         #[arg(long)]
         json: bool,
     },

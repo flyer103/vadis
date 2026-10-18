@@ -1,11 +1,12 @@
 # ADR-057 — the step ledger: one line per request in a session, with the cache break named, the money labelled, and nothing invented
 
-- Status: **proposed — awaiting the owner's ruling (drafted 2026-10-18).** Nothing in this file is frozen
-  yet, and that is deliberate: this draft spends **no `CONF` id**, writes **no file under `crates/`,
-  `config.example.yaml` or `tests/`**, and changes **no gate, corpus or envelope** (AGENTS constraint 9).
-  It writes the contract text (`docs/spec.md` §9.4) and the bookkeeping (`§9.3`, `book/`, `DESIGN` §12.9)
-  in the *contracted, not served* shape `§4.20` used before R74-1, so the pieces the owner is being asked
-  to rule on are readable as documents instead of as a proposal in a chat thread.
+- Status: **accepted — implemented.** The owner's ruling of 2026-10-18 adopted the recommendation;
+  the prerequisite repair (§2.6) and the surface (§2.1–§2.5) landed on `feat/step-ledger-impl`
+  (the §2.6 repair as commit `9731e69`, the reducer with `CONF-111…CONF-117`). One amendment was
+  folded into the landing (§2.3 row 3, noted in place): the `gap_ms` null condition is "identical
+  `ts` at the record's resolution", not "the two `ts` fall in one second" — the pre-repair clock's
+  one-second floor is what that older wording described, and with §2.6 landed it would contradict
+  both §2.6 and limb (f).
 - Kind: **a new read-out surface with no product byte.** It adds one subcommand that reads the trace
   files, one spec section, and one two-line repair to the clock the trace writes (§2.6) — that repair is
   the only thing here that touches `crates/`, and it is a *prerequisite*, not scope.
@@ -214,7 +215,7 @@ Column names are the `--json` keys verbatim (snake_case). The text output prints
 |---|---|---|---|---|---|
 | 1 | `step` | u32 | — (assigned by the reducer, 1-based within the session) | derived | never |
 | 2 | `start` | RFC3339 | `ts` — the request's **start** (§2.6) | measured | never |
-| 3 | `gap_ms` | i64 \| `—` | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; **negative values are printed as measured**, never clamped | derived | `—` when the two `ts` share a second (§2.6), or when n = 1 |
+| 3 | `gap_ms` | i64 \| `—` | `ts(n) − ts(n−1) − result.overhead_ms(n−1)`; **negative values are printed as measured**, never clamped | derived | `—` when the two `ts` are **identical** (equal at the record's millisecond resolution — *amended at the landing*: the draft said "when the two `ts` share a second", which described the pre-§2.6 clock's floor and contradicted §2.6 and limb (f)), or when n = 1 |
 | 4 | `route` | string | `decision.provider` + `/` + `decision.model` | measured | `—` when both are empty (a refusal before any route resolved) |
 | 5 | `in` | u64 \| `—` | `usage.input_total` | **verified** (the provider's own count) | `—` when `usage_missing` |
 | 6 | `cached` | u64 \| `—` | `usage.input_cached` | **verified** | same |
@@ -481,7 +482,7 @@ A capability that lands only in `crates/` and `book/` is invisible on the three 
 |---|---|
 | **`ADR-057`** | this file |
 | **spec `§9.4`** | the surface's contract (`§9.1`/`§9.2` are the served read-outs, `§9.3` the not-served list; numbering is by landing time, as `§4.20` followed `§4.19`) |
-| — | **no `CONF` id, no `GAP-Q` id, no round number.** This draft allocates none: the card that lands the reducer takes the next free `CONF` numbers from `DESIGN` §12.8's heading (`CONF-01…CONF-110` at this HEAD), and §4's limbs are its outline |
+| **`CONF-111…CONF-117`** | spent by the implementing card (the seven limbs of §4, one case each), allocated from `DESIGN` §12.8's `CONF-01…CONF-110` heading — the draft itself allocated none, as promised |
 
 ### 8.2 What this draft adds to the documents
 
