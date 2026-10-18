@@ -237,8 +237,15 @@ This is the foundation of the analysis loop: a policy cannot be re-implemented i
 
 **Not implemented in v0.1** and taken by no round yet: there is no `replay` subcommand and no simulation seam
 in the serving path, so the shape above is design intent, not a served surface — spec §9.3 says the same thing
-at the user-facing boundary, together with `vadis trace tail` and `GET /metrics`. Until it lands, the trace
+at the user-facing boundary, together with `vadis trace tail` and `vadis steps`. Until it lands, the trace
 record (spec §6) is the interface, and a figure that cannot be replayed must not be claimed.
+
+**Until it lands, the pair has a manual route, and it is the replay's own acceptance test** (`ADR-059`): one
+request body, four requests against a `serve` of the instrument's own (the `X-Vadis-Transform` header alternating),
+the provider's `usage.input_total` read off the two warm rows, and an offline reducer over the committed raw — the
+method, its nine conditions, its refusals and the artefacts' home are `ADR-059`'s, and its first `report.json` is
+what `vadis replay` must reproduce byte for byte before any of its numbers may be trusted. `ADR-059` mints no
+figure and sets no threshold; §12.25 is its product-side register entry.
 
 ## 10. Test strategy
 
@@ -1995,6 +2002,26 @@ cell) falls **20 → 4**, the four being §9.2's three named legacy rows plus th
 `grep -rn 'verified'` line count rises 123 → 131 and the term count (backticked or bold) 71 → 79, because a
 ruling has to name the word it governs: `ADR-031`'s scope note, `ADR-057`'s status correction, `spec §7`'s
 scope sentence and this line are sentences *about* the word, not labels on a figure.
+
+**Register line (2026-10-18, `ADR-059` — the paired control: one body, two modes, four requests).**
+`ADR-059` (`design/decisions/ADR-059-the-paired-control.md`) decides the **instrument** that `ADR-031`'s Cost gate
+has been missing, and nothing else: one request body sent **four times** to a `serve` of the instrument's own with
+only `X-Vadis-Transform` alternating (`passthrough`, `transform`, `passthrough`, `transform`), the provider's own
+`usage.input_total` read off the **second and fourth** records (the first of each arm is a warm-up that exists to put
+*that* arm's prefix in the provider's cache), and the difference published as `verified` under
+`docs/spec.md` §7's first minting route — a control turn with the transform on/off within one session. The gain is
+input-side only and is a **net**: the trace can decompose `net = saved − added` only locally, so
+`transforms[].saved_input_tokens` / `added_input_tokens` stay `inferred`, are printed beside the net and are never
+summed with it (`ADR-031` D4.3, `ADR-058` §2.1); `usage.output` is excluded because two arms are two generations.
+Nine conditions (one process/revision, one route/model/credential, everything measured, the mode the header asked,
+the treatment fired, the edit local by block hash, metered with one currency and one window, one cache regime, and a
+**null control** of four passthrough requests that must read zero) plus eight refusals decide when the instrument
+prints **no number** — with R4/R5/R6 keeping the token figure when only the *money* is unpriceable (plan account,
+mixed currency or window, mixed cache regime). The method runs **this week** as a documented recipe over the live
+path, homed at `design/paired-run/` (`ADR-059` §7) and homed as *method* in **§12.25**; `vadis replay` is the
+long-term home, and the recipe's `report.json` is its acceptance test. What it does not move: no product byte, no
+trace field, no `CONF` id, no gate, threshold, corpus or L1-envelope value; `vadis stats`'s
+`verified_savings_tokens` stays 0 after a successful pair, because a record cannot see its counterfactual.
 
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
@@ -4617,6 +4644,55 @@ ADR-054 §6):
 **What this section does not promise**: no second figure (no event-kind breakdown, no per-provider
 split, no session identity — spec §4.18's export boundary), no configurable window bound, no
 `vadis state` subcommand, and no change to the store's locking.
+
+### 12.25 The paired control's home: the method is ADR-059's, its raw artefacts are `design/paired-run/`, and no figure of it lives in this file
+
+**What this section is.** The instrument that mints the first `verified` **saving** — the one `ADR-031`'s Cost gate
+has been waiting for through four measured rounds — has one method home, **ADR-059**, one artefact home,
+`design/paired-run/`, and this pointer. Three things are fixed there and must not be restated here.
+
+1. **The pair, as a shape.** One request body, byte for byte, sent **four times** to a `serve` of the instrument's
+   own (its own config pair, trace dir, state dir, an ephemeral loopback port) with **only** `X-Vadis-Transform`
+   alternating: `passthrough`, `transform`, `passthrough`, `transform`. The first request of each arm is a
+   **warm-up** — it exists so that *that* arm's prefix is in the provider's cache — and is never measured; the
+   measured pair is the second occurrence of each, which is what makes the two cache states symmetric instead of
+   making the money delta mostly the cache. The body is a **responses**-wire body because only that wire carries
+   `prompt_cache_key`, which is what lets the four records be *one session* (`spec §7`'s first minting route: a
+   control turn with the transform on/off within one session) rather than two unrelated observations.
+2. **The quantity, and its field.** `net_input_tokens = usage.input_total(control) − usage.input_total(treatment)`
+   — one field per row, cache-regime-independent because `input_total` counts prompt tokens whatever tier served
+   them — labelled **`verified`**; and `net_input_cost` over the two rows' `cost.{input_miss,input_hit,cache_write}`,
+   pre-peak as the record reports it, one currency and one `peak_applied_pct` or no money figure at all. **The gain
+   is a net and is input-side only**: the trace can decompose `net = saved − added` only locally
+   (`estimate_tokens = bytes/4`), so `transforms[].saved_input_tokens` / `added_input_tokens` remain `inferred`,
+   are printed beside the net as the *prediction*, and are never summed with it (`ADR-031` D4.3, `ADR-058` §2.1);
+   `usage.output` / `usage.reasoning` are excluded because two arms are two generations.
+3. **The conditions and the refusals.** Nine conditions (one process and revision, one route/model/credential,
+   everything measured, the mode the header asked, the treatment fired with ≥ 1 edited path, the edit local by
+   `prefix.blocks[].hash`, metered with one currency and one window, one cache regime, and a **null control** — a
+   second quartet with the header absent on all four, which must read exactly 0 or the ruler is broken) and eight
+   refusals (`ADR-059` §5.1). R4–R6 keep the **token** figure when only the money is unpriceable — a plan account
+   whose marginal price is 0, a mixed currency or window, a mixed cache regime — and R1–R3, R7–R8 print nothing.
+
+**Where the numbers live.** In `design/paired-run/` — `recipe.md`, `fixture.json`, `off.out.json`,
+`on.out.json`, `reduce.jq` and `report.json` — committed by the run that produces them (`ADR-059` §7), and **never
+here**. This is §12.5's, §12.16's, §12.17's and §12.18's own single-source rule: a measured figure copied into this
+file would be a second copy that goes stale silently, and this one would go stale in the file a gate's reader
+consults. The report is reducible **offline** from the committed raw with no network and no rerun — `ADR-045` §2's
+acid test — which is also the acceptance test the future `vadis replay` inherits (§9).
+
+**What it deliberately does not touch.** No product byte, no new trace field, no event, no schema move
+(`TRACE_SCHEMA_VERSION` / `EVENT_SCHEMA_VERSION` stay 2), no new command, no reporting surface. `vadis stats`'s
+`verified_savings_tokens` stays **0** after a successful pair, and that is correctness rather than a gap: the served
+figure sums `transforms[]` of single records (spec §6), and a record cannot see its counterfactual — storing a pair
+would be a trace-contract change and a separate decision. `design/paired-run/` is **not** a workspace member, not
+in `tests/conformance/`, not served and not referenced by any crate.
+
+**What it may never claim** (ADR-059 §9): nothing output-side; no session total from one body (`n × delta` is a
+multiplication the pair never observed); no generalisation beyond the fixture's shape (a composed body is not client
+traffic, `ADR-032` D5); no `tee` retention cost (spec §4.4's retrieve channel stays unimplemented); no answer-quality
+claim; no latency figure (`ADR-030` owns it); no dollar figure on a plan account; and **no threshold of any kind** —
+the L1 envelope and the transform band stay the loop state record's waiting-on-human row 1 (`ADR-029`'s boundary).
 
 ## 13. Primitive register, module map and leak register (ADR-016)
 

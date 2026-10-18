@@ -3245,6 +3245,18 @@ any JSON tool. `vadis replay` in particular is the analysis harness's prerequisi
 and needs a simulation seam in the serving path plus the plugin-config surface; it is not part of v0.1's
 promise, and no implementation has yet taken it.
 
+**The saving's instrument is not a surface, and it is reachable now.** `design/decisions/ADR-059-the-paired-control.md`
+fixes the **paired control** §7 names as `verified`'s first minting route: one request body sent four times to a
+`serve` of the instrument's own, only `X-Vadis-Transform` alternating, the provider's `usage.input_total` read off the
+two warm records, and an offline reducer over committed raw. It adds **no subcommand** (the CLI still accepts
+`serve`, `stats`, `setup` and `wrap`, and any other is a usage error with a non-zero exit), changes nothing in the
+serving path, and produces **no served figure**: `vadis stats`'s `verified savings tokens` stays 0 after a successful
+pair, because the served figure sums `transforms[]` of single records (§6) and a record cannot see its
+counterfactual. Its artefacts live at `design/paired-run/` and its method, its nine conditions and its refusals are
+`ADR-059`'s; the first `report.json` is what the future `vadis replay` must reproduce offline before any of its
+numbers may be trusted (DESIGN §9, §12.25). What this paragraph corrects about the section above is one word of
+tense: `verified` is no longer unreachable for want of an instrument — it is unreachable until someone runs this one.
+
 ### 9.4 `vadis steps` — one line per request in a session
 
 Status: **served.** The command reads the trace files a real `serve` wrote and prints the ledger below;
