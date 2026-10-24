@@ -201,7 +201,11 @@ your conversations" surface at all.
   ([`docs/spec.md` §9](../docs/spec.md)).
 - **Retry discipline**: a retry happens only where the evidence says the attempt was not
   billed. A failure after the request bytes were fully written is never retried by the
-  gateway — see the unknown-outcome section.
+  gateway — see the unknown-outcome section. Where nothing was sent and nothing was billed
+  (a connect failure, an error head whose body could not be read), the **same route** is
+  retried once before any route change — a walk is a route change and pays a re-prefill —
+  and a failure the rule refuses says so on its trace entry
+  ([`docs/spec.md` §4.2](../docs/spec.md)).
 - **Degradation rules**: a failed transform falls back to the original payload and the
   request is still served; a prefix discontinuity warns by default and can be made
   rejecting; unknown fields pass through; a failed trace write never blocks a request but is

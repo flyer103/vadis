@@ -68,11 +68,18 @@ Read it in this order; each group answers a different question.
    ([`docs/spec.md` §9.3](../docs/spec.md)) — so any figure here can be recomputed from the
    record.
 8. **Result** — the status returned to the client, the upstream status, the failover origin
-   if the route was switched, vadis's own overhead, the upstream latency, and whether the
-   upstream reported usage at all.
+   if the route was switched, how many upstream attempts the request made (a retry that
+   served reads differently from a walk that moved), vadis's own overhead, the upstream
+   latency, and whether the upstream reported usage at all. A request the client abandoned
+   mid-flight still gets a row here — its status is the format's own `499` when no response
+   head existed, or a truncation entry naming `client_closed` when one did
+   ([`docs/spec.md` §6](../docs/spec.md)).
 9. **Failures** — `errors[]`, an array that is always present. No failure is an **empty
    array**, never a missing field; a failed transform, a failed trace write, an upstream
-   failure and an internal error each appear here with a kind and a message.
+   failure and an internal error each appear here with a kind and a message. A refusal also
+   carries a short, redacted excerpt of the upstream's own error object
+   (`details.upstream_body`) so it can be diagnosed from the trace alone
+   ([`docs/spec.md` §6](../docs/spec.md)).
 
 A trimmed illustration of the shape (values illustrative; the normative field list with
 types is [`docs/spec.md` §6](../docs/spec.md) and the Rust form is

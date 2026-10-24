@@ -1486,6 +1486,10 @@ impl Forwarder {
                 .unwrap_or_default();
             let multi_key = pool.len() > 1;
             let mut key_cursor: usize = 0;
+            // ADR-060 D3: this route's same-route retries so far — one
+            // per route per request (STREAM_RETRY_CAP), reset by the
+            // walk's move to the next candidate.
+            let mut retries_used: u32 = 0;
             // spec §4.9 / ADR-020: the entry states the URL for the wire this
             // attempt uses, and it is used verbatim. ADR-051 §2.1: that wire
             // is the **inbound** protocol — the cell the request came in on —
@@ -2035,6 +2039,27 @@ impl Forwarder {
                             &cls,
                             Some(candidate),
                         );
+                        // ADR-060 D3, spec §4.2's evidence table row 1:
+                        // the request bytes were never fully written —
+                        // nothing was billed, and on the buffered medium
+                        // nothing can be on the wire — so the SAME route
+                        // is retried once, 250 ms, BEFORE the walk (a
+                        // walk is a route change and pays a re-prefill,
+                        // ADR-011 item 9). This is the retry's one
+                        // buffered call site.
+                        let retry_refused_word = match same_route_retry_verdict(
+                            retries_used,
+                            started,
+                            self.config.server.request_timeout.0,
+                        ) {
+                            SameRouteRetry::Allowed => {
+                                tokio::time::sleep(retry_backoff()).await;
+                                retries_used += 1;
+                                attempt_index += 1;
+                                continue 'keys;
+                            }
+                            SameRouteRetry::Refused(word) => word,
+                        };
                         if let Some(next) = self.next_candidate(
                             &candidates,
                             &attempted_providers,
@@ -2069,6 +2094,9 @@ impl Forwarder {
                             details: Some(json!({
                                 "upstream_status": Value::Null,
                                 "error_class": cls.class.as_str(),
+                                // ADR-060 D3: the table was consulted and
+                                // refused — the cap or the floor, one word.
+                                "retry_refused": retry_refused_word,
                             })),
                         });
                     }
@@ -2095,6 +2123,11 @@ impl Forwarder {
                             details: Some(json!({
                                 "stage": "unknown_outcome",
                                 "error_class": "timeout",
+                                // ADR-060 D3: the class table refuses
+                                // this attempt BY NAME — the request may
+                                // have been billed, and the client's own
+                                // retry is the recovery.
+                                "retry_refused": "billed",
                             })),
                         });
                     }
@@ -2859,6 +2892,17 @@ impl Forwarder {
             class,
             ErrorClass::FormatError | ErrorClass::ContentPolicyBlocked
         );
+        let mut details = json!({
+            "upstream_status": upstream_status,
+            "error_class": class.as_str(),
+        });
+        if deterministic {
+            // ADR-060 D3, spec §4.2's table row 6: a re-probe reproduces
+            // the refusal — the refusal word is on the record. Every
+            // other read answer is the walk's business and carries no
+            // word (row 7).
+            details["retry_refused"] = json!("deterministic");
+        }
         ForwardFailure {
             status: 502,
             code: ErrorCode::UpstreamError,
@@ -2873,10 +2917,7 @@ impl Forwarder {
                     class.as_str()
                 )
             },
-            details: Some(json!({
-                "upstream_status": upstream_status,
-                "error_class": class.as_str(),
-            })),
+            details: Some(details),
         }
     }
 }
@@ -2927,6 +2968,57 @@ pub(crate) const STREAM_SILENCE_TTL_S: u64 = 60;
 /// cause of a refusal, never appears in `skipped[]`, and never produces
 /// `no_available_route`.
 pub(crate) const REASON_STREAM_SILENCE: &str = "stream_silence";
+
+// -- ADR-060 D3 / spec §4.2: the bounded same-route retry ---------------
+
+/// One retry per route per request (spec §4.2's "cap, backoff, floor"
+/// row): two attempts on a route, and the walk's own candidate count
+/// unchanged — a request attempts at most `candidates × 2` times.
+pub(crate) const STREAM_RETRY_CAP: u32 = 1;
+/// The fixed wait before the retry. A ladder is meaningless at one
+/// retry and a jitter is meaningless with one operator (two identical
+/// requests would record different latencies with nothing to attribute
+/// the difference to).
+pub(crate) const RETRY_BACKOFF_MS: u64 = 250;
+/// The retry is attempted only when the remaining
+/// `server.request_timeout` budget is at least this much AFTER the
+/// wait — otherwise it is refused `budget` (the floor, not a guess).
+pub(crate) const RETRY_FLOOR_MS: u64 = 1000;
+
+/// The §4.2 class table's answer to "may this failure be retried on its
+/// own route?" — `Allowed`, or the closed refusal word
+/// (`"budget"` — the cap or the floor are one word in spec §4.2's set).
+pub(crate) enum SameRouteRetry {
+    Allowed,
+    Refused(&'static str),
+}
+
+/// The cap-and-floor half of the verdict (the evidence half — billed?
+/// forwarded? deterministic? — is decided by the call site's table row,
+/// which is what makes the forbidden rows structurally unable to reach
+/// a retry: they never call this).
+pub(crate) fn same_route_retry_verdict(
+    retries_used: u32,
+    started: Instant,
+    request_timeout_ms: u64,
+) -> SameRouteRetry {
+    if retries_used >= STREAM_RETRY_CAP {
+        return SameRouteRetry::Refused("budget");
+    }
+    let elapsed = started.elapsed().as_millis() as u64;
+    let remaining = request_timeout_ms.saturating_sub(elapsed);
+    if remaining >= RETRY_BACKOFF_MS + RETRY_FLOOR_MS {
+        SameRouteRetry::Allowed
+    } else {
+        SameRouteRetry::Refused("budget")
+    }
+}
+
+/// The fixed backoff itself (spec §4.2: one constant, no ladder, no
+/// jitter).
+pub(crate) fn retry_backoff() -> std::time::Duration {
+    std::time::Duration::from_millis(RETRY_BACKOFF_MS)
+}
 
 /// The `demotion` object's ONE shape (ADR-056 §6.2): the six members
 /// `rebuild_cooldown` reads — `{scope, provider, model, until_us, ttl_s,
@@ -3521,6 +3613,222 @@ mod walk_tests {
         for banned in ["request_id", "echoed"] {
             assert!(ub.get(banned).is_none(), "{banned} is not allowlisted");
         }
+    }
+
+    // -- ADR-060 D3: the bounded same-route retry ------------------------
+
+    /// Answers a scripted sequence of outcomes (one per send), recording
+    /// every request it is handed.
+    struct SequencedTransport {
+        outcomes: Vec<vadis_providers::AttemptOutcomeDouble>,
+        next: std::sync::Mutex<usize>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ProviderSend for SequencedTransport {
+        fn send(
+            &self,
+            _req: HttpRequest<Bytes>,
+        ) -> impl Future<Output = vadis_providers::AttemptOutcome> + Send {
+            self.seen.lock().unwrap().push("attempt".to_string());
+            let i = {
+                let mut n = self.next.lock().unwrap();
+                let i = *n;
+                *n += 1;
+                i
+            };
+            let outcome = self
+                .outcomes
+                .get(i)
+                .cloned()
+                .unwrap_or(vadis_providers::AttemptOutcomeDouble::NotSent);
+            async move {
+                match outcome {
+                    vadis_providers::AttemptOutcomeDouble::Responded { status, body } => {
+                        vadis_providers::AttemptOutcome::Responded(
+                            vadis_providers::UpstreamResponse {
+                                status,
+                                retry_after: None,
+                                content_type: Some("application/json".into()),
+                                body: Bytes::from(body),
+                            },
+                        )
+                    }
+                    vadis_providers::AttemptOutcomeDouble::NotSent => {
+                        vadis_providers::AttemptOutcome::NotSent(vadis_providers::TransportError {
+                            kind: vadis_providers::TransportKind::Connect,
+                            message: "fake: connect refused".into(),
+                            wrote_full_request: false,
+                        })
+                    }
+                    vadis_providers::AttemptOutcomeDouble::WrittenNoResponse => {
+                        vadis_providers::AttemptOutcome::WrittenNoResponse(
+                            vadis_providers::TransportError {
+                                kind: vadis_providers::TransportKind::Timeout,
+                                message: "fake: written, no response".into(),
+                                wrote_full_request: true,
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fn retry_forwarder(
+        outcomes: Vec<vadis_providers::AttemptOutcomeDouble>,
+        trace: &std::sync::Arc<CaptureTrace>,
+    ) -> (Forwarder, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![provider("native", WireApi::Chat)],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let f = Forwarder {
+            config,
+            transports: HashMap::from([(
+                "native".to_string(),
+                Arc::new(SequencedTransport {
+                    outcomes,
+                    next: std::sync::Mutex::new(0),
+                    seen: seen.clone(),
+                }) as Arc<dyn ProviderTransport>,
+            )]),
+            api_keys: HashMap::from([("native".to_string(), vec!["sk-unit".to_string()])]),
+            store: None,
+            trace: Some(trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>),
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        };
+        (f, seen)
+    }
+
+    const OK_BODY: &[u8] = br#"{"id":"ok","choices":[{"index":0,"message":{"role":"assistant","content":"served"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}"#;
+
+    /// The retry's positive (the disabling edit is the
+    /// `continue 'keys` in `forward`'s NotSent arm): a pre-write connect
+    /// failure is retried on the SAME route, 250 ms later, BEFORE any
+    /// walk — the second attempt serves, the record reads `attempts: 2`
+    /// with `failover_from: null` (nothing moved), and only one
+    /// transport ever saw the request.
+    #[tokio::test]
+    async fn a_connect_failure_is_retried_on_the_same_route_before_the_walk() {
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let (f, seen) = retry_forwarder(
+            vec![
+                vadis_providers::AttemptOutcomeDouble::NotSent,
+                vadis_providers::AttemptOutcomeDouble::Responded {
+                    status: 200,
+                    body: OK_BODY.to_vec(),
+                },
+            ],
+            &trace,
+        );
+        let t0 = std::time::Instant::now();
+        let outcome = f
+            .forward(
+                WireApi::Chat,
+                br#"{"model":"native/m","messages":[{"role":"user","content":"x"}],"stream":false}"#,
+                "req-retry-1",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        match outcome {
+            ForwardOutcome::Success(s) => assert_eq!(s.status, 200),
+            ForwardOutcome::Failure(f) => panic!("the retry must serve: {}", f.message),
+        }
+        assert_eq!(seen.lock().unwrap().len(), 2, "two attempts, one route");
+        assert!(
+            t0.elapsed() >= std::time::Duration::from_millis(240),
+            "the fixed backoff ran before the retry"
+        );
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        assert_eq!(rec["result"]["attempts"], 2);
+        assert_eq!(rec["result"]["failover_from"], serde_json::Value::Null);
+        assert_eq!(rec["errors"].as_array().map(Vec::len), Some(0));
+    }
+
+    /// The cap: a second pre-write failure on the same route is NOT
+    /// retried again — the terminal refusal carries `retry_refused:
+    /// "budget"` (the cap and the floor are one word, spec §4.2) and the
+    /// record reads `attempts: 2`.
+    #[tokio::test]
+    async fn a_second_connect_failure_is_refused_as_budget() {
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let (f, seen) = retry_forwarder(
+            vec![
+                vadis_providers::AttemptOutcomeDouble::NotSent,
+                vadis_providers::AttemptOutcomeDouble::NotSent,
+            ],
+            &trace,
+        );
+        let outcome = f
+            .forward(
+                WireApi::Chat,
+                br#"{"model":"native/m","messages":[{"role":"user","content":"x"}],"stream":false}"#,
+                "req-retry-2",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        match outcome {
+            ForwardOutcome::Failure(f) => {
+                assert_eq!(f.status, 502);
+                assert_eq!(f.details.unwrap()["retry_refused"], "budget");
+            }
+            ForwardOutcome::Success(_) => panic!("both attempts failed"),
+        }
+        assert_eq!(seen.lock().unwrap().len(), 2, "the cap held at one retry");
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        assert_eq!(rec["result"]["attempts"], 2);
+        assert_eq!(rec["errors"][0]["details"]["retry_refused"], "budget");
+    }
+
+    /// The `unknown_outcome` class is refused BY NAME (spec §4.2 row 3 /
+    /// ADR-011 item 6 row 3): a full write with no response is never
+    /// retried — the disabling edit is the `"retry_refused": "billed"`
+    /// member, and the structural half is that the arm has no retry
+    /// branch at all.
+    #[tokio::test]
+    async fn a_written_no_response_attempt_is_refused_as_billed() {
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let (f, seen) = retry_forwarder(
+            vec![vadis_providers::AttemptOutcomeDouble::WrittenNoResponse],
+            &trace,
+        );
+        let outcome = f
+            .forward(
+                WireApi::Chat,
+                br#"{"model":"native/m","messages":[{"role":"user","content":"x"}],"stream":false}"#,
+                "req-retry-3",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        match outcome {
+            ForwardOutcome::Failure(f) => {
+                assert_eq!(f.details.unwrap()["retry_refused"], "billed");
+            }
+            ForwardOutcome::Success(_) => panic!("the attempt died"),
+        }
+        assert_eq!(seen.lock().unwrap().len(), 1, "never retried");
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        assert_eq!(rec["result"]["attempts"], 1);
+        assert_eq!(rec["errors"][0]["details"]["retry_refused"], "billed");
     }
 
     // -- minimal legal config sections for the unit fixtures ------------
