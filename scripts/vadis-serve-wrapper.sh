@@ -47,9 +47,11 @@ trap 'record_death TERM' TERM
 trap 'record_death INT' INT
 trap 'record_death HUP' HUP
 
-# The wrapper must remain present to catch and forward a signal; exec here would
-# replace the very process that owns the traps and make the death line impossible.
-"$@" &
+# The wrapper must remain present to catch and forward a signal. Its child
+# subshell execs the real binary, so child_pid is the supervised command's pid.
+(
+    exec "$@"
+) &
 child_pid=$!
 
 while :; do
