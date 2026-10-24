@@ -1219,7 +1219,36 @@ pub async fn serve(config_path: &str) -> i32 {
             None
         }
     };
-    match axum::serve(listener, app).await {
+    // ADR-060 D1 (§5's owed ordering): the graceful-shutdown drain. The
+    // signal handler flips the process-wide drain flag BEFORE any
+    // in-flight work is dropped, so a request whose future or body the
+    // drain then drops is written `canceled_by: "shutdown"` instead of
+    // blaming the client; axum's graceful shutdown then waits for the
+    // in-flight connections, and every cancelled-row guard holds its own
+    // `Arc`s to the store and the trace sink — the sink cannot close
+    // while an in-flight request exists, so the drain's rows are not
+    // lost. (A `SIGKILL` still writes nothing; that boundary is ADR-060
+    // §2.3.5's, stated rather than hidden.)
+    let shutdown_signal = async {
+        let sigterm = async {
+            use tokio::signal::unix::{signal, SignalKind};
+            match signal(SignalKind::terminate()) {
+                Ok(mut s) => {
+                    s.recv().await;
+                }
+                Err(_) => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm => {}
+        }
+        vadis_proxy::set_shutdown_draining();
+    };
+    match axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+    {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("vadis: server error: {e}");

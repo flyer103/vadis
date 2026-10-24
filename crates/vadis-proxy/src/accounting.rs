@@ -440,6 +440,44 @@ impl<'a> Accountant<'a> {
         )
     }
 
+    /// The **cancelled request's terminal row** (ADR-060 D1 / spec §6's
+    /// cancelled class): the only writer the cancel guard's `Drop`
+    /// calls. Usage-missing by construction (no measurement exists, so
+    /// nothing is charged and no cost is invented, spec §8), no cache
+    /// group, and `errors` is exactly the one entry the guard built for
+    /// its arm — the `canceled` kind (arm A) or the `client_closed`
+    /// truncation (arm B).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish_canceled(
+        &self,
+        ctx: &AccountCtx<'_>,
+        status: u16,
+        upstream_status: Option<u16>,
+        provider: &str,
+        model: &str,
+        failover_from: Option<String>,
+        errors: Vec<TraceError>,
+        blocks: &[PrefixBlock],
+        upstream_ms: Option<u32>,
+        attempts: u32,
+    ) -> AccountResult {
+        self.commit(
+            ctx,
+            status,
+            upstream_status,
+            provider,
+            model,
+            None,
+            true,
+            failover_from,
+            errors,
+            blocks,
+            upstream_ms,
+            attempts,
+            None,
+        )
+    }
+
     /// The shared end-of-request commit (§12.10.5 note R2's order).
     /// `attempts` is ADR-060 D3's `result.attempts` — how many upstream
     /// attempts this request made across all routes; every constructor

@@ -187,6 +187,11 @@ struct RelayCtx {
         Arc<dyn vadis_core::response_cache::ResponseCache>,
         vadis_core::response_cache::ResponseKey,
     )>,
+    /// ADR-060 D1: the cancelled-row guard's slot, shared with the
+    /// guard that moved into the response body — the relay's byte
+    /// counter and the terminal take both go through it, so a drop at
+    /// any chunk boundary reads the facts the relay last recorded.
+    cancel: Arc<crate::cancel::CancelSlot>,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -305,9 +310,33 @@ impl Forwarder {
         // enforces this instant (it is not a second timer); the relay's
         // per-read `timeout_at` trips against it without re-arming.
         let deadline = tokio::time::Instant::from_std(facts.started) + self.request_timeout();
+        // ADR-060 D1: the cancelled-row guard, owned by THIS frame for
+        // the head phase — hyper dropping the handler future mid-head
+        // drops it — and moved into the response body on success (the
+        // body owns the relay stream, so dropping the body drops the
+        // guard). The slot stays empty until the request commits to
+        // being served (filled in `forward_stream_inner`, after the
+        // boundary refusals and the replay, before the first attempt).
+        let guard = crate::cancel::CancelGuard::new(
+            self.store.clone(),
+            self.trace
+                .clone()
+                .map(|t| t as std::sync::Arc<dyn vadis_core::TraceWriter>),
+        );
+        // The relay's context needs the slot as an `Arc` (it outlives the
+        // handler future), so the inner driver takes the Arc form.
+        let cancel_arc = guard.slot_arc();
         let outcome = match tokio::time::timeout_at(
             deadline,
-            self.forward_stream_inner(&mut facts, proto_in, body, request_id, headers, deadline),
+            self.forward_stream_inner(
+                &mut facts,
+                proto_in,
+                body,
+                request_id,
+                headers,
+                deadline,
+                &cancel_arc,
+            ),
         )
         .await
         {
@@ -335,9 +364,20 @@ impl Forwarder {
             }
         };
         if let StreamOutcome::Failure(f) = &outcome {
-            self.record_failure_trace(&facts, f);
+            self.record_failure_trace(&facts, f, Some(guard.slot()));
         }
-        outcome
+        match outcome {
+            // ADR-060 D1: the SSE medium's arm — the guard moves into
+            // the response body, so hyper dropping the body on a client
+            // disconnect (or the shutdown drain) is what runs its
+            // `Drop` and, when the ordinary terminal writer had not
+            // taken the slot, writes the `client_closed` row.
+            StreamOutcome::Success(mut s) => {
+                s.body = crate::cancel::guard_body(guard, s.body);
+                StreamOutcome::Success(s)
+            }
+            failure => failure,
+        }
     }
 
     /// ADR-053 §3: the stream path's whole-request bound. One owner —
@@ -354,6 +394,7 @@ impl Forwarder {
     /// absolute instant the outer wrap enforces, carried through so the
     /// relay the priming hands off to trips against it after our head
     /// is sent.
+    #[allow(clippy::too_many_arguments)]
     async fn forward_stream_inner(
         &self,
         facts: &mut RequestFacts<'_>,
@@ -362,6 +403,7 @@ impl Forwarder {
         request_id: &str,
         headers: &[(String, String)],
         deadline: tokio::time::Instant,
+        cancel: &std::sync::Arc<crate::cancel::CancelSlot>,
     ) -> StreamOutcome {
         let started = facts.started;
         let now_epoch_s = facts.now_epoch_s;
@@ -756,6 +798,17 @@ impl Forwarder {
                 });
             }
         }
+
+        // ADR-060 D1: the request now commits to being served — the
+        // cancelled-row guard's snapshot is installed (the boundary
+        // refusals and the replay above wrote their own row and hold no
+        // in-flight attempt); the relay's context carries the slot so
+        // the byte counter stays shared with the guard.
+        cancel.refresh(crate::cancel::snapshot_facts(
+            facts,
+            &primary.provider,
+            &primary.model,
+        ));
 
         // The primary candidate plus the fallback chain (spec §4.2),
         // filtered to native routes with a key present at startup. For a
@@ -1218,6 +1271,15 @@ impl Forwarder {
                 // record's `result.attempts` and the cancelled-row
                 // guard's snapshot read this count).
                 facts.attempts = attempt_index + 1;
+                // ADR-060 D1: refresh the cancelled-row guard to this
+                // attempt's facts — a drop mid-attempt (head phase)
+                // strands exactly this state.
+                cancel.refresh(crate::cancel::snapshot_facts(
+                    facts,
+                    &cand.route.provider,
+                    &cand.route.model,
+                ));
+                cancel.note_attempt(facts.attempts);
                 // The rotation arm (ADR-049 §3 rule 3), the streaming twin:
                 // a credential-class failure whose pool still holds an
                 // untried key retries the SAME route on the next key —
@@ -1231,6 +1293,12 @@ impl Forwarder {
                             facts.upstream_ms = head_ms;
                             last_upstream_status = Some(head.status);
                             facts.last_upstream_status = Some(head.status);
+                            // ADR-060 D1: a head arrived (any status — an
+                            // error head being composed when the client
+                            // leaves is arm A with its `upstream_status`
+                            // intact) and the request was fully written.
+                            cancel.note_upstream_status(head.status, head_ms);
+                            cancel.note_wrote_full_request();
                             if (200..300).contains(&head.status) {
                                 // A probe succeeded (ADR-014 item 3): a 2xx head on
                                 // the primary while the family was on overflow
@@ -1307,6 +1375,7 @@ impl Forwarder {
                                         }
                                         _ => None,
                                     },
+                                    cancel: Arc::clone(cancel),
                                 };
                                 let state = RelayState {
                                     tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -1339,6 +1408,11 @@ impl Forwarder {
                                     ps.settled_on(&settled_label);
                                 }
                                 facts.failover_from = failover_from.clone();
+                                // ADR-060 D1: the relay is being entered —
+                                // a 2xx head is forwarded and the body goes
+                                // in flight. From here a drop is arm B,
+                                // whatever its producer.
+                                cancel.note_relay_entered();
                                 let relay =
                                     relay_stream(ctx, state, Bytes::from(base.as_bytes().to_vec()));
                                 return StreamOutcome::Success(StreamSuccess {
@@ -1644,6 +1718,9 @@ impl Forwarder {
                             // item 6 row 3) — no retry, no failover, deliberately
                             // no closure event.
                             facts.upstream_ms = Some(attempt_started.elapsed().as_millis() as u32);
+                            // ADR-060 D1: the request bytes were fully
+                            // written — the guard's `stage` evidence.
+                            cancel.note_wrote_full_request();
                             return StreamOutcome::Failure(ForwardFailure {
                                 status: 502,
                                 code: ErrorCode::UpstreamError,
@@ -1914,6 +1991,10 @@ fn relay_stream(
                             st.tap.feed(&b);
                             st.relayed += b.len() as u64;
                             st.last_byte_at = Some(Instant::now());
+                            // ADR-060 D1: the shared byte counter — the
+                            // guard reads it at drop time because the
+                            // drop destroys the relay's own state.
+                            ctx.cancel.note_bytes_relayed(st.relayed);
                             // The cache's recording copy (spec §4.17): kept only
                             // within the store's byte bound — a body past it is
                             // never a candidate, so the buffer is dropped rather
@@ -2231,6 +2312,11 @@ fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
 /// written through). A truncation rides in `errors[]`, never presented
 /// as completeness; nothing is charged twice.
 fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<TruncationInfo>) {
+    // ADR-060 D1: the invariant's take-before-write — the relay's own
+    // terminal row is about to exist, so the cancelled-row guard (which
+    // shares this slot from inside the response body) can never add a
+    // second one when the body is later dropped.
+    ctx.cancel.take();
     let (usage, usage_missing) = match st.tap.finish() {
         SseUsageOutcome::Complete(u) => (Some(u), false),
         SseUsageOutcome::Missing => (None, true),
@@ -2550,12 +2636,11 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn request_timeout_trips_a_busy_relay_into_declared_truncation() {
-        // A trickle upstream: head + one SSE chunk every 30ms (every gap
-        // well under the 10s idle bound), forever — past the 400ms
-        // whole-request bound. The relay must be killable at the bound
-        // and the trip must be a DECLARED truncation.
+    /// A trickle upstream: head + one SSE chunk every 30ms (every gap
+    /// well under any idle bound used here), forever — past whatever
+    /// bound the caller arms. The relay keeps producing while the
+    /// caller keeps polling.
+    async fn trickle_listener() -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -2586,6 +2671,16 @@ mod tests {
                 });
             }
         });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_timeout_trips_a_busy_relay_into_declared_truncation() {
+        // A trickle upstream: head + one SSE chunk every 30ms (every gap
+        // well under the 10s idle bound), forever — past the 400ms
+        // whole-request bound. The relay must be killable at the bound
+        // and the trip must be a DECLARED truncation.
+        let port = trickle_listener().await;
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let f = forwarder(test_config(10_000, 400, port), Some(trace.clone()));
         let t0 = std::time::Instant::now();
@@ -2639,5 +2734,95 @@ mod tests {
                 )
             }
         }
+    }
+
+    // -- ADR-060 D1: the cancelled row on the shipped cancellation path --
+
+    /// Arm A, wired (the disabling edit is `CancelGuard::new` in
+    /// `forward_stream`): dropping the handler future mid-head-phase —
+    /// what hyper does when the client disconnects before any response
+    /// head exists — writes exactly one terminal row: `499`, kind
+    /// `canceled`, `stage: not_billed` (an attempt was submitted but
+    /// this process never observed a full write), and NO second row
+    /// ever appears.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_the_head_phase_future_writes_the_canceled_row() {
+        let port = slow_head_listener().await;
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = forwarder(test_config(10_000, 10_000, port), Some(trace.clone()));
+        let fut = f.forward_stream(
+            WireApi::Chat,
+            STREAM_BODY,
+            "req-cancel-a",
+            &[],
+            TransformMode::Passthrough,
+        );
+        // Drop the future the way hyper drops a disconnected client's
+        // handler future: mid-await, before any outcome existed.
+        let dropped = tokio::time::timeout(std::time::Duration::from_millis(150), fut)
+            .await
+            .is_err();
+        assert!(dropped, "the future must still be awaiting its head");
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1, "exactly one terminal row");
+        let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+        assert_eq!(rec["result"]["status"], 499);
+        assert_eq!(rec["result"]["attempts"], 1);
+        let e = &rec["errors"][0];
+        assert_eq!(e["kind"], "canceled");
+        assert_eq!(e["details"]["stage"], "not_billed");
+        assert_eq!(e["details"]["canceled_by"], "client");
+        assert_eq!(e["details"]["wrote_full_request"], false);
+    }
+
+    /// Arm B, wired (the disabling edit is `guard_body` in
+    /// `forward_stream`'s success arm): a `2xx` head was forwarded and
+    /// bytes were relayed, then the response body is dropped — what
+    /// hyper does when the client disconnects mid-stream. Exactly one
+    /// row: the head's status, `stream_end: client_closed`,
+    /// `relayed_bytes > 0`, `retry_refused: forwarded`, and no second
+    /// row from the guard after the relay's own terminal write would
+    /// have run.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_the_response_body_mid_stream_writes_the_client_closed_row() {
+        let port = trickle_listener().await;
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = forwarder(test_config(10_000, 10_000, port), Some(trace.clone()));
+        let outcome = f
+            .forward_stream(
+                WireApi::Chat,
+                STREAM_BODY,
+                "req-cancel-b",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        let s = match outcome {
+            StreamOutcome::Success(s) => s,
+            StreamOutcome::Failure(f) => {
+                panic!("the trickle head must answer: {} {}", f.status, f.message)
+            }
+        };
+        // Read at least one chunk so bytes are on the wire, then drop
+        // the body the way hyper drops it on a client disconnect.
+        let mut body = Box::pin(s.body);
+        use futures::StreamExt as _;
+        let first = body.next().await;
+        assert!(first.is_some(), "the trickle relayed its first chunk");
+        drop(body);
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1, "exactly one terminal row");
+        let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+        assert_eq!(rec["result"]["status"], 200);
+        assert_eq!(rec["result"]["attempts"], 1);
+        let e = &rec["errors"][0];
+        assert_eq!(e["kind"], "upstream_error");
+        assert_eq!(e["details"]["error_class"], "stream_truncated");
+        assert_eq!(e["details"]["stream_end"], "client_closed");
+        assert!(
+            e["details"]["relayed_bytes"].as_u64().unwrap_or(0) > 0,
+            "the dropped body had relayed bytes"
+        );
+        assert_eq!(e["details"]["retry_refused"], "forwarded");
     }
 }

@@ -707,11 +707,33 @@ impl Forwarder {
             transform_error: None,
             attempts: 0,
         };
+        // ADR-060 D1: the cancelled-row guard, owned by THIS frame —
+        // the buffered medium's handler future. A client disconnect
+        // mid-request drops the future (and with it this frame's
+        // locals), which is exactly the path that runs the guard's
+        // `Drop` and writes the terminal row the request would
+        // otherwise never have. The slot stays empty until the request
+        // commits to being served (filled in `forward_inner`, after
+        // the boundary refusals and the replay, before the first
+        // attempt), so a refusal's synchronous row cannot be doubled.
+        let guard = crate::cancel::CancelGuard::new(
+            self.store.clone(),
+            self.trace
+                .clone()
+                .map(|t| t as std::sync::Arc<dyn vadis_core::TraceWriter>),
+        );
         let outcome = self
-            .forward_inner(&mut facts, proto_in, body, request_id, headers)
+            .forward_inner(
+                &mut facts,
+                proto_in,
+                body,
+                request_id,
+                headers,
+                guard.slot(),
+            )
             .await;
         if let ForwardOutcome::Failure(f) = &outcome {
-            self.record_failure_trace(&facts, f);
+            self.record_failure_trace(&facts, f, Some(guard.slot()));
         }
         outcome
     }
@@ -721,8 +743,20 @@ impl Forwarder {
     /// shape cannot drift from it. Missing facts stay missing — an
     /// unparsable body has no `session` and no `blocks`, and the record
     /// says so by leaving them empty rather than inventing values.
-    /// Shared by both forwarding paths.
-    pub(crate) fn record_failure_trace(&self, facts: &RequestFacts<'_>, f: &ForwardFailure) {
+    /// Shared by both forwarding paths. `cancel` is the cancelled-row
+    /// guard's slot (ADR-060 D1): the take before this write is what
+    /// makes a second row impossible, so it happens FIRST.
+    pub(crate) fn record_failure_trace(
+        &self,
+        facts: &RequestFacts<'_>,
+        f: &ForwardFailure,
+        cancel: Option<&crate::cancel::CancelSlot>,
+    ) {
+        // The invariant's take-before-write (ADR-060 D1 §2.3): this
+        // request is about to have its terminal row.
+        if let Some(slot) = cancel {
+            slot.take();
+        }
         crate::accounting::Accountant {
             store: self.store.as_deref(),
             trace: self.trace.as_deref(),
@@ -780,6 +814,7 @@ impl Forwarder {
         body: &[u8],
         request_id: &str,
         headers: &[(String, String)],
+        cancel: &crate::cancel::CancelSlot,
     ) -> ForwardOutcome {
         let started = facts.started;
         let now_epoch_s = facts.now_epoch_s;
@@ -1206,6 +1241,17 @@ impl Forwarder {
         // this walk. Provider-exclusion semantics: a failed provider is
         // excluded whole — its other routes are not attempted either
         // (ADR-011 item 4's in-request form).
+
+        // ADR-060 D1: the request now commits to being served — the
+        // cancelled-row guard's snapshot is installed (the boundary
+        // refusals and the replay above wrote their own row and hold no
+        // in-flight attempt), so a drop from here on leaves a terminal
+        // row naming the resolved route until an attempt refreshes it.
+        cancel.refresh(crate::cancel::snapshot_facts(
+            facts,
+            &primary.provider,
+            &primary.model,
+        ));
         let mut candidates: Vec<RouteSpec> = vec![primary.clone()];
         if let Some(policy) = &plan_policy {
             let tier = plan_tier(&self.config, policy);
@@ -1540,6 +1586,15 @@ impl Forwarder {
                 // record's `result.attempts` and the cancelled-row
                 // guard read this count.
                 facts.attempts = attempt_index + 1;
+                // ADR-060 D1: refresh the cancelled-row guard to this
+                // attempt's facts — a drop mid-attempt strands exactly
+                // this state, and the outcome below sets the evidence.
+                cancel.refresh(crate::cancel::snapshot_facts(
+                    facts,
+                    &candidate.provider,
+                    &candidate.model,
+                ));
+                cancel.note_attempt(facts.attempts);
                 let outcome = transport.send_boxed(req).await;
                 let latency_us = attempt_started.elapsed().as_micros() as i64;
                 let upstream_ms = Some((latency_us / 1000) as u32);
@@ -1550,6 +1605,11 @@ impl Forwarder {
                     AttemptOutcome::Responded(resp) => {
                         last_upstream_status = Some(resp.status);
                         facts.last_upstream_status = Some(resp.status);
+                        // ADR-060 D1: a head arrived and the request was
+                        // fully written — the guard's evidence for
+                        // whichever arm a later drop takes.
+                        cancel.note_upstream_status(resp.status, upstream_ms);
+                        cancel.note_wrote_full_request();
                         // Row 6 — the outcome, FULL. `wrote_full_request` is
                         // true by construction on the answered path.
                         // ADR-051 §2.1: the wire the attempt went out on is
@@ -1648,6 +1708,10 @@ impl Forwarder {
                             // put (replacing it with this request's blocks for
                             // the NEXT request) must run after it — measure,
                             // then replace (§12.10.6).
+                            // ADR-060 D1: the take-before-write — this request
+                            // is about to have its terminal row, so the
+                            // cancelled-row guard can never add a second.
+                            cancel.take();
                             let ctx = crate::accounting::AccountCtx {
                                 request_id,
                                 received_event: facts.received_event,
@@ -1985,6 +2049,9 @@ impl Forwarder {
                         // may already have been billed. No retry, no failover,
                         // and deliberately **no closure event** — the unpaired
                         // intent is the `unknown_outcome` reconciliation finds.
+                        // ADR-060 D1: the request bytes were fully written —
+                        // the guard's `stage` evidence.
+                        cancel.note_wrote_full_request();
                         let timed_out = err.kind == TransportKind::Timeout;
                         return ForwardOutcome::Failure(ForwardFailure {
                             status: if timed_out { 504 } else { 502 },
@@ -3216,6 +3283,98 @@ mod walk_tests {
             0,
             "the foreign transport was never handed a request"
         );
+    }
+
+    // -- ADR-060 D1: the buffered medium's cancelled row -----------------
+
+    /// A transport whose attempt never resolves — the in-flight attempt
+    /// a client disconnect drops.
+    struct HangingTransport;
+
+    impl ProviderSend for HangingTransport {
+        fn send(
+            &self,
+            _req: HttpRequest<Bytes>,
+        ) -> impl Future<Output = vadis_providers::AttemptOutcome> + Send {
+            std::future::pending()
+        }
+    }
+
+    #[derive(Default)]
+    struct CaptureTrace {
+        records: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl vadis_core::TraceWriter for CaptureTrace {
+        fn write(&self, rec: &vadis_core::trace::DecisionRecord) -> Result<Option<String>, String> {
+            self.records
+                .lock()
+                .unwrap()
+                .push(serde_json::to_string(rec).unwrap());
+            Ok(Some("test:0".into()))
+        }
+        fn config_digest(&self) -> &str {
+            ""
+        }
+    }
+
+    /// Arm A on the buffered medium (the disabling edit is
+    /// `CancelGuard::new` in `forward`): dropping the handler future
+    /// mid-attempt — what hyper does when the client disconnects —
+    /// writes exactly one terminal row: `499`, kind `canceled`,
+    /// `stage: not_billed`, and no other row ever.
+    #[tokio::test]
+    async fn dropping_the_buffered_future_mid_attempt_writes_the_canceled_row() {
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![provider("native", WireApi::Chat)],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let f = Forwarder {
+            config,
+            transports: HashMap::from([(
+                "native".to_string(),
+                Arc::new(HangingTransport) as Arc<dyn ProviderTransport>,
+            )]),
+            api_keys: HashMap::from([("native".to_string(), vec!["sk-unit".to_string()])]),
+            store: None,
+            trace: Some(trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>),
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        };
+        let body =
+            r#"{"model":"native/m","messages":[{"role":"user","content":"x"}],"stream":false}"#;
+        let fut = f.forward(
+            WireApi::Chat,
+            body.as_bytes(),
+            "req-cancel-buffered",
+            &[],
+            TransformMode::Passthrough,
+        );
+        // Drop the future the way hyper drops it on a client disconnect.
+        let dropped = tokio::time::timeout(std::time::Duration::from_millis(150), fut)
+            .await
+            .is_err();
+        assert!(dropped, "the attempt must still be in flight");
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1, "exactly one terminal row");
+        let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+        assert_eq!(rec["result"]["status"], 499);
+        assert_eq!(rec["result"]["attempts"], 1);
+        let e = &rec["errors"][0];
+        assert_eq!(e["kind"], "canceled");
+        assert_eq!(e["details"]["stage"], "not_billed");
+        assert_eq!(e["details"]["canceled_by"], "client");
     }
 
     // -- minimal legal config sections for the unit fixtures ------------
