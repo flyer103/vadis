@@ -479,6 +479,12 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use vadis_core::trace::DecisionRecord;
 
+    /// The drain flag is process-global and crate tests run in parallel
+    /// threads: every test that asserts a `canceled_by` word holds this
+    /// lock, so the flag's set/reset window cannot leak into another
+    /// test's row.
+    static FLAG_LOCK: StdMutex<()> = StdMutex::new(());
+
     /// Captures every record the guard writes.
     #[derive(Default)]
     struct CaptureTrace {
@@ -529,6 +535,7 @@ mod tests {
     /// `canceled_by: client`, `attempts: 0`.
     #[test]
     fn drop_writes_the_arm_a_row_when_no_attempt_was_submitted() {
+        let _flag = FLAG_LOCK.lock().unwrap();
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
         let guard = CancelGuard::new(None, Some(t));
@@ -554,6 +561,7 @@ mod tests {
     /// count carried.
     #[test]
     fn arm_a_names_unknown_outcome_when_the_attempt_fully_wrote() {
+        let _flag = FLAG_LOCK.lock().unwrap();
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
         let guard = CancelGuard::new(None, Some(t));
@@ -619,6 +627,7 @@ mod tests {
     /// afterwards so other tests in this process keep the client word.
     #[test]
     fn the_drain_flag_names_shutdown_as_the_canceller() {
+        let _flag = FLAG_LOCK.lock().unwrap();
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
         let guard = CancelGuard::new(None, Some(t));

@@ -642,6 +642,11 @@ pub(crate) struct RequestFacts<'a> {
     /// spliced (spec §8 / DESIGN §12.12: forwarded unedited, declared in
     /// `errors[]` as `transform_error`, empty `transforms[]`).
     pub(crate) transform_error: Option<vadis_core::trace::TraceError>,
+    /// ADR-060 D2: the bounded, redacted slice of the upstream's own
+    /// error body, captured at the failure head the classifier read —
+    /// attached to the terminal failure record's `errors[0].details`
+    /// (trace only; the client-facing body keeps its shape).
+    pub(crate) upstream_body: Option<Value>,
     /// ADR-060 D3: how many upstream attempts this request has made so
     /// far — incremented at each attempt's start (after the intent row,
     /// before the wire), read by the terminal record (`result.attempts`)
@@ -705,6 +710,7 @@ impl Forwarder {
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
+            upstream_body: None,
             attempts: 0,
         };
         // ADR-060 D1: the cancelled-row guard, owned by THIS frame —
@@ -757,6 +763,15 @@ impl Forwarder {
         if let Some(slot) = cancel {
             slot.take();
         }
+        // ADR-060 D2: the refusal's diagnosability member rides the
+        // record's own errors[0].details — a CLONE of the failure, so
+        // the client-facing §8 body keeps its shape (the attach helper
+        // is the only writer of the key; the slice is the only value it
+        // accepts).
+        let mut failure = f.clone();
+        if let Some(slice) = facts.upstream_body.clone() {
+            crate::upstream_body::attach(&mut failure, slice);
+        }
         crate::accounting::Accountant {
             store: self.store.as_deref(),
             trace: self.trace.as_deref(),
@@ -791,7 +806,7 @@ impl Forwarder {
                 transforms: facts.transform_records.clone(),
                 transform_error: facts.transform_error.clone(),
             },
-            f,
+            &failure,
             facts
                 .attempted_route
                 .as_ref()
@@ -1610,6 +1625,19 @@ impl Forwarder {
                         // whichever arm a later drop takes.
                         cancel.note_upstream_status(resp.status, upstream_ms);
                         cancel.note_wrote_full_request();
+                        // ADR-060 D2: the bounded, redacted slice of the
+                        // upstream's own error body, from the same bytes
+                        // the classifier reads — attached to the terminal
+                        // failure record (never the client body).
+                        if !(200..300).contains(&resp.status) {
+                            let creds: Vec<&str> = self
+                                .api_keys
+                                .values()
+                                .flatten()
+                                .map(String::as_str)
+                                .collect();
+                            facts.upstream_body = crate::upstream_body::capture(&resp.body, &creds);
+                        }
                         // Row 6 — the outcome, FULL. `wrote_full_request` is
                         // true by construction on the answered path.
                         // ADR-051 §2.1: the wire the attempt went out on is
@@ -3375,6 +3403,124 @@ mod walk_tests {
         assert_eq!(e["kind"], "canceled");
         assert_eq!(e["details"]["stage"], "not_billed");
         assert_eq!(e["details"]["canceled_by"], "client");
+    }
+
+    // -- ADR-060 D2: the diagnosable refusal -----------------------------
+
+    /// A transport answering one deterministic 400 whose error body
+    /// quotes both the provider's reason and the process's own
+    /// credential.
+    struct RefusingTransport {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ProviderSend for RefusingTransport {
+        fn send(
+            &self,
+            _req: HttpRequest<Bytes>,
+        ) -> impl Future<Output = vadis_providers::AttemptOutcome> + Send {
+            self.seen.lock().unwrap().push("attempt".to_string());
+            async {
+                vadis_providers::AttemptOutcome::Responded(vadis_providers::UpstreamResponse {
+                    status: 400,
+                    retry_after: None,
+                    content_type: Some("application/json".into()),
+                    body: Bytes::from_static(
+                        br#"{"error":{"message":"Unknown parameter: foo (key sk-live-UNITCRED9876543210 rejected)","type":"invalid_request_error"},"request_id":"req_x","echoed":"user text"}"#,
+                    ),
+                })
+            }
+        }
+    }
+
+    /// The wiring (the disabling edit is `crate::upstream_body::capture`
+    /// in `forward`'s failure-head arm): a deterministic refusal's trace
+    /// record carries `errors[0].details.upstream_body` — allowlisted,
+    /// credential-redacted — while the client-facing failure keeps its
+    /// original details (no upstream_body member).
+    #[tokio::test]
+    async fn a_deterministic_refusal_carries_the_redacted_slice_on_the_trace_only() {
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![provider("native", WireApi::Chat)],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let f = Forwarder {
+            config,
+            transports: HashMap::from([(
+                "native".to_string(),
+                Arc::new(RefusingTransport {
+                    seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                }) as Arc<dyn ProviderTransport>,
+            )]),
+            api_keys: HashMap::from([(
+                "native".to_string(),
+                vec!["sk-live-UNITCRED9876543210".to_string()],
+            )]),
+            store: None,
+            trace: Some(trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>),
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        };
+        let body =
+            r#"{"model":"native/m","messages":[{"role":"user","content":"x"}],"stream":false}"#;
+        let outcome = f
+            .forward(
+                WireApi::Chat,
+                body.as_bytes(),
+                "req-d2",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+        // The client-facing shape: the walk's deterministic refusal
+        // (spec §8 — 502 with the class), and NO upstream_body member
+        // in its details (the slice is the trace's, not the client's).
+        let failure = match outcome {
+            ForwardOutcome::Failure(f) => f,
+            ForwardOutcome::Success(_) => panic!("the deterministic 400 must refuse"),
+        };
+        assert_eq!(failure.status, 502);
+        assert!(
+            failure
+                .details
+                .as_ref()
+                .is_none_or(|d| d.get("upstream_body").is_none()),
+            "the client body carries no upstream_body"
+        );
+        // The trace record: the slice, redacted and allowlisted.
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1);
+        let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+        let ub = &rec["errors"][0]["details"]["upstream_body"];
+        assert_eq!(ub["shape"], "json");
+        assert_eq!(
+            ub["error"]["type"], "invalid_request_error",
+            "the nested error object survives one level"
+        );
+        let msg = ub["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("Unknown parameter: foo"),
+            "the diagnosis survives: {msg}"
+        );
+        assert!(
+            !msg.contains("UNITCRED"),
+            "the process's own credential never survives: {msg}"
+        );
+        assert!(msg.contains("[redacted]"));
+        for banned in ["request_id", "echoed"] {
+            assert!(ub.get(banned).is_none(), "{banned} is not allowlisted");
+        }
     }
 
     // -- minimal legal config sections for the unit fixtures ------------

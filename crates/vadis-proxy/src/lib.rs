@@ -14,6 +14,7 @@ mod revision;
 mod state_read;
 mod stream_forward;
 mod stubs;
+mod upstream_body;
 
 pub use accounting::{
     quota_plan_from_cfg, route_accounting, trace_error_for_failure, AccountCtx, AccountResult,

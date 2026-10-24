@@ -300,6 +300,7 @@ impl Forwarder {
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
+            upstream_body: None,
             attempts: 0,
         };
         // ADR-053 §3 — `server.request_timeout` becomes real on the
@@ -1434,6 +1435,22 @@ impl Forwarder {
                             // bytes that arrived.
                             let status = head.status;
                             let resp = head.into_upstream_response(idle).await;
+                            // ADR-060 D2: the bounded, redacted slice of
+                            // the upstream's own error body, from the same
+                            // bytes the classifier reads below — attached
+                            // to the terminal failure record (never the
+                            // client body, which on this arm never sees a
+                            // byte of the error head at all).
+                            {
+                                let creds: Vec<&str> = self
+                                    .api_keys
+                                    .values()
+                                    .flatten()
+                                    .map(String::as_str)
+                                    .collect();
+                                facts.upstream_body =
+                                    crate::upstream_body::capture(&resp.body, &creds);
+                            }
                             let evidence = ErrorEvidence {
                                 status: Some(status),
                                 retry_after: resp.retry_after.as_deref(),
