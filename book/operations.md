@@ -217,6 +217,47 @@ be adopted online: it is tried on a share of *new* sessions only (never changed 
 which would discard the prefix cache), and it reverts by itself when its declared signals go
 wrong (ADR-012, ADR-013).
 
+### Replace the binary, never its inode
+
+**Never `cp` a new build over a binary that is running.** On macOS, writing into the inode
+that `serve` is executing can invalidate its code signature and kill the process before it
+can report an error. Stop the service and replace the file atomically instead. The shipped
+[`scripts/vadis-deploy.sh`](../scripts/vadis-deploy.sh) checks for an executing or open binary,
+runs your stop command, checks again, stages the new file beside the installed one, and uses
+`mv` to give the installed path a new inode. It prints the old and new inode and SHA-256
+identity; on macOS it ad-hoc signs a Mach-O binary before running your start command.
+
+```bash
+VADIS_DEPLOY_STOP='<your service stop command>' \
+VADIS_DEPLOY_START='<your service start command>' \
+scripts/vadis-deploy.sh /path/to/new/vadis "$HOME/bin/vadis"
+```
+
+The one-line sequence is **stop → verify that nothing is executing the old file → atomic
+`mv` → `codesign` where needed → start**. If the second check finds the binary still running,
+the script refuses and leaves it alone. The check uses `lsof`, which must be installed. Your
+stop command must wait until the old process has exited, as a service manager's stop operation
+normally does.
+
+### A supervised stop leaves a death line
+
+Run the server through [`scripts/vadis-serve-wrapper.sh`](../scripts/vadis-serve-wrapper.sh)
+when you want `TERM`, `INT`, or `HUP` to leave an explicit record:
+
+```bash
+scripts/vadis-serve-wrapper.sh /path/to/vadis serve
+```
+
+Each caught signal appends one line containing the UTC timestamp, supervised pid, child pid,
+signal, and uptime to **`${XDG_STATE_HOME:-$HOME/.local/state}/vadis/death.log`**. Set
+`VADIS_DEATH_LOG` to choose another file. The wrapper forwards the signal and exits; it never
+restarts the server. `SIGKILL`, a kernel failure, and power loss cannot be caught, so those
+deaths still require the operating system's own crash or shutdown records.
+
+Run [`scripts/test-vadis-ops.sh`](../scripts/test-vadis-ops.sh) to exercise the deployment
+refusal, inode replacement, hook order, and signal record against fake executables in a
+temporary directory. The test needs no vadis binary, configuration, or network port.
+
 ## Troubleshooting entry points
 
 | Symptom | First thing to check |
