@@ -472,6 +472,49 @@ classification, never a fourth fact about it: a failure whose body could not be 
 class, and §4.6 rule 3's account-moving verdict is reachable on a streaming request for the same reason it is
 reachable on a buffered one.
 
+**One failure may be retried on its own route, and only where nothing was written and nothing was billed**
+(ADR-060 D3). The two conditions are separate facts and both are required — a retry needs the client's output
+to be empty **and** the attempt to be unbillable:
+
+| Evidence at the failure | Billed? | Retry the same route |
+|---|---|---|
+| the request bytes were never fully written (connect / TLS / pre-write transport failure) | no | **yes**, bounded |
+| an **error-status** head arrived and the attempt served none of its body (the read failed); a refusal generates nothing | no | **yes**, bounded |
+| the request was fully written and nothing came back at all (`unknown_outcome`, §8) | **maybe** | **no** |
+| a **2xx** head arrived and any byte of its body arrived, or the body was cut before its terminal event | **yes** — the model was invoked | **no** |
+| `server.request_timeout` tripped (the outer bound, ADR-053) | unknown, and no budget remains | **no** |
+| `format_error` / `content_policy_blocked` (deterministic for the unchanged request, ADR-011 item 3) | — | **no** |
+| any other answer that was read — a 5xx, a 429, a 401 | no | **no**: that is §4.2's walk, unchanged, and a same-route retry of it would only double the wait before the move |
+
+The last two rows are as load-bearing as the first two: **the retry this rule permits is narrower than "the
+stream was cut"**. A cut after a `2xx` head is a served attempt, and every served attempt is terminal — which
+is also the tightening that replaces the old `relayed == 0` proxy with two facts, since "no byte reached the
+client" is not the same thing as "nothing was billed" (a `200` head with no body byte yet is a model already
+generating).
+
+- **Same route first, then the walk.** The retry is `provider/model`-identical to the attempt that failed and
+  it runs **before** the candidate walk, because a walk is a route change and a route change destroys the
+  prefix cache and pays a re-prefill (ADR-011 item 9). A retry that serves therefore writes **no**
+  `failover.triggered` row and no `result.failover_from`: nothing moved, and the record says so.
+- **Cap, backoff, floor** — three constants, no configuration key: **one retry per route per request**
+  (`STREAM_RETRY_CAP = 1`, i.e. two attempts on a route, and the walk's own candidate count unchanged, so a
+  request attempts at most `candidates × 2` times); a fixed **250 ms** wait before it (`RETRY_BACKOFF_MS`, a
+  ladder is meaningless at one retry and a jitter is meaningless with one operator); and the retry is
+  attempted only when the remaining `server.request_timeout` budget is **≥ 1000 ms after that wait**
+  (`RETRY_FLOOR_MS`). The retry's own attempt window is unchanged (`server.upstream_attempt_timeout`, bounded
+  by the request deadline).
+- **Both forwarding media.** The evidence table does not know the medium; what the medium decides is whether
+  any of the client's output is already on the wire, and on the buffered path none can be (its head is
+  produced only once the body is complete) — so every buffered failure is in the "nothing forwarded" column.
+  The "something forwarded" column is the SSE medium's, and there §4.20's relay refuses the walk after the
+  first relayed byte.
+- **The record names the refusal, not only the retry.** A failure entry carries
+  `details.retry_refused ∈ {forwarded, billed, deterministic, budget}` whenever the table above was consulted
+  and answered *no* — so a reader can tell *the retry happened and failed* (`result.attempts ≥ 2`) from *no
+  retry was permitted, and why*. §6 states the field; the word set is closed and each value has one meaning:
+  `forwarded` = output was already on the wire, `billed` = the attempt may have been billed
+  (`unknown_outcome`), `deterministic` = a re-probe reproduces the refusal, `budget` = the cap or the floor.
+
 ### 4.3 `inject` (plugin dependency declaration)
 
 `inject: [<service>…]` declares the service slots this plugin depends on (Cordis's coeffect declaration,
@@ -1956,6 +1999,16 @@ log scan is exactly what that forbids. The omission is constant, and the respons
 (`# vadis: unknown_outcome_requests omitted — the figure lives in the event log and this surface does not
 scan it`), so its absence can never be read as a zero. `vadis stats` remains the surface for it.
 
+**A cancelled request's row moves two of these figures and adds none** (ADR-060 D1). §6's cancelled class
+writes a **non-2xx** record (`result.status: 499`, the head-never-existed arm), so the row counts in
+`vadis_requests_failed` and its kind appears in `vadis_failures_by_kind{kind="canceled"}` — no series is
+added and no derivation is duplicated (the one-owner rule below still holds: this surface formats
+`vadis stats`' figures and computes none). The event-side figure is **unchanged and still omitted** with the
+reason above, and the two counts are different populations by construction: the event log counts intents no
+response closed (a process killed before it could write counts there and nowhere in the trace), the trace
+counts rows a live process wrote. Neither may be read as the other, and this surface may not scan the log to
+try.
+
 **One owner for every value.** The figures are the ones `vadis stats` already derives — the window read and
 `stats::aggregate` — and the surface **formats** them; it may not compute a figure from records, and the
 formatter's signature admits none (DESIGN §12.21). Two consequences are contract, not implementation detail:
@@ -2162,6 +2215,13 @@ and green. One amendment `R74-1` was forced to make is recorded at §4.20.1's ra
 own rig table (§4.20.7's cases) drives `400ms` windows, which the section text's original 1 s floor
 would have refused — the rigs win (an assertion is not a card's to edit), and the floor is 100 ms.*
 
+*Amended by `ADR-060` (2026-10-24, contract only): §4.20.3's cause vocabulary gains a fourth value,
+**`client_closed`** — the one cause the *client* produced; a truncation that had already written to the client
+carries `details.retry_refused: "forwarded"` (§4.2); a `client_closed` cut writes **no** route cooldown
+(§4.20.5, because the route was healthy and the reader left); and §4.20.4's `stream_incomplete` population
+gains the rows that previously were not written at all. The three bounds, their ranges, the relay's
+write-through and the "never fabricate a terminal" rule are untouched.*
+
 Three facts about a streamed response are stated here, because each was measured on a 13-day trace window
 and each was previously either absent or expressed by the wrong knob: **how long a stream may stay
 silent** (§4.20.1–§4.20.2), **why a stream ended short** (§4.20.3), **which bucket a request lands in**
@@ -2254,9 +2314,17 @@ A truncation is recorded as it is today (a `200` head plus one `errors[]` entry 
 | **`idle_timeout`** | the upstream went **silent** | the per-read gap bound tripped with the connection still open | **present** — the window actually in force for that read (the `min()` above) |
 | **`upstream_ended_early`** | the upstream **closed first** | the body ended with **no bound tripped** — a clean EOF of an **SSE** body before its terminal event, or a transport error (any media type) | **absent** — no bound tripped |
 | **`request_timeout`** | **our own** outer bound | `server.request_timeout`'s deadline was reached | **present** — the effective window of the tripping read |
+| **`client_closed`** | **the client** closed the response | the response body was dropped at the client: it disconnected mid-stream, so the relay stopped reading and nothing further was forwarded (DESIGN §12.10.3 R5; ADR-060 D1) | **absent** — no bound of ours tripped, and the upstream did not fail |
 
-The vocabulary is **closed** and `stream_end` is **never null** on a truncation entry. Alongside it, three
-observables are always present on that entry:
+The vocabulary is **closed** and `stream_end` is **never null** on a truncation entry. `client_closed` is the
+one value the **client** produced — the other three are facts about the other end of the wire or about our own
+clock — and it is the reason a truncation's *count* must not be read as a statement about the upstream without
+reading its causes (§4.20.4's figure keeps its definition; its population gains the rows that previously were
+not written at all). Two consequences follow directly: it writes **no** cooldown (§4.20.5 — the route is
+healthy and the reader left), and it is the only truncation that can arise on a *stream the upstream was still
+serving*.
+
+Alongside it, three observables are always present on that entry:
 
 | Key | Type | Value |
 |---|---|---|
@@ -2266,7 +2334,17 @@ observables are always present on that entry:
 
 The event log's `upstream.responded` carries the same two words (`stream_completed` = **not violated**, i.e.
 `true` unless the body was truncated — a body that is not SSE included; `stream_end` present iff truncated), so
-the demotion rule of §4.20.5 is derivable from the event alone.
+the demotion rule of §4.20.5 is derivable from the event alone. `error.classified` gains the same `stream_end`
+word beside its `detail` when the failure is a truncation, so the **per-attempt** sequence of causes is
+readable from the log while the record keeps the terminal cause (`result.attempts`, §6).
+
+**A truncation that had already written to the client says that no retry followed, and why.** When
+`relayed_bytes > 0` the entry carries `details.retry_refused: "forwarded"` (§4.2's closed word set): the class
+table considered a retry and refused it, because the client's output is already on the wire and a second
+attempt would duplicate it (ADR-060 D3 — no resumption mechanism exists in any of the three wired protocols).
+A truncation with `relayed_bytes == 0` carries `retry_refused` only when the table refused for one of the
+other three reasons, and carries no such member when the attempt *was* retried — the row then belongs to the
+retrying attempt and `result.attempts ≥ 2` is the fact that a retry happened.
 
 **Why the causes are separate, and not a boolean.** §4.20.5's instrument must be able to target **silence**
 alone: a graceful early close is not a stall, and punishing it would make a gateway fire on a route that is
@@ -2291,6 +2369,15 @@ may hold both vintages.
 **The invariant: `succeeded + failed + stream_incomplete == requests`**, for any window and any mixture of
 vintages. `result.status` is **not** rewritten — the client really did receive a `200` head, and a partial
 body; what changes is the aggregate's honesty.
+
+**A client-caused cut sits in the same bucket and is not the same fact** (ADR-060 D1). A record whose
+`stream_end` is `client_closed` is a `2xx` **with** a `stream_truncated` entry, so the predicate above lands it
+in `stream_incomplete` — the body did not complete, whoever ended it — and the cause word is what separates it
+from a cut the upstream caused. What the ruling changes is the **population**, never the definition: these
+requests previously wrote no record at all, so a window's `stream_incomplete` now includes them and **no
+comparison of that figure across the change is meaningful** (the stance §4.20.6 already took for
+`overhead_ms_p99` across R74). `failed` likewise gains the head-never-existed arm's `499` rows (§6), for the
+same reason: rows that did not exist cannot be compared with rows that do.
 
 **`usage_missing` is orthogonal to the partition, and is never a fourth bucket.** It partitions the same
 `requests` on a different axis (was a measurement obtained?), is reported on its own line, and is **never**
@@ -2319,7 +2406,7 @@ summary of it names the route-scoped case — *"every other failure is a fact ab
 |---|---|
 | Landing | `provider_cooldown` — `scope = "route"`, `provider`, `model` = the route's **native model id** (never an alias, never `""`), `until_us`, `reason = "stream_silence"` |
 | Second landing | the **same** object inside the `error.classified` payload as `demotion`, with exactly `{scope, provider, model, until_us, ttl_s, reason}` — the incremental write and `rebuild_cooldown` share one source, so the projection reproduces from the log (CONF-21's identity) |
-| Trigger | **one** such truncation (no streak, no counter — a counter would be state the log cannot rebuild); a truncation whose `stream_end` is `upstream_ended_early` or `request_timeout` writes **nothing** |
+| Trigger | **one** such truncation (no streak, no counter — a counter would be state the log cannot rebuild); a truncation whose `stream_end` is `upstream_ended_early`, `request_timeout` or `client_closed` writes **nothing** (the first two because the upstream's behaviour is not a stall and our own deadline is not the route's fault, the third because the client left and the route is healthy) |
 | TTL | **60 s** — a code constant, not a config key |
 | Effect | the candidate walk **prefers** an eligible candidate whose route is not silence-cooling, and leaves a cooling one **only when such a candidate exists**. The skip narrates `result.failover_from` naming the abandoned route and writes **no** `failover.triggered` row (ADR-024) |
 | Never | it **never refuses a request**: a `stream_silence` row is not a reason for `no_available_route`, never appears in `skipped[]`, and when it is the only eligible route the request is attempted as usual. It is *advisory*, and `reason = "stream_silence"` is the value that says so |
@@ -2388,8 +2475,8 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | response cache | `cache` — **present iff this record's response came from the recorded store** (§4.17), i.e. iff no upstream call was made: `verdict` (`inferred`, always — §7 / constraint 4), `key_digest` (the `sha256` of the client's inbound body bytes **as received**), `replayed` (`request_id` of the record the bytes came from + its `session` + its `turn_index`), `replayed_bytes` (how many response bytes were returned — a count of bytes, never a price and never a saving). See the paragraph below for the three properties a reader must not have to derive |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
-| result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms` |
-| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large}` (§8 — the vocabulary is shared with §8's `error.type` table, and the two lists move together; `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound) |
+| result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
 
 **`protocol` records what left the process outbound, and `translated` records an event — never a comparison.**
 `protocol_out` names the wire the request's bytes actually went out on. Because only a route that **declares the
@@ -2429,7 +2516,8 @@ remain truncations whatever the media type. For an SSE body the terminal predica
 for `chat`, the `responses` terminal events,
 `message_stop` for `anthropic`); a body that ends without it is a **truncation** — a `200` head plus one
 `errors[]` entry with `details.error_class: "stream_truncated"` and a `details.stream_end` cause word
-(§4.20.3: `idle_timeout` / `upstream_ended_early` / `request_timeout`). The partition of `requests` is
+(§4.20.3: `idle_timeout` / `upstream_ended_early` / `request_timeout` / `client_closed` — the last one being
+the client's own disconnect, §6's cancelled class). The partition of `requests` is
 therefore three-way and mutually exclusive — `failed` (`result.status` not 2xx), `stream_incomplete`
 (2xx **with** such an entry), `succeeded` (2xx without one) — with
 `succeeded + failed + stream_incomplete == requests` (§4.20.4). `usage_missing` is a **second, orthogonal
@@ -2620,6 +2708,87 @@ fact of an unread body is not invented). Everything else in the table — `event
 zeroed usage, `0` cost, `null` `plan_switch`, `result.overhead_ms` measured against `upstream_ms: null`, the
 `decision.provider` / `model` empty strings — is identical, because it follows from the same single fact: no
 pipeline stage ran.
+
+**A cancelled request has a row, and the row says which kind of unknown it is** (ADR-060 D1). A request the
+client abandons — the connection closes, so the future or the response body the server is running is dropped —
+ends with no terminal event of its own. It may not end with no record: the trace is the product (constraint 3)
+and the state truth already names this case (DESIGN §12.10.3 R5; §8's crash window). Two shapes, one class:
+
+| | arm A — no response body was in flight | arm B — a `2xx` head was forwarded and the body was in flight |
+|---|---|---|
+| `result.status` | **`499`** | the head's status (`200`) |
+| `result.attempts` | the attempts made — `0` when none was submitted | the attempts made |
+| `result.upstream_status` / `upstream_ms` | the answering head's status when one had arrived (e.g. vadis was composing a refusal that was never delivered), else `null` / `null` | the head's status / measured |
+| `result.overhead_ms` | measured — vadis's own work up to the cancellation | measured |
+| `result.failover_from` / `plan_switch` | exactly as the walk left them | idem |
+| `usage` / `usage_missing` | zeroed / **`true`** | zeroed unless the tap completed; `true` when it did not |
+| `cost.*` / `quota_after` | `0` / `null` | `0` / `null` |
+| `errors[0]` | `{kind: "canceled", details: {stage, canceled_by, attempt, wrote_full_request}}` | `{kind: "upstream_error", details: {error_class: "stream_truncated", stream: true, stream_end: "client_closed", relayed_bytes, since_last_byte_ms, retry_refused: "forwarded"}}` |
+
+- **`result.status: 499`** is this format's word for *the client closed the request before any response head
+  existed* (nginx's own marker). It is **never written to a socket** and never a status a client received, and
+  it is deliberately **not** `null`: `result.status` is a `u16`, a nullable one would change how every existing
+  reader reads the field (the `cost.currency` class that moved the version to 2), and an added **value** is
+  additive while a changed **type** is not — so `schema_version` stays **2**. The consequence is stated rather
+  than hidden: arm A counts in `failed` (`result.status` is not 2xx) and `errors[0].kind` is what separates it
+  from a refusal.
+- **`details.stage`** is `unknown_outcome` when an attempt was submitted and the request bytes were fully
+  written — the attempt **may have been billed**, which is §8's word for exactly this and the word the
+  buffered path's `WrittenNoResponse` class already carries — and `not_billed` otherwise (nothing left this
+  process that a provider could charge for: an attempt that never reached a full write, or no attempt at all).
+- **`details.canceled_by`** ∈ `{client, shutdown}`: the two producers (a disconnect; the graceful drain).
+  **`details.attempt`** / **`details.wrote_full_request`** are the evidence ADR-011 item 6 is written over.
+- Arm B is §4.20.3's truncation shape with its fourth cause word, so it lands in `stream_incomplete`
+  (§4.20.4); its `retry_refused: "forwarded"` is §4.2's word for *a retry was considered and refused because
+  the client's output is already on the wire*.
+- **Both arms are `usage_missing: true`** unless a measurement actually arrived, so neither is priced, neither
+  enters a rate as a 0-usage observation (§7's absent-measurement rule), and each counts on `usage missing` as
+  a row.
+
+**The invariant: at most one terminal row per request, and one whenever the process is alive to write it.**
+Two mechanisms, and both are contract rather than implementer discipline:
+
+1. **One owner, taken before the write.** The record's context is owned by one guard, and the ordinary terminal
+   writer **takes** it (`Option::take`) *before* it writes. A request that already has a terminal row can
+   therefore never acquire a second, unknown-outcome one. The cost of that ordering is deliberate and named: a
+   panic between the take and the write loses the row instead of duplicating it, and a lost row on a dying
+   process is the `trace_write_failed` class we already tolerate.
+2. **The guard is owned by what the server runs, and it owns the facts its row needs.** It is constructed after
+   the boundary refusals (which write their row synchronously and have no in-flight attempt) and is owned by
+   the buffered medium's handler future or the SSE medium's response body — so a client disconnect, which
+   drops one of them, is the path that runs it. It calls the same **synchronous** writer every other record
+   uses (no runtime, no timer at drop time), and the graceful shutdown must drop the in-flight futures
+   **before** the trace sink closes. Because the drop destroys the relay's state, the row is built from facts
+   the guard carries — whether the relay had been entered (a `2xx` head forwarded), the head's status, a byte
+   counter the relay updates as it forwards, the attempt count, `wrote_full_request` — and the arm follows from
+   the first of those alone: **the relay was entered ⇒ arm B, it was not ⇒ arm A** (so a refusal that was
+   being composed when the client left is arm A with its `upstream_status` intact, never a truncation).
+
+**What no mechanism here reaches, stated once:** a `SIGKILL` writes nothing. That request keeps its
+`upstream.submitted` intent and no row — the population `unknown_outcome_requests` counts, and the reason
+§4.16 says the trace-side and event-side figures are not each other.
+
+**A refusal carries a bounded, redacted slice of the upstream's own error object** (ADR-060 D2). It is a
+**response-side** record: it is drawn from the error body the classifier already reads (§4.2's evidence
+clause) and it touches no request byte, no forwarded byte and no prefix hash, so constraint 1 is not engaged —
+the request the upstream saw is the client's own bytes, unchanged. It rides the `errors[]` entry that reports
+the refusal as `details.upstream_body`, **present iff a body arrived and something survived the bounds**: an
+absent member means *no body, or nothing retained*, never "the body was empty".
+
+| Rule | Value |
+|---|---|
+| capture | ≤ **1024 bytes** of the body, from the classifier's own read — no second read, no larger buffer, no new bound on the wire |
+| fields | `message`, `type`, `code`, `param`, and `error.{message,type,code,param}` one level down; **every other key is dropped**, so a body that echoes the request contributes nothing |
+| per-field bound | `message` ≤ **256 bytes**, the others ≤ **64 bytes** each, cut on a UTF-8 boundary; `truncated: true` says a reader holds a prefix |
+| unparsable body | `shape: "text"` carries the **byte count and no bytes** — free text is never copied, which is what keeps *"never a full message body that could carry user content"* a property of the format rather than of a provider's manners |
+| redaction | the process's own configured credential values (exact match, no guessing) plus the key-shape table (`Bearer` / `Basic` schemes, `sk-…` / `pk-…`, a `key`/`token`/`secret`/`password` assignment, a ≥32-char run beside such a label) — each replaced by `[redacted]`. **No header value is ever captured**; the one header-derived fact a record carries is `Retry-After`'s duration |
+| JSONL | written by the record's own encoder, so CR/LF and every control character is escaped and the row stays **one physical line**; the bounds count **pre-escape** bytes, so a written line grows by at most the encoder's escape factor |
+| not in the store | the slice is written to the **trace only**, never to an event row (ADR-009 item 3 and ADR-011 item 8 keep bodies out of the state truth; the trace is the analysis medium) |
+
+A provider's `message` may still quote a fragment of the client's own input; the capture bound, the allowlist
+and the redaction set are the whole of the guarantee, and this contract does not claim a stronger one. Nothing
+here is a price, a token figure or a saving: it is a byte count and a bounded excerpt, and §7's vocabulary
+does not apply to it.
 
 **`decision.model` vs `decision.requested_model`** (one field would lose information, so both are kept):
 `model` is the id the request was actually billed under at the upstream — the resolved roster entry's own
