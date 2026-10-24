@@ -212,6 +212,8 @@ pub fn refused_record(
         result: ResultRec {
             status: ErrorCode::Unauthorized.http_status(),
             upstream_status: None,
+            // §4.7's guard refuses before any attempt (ADR-060 D3).
+            attempts: 0,
             failover_from: None,
             plan_switch: None,
             overhead_ms,

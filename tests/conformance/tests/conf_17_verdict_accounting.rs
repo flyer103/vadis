@@ -137,6 +137,7 @@ fn empty_record() -> DecisionRecord {
         result: ResultRec {
             status: 200,
             upstream_status: Some(200),
+            attempts: 1,
             failover_from: None,
             plan_switch: None,
             overhead_ms: 0,

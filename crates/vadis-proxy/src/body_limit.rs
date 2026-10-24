@@ -131,6 +131,8 @@ pub fn too_large_record(
         result: ResultRec {
             status: ErrorCode::RequestTooLarge.http_status(),
             upstream_status: None,
+            // §4.13's bound refuses before any attempt (ADR-060 D3).
+            attempts: 0,
             failover_from: None,
             plan_switch: None,
             overhead_ms,

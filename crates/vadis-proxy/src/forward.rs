@@ -194,6 +194,9 @@ pub fn mode_refused_record(
         result: ResultRec {
             status: failure.status,
             upstream_status: None,
+            // The mode is refused before any attempt (spec §6's
+            // pre-pipeline class): nothing was attempted (ADR-060 D3).
+            attempts: 0,
             failover_from: None,
             plan_switch: None,
             overhead_ms,
@@ -639,6 +642,11 @@ pub(crate) struct RequestFacts<'a> {
     /// spliced (spec §8 / DESIGN §12.12: forwarded unedited, declared in
     /// `errors[]` as `transform_error`, empty `transforms[]`).
     pub(crate) transform_error: Option<vadis_core::trace::TraceError>,
+    /// ADR-060 D3: how many upstream attempts this request has made so
+    /// far — incremented at each attempt's start (after the intent row,
+    /// before the wire), read by the terminal record (`result.attempts`)
+    /// and by the cancelled-row guard's snapshot.
+    pub(crate) attempts: u32,
 }
 
 impl Forwarder {
@@ -697,6 +705,7 @@ impl Forwarder {
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
+            attempts: 0,
         };
         let outcome = self
             .forward_inner(&mut facts, proto_in, body, request_id, headers)
@@ -760,6 +769,7 @@ impl Forwarder {
                 .failover_from
                 .as_ref()
                 .map(|r| format!("{}/{}", r.provider, r.model)),
+            facts.attempts,
         );
     }
 
@@ -1526,6 +1536,10 @@ impl Forwarder {
                     }
                 };
                 let attempt_started = Instant::now();
+                // ADR-060 D3: this attempt now exists — the terminal
+                // record's `result.attempts` and the cancelled-row
+                // guard read this count.
+                facts.attempts = attempt_index + 1;
                 let outcome = transport.send_boxed(req).await;
                 let latency_us = attempt_started.elapsed().as_micros() as i64;
                 let upstream_ms = Some((latency_us / 1000) as u32);
@@ -1669,6 +1683,7 @@ impl Forwarder {
                                 },
                                 &blocks,
                                 upstream_ms,
+                                facts.attempts,
                             );
                             if let (Some(id), Some(s)) = (intent_id, session.as_deref()) {
                                 accountant.put_ledger(Some(s), &blocks, id);

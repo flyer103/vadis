@@ -295,6 +295,7 @@ impl Forwarder {
             transform_mode,
             transform_records: Vec::new(),
             transform_error: None,
+            attempts: 0,
         };
         // ADR-053 §3 — `server.request_timeout` becomes real on the
         // stream path, SINGLE OWNER: one deadline measured from the
@@ -1213,6 +1214,10 @@ impl Forwarder {
                 };
 
                 let attempt_started = Instant::now();
+                // ADR-060 D3: this attempt now exists (the terminal
+                // record's `result.attempts` and the cancelled-row
+                // guard's snapshot read this count).
+                facts.attempts = attempt_index + 1;
                 // The rotation arm (ADR-049 §3 rule 3), the streaming twin:
                 // a credential-class failure whose pool still holds an
                 // untried key retries the SAME route on the next key —
@@ -2338,6 +2343,9 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<Truncation
         errors,
         &blocks,
         st.head_ms,
+        // ADR-060 D3: one upstream attempt per entry of `attempted` —
+        // the pre-relay walk's and the relay's own attempts alike.
+        st.attempted.len() as u32,
     );
     // Measure, then replace (§12.10.6): the ledger put runs after the
     // continuity measurement inside `finish_stream`.

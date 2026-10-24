@@ -290,6 +290,7 @@ impl<'a> Accountant<'a> {
         outcome: &ForwardSuccess,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
+        attempts: u32,
     ) -> AccountResult {
         let failover_from = outcome
             .failover_from
@@ -307,6 +308,7 @@ impl<'a> Accountant<'a> {
             Vec::new(),
             blocks,
             upstream_ms,
+            attempts,
             None,
         )
     }
@@ -335,6 +337,7 @@ impl<'a> Accountant<'a> {
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
         failover_from: Option<String>,
+        attempts: u32,
     ) -> AccountResult {
         // The details carry the upstream status when one exists; it also
         // mirrors into result.upstream_status so the record answers both
@@ -359,6 +362,7 @@ impl<'a> Accountant<'a> {
             vec![trace_error_for_failure(&failure)],
             blocks,
             upstream_ms,
+            attempts,
             None,
         )
     }
@@ -394,6 +398,10 @@ impl<'a> Accountant<'a> {
             Vec::new(),
             blocks,
             None,
+            // The replay made no upstream attempt (ADR-042 §4.3): the
+            // attempts count of a record whose call was replaced by a
+            // hit is 0 by definition (ADR-060 D3).
+            0,
             Some(cache),
         )
     }
@@ -413,6 +421,7 @@ impl<'a> Accountant<'a> {
         extra_errors: Vec<TraceError>,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
+        attempts: u32,
     ) -> AccountResult {
         self.commit(
             ctx,
@@ -426,11 +435,15 @@ impl<'a> Accountant<'a> {
             extra_errors,
             blocks,
             upstream_ms,
+            attempts,
             None,
         )
     }
 
     /// The shared end-of-request commit (§12.10.5 note R2's order).
+    /// `attempts` is ADR-060 D3's `result.attempts` — how many upstream
+    /// attempts this request made across all routes; every constructor
+    /// states it, `0` on the classes that attempted nothing.
     #[allow(clippy::too_many_arguments)]
     fn commit(
         &self,
@@ -445,6 +458,7 @@ impl<'a> Accountant<'a> {
         extra_errors: Vec<TraceError>,
         blocks: &[PrefixBlock],
         upstream_ms: Option<u32>,
+        attempts: u32,
         // The response-cache group (spec §6): `Some` **iff** this
         // record's response came from the recorded store — every class
         // but `finish_replay` passes `None`.
@@ -613,6 +627,7 @@ impl<'a> Accountant<'a> {
             result: ResultRec {
                 status,
                 upstream_status,
+                attempts,
                 failover_from,
                 plan_switch: ctx.plan_switch.clone(),
                 overhead_ms,

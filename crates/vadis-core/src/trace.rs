@@ -306,6 +306,17 @@ impl QuotaAfter {
 pub struct ResultRec {
     pub status: u16,
     pub upstream_status: Option<u16>,
+    /// ADR-060 D3 (spec §6): how many upstream attempts this request
+    /// made, across all routes — always present, `0` on the classes
+    /// that attempted nothing (the boundary refusals,
+    /// `no_available_route`, a cancelled request that submitted no
+    /// attempt) and `≥ 1` otherwise. It is what lets a reader tell
+    /// *a same-route retry served this* (`attempts ≥ 2` with
+    /// `failover_from` null) from *the walk moved* (`attempts ≥ 2`
+    /// with `failover_from` set) from *no retry happened*
+    /// (`attempts == 1`). Additive — one added field never moves
+    /// `schema_version` (ADR-060 §5).
+    pub attempts: u32,
     /// `"<provider>/<model>"` when the request switched away from a failed
     /// route (spec §6 `failover_from`).
     pub failover_from: Option<String>,
@@ -599,6 +610,7 @@ mod tests {
             result: ResultRec {
                 status: 200,
                 upstream_status: Some(200),
+                attempts: 1,
                 failover_from: None,
                 plan_switch: None,
                 overhead_ms: 1,
@@ -607,6 +619,8 @@ mod tests {
             errors: Vec::new(),
         };
         let v = serde_json::to_value(&rec).unwrap();
+        // ADR-060 D3: `result.attempts` is always present on the wire.
+        assert_eq!(v["result"]["attempts"], 1);
         // spec §6: no failure = an EMPTY array, not an omitted field.
         assert!(v.get("errors").is_some(), "errors must serialize");
         assert_eq!(v["errors"].as_array().map(Vec::len), Some(0));
