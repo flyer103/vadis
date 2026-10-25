@@ -2740,7 +2740,7 @@ and the state truth already names this case (DESIGN §12.10.3 R5; §8's crash wi
 | `result.failover_from` / `plan_switch` | exactly as the walk left them | idem |
 | `usage` / `usage_missing` | zeroed / **`true`** | zeroed unless the tap completed; `true` when it did not |
 | `cost.*` / `quota_after` | `0` / `null` | `0` / `null` |
-| `errors[0]` | `{kind: "canceled", details: {stage, canceled_by, attempt, wrote_full_request}}` | `{kind: "upstream_error", details: {error_class: "stream_truncated", stream: true, stream_end: "client_closed", relayed_bytes, since_last_byte_ms, retry_refused: "forwarded"}}` |
+| `errors[0]` | `{kind: "canceled", details: {stage, canceled_by, attempt, wrote_full_request}}` | `{kind: "upstream_error", details: {error_class: "stream_truncated", stream: true, stream_end: "client_closed", relayed_bytes, since_last_byte_ms, retry_refused: "forwarded" when `relayed_bytes > 0`, `"billed"` when `0` (§4.20.3's zero-byte rule)}}` |
 
 - **`result.status: 499`** is this format's word for *the client closed the request before any response head
   existed* (nginx's own marker). It is **never written to a socket** and never a status a client received, and
