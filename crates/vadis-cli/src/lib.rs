@@ -575,7 +575,14 @@ pub async fn serve(config_path: &str) -> i32 {
             .unwrap_or(false);
         if is_stream {
             return match forwarder
-                .forward_stream(proto_in, &body, &request_id, &headers, transform_mode)
+                .forward_stream_with_client(
+                    proto_in,
+                    &body,
+                    &request_id,
+                    &headers,
+                    transform_mode,
+                    client,
+                )
                 .await
             {
                 vadis_proxy::StreamOutcome::Success(s) => {
@@ -615,7 +622,14 @@ pub async fn serve(config_path: &str) -> i32 {
             };
         }
         let outcome = forwarder
-            .forward(proto_in, &body, &request_id, &headers, transform_mode)
+            .forward_with_client(
+                proto_in,
+                &body,
+                &request_id,
+                &headers,
+                transform_mode,
+                client,
+            )
             .await;
         match outcome {
             ForwardOutcome::Success(s) => {

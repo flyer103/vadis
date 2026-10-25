@@ -768,18 +768,38 @@ impl Forwarder {
         headers: &[(String, String)],
         transform_mode: TransformMode,
     ) -> ForwardOutcome {
+        // The public five-parameter signature is frozen by conformance
+        // (CONF-20 calls this method directly; conformance is outside
+        // the mutable scope), so this entry point serves the direct
+        // engine caller — one with no boundary of its own — and derives
+        // the client word here, the ONE derivation that request will
+        // see (ADR-061 §4.2). The serving path does not come through
+        // here: it enters at [`Self::forward_with_client`] carrying the
+        // word the boundary guard already derived, so a served request
+        // is still derived exactly once.
+        let client = client_from_headers(headers);
+        self.forward_with_client(proto_in, body, request_id, headers, transform_mode, client)
+            .await
+    }
+
+    /// The serving path's entry point (ADR-061 §4.2's "once"): the
+    /// client word arrives **already derived** — the boundary guard's,
+    /// the same word the request's pre-pipeline records (`401`, `413`)
+    /// carry — so this frame never re-derives it and one request's rows
+    /// cannot disagree about who called.
+    pub async fn forward_with_client(
+        &self,
+        proto_in: WireApi,
+        body: &[u8],
+        request_id: &str,
+        headers: &[(String, String)],
+        transform_mode: TransformMode,
+        client: &'static str,
+    ) -> ForwardOutcome {
         // One clock read, two projections (AGENTS constraint 2): the µs
         // word feeds the plan guard (which must judge the same instant
         // /health reports), the seconds word everything else.
         let now_us = now_us();
-        // ADR-061 D3: the client word, derived from the request's own
-        // headers with the same pure function the boundary guard used —
-        // identical input, identical word, so this request's rows can
-        // never disagree with its pre-pipeline siblings. (The public
-        // signature keeps its five parameters: CONF-20 calls this
-        // method directly, and conformance is outside the mutable
-        // scope.)
-        let client = client_from_headers(headers);
         let mut facts = RequestFacts {
             request_id,
             received_event: None,

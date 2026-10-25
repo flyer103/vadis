@@ -269,11 +269,32 @@ impl Forwarder {
         headers: &[(String, String)],
         transform_mode: vadis_core::transform::TransformMode,
     ) -> StreamOutcome {
+        // The public five-parameter signature is frozen by conformance
+        // (CONF-61/CONF-62 call this method directly; conformance is
+        // outside the mutable scope), so this entry point serves the
+        // direct engine caller and derives the client word here — the
+        // one derivation that request will see (ADR-061 §4.2). The
+        // serving path enters at [`Self::forward_stream_with_client`]
+        // carrying the boundary's word.
+        let client = crate::forward::client_from_headers(headers);
+        self.forward_stream_with_client(proto_in, body, request_id, headers, transform_mode, client)
+            .await
+    }
+
+    /// The serving path's streaming entry point (ADR-061 §4.2's
+    /// "once"): the client word arrives **already derived** — the
+    /// boundary guard's — so this frame never re-derives it.
+    pub async fn forward_stream_with_client(
+        &self,
+        proto_in: WireApi,
+        body: &[u8],
+        request_id: &str,
+        headers: &[(String, String)],
+        transform_mode: vadis_core::transform::TransformMode,
+        client: &'static str,
+    ) -> StreamOutcome {
         // One clock read, two projections — the buffered path's twin.
         let now_us = now_us();
-        // ADR-061 D3: the buffered path's twin — the same pure function
-        // over the same headers, before any pipeline work.
-        let client = crate::forward::client_from_headers(headers);
         let mut facts = RequestFacts {
             request_id,
             received_event: None,
