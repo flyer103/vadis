@@ -2069,9 +2069,10 @@ re-bill (`rebill(first) = −cached → 0`, arithmetic, not a special case), whi
 columns that already exist: **no sixth class word**, no flag, no bucket and no money rule moves.
 **Two stale contracts this ruling had to stand on, both registered:** **F1** the *shipped* command prints
 `verified` on single observations (header, `cache` line, module docs, and a unit test that asserts the word)
-— `ADR-058`'s correction reached spec §9.4.3, `ADR-057` and the book's label table, not the implementation,
-which landed afterwards; §5 A1–A4 of the ADR freeze the five sites and the assertion for its implementing
-card, and the book is corrected now. **F2** spec §9.4.2 and `ADR-057` §2.2 called the block index a
+— `ADR-058`'s correction reached spec §9.4.3, `ADR-057` and the book's label table, but the surface's one
+landing commit (`296657f`, same day) wrote the word into the code, the book's `steps` section and the
+assertion at once, so it never reached the surface; §5 A1–A4 of the ADR freeze the five sites and the
+assertion for its implementing card, and the book is corrected now. **F2** spec §9.4.2 and `ADR-057` §2.2 called the block index a
 byte-order ordinal with a factor-of-four justification, while `extract_prefix_blocks` has enumerated in the
 **provider's template order** since the 2026-09-20 Plan A decision (`CONF-31`, spec §6) — the sentence is
 corrected in place and the quoted 4× was a pre-Plan-A measurement, so it is no longer restated (`ADR-057` is
