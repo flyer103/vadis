@@ -21,7 +21,8 @@
 //! (ADR-057 §6.1).
 //!
 //! Labels (spec §7): `usage.*`, the block hashes and `lcp` are
-//! **verified**; `new_tok` is **inferred** (GAP-Q14); an absent figure
+//! **measured**; `new_tok`, `kept_tok` and `rebill_tok` are
+//! **inferred** (GAP-Q14 / §9.4.8); an absent figure
 //! prints `—`/null, never `0`. A row served by a provider whose roster
 //! entry declares `account: coding_plan` prints the literal `plan` in
 //! the money column — allowance headroom is not a zero price (GAP-Q17).
@@ -71,10 +72,10 @@ pub struct StepRow {
     pub out: Option<u64>,
     pub money: Option<Money>,
     /// Signed block delta: `+k` new blocks, `−k` dropped, `0` on a
-    /// repeat. **verified** (hash equality).
+    /// repeat. **measured** (hash equality).
     pub blocks: i64,
     /// `lcp` — the length of the longest common block-hash prefix with
-    /// the previous step. **verified**.
+    /// the previous step. **measured**.
     pub kept: u64,
     /// `#<index>:<kind>` of the first diverging block; null for
     /// `first`, `append` and `repeat`.
@@ -370,7 +371,7 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
             .iter()
             .filter_map(|b| b.get("hash").and_then(Value::as_str).map(String::from))
             .collect();
-        // A block without a hash cannot take part in a verified
+        // A block without a hash cannot take part in a measured
         // relation; the trace writer always emits one, so this is a
         // defensive equality on the shorter list, never an invention.
         let lcp = prev_hashes
@@ -862,7 +863,7 @@ pub fn render_text(rep: &Report, last: Option<usize>) -> String {
     );
     let _ = writeln!(
         out,
-        "wall_ms spans the whole request on a streamed row (not the gateway's own overhead); new_tok is inferred; in/cached/out and the block facts are verified; class names the verified block relation (kept/blocks/at), not what the client did"
+        "wall_ms spans the whole request on a streamed row (not the gateway's own overhead); new_tok is inferred; in/cached/out and the block facts are measured; kept_tok and rebill_tok are inferred (a proportional attribution, and a miss volume above the session's one-pass floor); class names the measured block relation (kept/blocks/at), not what the client did"
     );
     if let Some(n) = last.filter(|n| *n < rep.rows.len()) {
         let _ = writeln!(out, "showing the last {n} of {}", rep.rows.len());
@@ -870,16 +871,20 @@ pub fn render_text(rep: &Report, last: Option<usize>) -> String {
     // The header words are format ARGS here rather than inline write!
     // literals — `clippy::write_literal` (the repo's gate runs `-D
     // warnings`) fires on literal arguments to `writeln!` itself.
+    // §9.4.3's print order: columns 1–16, then 18 (`kept_tok`) and 19
+    // (`rebill_tok`), then 17 `flags` — the variable-length cell stays
+    // last (a right-aligned number after a ragged tail is unreadable).
     let header = format!(
-        "{:<4} {:<24} {:>7} {:<16} {:>6} {:>6} {:>5} {:<13} {:>6} {:>4} {:<12} {:>7} {:<7} {:>7} {:>7} {:<6} {}",
+        "{:<4} {:<24} {:>7} {:<16} {:>6} {:>6} {:>5} {:<13} {:>6} {:>4} {:<12} {:>7} {:<7} {:>7} {:>7} {:<6} {:>9} {:>10} {}",
         "step", "start", "gap_ms", "route", "in", "cached", "out", "money", "blocks",
-        "kept", "at", "new_tok", "class", "wall_ms", "head_ms", "status", "flags"
+        "kept", "at", "new_tok", "class", "wall_ms", "head_ms", "status", "kept_tok",
+        "rebill_tok", "flags"
     );
     let _ = writeln!(out, "{header}");
     for r in shown {
         let _ = writeln!(
             out,
-            "{:<4} {:<24} {:>7} {:<16} {:>6} {:>6} {:>5} {:<13} {:>6} {:>4} {:<12} {:>7} {:<7} {:>7} {:>7} {:<6} {}",
+            "{:<4} {:<24} {:>7} {:<16} {:>6} {:>6} {:>5} {:<13} {:>6} {:>4} {:<12} {:>7} {:<7} {:>7} {:>7} {:<6} {:>9} {:>10} {}",
             r.step,
             r.start,
             r.gap_ms.map(|g| g.to_string()).unwrap_or_else(|| "—".into()),
@@ -896,6 +901,8 @@ pub fn render_text(rep: &Report, last: Option<usize>) -> String {
             r.wall_ms,
             r.head_ms.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
             r.status_text(),
+            r.kept_tok,
+            r.rebill_tok.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
             r.flags.join(" "),
         );
     }
@@ -988,7 +995,7 @@ pub fn render_text(rep: &Report, last: Option<usize>) -> String {
         Some((cached, intotal)) => {
             let _ = writeln!(
                 out,
-                "cache            {:.4} ({} / {} input tokens, verified — the provider's own counters; {} rows without usage excluded)",
+                "cache            {:.4} ({} / {} input tokens, measured — the provider's own counters; {} rows without usage excluded)",
                 cached as f64 / intotal as f64,
                 cached,
                 intotal,
@@ -996,6 +1003,82 @@ pub fn render_text(rep: &Report, last: Option<usize>) -> String {
             );
         }
     }
+    // -- the re-bill block (§9.4.8.5): three lines, then the two ------
+    // groupings. Every one of the nine keys is printed here — the
+    // counts clause carries rows/excluded_rows/unpriced_rows, the
+    // first line carries tokens/miss_tokens/floor_tokens/
+    // surplus_tokens, the money line carries money_nano.
+    let rb = &rep.rebill;
+    match rb.tokens {
+        None => {
+            let _ = writeln!(out, "re-billed        — (no step carries usage)");
+        }
+        Some(tokens) => {
+            let _ = writeln!(
+                out,
+                "re-billed        {} tokens (inferred)  = Σ miss {} − floor {} + surplus {}   ({} rows re-billed; {} rows without usage; {} rows unpriced)",
+                tokens, rb.miss_tokens, rb.floor_tokens, rb.surplus_tokens, rb.rows,
+                rb.excluded_rows, rb.unpriced_rows
+            );
+        }
+    }
+    let money_bits: Vec<String> = rb
+        .money_nano
+        .iter()
+        .map(|(cur, nano)| format!("{nano} nano {cur}"))
+        .collect();
+    let _ = writeln!(
+        out,
+        "re-billed money  {} (inferred; each row's own measured miss rate — no price table is read here)",
+        if money_bits.is_empty() {
+            "—".to_string()
+        } else {
+            money_bits.join(", ")
+        }
+    );
+    // The one cell allowed to be absent: printed only when non-zero
+    // (the `money` line's own `plan rows` rule), and its absence means
+    // zero.
+    if rb.plan_tokens > 0 {
+        let _ = writeln!(
+            out,
+            "re-billed plan   {} tokens (marginal 0 — allowance headroom, not a zero price)",
+            rb.plan_tokens
+        );
+    }
+    // `by break kind`: all four words, always, `count/Σ rebill_tok`,
+    // over rewrite rows only (§9.4.5).
+    let kinds: Vec<String> = BREAK_KINDS
+        .iter()
+        .map(|k| {
+            let (count, sum) = rb.by_break_kind.get(*k).copied().unwrap_or((0, 0));
+            format!("{k} {count}/{sum}")
+        })
+        .collect();
+    let _ = writeln!(
+        out,
+        "by break kind    {}   (rewrite rows only; count/Σ rebill_tok)",
+        kinds.join(" | ")
+    );
+    let top: Vec<String> = rb
+        .top_rebilled
+        .iter()
+        .map(|(s, c, at, tok)| {
+            format!(
+                "#{s} ({c}, {}, {tok} tok)",
+                at.clone().unwrap_or_else(|| "—".into())
+            )
+        })
+        .collect();
+    let _ = writeln!(
+        out,
+        "top rebilled     {}   (the five largest rebill_tok — which step cost the money)",
+        if top.is_empty() {
+            "—".to_string()
+        } else {
+            top.join(", ")
+        }
+    );
     out
 }
 
@@ -1054,6 +1137,10 @@ pub fn report_json(rep: &Report, last: Option<usize>) -> serde_json::Value {
                     Some(us) if us != r.status => serde_json::json!(r.status_text()),
                     _ => serde_json::json!(r.status),
                 },
+                // Columns 18 and 19 (§9.4.3's print order — before the
+                // variable-length `flags` cell, as in the text table).
+                "kept_tok": r.kept_tok,
+                "rebill_tok": r.rebill_tok,
                 "flags": r.flags,
             })
         })
@@ -1078,6 +1165,37 @@ pub fn report_json(rep: &Report, last: Option<usize>) -> serde_json::Value {
         })
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
+    // §9.4.8.5's rebill block — the same nine values the text form
+    // prints, plus the two groupings, under the same names. Built
+    // before the summary macro: `json!` cannot take a block as an
+    // object value.
+    let rebill_json = {
+        let rb = &rep.rebill;
+        serde_json::json!({
+            "tokens": rb.tokens,
+            "money_nano": rb.money_nano,
+            "plan_tokens": rb.plan_tokens,
+            "rows": rb.rows,
+            "miss_tokens": rb.miss_tokens,
+            "floor_tokens": rb.floor_tokens,
+            "surplus_tokens": rb.surplus_tokens,
+            "excluded_rows": rb.excluded_rows,
+            "unpriced_rows": rb.unpriced_rows,
+            "by_break_kind": BREAK_KINDS
+                .iter()
+                .map(|k| {
+                    let (count, sum) = rb.by_break_kind.get(*k).copied().unwrap_or((0, 0));
+                    (
+                        k.to_string(),
+                        serde_json::json!({ "rows": count, "rebill_tok": sum }),
+                    )
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>(),
+            "top_rebilled": rb.top_rebilled.iter().map(|(s, c, at, tok)| serde_json::json!({
+                "step": s, "class": c, "at": at, "rebill_tok": tok,
+            })).collect::<Vec<_>>(),
+        })
+    };
     let mut summary = serde_json::json!({
         "session": rep.session,
         "span": {
@@ -1104,6 +1222,9 @@ pub fn report_json(rep: &Report, last: Option<usize>) -> serde_json::Value {
                 "excluded": rep.cache_excluded,
             }),
         },
+        // §9.4.8.5's rebill block — the same nine values the text form
+        // prints, plus the two groupings, under the same names.
+        "rebill": rebill_json,
     });
     if let Some(n) = last.filter(|n| *n < rep.rows.len()) {
         summary["showing"] = serde_json::json!({ "last": n, "of": rep.rows.len() });
@@ -1549,8 +1670,12 @@ mod tests {
         ]);
         let text = render_text(&rep, None);
         assert!(
-            text.contains("class names the verified block relation"),
-            "the header carries ADR-057 §2.2's caveat (defect 3)"
+            text.contains("class names the measured block relation"),
+            "the header carries ADR-057 §2.2's caveat with ADR-058's word (defect 3 / ADR-062 §5 A4)"
+        );
+        assert!(
+            !text.contains("verified"),
+            "§9.4.3: this surface prints no `verified` figure at all (ADR-058)"
         );
         for (word, count) in [
             ("first", "count 1"),
@@ -1575,5 +1700,155 @@ mod tests {
         assert_eq!(v["summary"]["by_class"]["rewrite"]["count"], 0);
         assert_eq!(v["summary"]["by_class"]["first"]["count"], 1);
         assert_eq!(v["summary"]["by_class"]["append"]["count"], 1);
+    }
+
+    /// A one-fixture session exercising both forms of the re-bill
+    /// surface: an append chain, then a mid-prefix break (kept `a`,
+    /// diverged at `#1`), then a same-session cold re-prefill
+    /// (`#0`). The `--json` row keys and the text table must carry
+    /// the same values under the same names (§9.4.1's one rule).
+    #[test]
+    fn rebill_in_both_forms_the_same_values() {
+        let mut r1 = rec_usage("2026-10-18T05:00:00.100Z", &[("a", 40), ("b", 60)], 100, 0);
+        r1["decision"]["provider"] = serde_json::json!("m");
+        r1["cost"]["input_miss"] = serde_json::json!(200); // 2 nano/tok
+        let mut r2 = rec_usage(
+            "2026-10-18T05:00:01.100Z",
+            &[("a", 40), ("b", 60), ("c", 20)],
+            120,
+            100,
+        );
+        r2["decision"]["provider"] = serde_json::json!("m");
+        r2["cost"]["input_miss"] = serde_json::json!(40);
+        // a mid-prefix break: kept `a`, the tail diverged at #1
+        let mut r3 = rec_usage(
+            "2026-10-18T05:00:02.100Z",
+            &[("a", 40), ("w", 55), ("c", 20)],
+            115,
+            40,
+        );
+        r3["decision"]["provider"] = serde_json::json!("m");
+        r3["cost"]["input_miss"] = serde_json::json!(150); // 2 nano/tok
+                                                           // a same-session cold re-prefill: nothing survived
+        let mut r4 = rec_usage("2026-10-18T05:00:03.100Z", &[("z", 30), ("y", 50)], 80, 0);
+        r4["decision"]["provider"] = serde_json::json!("m");
+        r4["cost"]["input_miss"] = serde_json::json!(160); // 2 nano/tok
+        let rep = report(vec![r1, r2, r3, r4]);
+        // (1) 100/0 growth 100 rebill 0; (2) 120/100 miss 20 = growth
+        // 20 rebill 0; (3) 115/40 miss 75 growth 0 rebill 75;
+        // (4) 80/0 miss 80 growth 0 rebill 80.
+        assert_eq!(rep.rows[2].kept_tok, 40);
+        assert_eq!(rep.rows[2].rebill_tok, Some(75));
+        assert_eq!(rep.rows[3].kept_tok, 0);
+        assert_eq!(rep.rows[3].rebill_tok, Some(80));
+        let v = report_json(&rep, None);
+        let rows = v["rows"].as_array().unwrap();
+        assert_eq!(rows[2]["kept_tok"], 40);
+        assert_eq!(rows[2]["rebill_tok"], 75);
+        assert_eq!(rows[3]["kept_tok"], 0);
+        assert_eq!(rows[3]["rebill_tok"], 80);
+        // key order: 18 and 19 sit between `status` and `flags`.
+        let keys: Vec<&str> = rows[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        let i_status = keys.iter().position(|k| *k == "status").unwrap();
+        assert_eq!(
+            &keys[i_status + 1..i_status + 4],
+            ["kept_tok", "rebill_tok", "flags"]
+        );
+        // summary.rebill: the nine keys, same values the text prints.
+        let rb = &v["summary"]["rebill"];
+        assert_eq!(rb["tokens"], 155);
+        assert_eq!(rb["rows"], 2);
+        assert_eq!(rb["miss_tokens"], 275);
+        assert_eq!(rb["floor_tokens"], 120);
+        assert_eq!(rb["surplus_tokens"], 0);
+        assert_eq!(rb["excluded_rows"], 0);
+        assert_eq!(rb["unpriced_rows"], 0);
+        assert_eq!(rb["plan_tokens"], 0);
+        assert_eq!(rb["money_nano"]["USD"], 150 + 160);
+        let text = render_text(&rep, None);
+        assert!(text.contains("re-billed        155 tokens (inferred)  = Σ miss 275 − floor 120 + surplus 0   (2 rows re-billed; 0 rows without usage; 0 rows unpriced)"));
+        assert!(text.contains("re-billed money  310 nano USD (inferred; each row's own measured miss rate — no price table is read here)"));
+        assert!(!text.contains("re-billed plan"), "absence means zero");
+        // The groupings, same values in both forms.
+        assert_eq!(rb["by_break_kind"]["message"]["rows"], 2);
+        assert_eq!(rb["by_break_kind"]["message"]["rebill_tok"], 155);
+        assert_eq!(rb["by_break_kind"]["system"]["rows"], 0);
+        assert_eq!(rb["top_rebilled"][0]["step"], 4);
+        assert_eq!(rb["top_rebilled"][0]["rebill_tok"], 80);
+        assert_eq!(rb["top_rebilled"][0]["at"], "#0:message");
+        assert_eq!(rb["top_rebilled"][1]["at"], "#1:message");
+        assert!(text
+            .contains("by break kind    system 0/0 | tool 0/0 | message 2/155 | input_item 0/0"));
+        assert!(text.contains(
+            "top rebilled     #4 (rewrite, #0:message, 80 tok), #3 (rewrite, #1:message, 75 tok)"
+        ));
+    }
+
+    /// §9.4.8.6's zero and absence cases on the printed page: a
+    /// no-break session prints the arithmetic line with a zero (never
+    /// an absent key), a no-usage session prints the one replacement
+    /// line — and `rebill_tok` prints `—` on a row without usage.
+    #[test]
+    fn rebill_zero_and_absence_on_the_page() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 100, 0),
+            rec_usage("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)], 150, 100),
+        ]);
+        let text = render_text(&rep, None);
+        assert!(text.contains("re-billed        0 tokens (inferred)"));
+        assert!(text.contains("(0 rows re-billed; 0 rows without usage; 0 rows unpriced)"));
+        assert!(text.contains("re-billed money  —"));
+        let v = report_json(&rep, None);
+        assert_eq!(v["summary"]["rebill"]["tokens"], 0);
+        assert_eq!(
+            v["summary"]["rebill"]["money_nano"]
+                .as_object()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        let mut no_usage = rec("2026-10-18T05:00:00.100Z", &[("a", 7)]);
+        no_usage["usage_missing"] = serde_json::json!(true);
+        let rep = report(vec![no_usage]);
+        let text = render_text(&rep, None);
+        assert!(text.contains("re-billed        — (no step carries usage)"));
+        let v = report_json(&rep, None);
+        assert!(v["summary"]["rebill"]["tokens"].is_null());
+        assert_eq!(v["summary"]["rebill"]["excluded_rows"], 1);
+        assert_eq!(v["summary"]["rebill"]["rows"], 0);
+        // the row column: `—`, never 0, on a row without usage.
+        assert!(v["rows"][0]["rebill_tok"].is_null());
+        assert!(text.contains("rebill_tok"));
+    }
+
+    /// `by break kind` counts rewrite rows only, always all four
+    /// words, and a rewrite whose block carries no kind (`at: null`)
+    /// lands in no bucket — an absence, never a guess (§9.4.5).
+    #[test]
+    fn by_break_kind_all_four_and_kindless_lands_nowhere() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 100, 0),
+            rec_usage("2026-10-18T05:00:01.100Z", &[("z", 10)], 100, 0),
+        ]);
+        assert_eq!(rep.rows[1].class, "rewrite");
+        let mut kindless = rec_usage("2026-10-18T05:00:01.100Z", &[("z", 10)], 100, 0);
+        kindless["prefix"]["blocks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind");
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 100, 0),
+            kindless,
+        ]);
+        assert_eq!(rep.rows[1].at, None);
+        let total: u64 = rep.rebill.by_break_kind.values().map(|(c, _)| c).sum();
+        assert_eq!(total, 0, "a kindless rewrite lands in no bucket");
+        assert_eq!(rep.rebill.by_break_kind.len(), 4, "all four words, always");
     }
 }
