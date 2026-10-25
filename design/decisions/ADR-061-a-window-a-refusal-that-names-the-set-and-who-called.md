@@ -160,7 +160,9 @@ structural (the surface never touches a completion request), not a promise.
 
 No price (one source, §4.0 / constraint 5), no `max_tokens` or output cap, no `supports` cells, no route, no
 provider, no `account:`/plan classification, no family tag, no rate limit, no per-call metadata. ADR-055 §4's
-table stands except for the one row §2.7 supersedes.
+table stands except for the one row this ADR supersedes — the `context window` row, and only it (the header's
+*Supersedes* line is the ruling; §2.3's measured need is why ADR-055's own condition, *"for no client need this
+round has"*, no longer holds).
 
 ### 2.7 The one frozen assertion this collides with — named, and not taken here
 

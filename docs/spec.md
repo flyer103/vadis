@@ -2233,8 +2233,8 @@ family classification, the model's **price** and its declared `supports` cells (
 ADR-051's wiring facts), any `/metrics` counter and any figure, and a per-call
 `X-Vadis-Request-Id` on the `200` arm (no request exists to correlate; `/metrics` and `/state/events`
 already answer the same way). The context window **is** carried — as the fifth key above, and only as a number
-whose source is the roster (ADR-061 §2.6: ADR-055 §4's refusal of it rested on *"no client need this round
-has"*, and the need was measured). Single-model retrieval (`GET /v1/models/{id}`) is a **non-goal** — it
+whose source is the roster (ADR-061's *Supersedes* line: ADR-055 §4's refusal of it rested on *"no client need
+this round has"*, and the need was measured). Single-model retrieval (`GET /v1/models/{id}`) is a **non-goal** — it
 would turn the endpoint into an alias-name oracle — and a query string is **ignored** rather than
 refused (an OpenAI-compatible client appends one without meaning anything by it).
 
