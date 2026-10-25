@@ -199,6 +199,10 @@ adds the word, not a second gate.
 
 The class table decides, and it is ADR-011 item 6's own evidence table rather than a new one:
 
+> **Amended 2026-10-25 (§8): row 2 of the table below is deleted.** A head that arrived is a decision, so the
+> retry survives only where no head did. §8 states the ruling, the restated predicate and the reason; the rows
+> below are otherwise unchanged.
+
 | evidence | billed? | retry the same route |
 |---|---|---|
 | the request bytes were never fully written (connect / TLS / pre-write transport failure) | no | **yes**, bounded |
@@ -301,3 +305,193 @@ must both hold, and "no byte reached the client" is only the first of them.
 - **D3** is reversible per arm: the cap, the backoff and the floor are one constant each; the ordering
   (same-route retry before the walk) is one call site. The `retry_refused` words are additive on an optional
   object.
+
+## 8. Amendment (2026-10-25) — the boundary between row 2 and row 7: a head that arrived is a decision
+
+- Status: **accepted (2026-10-25), contract only.** It amends §4.2 **by deletion** — not by rewriting its
+  history — `docs/spec.md` §4.2's copy of the same table, that section's `retry_refused` sentence, and one
+  `book/` clause that was written under the deleted row. No product byte, no test, no conformance case, no
+  config key, no price, no token figure, no new class; `schema_version` stays **2**.
+- Supersedes: this ADR's §4.2 **row 2**, and — because row 2 was inherited — **ADR-011 item 6's table row 2**
+  ("the provider answered (any status, including 5xx / 429 / a refusal) → yes, bounded") **for the same-route
+  retry only**. ADR-011 item 6's *fall-over* column, its row 1 and its row 3 stand untouched, and so does its
+  billing argument, which this section keeps and uses.
+- Authority: the owner's card of 2026-10-25. T2 implemented §4.2 literally; `conf_82_d` (a spill whose `403`
+  head's body read ends short, asserting **exactly one** `error.classified`) went red with `2`. The owner ruled
+  the narrower boundary — **a head that arrived is a decision** — and ruled that the count stays `1`: the
+  contract, not the measurement, absorbs the correction.
+
+### 8.1 The contradiction, in the terms that produced it
+
+Two rows of §4.2's table describe one event and answer oppositely:
+
+| §4.2 row | its event, as written | its verdict |
+|---|---|---|
+| 2 | "an **error-status** head arrived and the attempt served none of its body (a refusal generates nothing)" | retry **yes**, bounded |
+| 7 | "any other answer that was read (5xx / 429 / 401)" | retry **no** — the walk's business |
+
+A `429`, a `503` and a `403` are error-status heads, and any of them serves none of its body when the body read
+ends short — a mid-read error, or §4.20's idle bound. That attempt is simultaneously row 2 and row 7. The two
+copies of the table also disagreed about *which fact* row 2 turned on: this ADR's copy reads "(a refusal
+generates nothing)", a statement about the bill, while `docs/spec.md`'s copy reads "(**the read failed**)", a
+statement about the read. T2 read the spec's copy and made `read_failed` the trigger, which is why the red case
+is the **partial**-body one: one event reached a retry through one phrase and a refusal through the other, and
+one index of the record (`error.classified`, one per failed attempt, §4.3) counted `2` where the pinned case
+asserts `1`.
+
+### 8.2 The ruling
+
+**A same-route retry is permitted only where the attempt carries no decision from the provider: no answer head
+arrived *and* the request bytes were never fully written. Where a head did arrive — any status, with a body of
+any length, complete or truncated — the provider reached a decision, the attempt is terminal, and the recovery
+is the walk. Row 2 is deleted; row 7 survives, generalized from "any *other* answer that was read" to "any
+answer".**
+
+Stated as a predicate on evidence the attempt already carries, once the answer's shape is taken out of it:
+
+| the attempt's evidence | what it means about the attempt | retry the same route |
+|---|---|---|
+| `head_status == None` ∧ `wrote_full_request == false` | the provider was never reached; nothing can have been billed | **yes**, bounded (row 1) |
+| `head_status == None` ∧ `wrote_full_request == true` | fully written and never answered (`unknown_outcome`) | **no** (row 3) |
+| `head_status == Some(_)` | the provider answered — it reached a decision | **no** (rows 2, 4 and 7 collapse here) |
+
+The correction is therefore a **reduction, not a new class**: the seven rows are three states, read in the
+order *did a head arrive → were the bytes written → what does the bill say*. A retry asks one question — *did
+the provider reach a decision?* — and a head **is** the decision; the bill is the constraint on a retry, never
+the licence for one. Nothing about the answer's shape is left to weigh: `5xx` vs `429` vs `401` vs a `403`
+refusal, an empty body vs a 900-byte one, are §4.6 taxonomy facts, and the taxonomy's job is to choose **which**
+recovery the walk takes, never whether a retry is permitted.
+
+### 8.3 Why the surviving row is the right reading, and not merely the safe one
+
+Four arguments, in order of force.
+
+1. **The deleted row's retry cannot change its own verdict.** Each of its instantiations ends where it started:
+   a deterministic refusal (`403` + an exhaustion keyword, `format_error`, `content_policy_blocked`, and a `401`
+   with no further credential to rotate to — rotation is a different axis and this amendment does not touch it)
+   reproduces exactly on the unchanged request in 250 ms — that is ADR-011 item 3's definition of deterministic;
+   a `429` asks, through `Retry-After`, not to be retried sooner than the provider's own clock, so a 250 ms
+   retry does the thing the answer forbade, on a route the classifier has just begun to cool; and a `5xx` head
+   is a statement about the route, which a second attempt on that same route cannot change — the walk can. A
+   retry that cannot change the answer is not a recovery: it is the client's wait, doubled, plus a second
+   `upstream.submitted` intent for an answer already given.
+2. **Row 2 never had a shipped implementation to preserve.** The shipped classifier returns
+   `{class, matched, retry_after, demotion}` and no action; the recovery is decided at the call site, and before
+   D3 no call site retried a route at all — for an answered failure the walk was the product's only recovery.
+   Retaining row 2 would not keep a behaviour, it would mint one, and it would mint it in the direction the
+   audit did not ask for: the week's finding was a **not-sent** failure walking into a route 133× the input
+   price, which is row 1's case (§8.4).
+3. **The fact row 2 turned on is already ruled not to be a discriminator.** §4.2 says, earlier in the same
+   section, that a read that ends short "leaves the classifier with the bytes that arrived" and that "a failure
+   whose body could not be read is not a different outcome class" (R12/E4; `conf_82_d`'s second leg is that
+   guard, green by construction). Row 2 made exactly that fact a **recovery** discriminator. Both rules cannot
+   stand on one fact: if a short read is not a class, it cannot license a retry.
+4. **The measurement pins the boundary from both sides, and only this reading satisfies both.** `conf_82_d`
+   asserts one `error.classified` for a spill and the count stays `1`; `conf_29`'s two cases assert a connect
+   failure is classified and recovered, and their counts move to `2` under the owner's separate authorisation of
+   2026-10-24, recorded in that case as T2's receipt — not by this section. *One row per answered attempt, two
+   rows per not-sent-then-retried attempt* is the head test and nothing else.
+
+### 8.4 What remains of D3, and the event it was written for
+
+Row 1 is now the whole of D3's live surface, and it is unchanged: a pre-write transport failure
+(`connect_failure`, TLS, or any failure before the request bytes were fully written) is retried on the same
+route once, after a fixed 250 ms, when at least 1000 ms of the request budget remains, **before** the walk — on
+both media, at the two call sites that already exist (the buffered `NotSent` arm and the relay's
+`OpenHead::NotSent` arm).
+
+That is the week audit's 2026-10-22 event precisely (the audit's own figure): a connect failure walked straight
+into a route priced 133× the input price, because the walk was the first resort and a route change is what pays
+a re-prefill (ADR-011 item 9). A not-sent attempt is the one case where a same-route retry is *new information* —
+the provider never saw the request, so nothing about the route has been tested yet — and it is the case the rule
+was written for.
+
+The correction therefore costs D3 nothing it was written for: the cap (`STREAM_RETRY_CAP = 1`), the backoff
+(`RETRY_BACKOFF_MS`), the floor (`RETRY_FLOOR_MS`), the same-route-before-walk ordering and the
+`candidates × 2` total are all unchanged and all still reachable.
+
+One consequence is worth stating for readers of the record: `result.attempts ≥ 2` with `result.failover_from:
+null` now has exactly one production meaning — *a not-sent attempt was retried on its own route and the retry
+served*. §4.3's three-way reading of the field stays true and gets sharper: one cause per shape, instead of two
+causes sharing one.
+
+### 8.5 The walk, and the wording row 7 must not grow into
+
+For a read answer the walk is unchanged and **is** the recovery — which is why row 7 was written. A same-route
+retry before the move would only double the client's wait for an answer the route has already given (and, for a
+`429`, would also be a retry sooner than the provider's own `Retry-After` asked for). Nothing here touches the
+walk's candidate count, its reason words, its cooldown writes or its price record.
+
+Row 7's reach is bounded by its own subject, and the bound has to be read rather than assumed: **"any other
+*answer* that was *read*"** — an answer exists only where a head arrived, and "read" is a fact about a body. A
+connect failure produced no answer and nothing was read, so no wording of row 7 can reach it. An editor who
+widens the row to "any failure that produced no usable output", or to "any failure where nothing reached the
+client", swallows row 1 and deletes D3's only effect: the boundary is **the head** — not the output, and not
+the body.
+
+### 8.6 The case a reader will ask about: an error-status head **with** a body
+
+An error-status head that *did* deliver a body changes nothing about the retry — the head was already the
+decision, and the body decides only *which* class the answer is classified as (`insufficient_quota` vs `auth`
+vs status-and-headers alone when the body says nothing) and what `details.upstream_body` retains — so 0 bytes,
+300 bytes and a body cut at 900 bytes are one event to this table, and the attempt is terminal in all three.
+
+What the record holds in that case (§4.3, §4.20.3): **one** `error.classified` row for the attempt, with
+`reason`/`matched` from the body when the body supplied them and from status and headers when it did not
+(R12/E4); one `upstream.responded` row before it; the walk's `failover.triggered` if a candidate answers; and
+one terminal trace row whose `errors[0].details` carries the class and the redacted D2 `upstream_body` slice. The
+record never says "a retry was refused" for this class — §8.7 — because no retry was ever a candidate.
+
+### 8.7 `retry_refused`'s scope, corrected together with the table
+
+§4.2's sentence after the table was written as an obligation of *every* refusal ("whenever the table above was
+consulted and answered *no*"), which the surviving row cannot honor and the shipped record does not attempt:
+none of the closed set's four words is true of an ordinary `5xx` / `429` / `401` read answer. The correct
+scope — written into `docs/spec.md` §4.2 by this amendment, and already what the record does — is:
+
+> `details.retry_refused` is present **iff one of its four words is true of the failure** — `forwarded` (the
+> client's output is already on the wire), `billed` (the attempt may have been billed), `deterministic` (a
+> re-probe reproduces the refusal), `budget` (the cap or the floor) — and absent otherwise. It answers *"was a
+> retry a candidate, and if so why was it refused"*, never *"did the table say no"*.
+
+§4.20.3's uses of the member (a truncation with relayed bytes, a `2xx` head with none, and the refusal reasons)
+stand exactly as they are, and the word set stays closed. That no retry ran is still readable two other ways —
+`result.attempts` and the `upstream.submitted` / `error.classified` sequence — so the member carries only what
+a reader would otherwise have to guess.
+
+### 8.8 The rest of the table, read once
+
+The card asked for the other rows to be read at the same time, so that a second contradiction is not found
+twice. There is none: one pair partitions cleanly, and three overlaps are benign.
+
+| rows | same event? | verdicts | what changes |
+|---|---|---|---|
+| 1 / 3 | no — they **partition** the no-head space on `wrote_full_request` | yes / no | nothing: 1 is the whole of D3, 3 is `unknown_outcome` |
+| 4 / 7 | partly: a `2xx` head with its body cut is also "an answer that was read" | both **no** | 4 survives with its billing evidence; its **ground** moves to §8.2's head rule, and the billing line becomes corroboration — a second, independent reason (the model was invoked, so a retry is a probable double charge) |
+| 5 / 2, 4, 7 | yes: the outer bound can trip at any of those points | **no** everywhere | nothing: one verdict under a different word (`budget`), which is why it is not a contradiction |
+| 6 / 7 | yes: `format_error` / `content_policy_blocked` are read answers, so row 7's "any **other** answer" would otherwise swallow them | both **no** | nothing: the word *other* makes 6 the specific row and 7 the catch-all, and 6 keeps its `deterministic` word |
+
+Two wording notes worth keeping, both read out of the same pass: row 7's "5xx / 429 / 401" is a list of
+**examples** of a read answer, not its definition (a plain `403` that matches no taxonomy table is row 7 too —
+`conf_82`'s leg (c) is that shape), and row 6's classes are the only ones whose retry word exists because *the
+class itself would reproduce*, which is a statement about the class rather than about a retry that ran.
+
+### 8.9 What is owed (implementation, not a ruling)
+
+- **T2:** delete the streaming retry call site — the `read_failed && !deterministic_class` branch in
+  `stream_forward.rs` — and the `into_upstream_response_with_read_status` helper whose only consumer it was,
+  reverting that call to the plain `into_upstream_response` (the helper's doc comment names the deleted row and
+  goes with it). `read_failed` stops being a retry input. Nothing else in D3's machinery moves: cap, backoff,
+  floor, ordering, and both media's `NotSent` arms stand. The buffered path has no row-2 site to delete — an
+  answered failure there never retried.
+- **Not owed, and not done here:** `conf_82_d` is not edited (its count stays `1`); `conf_29`'s two counts move
+  to `2` under the owner's own authorisation, recorded in that case as a receipt. `schema_version` stays `2`;
+  no field, value, kind or word is added.
+
+### 8.10 Reversibility
+
+Restoring row 2 is one row and one call site, so it is textually cheap and substantively expensive: it re-opens
+`conf_82_d`'s count (a measurement decision, constraint 9) and owes an argument that a retry which cannot change
+its class's verdict is worth the client's wait — a new ruling, not a revert. Removing row 7's reach instead is
+not reversible by this ADR at all: retrying after a head duplicates output on the wire (§4.1's structural
+refusal) on the streaming medium and duplicates a charge on the buffered one.

@@ -474,19 +474,30 @@ reachable on a buffered one.
 
 **One failure may be retried on its own route, and only where nothing was written and nothing was billed**
 (ADR-060 D3). The two conditions are separate facts and both are required — a retry needs the client's output
-to be empty **and** the attempt to be unbillable:
+to be empty **and** the attempt to be unbillable — and since ADR-060 §8 (2026-10-25) the first row below is the
+**only** row that answers *yes*: the retry predicate is evidence about the attempt, not about the answer's
+shape.
 
 | Evidence at the failure | Billed? | Retry the same route |
 |---|---|---|
 | the request bytes were never fully written (connect / TLS / pre-write transport failure) | no | **yes**, bounded |
-| an **error-status** head arrived and the attempt served none of its body (the read failed); a refusal generates nothing | no | **yes**, bounded |
 | the request was fully written and nothing came back at all (`unknown_outcome`, §8) | **maybe** | **no** |
 | a **2xx** head arrived and any byte of its body arrived, or the body was cut before its terminal event | **yes** — the model was invoked | **no** |
 | `server.request_timeout` tripped (the outer bound, ADR-053) | unknown, and no budget remains | **no** |
 | `format_error` / `content_policy_blocked` (deterministic for the unchanged request, ADR-011 item 3) | — | **no** |
 | any other answer that was read — a 5xx, a 429, a 401 | no | **no**: that is §4.2's walk, unchanged, and a same-route retry of it would only double the wait before the move |
 
-The last two rows are as load-bearing as the first two: **the retry this rule permits is narrower than "the
+**The boundary is the head, not the body** (ADR-060 §8, 2026-10-25). This table's former row 2 — *an
+error-status head arrived and the attempt served none of its body (the read failed) → retry **yes*** — is
+**deleted**, and its event belongs to the last row: a head that arrived is a decision the provider reached, so
+`head_status == Some(_)` makes the attempt terminal whatever its status and whatever its body did, and the walk
+is that attempt's recovery. The predicate in full: retry **iff** `head_status == None` **and**
+`wrote_full_request == false` — no head (no decision reached) *and* no full write (nothing can have been
+billed). A read that ends short is not a licence to retry, for the same reason it is not an outcome class
+(this section's own R12/E4 sentence above): the bytes that arrived are evidence, and their absence is fewer
+bytes of it.
+
+The last two rows are as load-bearing as the first: **the retry this rule permits is narrower than "the
 stream was cut"**. A cut after a `2xx` head is a served attempt, and every served attempt is terminal — which
 is also the tightening that replaces the old `relayed == 0` proxy with two facts, since "no byte reached the
 client" is not the same thing as "nothing was billed" (a `200` head with no body byte yet is a model already
@@ -509,11 +520,14 @@ generating).
   The "something forwarded" column is the SSE medium's, and there §4.20's relay refuses the walk after the
   first relayed byte.
 - **The record names the refusal, not only the retry.** A failure entry carries
-  `details.retry_refused ∈ {forwarded, billed, deterministic, budget}` whenever the table above was consulted
-  and answered *no* — so a reader can tell *the retry happened and failed* (`result.attempts ≥ 2`) from *no
-  retry was permitted, and why*. §6 states the field; the word set is closed and each value has one meaning:
-  `forwarded` = output was already on the wire, `billed` = the attempt may have been billed
-  (`unknown_outcome`), `deterministic` = a re-probe reproduces the refusal, `budget` = the cap or the floor.
+  `details.retry_refused ∈ {forwarded, billed, deterministic, budget}` **iff one of those four words is true of
+  it** — `forwarded` = output was already on the wire, `billed` = the attempt may have been billed
+  (`unknown_outcome`), `deterministic` = a re-probe reproduces the refusal, `budget` = the cap or the floor — so
+  a reader can tell *the retry happened and failed* (`result.attempts ≥ 2`) from *no retry was permitted, and
+  why*. The member is **not** owed by every refusal: an ordinary `5xx` / `429` / `401` read answer carries none,
+  because no retry was ever a candidate for it (ADR-060 §8.7), and the log already says no retry ran through
+  `result.attempts` and the `upstream.submitted` / `error.classified` sequence. §6 states the field; the word
+  set is closed and each value has one meaning.
 
 ### 4.3 `inject` (plugin dependency declaration)
 
@@ -2342,9 +2356,10 @@ readable from the log while the record keeps the terminal cause (`result.attempt
 `relayed_bytes > 0` the entry carries `details.retry_refused: "forwarded"` (§4.2's closed word set): the class
 table considered a retry and refused it, because the client's output is already on the wire and a second
 attempt would duplicate it (ADR-060 D3 — no resumption mechanism exists in any of the three wired protocols).
-A truncation with `relayed_bytes == 0` carries `retry_refused` only when the table refused for one of the
-other three reasons, and carries no such member when the attempt *was* retried — the row then belongs to the
-retrying attempt and `result.attempts ≥ 2` is the fact that a retry happened.
+A truncation with `relayed_bytes == 0` carries `retry_refused` only when one of the other three words is true of
+it — `billed` for the ordinary case, since a `2xx` head is a model already generating (ADR-011 item 6 row 3).
+No cut is ever retried (§4.2's head rule; ADR-060 §8), so a truncated request's `result.attempts` can exceed
+`1` only through a retry that happened **before** the truncated attempt's head, and never through one after it.
 
 **Why the causes are separate, and not a boolean.** §4.20.5's instrument must be able to target **silence**
 alone: a graceful early close is not a stall, and punishing it would make a gateway fire on a route that is

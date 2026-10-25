@@ -199,12 +199,15 @@ your conversations" surface at all.
   section reports them separately — a cooling provider makes a probe wait without moving the
   family's account, and the trace records why
   ([`docs/spec.md` §9](../docs/spec.md)).
-- **Retry discipline**: a retry happens only where the evidence says the attempt was not
-  billed. A failure after the request bytes were fully written is never retried by the
-  gateway — see the unknown-outcome section. Where nothing was sent and nothing was billed
-  (a connect failure, an error head whose body could not be read), the **same route** is
-  retried once before any route change — a walk is a route change and pays a re-prefill —
-  and a failure the rule refuses says so on its trace entry
+- **Retry discipline**: the gateway retries a request on its own route only when the attempt
+  never reached the provider at all — nothing was sent, so nothing was billed — which in
+  practice means a connect failure (and it is the case the rule exists for: the routing
+  change that would otherwise follow is a **route change**, priced by a re-prefill). Once
+  the provider has begun answering — any status, and whether or not its error body arrived
+  complete — the attempt is final and the fallback chain is the recovery; a failure after
+  the request bytes were fully written is never retried by the gateway, and the
+  unknown-outcome section says why. A retry is one attempt on the same route, before any
+  route change, and a failure the rule refuses says so on its trace entry
   ([`docs/spec.md` §4.2](../docs/spec.md)).
 - **Degradation rules**: a failed transform falls back to the original payload and the
   request is still served; a prefix discontinuity warns by default and can be made
