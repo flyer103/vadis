@@ -2447,6 +2447,7 @@ mod tests {
     //! tripping at the SAME absolute instant, one timer, never re-armed),
     //! and the head-arrival attempt bound's conservative arm.
     use super::*;
+    use axum::response::IntoResponse as _;
     use std::sync::Mutex as StdMutex;
     use tokio::io::AsyncReadExt;
     use vadis_core::config::VadisConfig;
@@ -2883,6 +2884,166 @@ mod tests {
             "the dropped body had relayed bytes"
         );
         assert_eq!(e["details"]["retry_refused"], "forwarded");
+    }
+
+    /// Arm B at the SOCKET level (R3, T3's finding F1): the relay is
+    /// served the way `serve` serves it — a real axum listener, the
+    /// handler wiring of `crates/vadis-cli/src/lib.rs` (`Body::from_stream`
+    /// over `forward_stream`'s guarded body) — and the client is a real
+    /// TCP socket that RST-cuts mid-stream after bytes arrived, the T3
+    /// driver's own cut. The `client_closed` row must appear within a
+    /// bound far under `server.request_timeout` (10 s here): if the
+    /// disconnect is not observed, this test fails at 5 s rather than
+    /// recording `request_timeout` at the outer bound.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_socket_level_client_cut_mid_stream_writes_the_client_closed_row() {
+        let upstream_port = trickle_listener().await;
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = std::sync::Arc::new(forwarder(
+            test_config(10_000, 10_000, upstream_port),
+            Some(trace.clone()),
+        ));
+        // The handler is lib.rs's own stream-path wiring, verbatim in
+        // shape: forward_stream, then `Body::from_stream` over the
+        // guarded body — the guard rides in the body hyper polls.
+        let handler_state = std::sync::Arc::clone(&f);
+        let app = axum::Router::new()
+            .route(
+                "/v1/chat/completions",
+                axum::routing::post(
+                    move |axum::extract::State(f): axum::extract::State<
+                        std::sync::Arc<Forwarder>,
+                    >,
+                          body: axum::body::Bytes| {
+                        let fut = async move {
+                            match f
+                                .forward_stream(
+                                    WireApi::Chat,
+                                    &body,
+                                    "req-socket-cut",
+                                    &[],
+                                    TransformMode::Passthrough,
+                                )
+                                .await
+                            {
+                                StreamOutcome::Success(s) => {
+                                    use futures::StreamExt as _;
+                                    let ok_items = s.body.map(Ok::<_, std::io::Error>);
+                                    let mut resp = axum::response::Response::new(
+                                        axum::body::Body::from_stream(ok_items),
+                                    );
+                                    *resp.status_mut() =
+                                        axum::http::StatusCode::from_u16(s.status)
+                                            .expect("upstream status maps");
+                                    if let Some(ct) = s.content_type {
+                                        if let Ok(v) = ct.parse() {
+                                            resp.headers_mut()
+                                                .insert(axum::http::header::CONTENT_TYPE, v);
+                                        }
+                                    }
+                                    resp
+                                }
+                                StreamOutcome::Failure(fl) => (
+                                    axum::http::StatusCode::from_u16(fl.status)
+                                        .expect("failure status maps"),
+                                    fl.message,
+                                )
+                                    .into_response(),
+                            }
+                        };
+                        fut
+                    },
+                ),
+            )
+            .with_state(handler_state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let serve_task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // The client: a raw socket, POST the streaming body, read the
+        // relayed chunks until a few SSE frames arrived…
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+            .await
+            .unwrap();
+        let head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            STREAM_BODY.len()
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        s.write_all(STREAM_BODY).await.unwrap();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 8192];
+        let read_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            assert!(
+                std::time::Instant::now() < read_deadline,
+                "the relay never produced readable chunks"
+            );
+            let n = tokio::time::timeout(std::time::Duration::from_secs(2), s.read(&mut buf))
+                .await
+                .expect("read within the window")
+                .expect("the relay stays open while we read");
+            assert!(n > 0, "the relay stays open while we read");
+            seen.extend_from_slice(&buf[..n]);
+            // SSE frames in chunked clothing: count the payload markers,
+            // not the HTTP framing (chunk headers carry no blank line).
+            if seen.windows(10).filter(|w| *w == b"data: tick").count() >= 3 {
+                break;
+            }
+        }
+        // …then cut mid-stream. `set_linger` is unstable on std, so the
+        // RST is produced the way the kernel itself does it: the trickle
+        // keeps sending, we stop reading and let chunks pile up UNREAD
+        // in the socket's receive buffer, then close — a close with
+        // unread received data sends RST, so vadis sees a dead client,
+        // not an EOF drain (T3's own cut shape).
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        drop(s);
+
+        // The `client_closed` row within a bounded time far under the
+        // 10 s whole-request bound — a `request_timeout` row here is
+        // the failure R3 exists to catch (T3 F1).
+        let t0 = std::time::Instant::now();
+        let bound = std::time::Duration::from_secs(5);
+        let row = loop {
+            let records = trace.records.lock().unwrap().clone();
+            if let Some(first) = records.first() {
+                break first.clone();
+            }
+            assert!(
+                t0.elapsed() < bound,
+                "the client cut was not observed within {:?}: no terminal row \
+                 appeared (hyper did not drop the body)",
+                bound
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(5),
+            "observed within the bound, not at the outer deadline"
+        );
+        let rec: serde_json::Value = serde_json::from_str(&row).unwrap();
+        assert_eq!(rec["result"]["status"], 200);
+        assert_eq!(rec["result"]["attempts"], 1);
+        let e = &rec["errors"][0];
+        assert_eq!(e["kind"], "upstream_error");
+        assert_eq!(e["details"]["error_class"], "stream_truncated");
+        assert_eq!(e["details"]["stream_end"], "client_closed");
+        assert!(
+            e["details"]["relayed_bytes"].as_u64().unwrap_or(0) > 0,
+            "bytes were on the wire before the cut"
+        );
+        assert_eq!(e["details"]["retry_refused"], "forwarded");
+        // And exactly one row: the relay's own terminal writer must not
+        // add a second one after the guard's.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1, "exactly one terminal row");
+        serve_task.abort();
     }
 
     /// ADR-060 D3, shape A on the wire (the disabling edit is
