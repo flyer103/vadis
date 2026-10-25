@@ -192,8 +192,9 @@ generation — none of the three wired protocols carries resumable event ids in 
 of the three upstreams continues a generation. So the ruling is terminal: **record the cause, close the
 stream without a fabricated terminal (never `[DONE]`), and let the client redo the turn** —
 `details.retry_refused: "forwarded"` is how the record says a retry was considered and refused. The
-`failover_zero_byte` gate that already refuses the walk after the first relayed byte is the mechanism; D3
-adds the word, not a second gate.
+refusal is structural (§8.9, recorded in §8.11): the relay has **no walk at all** — a head that arrived is
+a decision — so D3's word documents a refusal the code's own shape enforces; there is no gate left to
+consult and none needed.
 
 ### 4.2 Shape B: nothing forwarded — retried only where nothing was billed
 
@@ -215,10 +216,11 @@ The class table decides, and it is ADR-011 item 6's own evidence table rather th
 
 So the retry this ruling permits is **narrower than "the stream was cut"**, and that is the decision rather
 than a residue of it: a cut after a `2xx` head is a *served* attempt, and every served attempt is terminal.
-The tightening this buys is worth naming, because it is where the shipped gate is a proxy and this rule is the
-fact: `failover_zero_byte` decides on `relayed == 0` — bytes forwarded **to the client** — while the bill turns
-on a different question, and a `200` head with no body byte yet is a model already generating. The two facts
-must both hold, and "no byte reached the client" is only the first of them.
+The proxy this decision deleted is worth naming, because the shipped code once leaned on it:
+`failover_zero_byte` decided on `relayed == 0` — bytes forwarded **to the client** — while the bill turns
+on a different question, and a `200` head with no body byte yet is a model already generating. That walk
+(the relay's only one) was deleted with the row-2 branch (§8.9, recorded in §8.11): the two facts no longer
+meet a gate at all, and "no byte reached the client" no longer buys a second attempt.
 
 - **Attempt cap: one retry per route per request** (`STREAM_RETRY_CAP = 1`; two attempts on a route). The
   request-level cap is unchanged — the walk's candidate count is still the walk's — so the total attempts a
@@ -495,3 +497,17 @@ Restoring row 2 is one row and one call site, so it is textually cheap and subst
 its class's verdict is worth the client's wait — a new ruling, not a revert. Removing row 7's reach instead is
 not reversible by this ADR at all: retrying after a head duplicates output on the wire (§4.1's structural
 refusal) on the streaming medium and duplicates a charge on the buffered one.
+
+### 8.11 Amendment (2026-10-25): the zero-byte walk is deleted, and this records it
+
+The row-2 deletion §8.9 authorised removed more than the branch it names, and this section is the record.
+`691d2af` deleted `failover_zero_byte` — the relay's **only** chain walk — and with it the machinery that
+existed solely to serve it: `RelayCtx::head_timeout`, `RelayCtx::client_requested_usage`,
+`RelayState::remaining`, `RelayState::attempted`, and the `in_cooldown` / `silence_cooling` walk-skip
+predicates. This is not a scope overrun but the deletion §4.1's "record, close" and §4.2 row 4 require: a
+`2xx` head with zero relayed bytes is a **terminal** truncation (`stream_end` names its cause,
+`retry_refused` its refusal word), and a relay that can never walk needs no walk state. §4.1's and §4.2's
+prose above is rewritten to match — the shipped gate they still named is gone, and the refusal is the
+code's own shape. `DESIGN.md`'s R74-1 register line carries a supersession note for the same reason.
+Nothing in §8.11 moves a boundary, a word or a count beyond that: cap, backoff, floor, ordering and both
+media's `NotSent` arms are §8.9's and stand.

@@ -2360,6 +2360,8 @@ A truncation with `relayed_bytes == 0` carries `retry_refused` only when one of 
 it — `billed` for the ordinary case, since a `2xx` head is a model already generating (ADR-011 item 6 row 3).
 No cut is ever retried (§4.2's head rule; ADR-060 §8), so a truncated request's `result.attempts` can exceed
 `1` only through a retry that happened **before** the truncated attempt's head, and never through one after it.
+A `2xx` head with zero relayed bytes is terminal all the same — no walk, no second attempt: the head alone
+means the model was invoked, and the relay's former zero-byte failover walk is deleted (ADR-060 §8.9/§8.11).
 
 **Why the causes are separate, and not a boolean.** §4.20.5's instrument must be able to target **silence**
 alone: a graceful early close is not a stall, and punishing it would make a gateway fire on a route that is

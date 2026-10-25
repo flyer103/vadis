@@ -1837,8 +1837,9 @@ contract itself.
 `ADR-056`: every row above moved from *contracted* to **served**. `server.stream_idle_timeout` (default
 30 s) loads, validates and reloads (read once per request at the streaming driver's entry); the streaming
 client carries the two windows (`head_timeout` on the attempt knob, `idle_timeout` on the new key —
-`failover_zero_byte`'s mid-request client takes the pair from the request's frozen context, ADR-056
-§6.1.1 item 5); a truncation entry carries `stream_end` (`idle_timeout` | `upstream_ended_early` |
+the mid-request client this line named `failover_zero_byte`'s is deleted with the walk itself: ADR-060
+§8.9/§8.11 removed `failover_zero_byte`, its `head_timeout` carrier and the walk state, so the relay's
+frozen context now carries `idle` and the request deadline alone); a truncation entry carries `stream_end` (`idle_timeout` | `upstream_ended_early` |
 `request_timeout`) beside `relayed_bytes`, `window_ms` (iff a bound tripped) and `since_last_byte_ms`,
 with the three-valued SSE completeness predicate asked only at the clean-end arm (`R74-0-F7`'s stale
 `ctx.content_type` repaired by `st.content_type`, set where a head is adopted); the three-bucket
@@ -1846,8 +1847,9 @@ partition lives in one owner (`stats::bucket_of`) rendered by both `/metrics` an
 (`vadis_requests_stream_incomplete`, `CONF-87`'s frozen set 21 → 22); one `idle_timeout` truncation
 writes the route-scoped advisory `stream_silence` row (TTL the 60 s constant) whose `demotion` object
 and projection share one `until_us` (`R74-0-F1` repaired — one shape for both arms,
-`rebuild_cooldown`-sufficient), and the walks (buffered, streaming pre-relay, zero-byte failover,
-failover narration) prefer a non-silence candidate without ever refusing, skipping or narrating a
+`rebuild_cooldown`-sufficient), and the walks (buffered, streaming pre-relay and failover narration — the
+fourth walk this line named, the zero-byte failover, is deleted with the relay's row-2 branch by ADR-060
+§8.9/§8.11) prefer a non-silence candidate without ever refusing, skipping or narrating a
 `failover.triggered` row. `CONF-108/109/110` are un-parked and green (CONF-109 gaining limb (d), the
 false-incompletion control); amendments A1 (conf_105), A2 (conf_41) and A3 (conf_87) landed as frozen.
 One conflict the contract carried internally is resolved and recorded at spec §4.20.1's range row: the
