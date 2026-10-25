@@ -765,7 +765,11 @@ pub struct DecisionRecord {
 
 pub struct IdentityRec { pub request_id: String,
     pub event_id: i64,          // the request.received event in the state store (spec §4.5, ADR-010)
-    pub client: ClientKind, pub client_ua_raw: Option<String>,
+    // client: derived once, at the boundary, from User-Agent into the closed vocabulary
+    // (spec §6, ADR-061 §4) — `other` when the header is absent or matches no rule. The
+    // raw header is NEVER recorded: no verbatim copy, no truncation, no hash (ADR-061 §4.6;
+    // this sketch used to carry `client_ua_raw`, a field the record never had).
+    pub client: ClientKind,
     pub session: Option<String>, pub thread_id: Option<String>, pub turn_index: u32 }
 pub struct ProtocolRec { pub r#in: Protocol, pub out: Protocol, pub translated: bool, pub lossy: Vec<LossyNote> }
 pub struct LossyNote { pub field: &'static str, pub reason: &'static str, pub action: LossyAction }
@@ -825,7 +829,7 @@ spec §6 field groups → Rust paths (auditable line by line):
 | spec §6 field group | Fields | Rust path |
 |---|---|---|
 | config | `config_digest` | `record.config_digest` — a **top-level** field beside `schema_version`, not a nested group (spec §6, §4.14; ADR-037 D6: the byte digest of the root file and the roster, written once by the loader and stamped by every writer) |
-| identity | `request_id` `event_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`client_ua_raw` is an appendix, for troubleshooting when UA normalization fails; `event_id` is the join anchor into the event log, spec §4.5) |
+| identity | `request_id` `event_id` `client` `session` `thread_id` `turn_index` | `identity.*` (`event_id` is the join anchor into the event log, spec §4.5; `client` is derived at the boundary from `User-Agent` into the closed vocabulary and the raw header is never recorded in any form — spec §6, ADR-061 §4.6; `thread_id` is a declared null in v0.1 — ADR-061 §4.7) |
 | protocol | `protocol_in` `protocol_out` `translated` `lossy[]` | `protocol.r#in` `protocol.out` `protocol.translated` `protocol.lossy` |
 | decision | `provider` `model` `requested_model` `selection_source` `plugin_chain[]` `decision_ms` | `decision.*` (`model` = the resolved provider-native id, `requested_model` = the client's own string — spec §6 and §12.10.7) |
 | state | `stateful_inbound` `sticky_hit` `cache_control_breaks` | `state.*` |
