@@ -84,6 +84,10 @@ fn is_shutdown_draining() -> bool {
 /// an in-flight attempt with stale facts).
 pub(crate) struct CancelCtx {
     pub request_id: String,
+    /// The boundary's one `User-Agent` derivation (ADR-061 D3), carried
+    /// from the request's facts — the cancelled row names who left, the
+    /// same word every other row of the request carries.
+    pub client: &'static str,
     pub received_event: Option<EventId>,
     pub proto_in: WireApi,
     pub proto_out: Option<WireApi>,
@@ -121,6 +125,7 @@ pub(crate) fn snapshot_facts(
     CancelCtx {
         request_id: facts.request_id.to_string(),
         received_event: facts.received_event,
+        client: facts.client,
         proto_in: facts.proto_in,
         proto_out: facts.proto_out,
         session: facts.session.clone(),
@@ -429,6 +434,7 @@ impl Drop for CancelGuard {
         let acc_ctx = AccountCtx {
             request_id: &ctx.request_id,
             received_event: ctx.received_event,
+            client: ctx.client,
             proto_in: ctx.proto_in.as_str(),
             proto_out: ctx.proto_out.as_ref().map(|w| w.as_str()),
             session: ctx.session.as_deref(),
@@ -536,6 +542,8 @@ mod tests {
     fn ctx(request_id: &str) -> CancelCtx {
         CancelCtx {
             request_id: request_id.to_string(),
+            // A fixture row: the derivation's unknown bucket.
+            client: "other",
             received_event: None,
             proto_in: WireApi::Chat,
             proto_out: Some(WireApi::Chat),

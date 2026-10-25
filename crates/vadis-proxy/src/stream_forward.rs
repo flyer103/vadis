@@ -140,6 +140,9 @@ struct RelayCtx {
     /// timer.
     request_deadline: tokio::time::Instant,
     request_id: String,
+    /// The boundary's one `User-Agent` derivation (ADR-061 D3), carried
+    /// from the pre-flight facts to the relay's terminal record.
+    client: &'static str,
     proto_in: WireApi,
     session: Option<String>,
     turn_index: u32,
@@ -268,9 +271,13 @@ impl Forwarder {
     ) -> StreamOutcome {
         // One clock read, two projections — the buffered path's twin.
         let now_us = now_us();
+        // ADR-061 D3: the buffered path's twin — the same pure function
+        // over the same headers, before any pipeline work.
+        let client = crate::forward::client_from_headers(headers);
         let mut facts = RequestFacts {
             request_id,
             received_event: None,
+            client,
             proto_in,
             proto_out: None,
             session: None,
@@ -686,6 +693,7 @@ impl Forwarder {
                 &AccountCtx {
                     request_id,
                     received_event: facts.received_event,
+                    client: facts.client,
                     proto_in: proto_in.as_str(),
                     proto_out: Some(proto_in.as_str()),
                     session: session.as_deref(),
@@ -756,6 +764,7 @@ impl Forwarder {
                 let ctx = AccountCtx {
                     request_id,
                     received_event: facts.received_event,
+                    client: facts.client,
                     proto_in: proto_in.as_str(),
                     // No bytes left the process — spec §6's third
                     // `protocol_out` class.
@@ -1385,6 +1394,7 @@ impl Forwarder {
                                     now_epoch_s,
                                     now_us: facts.now_us,
                                     received_event: facts.received_event,
+                                    client: facts.client,
                                     blocks: facts.blocks.clone(),
                                     plan_switch: facts.plan_switch.clone(),
                                     // The one value (spec §6): the read from
@@ -2360,6 +2370,7 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<Truncation
     let acc_ctx = AccountCtx {
         request_id: &ctx.request_id,
         received_event: ctx.received_event,
+        client: ctx.client,
         proto_in: ctx.proto_in.as_str(),
         proto_out: Some(st.wire.as_str()),
         session: ctx.session.as_deref(),

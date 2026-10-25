@@ -36,6 +36,11 @@ Read it in this order; each group answers a different question.
 1. **Identity** — which request this was: `request_id`, `event_id`, the normalized client,
    the resolved `session` (the client's own key, or null when it sent none), and
    `turn_index` within the session. Start here, because every later number is per-request.
+   The `client` word is derived from the request's `User-Agent` into a small closed
+   vocabulary (`codex`, `hermes`, `claude-code`, `other`) — an absent or unrecognized
+   header reads `other`, and the raw header is never recorded anywhere. A client that
+   wants to be named must say so itself: an SDK's default User-Agent names the SDK, not
+   the program built on it, so it is deliberately not bound to any word.
 2. **Protocol** — `protocol_in`, `protocol_out`, whether a translation happened, and the
    lossy notes if it did. On every record this build writes the two wires are equal — a route
    is attempted only on a cell it declares — and no translation happens, so this group is the

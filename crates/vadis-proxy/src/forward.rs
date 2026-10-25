@@ -183,6 +183,10 @@ pub fn mode_refused_record(
     now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
+    // The boundary's one `User-Agent` derivation (ADR-061 D3): the
+    // mode is resolved at the boundary, beside the guard that derived
+    // the word, so this record carries it too.
+    client: &'static str,
 ) -> vadis_core::trace::DecisionRecord {
     use vadis_core::trace::{
         CostRec, DecisionRec, DecisionRecord, IdentityRec, PrefixRec, ProtocolRec, ResultRec,
@@ -199,7 +203,7 @@ pub fn mode_refused_record(
             // The mode is decided before §12.10.5's row 1: the same `0`
             // sentinel every pre-pipeline refusal writes.
             event_id: 0,
-            client: "other",
+            client,
             session: None,
             thread_id: None,
             turn_index: 0,
@@ -487,6 +491,21 @@ pub(crate) fn rewrite_outbound_model<'a>(
     cleaned.set_top_level_string("model", native_id)
 }
 
+/// ADR-061 D3's derivation over the engine's own header view: the same
+/// pure function the boundary guard applied to the same request's
+/// headers — the engines receive the full header list already, so the
+/// word is recomputed identically rather than widening the public
+/// signature (CONF-20 calls `forward` directly; conformance cases are
+/// outside the mutable scope).
+pub(crate) fn client_from_headers(headers: &[(String, String)]) -> &'static str {
+    vadis_core::trace::client_from_user_agent(
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, v)| v.as_str()),
+    )
+}
+
 /// `X-Vadis-Transform` (ADR-019 §2, spec §2.1), done by
 /// `vadis-proxy` at the boundary — vadis-core never reads a header.
 /// Absent or `passthrough` ⇒ the byte path; `transform` ⇒ the declared-edit
@@ -652,6 +671,10 @@ pub(crate) fn compose_transform_stage(
 pub(crate) struct RequestFacts<'a> {
     pub(crate) request_id: &'a str,
     pub(crate) received_event: Option<vadis_core::EventId>,
+    /// The boundary's one `User-Agent` derivation (ADR-061 D3), carried
+    /// to every record this request writes — never recomputed inside
+    /// the walk.
+    pub(crate) client: &'static str,
     pub(crate) proto_in: WireApi,
     pub(crate) proto_out: Option<WireApi>,
     pub(crate) session: Option<String>,
@@ -745,9 +768,18 @@ impl Forwarder {
         // word feeds the plan guard (which must judge the same instant
         // /health reports), the seconds word everything else.
         let now_us = now_us();
+        // ADR-061 D3: the client word, derived from the request's own
+        // headers with the same pure function the boundary guard used —
+        // identical input, identical word, so this request's rows can
+        // never disagree with its pre-pipeline siblings. (The public
+        // signature keeps its five parameters: CONF-20 calls this
+        // method directly, and conformance is outside the mutable
+        // scope.)
+        let client = client_from_headers(headers);
         let mut facts = RequestFacts {
             request_id,
             received_event: None,
+            client,
             proto_in,
             proto_out: None,
             session: None,
@@ -845,6 +877,7 @@ impl Forwarder {
             &crate::accounting::AccountCtx {
                 request_id: facts.request_id,
                 received_event: facts.received_event,
+                client: facts.client,
                 proto_in: facts.proto_in.as_str(),
                 proto_out: facts.proto_out.map(WireApi::as_str),
                 session: facts.session.as_deref(),
@@ -1176,6 +1209,7 @@ impl Forwarder {
                 &crate::accounting::AccountCtx {
                     request_id,
                     received_event: facts.received_event,
+                    client: facts.client,
                     proto_in: proto_in.as_str(),
                     proto_out: Some(proto_in.as_str()),
                     session: session.as_deref(),
@@ -1257,6 +1291,7 @@ impl Forwarder {
                 let ctx = crate::accounting::AccountCtx {
                     request_id,
                     received_event: facts.received_event,
+                    client: facts.client,
                     proto_in: proto_in.as_str(),
                     // No bytes left the process — spec §6's third
                     // `protocol_out` class.
@@ -1822,6 +1857,7 @@ impl Forwarder {
                             let ctx = crate::accounting::AccountCtx {
                                 request_id,
                                 received_event: facts.received_event,
+                                client: facts.client,
                                 proto_in: proto_in.as_str(),
                                 proto_out: Some(proto_in.as_str()),
                                 session: session.as_deref(),

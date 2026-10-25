@@ -519,6 +519,7 @@ pub async fn serve(config_path: &str) -> i32 {
         rev: std::sync::Arc<vadis_proxy::Revision>,
         proto_in: WireApi,
         headers: Vec<(String, String)>,
+        client: &'static str,
         body: axum::body::Bytes,
     ) -> Response {
         let forwarder = &rev.forwarder;
@@ -550,6 +551,7 @@ pub async fn serve(config_path: &str) -> i32 {
                         .as_ref()
                         .map(|t| t.config_digest())
                         .unwrap_or(""),
+                    client,
                 );
                 if let Some(t) = forwarder.trace.as_ref() {
                     let _ = t.write(&record);
@@ -683,6 +685,9 @@ pub async fn serve(config_path: &str) -> i32 {
                           axum::extract::Extension(rev): axum::extract::Extension<
                         std::sync::Arc<vadis_proxy::Revision>,
                     >,
+                          axum::extract::Extension(client_word): axum::extract::Extension<
+                        ClientWord,
+                    >,
                           axum::extract::Extension(body): axum::extract::Extension<
                         axum::body::Bytes,
                     >| {
@@ -690,7 +695,7 @@ pub async fn serve(config_path: &str) -> i32 {
                             .iter()
                             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                             .collect();
-                        proxy_endpoint(rev, proto_in, hs, body)
+                        proxy_endpoint(rev, proto_in, hs, client_word.0, body)
                     },
                 ),
             )
@@ -759,6 +764,10 @@ pub async fn serve(config_path: &str) -> i32 {
             .get(axum::http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
+        // The guard (outermost) derived the word; the bound runs inside
+        // it (ADR-061 D3's "once") — read it before the closure so the
+        // request can still move on into the pipeline.
+        let client = client_word(req.extensions());
         let refuse = |declared: Option<u64>| {
             let request_id = request_id();
             let now_us = std::time::SystemTime::now()
@@ -777,6 +786,9 @@ pub async fn serve(config_path: &str) -> i32 {
                     .as_ref()
                     .map(|t| t.config_digest())
                     .unwrap_or(""),
+                // The guard (outermost) derived the word; the bound runs
+                // inside it (ADR-061 D3's "once").
+                client,
             );
             // Write, then answer — the same order the auth guard uses;
             // a trace write failure is §8's non-blocking case.
@@ -1059,6 +1071,26 @@ pub async fn serve(config_path: &str) -> i32 {
         proto_in: &'static str,
     }
 
+    /// The boundary's `User-Agent` derivation (ADR-061 D3), as a request
+    /// extension: the guard derives the vocabulary word once per request
+    /// — the same place that reads the headers for §4.7's guard — and
+    /// every later record writer (the `413` bound, the mode refusal, the
+    /// pipeline's terminal row) reads it here rather than re-deriving,
+    /// so one request's rows can never disagree about who called. The
+    /// raw header value is dropped at the derivation and never stored.
+    #[derive(Clone, Copy)]
+    struct ClientWord(&'static str);
+
+    /// The one derivation call on the request path (ADR-061 §4.2's
+    /// "once"): reads the extension the guard inserted. The guard is the
+    /// outermost layer on every route that writes a record (§12.11), so
+    /// the extension is structurally always present here.
+    fn client_word(exts: &axum::http::Extensions) -> &'static str {
+        exts.get::<ClientWord>()
+            .expect("the guard layer derived the client word (ADR-061 D3)")
+            .0
+    }
+
     /// One boundary guard pass — and THE capture point of the whole
     /// request path (ADR-040 D2's capture-once rule): the revision in
     /// force at receive is taken here, once, inserted into the request's
@@ -1076,6 +1108,17 @@ pub async fn serve(config_path: &str) -> i32 {
     ) -> Response {
         let rev = st.revision.capture();
         req.extensions_mut().insert(rev.clone());
+        // ADR-061 D3: the ONE `User-Agent` derivation — here, where the
+        // boundary already reads the headers for §4.7's guard, before
+        // the pipeline, so the pre-pipeline records and the ordinary
+        // row carry the same word. The header value is dropped here and
+        // never recorded in any form.
+        let client_word = ClientWord(vadis_core::trace::client_from_user_agent(
+            req.headers()
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+        ));
+        req.extensions_mut().insert(client_word);
         let headers: Vec<(String, String)> = req
             .headers()
             .iter()
@@ -1088,7 +1131,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 let request_id = request_id();
                 let started = std::time::Instant::now();
                 let now_us = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .map(|d| d.as_micros() as i64)
                     .unwrap_or(0);
                 let record = vadis_proxy::refused_record(
@@ -1102,6 +1145,7 @@ pub async fn serve(config_path: &str) -> i32 {
                         .as_ref()
                         .map(|t| t.config_digest())
                         .unwrap_or(""),
+                    client_word.0,
                 );
                 // Write, then answer — and either way the client is told
                 // 401 (§8's non-blocking case).

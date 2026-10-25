@@ -1686,6 +1686,7 @@ fallback: []
             1_800_000_000_000_000,
             0,
             &stamped,
+            "other",
         );
         writer.write(&record).expect("the write lands");
         let dir = root.parent().unwrap().join("state/traces");

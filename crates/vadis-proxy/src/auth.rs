@@ -139,6 +139,11 @@ pub fn refused_record(
     now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
+    // The boundary's one `User-Agent` derivation (ADR-061 D3): the
+    // guard reads the headers, so the word exists before the pipeline
+    // and the refusal's record names who was refused — the one identity
+    // fact a pre-pipeline row can carry.
+    client: &'static str,
 ) -> DecisionRecord {
     let header = match verdict {
         AuthVerdict::Refused { header } => *header,
@@ -154,7 +159,7 @@ pub fn refused_record(
             // §4.5's row 1. `0` is never a real id (`events.event_id`
             // starts at 1) — the sentinel the pre-route path writes.
             event_id: 0,
-            client: "other",
+            client,
             session: None,
             thread_id: None,
             turn_index: 0,
@@ -379,6 +384,7 @@ mod tests {
             1_789_256_462_000_000,
             3,
             "0123456789abcdef",
+            "hermes",
         );
         let j = serde_json::to_value(&rec).unwrap();
         assert_eq!(j["schema_version"], 2); // v2: cost.currency (ADR-018)
@@ -387,6 +393,7 @@ mod tests {
         assert_eq!(j["ts"], "2026-09-12T23:41:02.000Z");
         assert_eq!(j["identity"]["request_id"], "req-1");
         assert_eq!(j["identity"]["event_id"], 0);
+        assert_eq!(j["identity"]["client"], "hermes"); // the boundary's word (ADR-061 D3)
         assert_eq!(j["identity"]["session"], serde_json::Value::Null);
         assert_eq!(j["identity"]["turn_index"], 0);
         assert_eq!(j["protocol"]["protocol_in"], "chat");
@@ -425,7 +432,7 @@ mod tests {
     fn refused_record_without_a_header_carries_null() {
         let g = AuthGate::new("tok-conf45-secret".into());
         let v = g.admits(&hdrs(&[]));
-        let rec = refused_record("req-2", "anthropic", &v, 0, 0, "");
+        let rec = refused_record("req-2", "anthropic", &v, 0, 0, "", "other");
         let j = serde_json::to_value(&rec).unwrap();
         assert_eq!(j["errors"][0]["details"]["header"], serde_json::Value::Null);
         assert_eq!(j["protocol"]["protocol_in"], "anthropic");

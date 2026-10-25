@@ -109,6 +109,11 @@ pub struct AccountCtx<'a> {
     pub request_id: &'a str,
     /// The `request.received` row id — the trace's join anchor (CONF-24).
     pub received_event: Option<EventId>,
+    /// The boundary's `User-Agent` derivation, one word of the closed
+    /// vocabulary (ADR-061 D3): derived once per request before the
+    /// pipeline and carried here — never re-derived, so a request's
+    /// record cannot disagree with its own pre-pipeline rows.
+    pub client: &'static str,
     pub proto_in: &'a str,
     /// The outbound protocol when a route was resolved; `None` on a
     /// terminal failure that never reached one (spec §6 `protocol_out`
@@ -601,7 +606,7 @@ impl<'a> Accountant<'a> {
             identity: IdentityRec {
                 request_id: ctx.request_id.to_string(),
                 event_id: ctx.received_event.map(|e| e.0).unwrap_or(0),
-                client: "other",
+                client: ctx.client,
                 session: ctx.session.map(str::to_string),
                 thread_id: None,
                 turn_index: ctx.turn_index,

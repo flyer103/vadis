@@ -65,6 +65,10 @@ pub fn too_large_record(
     now_us: i64,
     overhead_ms: u32,
     config_digest: &str,
+    // The boundary's one `User-Agent` derivation (ADR-061 D3): the
+    // bound runs inside the guard, so the word the guard derived is
+    // the word this record carries.
+    client: &'static str,
 ) -> DecisionRecord {
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
@@ -75,7 +79,7 @@ pub fn too_large_record(
             // The bound runs before §12.10.5's row 1: the same `0`
             // sentinel every pre-pipeline refusal writes.
             event_id: 0,
-            client: "other",
+            client,
             session: None,
             thread_id: None,
             turn_index: 0,
@@ -174,6 +178,7 @@ mod tests {
             1_789_256_462_000_000,
             2,
             "0123456789abcdef",
+            "other",
         );
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(v["config_digest"], "0123456789abcdef");
@@ -190,7 +195,7 @@ mod tests {
 
     #[test]
     fn the_chunked_arm_names_the_undeclared_length_as_null() {
-        let rec = too_large_record("req-2", WireApi::Responses, 4096, None, 0, 0, "");
+        let rec = too_large_record("req-2", WireApi::Responses, 4096, None, 0, 0, "", "other");
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
             v["errors"][0]["details"]["content_length"],

@@ -92,6 +92,50 @@ pub struct IdentityRec {
     pub turn_index: u32,
 }
 
+/// The ordered prefix table behind [`client_from_user_agent`] (ADR-061
+/// §4.2/§4.3): first match wins, so the order is part of the contract —
+/// a table whose order is not stated is a table that changes answers
+/// when someone sorts it. Matching is ASCII-case-insensitive on the
+/// prefix.
+///
+/// A binding is admitted only with the header value **attested** — the
+/// client's own source at a cited path, or a dated capture of the wire
+/// (§4.8's admission rule). This round carries exactly one: hermes's
+/// own attribution UA (`HermesAgent/<version>`, set by the client
+/// itself). `codex` and `claude-code` are eligible and deliberately
+/// unbound — no capture of those clients' real UA against a vadis
+/// endpoint exists in this repository, and a wrong word in the trace
+/// outlives the round that wrote it.
+const CLIENT_UA_PREFIXES: &[(&str, &str)] =
+    &[("hermesagent/", "hermes"), ("hermes-agent/", "hermes")];
+
+/// Reduce a request's `User-Agent` header to one word of the closed
+/// vocabulary {`codex`, `hermes`, `claude-code`, `other`} (ADR-061 D3,
+/// DESIGN §12.3's `ClientKind` — the words `IdentityRec::client`'s own
+/// doc names).
+///
+/// Pure: a function of the header value and nothing else — no clock, no
+/// config, no process state — so the boundary can derive it once per
+/// request and every writer of that request carries the same word. An
+/// absent, empty or unmatched header is `other`: the unknown bucket
+/// keeps a row written before this ruling comparable with one written
+/// after it. The header value itself is never recorded anywhere — not
+/// verbatim, not truncated, not hashed (§4.6: a hash over a small value
+/// space is reversible by enumeration and would only look like
+/// redaction).
+pub fn client_from_user_agent(ua: Option<&str>) -> &'static str {
+    let Some(ua) = ua else { return "other" };
+    for (prefix, word) in CLIENT_UA_PREFIXES {
+        let Some(rest) = ua.as_bytes().get(..prefix.len()) else {
+            continue;
+        };
+        if rest.eq_ignore_ascii_case(prefix.as_bytes()) {
+            return word;
+        }
+    }
+    "other"
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ProtocolRec {
@@ -505,6 +549,50 @@ impl TraceWriter for NullTraceWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-061 §4.3's one attested binding, both spellings, in every
+    /// ASCII case shape that matters — plus the prefix's slash: a value
+    /// that stops before it (`HermesAgentX/1`) names something else.
+    #[test]
+    fn hermes_attribution_ua_is_derived() {
+        assert_eq!(client_from_user_agent(Some("HermesAgent/1.2.3")), "hermes");
+        assert_eq!(client_from_user_agent(Some("hermesagent/0.1")), "hermes");
+        assert_eq!(client_from_user_agent(Some("HERMES-AGENT/2.0")), "hermes");
+        assert_eq!(client_from_user_agent(Some("Hermes-Agent/")), "hermes");
+        assert_eq!(client_from_user_agent(Some("HermesAgentX/1")), "other");
+    }
+
+    /// The two measured traps (ADR-061 §4.4 and §4.3): the openai SDK's
+    /// own default UA names the SDK, not the harness, and hermes can
+    /// emit a codex-shaped UA on a non-official codex base URL — so
+    /// neither is bound, and both read `other` on a correct build.
+    #[test]
+    fn unattested_prefixes_stay_other() {
+        // The SDK's own default — every openai-python client sends it.
+        assert_eq!(
+            client_from_user_agent(Some("OpenAI/Python 2.24.0")),
+            "other"
+        );
+        // codex_cli_rs with a Hermes Agent suffix — the §4.3 trap a
+        // future `codex` binding must not fall into.
+        assert_eq!(
+            client_from_user_agent(Some("codex_cli_rs/0.0.0 (Hermes Agent)")),
+            "other"
+        );
+        assert_eq!(client_from_user_agent(Some("codex-cli/1.0")), "other");
+        assert_eq!(client_from_user_agent(Some("claude-code/1.0")), "other");
+        assert_eq!(client_from_user_agent(Some("curl/8.4.0")), "other");
+    }
+
+    /// §4.5: an absent or empty header is `other` — never `null`, never
+    /// a fifth word — so a header-less client's rows stay comparable
+    /// with every row before this ruling.
+    #[test]
+    fn absent_or_unmatched_is_other() {
+        assert_eq!(client_from_user_agent(None), "other");
+        assert_eq!(client_from_user_agent(Some("")), "other");
+        assert_eq!(client_from_user_agent(Some(" \t ")), "other");
+    }
 
     /// R43-F4: the empty digest is **explicit and confined to unserved
     /// writers**. The trait method is required — a writer that forgets
