@@ -218,7 +218,7 @@ is a *block* fact (`at` present). They are independent columns, and the combinat
 | What you are looking at | `class` | `kept` / `kept_tok` | `at` | `rebill_tok` |
 |---|---|---|---|---|
 | the session's **own cold start** — nothing was sent before it | `first` | `0` / `0` | `—` | **`0`**, always: the first request's growth *is* its whole prompt, so it can never have re-sent anything |
-| a **cold re-prefill inside the session** — the prompt was replaced, not extended | `rewrite` (occasionally `repeat`) | `0` / `0` | `#0:<kind>` (on a `repeat`: `—`) | **≈ `in`** — the whole prompt |
+| a **cold re-prefill inside the session** — the prompt was replaced, not extended | `rewrite` (occasionally `repeat`) | `0` / `0` | `#0:<kind>` (on a `repeat`: `—`) | **the whole prompt** — all of it when it does not exceed the session's previous largest prompt |
 | a **mid-prefix break** — something early changed and the tail was re-sent | `rewrite` | `k` / `> 0` | `#k:<kind>` | the tail above the step's own growth |
 | **no break at all** — the prefix did not change, the upstream's cache missed it anyway | `append` / `repeat` / `shorten` | full | `—` | `> 0`; the row's flags name a route or plan switch when one happened (a new cache namespace), and otherwise the surface claims no cause |
 

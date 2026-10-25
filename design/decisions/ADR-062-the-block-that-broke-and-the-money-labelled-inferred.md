@@ -189,7 +189,11 @@ buckets.
    is dominated by, and on which `rebilled = Σmiss − final` with `surplus = 0`. Where they differ, the
    peak is the only defensible floor: a session that shortened after its peak already paid for that
    content once, and a *final*-context floor would book the compaction's replacement text as a re-bill.
-   §7 keeps that alternative and its cost.
+   Worked on the three-step session `(in, cached) = (10 000, 0), (15 000, 10 000), (3 000, 0)`: `Σmiss` is
+   18 000, the final context 3 000, the peak 15 000 — the final-context form reports **15 000** (the
+   replacement text *and* the 10 000 the compaction deleted), the peak form reports **3 000** (the
+   replacement text's own miss, which is F3's registered limit), and a perfect-cache append chain of the
+   same length reports **0**. §7 keeps the rejected form and its cost.
 
 ### 2.3 The money, and exactly where the price comes from
 
@@ -251,7 +255,7 @@ its name) and `first` already names the session's own start.
 | Row shape | `class` | `kept` | `kept_tok` | `at` | `rebill_tok` | why the arithmetic says so |
 |---|---|---|---|---|---|---|
 | **the session's own cold start** — nothing was ever sent before | `first` | `0` | `0` | `—` | **`0`** | `growth(1) = in(1)`, so `rebill(1) = −cached(1) → 0` (§2.2 consequence 1). Unavoidable, and priced nowhere. |
-| **a same-session cold re-prefill** — the previous prompt was not extended, it was replaced | `rewrite` (or `repeat`) | `0` | `0` | `#0:<kind>` (on a `repeat`: `—`) | **≈ `in`** — the whole prompt | `peak(n−1) ≈ in(n)`, so `growth ≈ 0` and the miss is all re-bill. This is the audit's "15 cold re-prefills above 20 k". |
+| **a same-session cold re-prefill** — the previous prompt was not extended, it was replaced | `rewrite` (or `repeat`) | `0` | `0` | `#0:<kind>` (on a `repeat`: `—`) | **the whole prompt minus growth** — `in` when it did not exceed the session's previous peak, `peak(n−1)` when it did | `peak(n−1) ≥ in(n)` ⇒ `growth = 0` ⇒ the miss is all re-bill; a prompt that also grew past the peak keeps that growth out of the figure. This is the audit's "15 cold re-prefills above 20 k". |
 | **a mid-prefix break** — something early changed, the tail was re-sent | `rewrite` | `k > 0` | `Σ_{i<k} tokens > 0` | `#k:<kind>` | the tail above `growth` | `growth = in(n) − peak(n−1)`; the rest of the miss is the re-sent tail. This is the audit's 107 (97 `input_item`, 10 `tool`). |
 | **no break, and a re-bill anyway** — the prefix did not change; the provider's cache did not cover it | `append` / `repeat` / `shorten` | full | `≈ in` | `—` | `> 0` | the block relation says the prompt grew (or repeated) exactly as before; the miss says the cache missed. The row's **flags** name the one in-record cause: `failover=<route>` or `plan=<from>→<to>` is a new upstream cache namespace (`ADR-011` item 9, `ADR-014` item 5). No flag ⇒ an expiry or an upstream instance the record cannot see, and the surface says nothing about it. |
 
@@ -430,7 +434,7 @@ command prints anything new. The book takes the re-bill paragraph and the two `m
 
 | Alternative | Why rejected |
 |---|---|
-| **the audit's own shape verbatim**: `rebilled = Σmiss − session-final context` | wrong as a *floor*. A session that shortens after its peak already paid for that content; a final-context floor books the compaction's replacement text as a re-bill (worked example in §2.2 consequence 3). The peak coincides with the final context on the append-only session the audit measured, so nothing about the audit's finding is weakened — the definition is simply right where the audit's was silent. |
+| **the audit's own shape verbatim**: `rebilled = Σmiss − session-final context` | wrong as a *floor*. A session that shortens after its peak already paid for that content; a final-context floor books the compaction's replacement text **and** the content the compaction deleted (worked: 15 000 against the peak's 3 000, §2.2 consequence 3). The peak coincides with the final context on the append-only session the audit measured, so nothing about the audit's finding is weakened — the definition is simply right where the audit's was silent. |
 | a **sixth class word** (`cold`, `coldstart`) | the class names a *relation* (`§9.4.2`), and a same-session cold re-prefill's relation is `rewrite` with `lcp == 0` — a word already covers it, `kept 0` + `#0:<kind>` already prove it, and a sixth word would be the vocabulary drift `§9.4.4` refuses for `retry`. §2.5 answers rule 3 with the columns that exist. |
 | one **`miss`** column and let the reader subtract | the audit's arithmetic was done by hand *because* it had to be; and a number with no field, no label and no named operands is the "script in dotfiles" `ADR-057` §1.4 refused. The subtraction is printed, not implied. |
 | price the re-bill from the **config's price table** (`p_miss(route) × tokens`, `ADR-014` item 5's formula) | it needs a band selection, a peak decision and a currency guess that the record has **already made** — and re-making them is the cost engine's second implementation, which the card forbids and `ADR-041` refuses on principle (one definition per figure). `cost.input_miss ÷ miss` *is* that price, as applied. The precedent's *label* is adopted; its *arithmetic* is not needed because this surface has the money already. |

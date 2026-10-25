@@ -3696,7 +3696,7 @@ independence is the diagnosis:
 | Row shape | `class` | `kept` | `kept_tok` | `at` | `rebill_tok` |
 |---|---|---|---|---|---|
 | the **session's own cold start** — nothing was sent before this request | `first` | `0` | `0` | `—` | **`0`** |
-| a **same-session cold re-prefill** — the previous prompt was replaced, not extended | `rewrite` (or `repeat`) | `0` | `0` | `#0:<kind>` (on a `repeat`: `—`) | **≈ `in`** — the whole prompt |
+| a **same-session cold re-prefill** — the previous prompt was replaced, not extended | `rewrite` (or `repeat`) | `0` | `0` | `#0:<kind>` (on a `repeat`: `—`) | **the whole prompt minus growth** — `in` when it did not exceed the session's previous peak, `peak(n−1)` when it did |
 | a **mid-prefix break** — something early changed, the tail was re-sent | `rewrite` | `k > 0` | `Σ_{i<k} tokens > 0` | `#k:<kind>` | the tail above `growth` |
 | **no break, and a re-bill anyway** — the prefix did not change; the provider's cache did not cover it | `append` / `repeat` / `shorten` | full | `≈ in` | `—` | `> 0` |
 
