@@ -7,6 +7,7 @@ deploy=$repo_dir/scripts/vadis-deploy.sh
 wrapper=$repo_dir/scripts/vadis-serve-wrapper.sh
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/vadis-ops-test.XXXXXX")
 child_pid=
+executing_pid=
 wrapper_pid=
 
 cleanup() {
@@ -14,6 +15,10 @@ cleanup() {
     if [ -n "$wrapper_pid" ]; then
         kill -KILL "$wrapper_pid" 2>/dev/null || true
         wait "$wrapper_pid" 2>/dev/null || true
+    fi
+    if [ -n "$executing_pid" ]; then
+        kill -KILL "$executing_pid" 2>/dev/null || true
+        wait "$executing_pid" 2>/dev/null || true
     fi
     if [ -n "$child_pid" ]; then
         kill -KILL "$child_pid" 2>/dev/null || true
@@ -65,20 +70,50 @@ cp "$test_root/fake-v1" "$test_root/installed"
 installed="$test_root/installed"
 old_inode=$(inode "$installed")
 
-printf 'TEST deploy refuses while the fake binary is running\n'
-"$installed" &
+if [ -x /bin/sleep ]; then
+    printf 'TEST deploy refuses while the installed binary is executing\n'
+    cp /bin/sleep "$test_root/executing-v1"
+    cp /bin/sleep "$test_root/executing-v2"
+    cp "$test_root/executing-v1" "$test_root/executing-installed"
+    executing_installed=$test_root/executing-installed
+    if [ "$(uname -s)" = Darwin ]; then
+        codesign --force --sign - "$test_root/executing-v1" "$test_root/executing-v2" "$executing_installed"
+    fi
+    executing_old_inode=$(inode "$executing_installed")
+    "$executing_installed" 30 &
+    executing_pid=$!
+    sleep 0.2
+    set +e
+    executing_refusal_output=$("$deploy" "$test_root/executing-v2" "$executing_installed" 2>&1)
+    executing_refusal_status=$?
+    set -e
+    [ "$executing_refusal_status" -ne 0 ] || fail 'deploy unexpectedly replaced an executing binary'
+    assert_contains "$executing_refusal_output" 'refusing to replace'
+    assert_contains "$executing_refusal_output" "inode=$executing_old_inode"
+    [ "$(inode "$executing_installed")" = "$executing_old_inode" ] || fail 'executing-binary refusal changed the inode'
+    printf '%s\n' "$executing_refusal_output"
+    printf 'PASS executing refusal status=%s inode=%s\n' "$executing_refusal_status" "$executing_old_inode"
+    kill -TERM "$executing_pid"
+    wait "$executing_pid" 2>/dev/null || true
+    executing_pid=
+else
+    printf 'SKIP executing refusal: source binary /bin/sleep is absent\n'
+fi
+
+printf 'TEST deploy refuses while the installed file is open\n'
+sh -c 'exec 9<"$1"; trap "exit 0" HUP INT TERM; while :; do sleep 1; done' sh "$installed" &
 child_pid=$!
 sleep 0.2
 set +e
 refusal_output=$("$deploy" "$test_root/fake-v2" "$installed" 2>&1)
 refusal_status=$?
 set -e
-[ "$refusal_status" -ne 0 ] || fail 'deploy unexpectedly replaced a running binary'
+[ "$refusal_status" -ne 0 ] || fail 'deploy unexpectedly replaced an open binary'
 assert_contains "$refusal_output" 'refusing to replace'
 assert_contains "$refusal_output" "inode=$old_inode"
 [ "$(inode "$installed")" = "$old_inode" ] || fail 'refusal changed the inode'
 printf '%s\n' "$refusal_output"
-printf 'PASS refusal status=%s inode=%s\n' "$refusal_status" "$old_inode"
+printf 'PASS open refusal status=%s inode=%s\n' "$refusal_status" "$old_inode"
 
 printf 'TEST deploy stops, replaces, and starts without retaining the inode\n'
 operations_log=$test_root/deploy-operations.log
