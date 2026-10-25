@@ -3527,6 +3527,10 @@ alternatives and the findings it registers:
 The surface answers one question: **inside this session, what did each step send, what did the provider's
 cache say, which account paid, what did it cost — and when the prefix broke, which block broke it.**
 
+§9.4.8 (the re-billed prefix: the block that broke, the tokens billed again, and the one session figure that
+sums them) is `ADR-062`'s extension. It adds two row columns and a `summary.rebill` block, moves no class
+word, flag or bucket, and it allocates no conformance case: the first free id stays `CONF-121`.
+
 #### 9.4.1 The command and its inputs
 
 | Property | Contract |
@@ -3563,9 +3567,10 @@ the absence this section's row table prints as `—` (§9.4.3), and its `at #0:<
 itself. The `lcp == 0` clause is the owner's ruling of 2026-10-18 (ADR-057 §2.2's dated amendment): the
 command already printed this shape with the relation beside it, and this table now describes it.
 
-The block index is vadis's own enumeration order of the client's bytes, **not** the provider's template
-order; the cache column is therefore the provider's own counter (§9.4.3), never a figure derived from the
-block list.
+The block index is the block's position in the list the trace records — `prefix.blocks[]`, enumerated in
+the **provider's template order** (system-instruction position → `tools` → `messages` / `input` items,
+§6, pinned by `CONF-31`), not the body's byte order. It is an ordinal, not a byte offset: the cache column
+is therefore the provider's own counter (§9.4.3), never a figure derived from the block list.
 
 #### 9.4.3 The row
 
@@ -3588,13 +3593,20 @@ block list.
 | 15 | `head_ms` | integer \| null | `result.upstream_ms` | measured |
 | 16 | `status` | integer, or `"<status>→<upstream_status>"` | `result.status`, plus the upstream's when the two differ | measured |
 | 17 | `flags` | array of strings | §9.4.4 | derived |
+| 18 | `kept_tok` | integer | `Σ prefix.blocks[i < lcp].tokens` — the inferred size of the prefix the previous step also carried, i.e. the part of the prompt **the break did not touch**. `0` on a row whose `lcp == 0` is a genuine empty sum (the measured zero `kept 0` prints beside it), never the `—` absence | **inferred** |
+| 19 | `rebill_tok` | integer \| null | §9.4.8's step term — the tokens this step billed **above its own growth**; null when the row carries no usage | **inferred** |
+
+The two new columns are **appended**, so no existing column number moves; the text table prints columns
+1–16, then **18, 19**, then 17 `flags` — the variable-length cell stays last, and the numbering is the
+`--json` key order and the amendment log's reference. `kept_tok` is never null (it is computed from the
+blocks, like `new_tok`); `rebill_tok` follows `in`/`cached` and is null exactly when they are.
 
 **This surface uses §7's `measured` and `inferred` labels only, and it prints no `verified` figure at all** —
 a ledger row is one observation and the ledger holds no counterfactual, so nothing on it can be a saving
-(§7, ADR-058). `measured` is on the provider's counters and on the block facts, `inferred` on `new_tok`, and
-`derived` names the rows that are not quantities.
+(§7, ADR-058). `measured` is on the provider's counters and on the block facts, `inferred` on `new_tok`,
+`kept_tok` and `rebill_tok`, and `derived` names the rows that are not quantities.
 
-**Absence is printed as an absence.** A null in columns 3, 4, 5-8, 11 and 15 means the record cannot
+**Absence is printed as an absence.** A null in columns 3, 4, 5-8, 11, 15 and 19 means the record cannot
 carry the figure — never `0`, never a guess (§7). A record with `usage_missing: true` prints null in
 columns 5-8 (the cost was never computed) and carries the `no_usage` flag.
 
@@ -3630,6 +3642,9 @@ ones).
 | `by class` | the five counts, each with `new_tok` and money under the same labels | carries the row-level labels through |
 | `top steps` | the five largest `new_tok`, as `#step (class, +k blocks)` | — |
 | `cache` | `Σcached / Σin` over rows that carry usage, with the excluded count | a ratio of measured figures; null when no row carries usage. It is not a saving (§7) |
+| `re-billed` | `R tokens (inferred)  = Σ miss M − floor F + surplus S   (K rows re-billed; E rows without usage)` — then one money line per currency (`A nano CUR`, **inferred**, at each row's own measured miss rate) and, only when non-zero, `plan T tokens (marginal 0 — allowance headroom, not a zero price)` | **§9.4.8's contract**: `R` is the one-pass-floor definition, `M`/`F`/`S` are its printed operands (`M`, `F` measured; `S` inferred), and no figure here is a saving, a `verified` figure or a measured difference |
+| `by break kind` | for each of the four block kinds — `system`, `tool`, `message`, `input_item`, always all four (`0` when never) — how many **`rewrite`** rows diverge at that kind, and the sum of their `rebill_tok` | a restatement of columns 11 and 19; the audit's *which kind of block breaks prefixes* split; a `rewrite` with no resolvable kind lands in no bucket rather than in a guess |
+| `top rebilled` | the five largest `rebill_tok`, as `#step (class, at, N tok)`, largest first, ties by step order; `—` when none, never padded with zero rows | the answer to *which step cost me the money* — the question `top steps` does not answer |
 
 A **reused session key** is not split into several sessions: the span and a large `gap_ms` are the
 reader's evidence, and the command invents no boundary.
@@ -3647,6 +3662,14 @@ reader's evidence, and the command invents no boundary.
   surface.
 - A **client column** — `identity.client` is a constant in this build (ADR-057 §9 F1); the column arrives
   with the change that fills the field.
+- A **`verified`** figure, a **saving**, a "tokens re-savable", or any reading of `rebill` as money that
+  could have been avoided. The re-bill of §9.4.8 is a decomposition of miss volume already paid, taken
+  against a modelled one-pass floor with no control, and it is `inferred`; nor may it be called
+  `reprefill_tokens`, which is `result.plan_switch`'s decision-time estimate for a cache-namespace change
+  (§6) — a different quantity under a name that already has an owner.
+- Any **verdict on the client** — whether a break was an edit, a compaction, a rewind or a cache expiry.
+  The ledger prints the relation (`kept`/`blocks`/`at`) and the re-bill; it does not know why, and it
+  prints no word for intent (§9.4.2).
 
 #### 9.4.7 The prerequisite this section depends on
 
@@ -3659,6 +3682,130 @@ on the second — which is why §9.4.3's null rule is "identical `ts`", not "one
 command may not ship before the repair: with a one-second floor both `start` and `gap_ms` would be
 wrong whenever they are small; `CONF-116` witnesses both halves (the live repaired clock, and the
 vintage record's honest null).
+
+#### 9.4.8 The re-billed prefix — the number, its field, and its label
+
+`ADR-062` extends the row and the summary with **two token weights and one session figure**, so that the
+two questions the ledger's columns only half-answer — *which block broke this prefix, and how much of this
+session's miss was re-prefill rather than new content* — are fields and not arithmetic a reader performs.
+Nothing in §9.4.1–§9.4.7's class words, flags, buckets, money rules or exit codes changes.
+
+**9.4.8.1 A re-bill is a row fact; a break is a block fact.** The two are independent columns and the
+independence is the diagnosis:
+
+| Row shape | `class` | `kept` | `kept_tok` | `at` | `rebill_tok` |
+|---|---|---|---|---|---|
+| the **session's own cold start** — nothing was sent before this request | `first` | `0` | `0` | `—` | **`0`** |
+| a **same-session cold re-prefill** — the previous prompt was replaced, not extended | `rewrite` (or `repeat`) | `0` | `0` | `#0:<kind>` (on a `repeat`: `—`) | **≈ `in`** — the whole prompt |
+| a **mid-prefix break** — something early changed, the tail was re-sent | `rewrite` | `k > 0` | `Σ_{i<k} tokens > 0` | `#k:<kind>` | the tail above `growth` |
+| **no break, and a re-bill anyway** — the prefix did not change; the provider's cache did not cover it | `append` / `repeat` / `shorten` | full | `≈ in` | `—` | `> 0` |
+
+The first three are told apart by columns the table already prints: `class` (a cold start is `first`, a
+cold re-prefill is a `rewrite` with `kept 0`), `at` (`—` versus `#0:<kind>` versus `#k:<kind>`), and the
+proof in 9.4.8.2 that the first shape cannot carry a re-bill at all. No sixth class word exists for them:
+`class` names a relation (§9.4.2) and `rewrite` with `lcp == 0` is the relation a cold re-prefill has. The
+fourth shape has no block cause on the record; its `flags` name the one cause the record can carry — a
+route or account move (`failover=`, `plan=`) opens a new upstream cache namespace (§6) — and where no flag
+is present the surface says nothing, because an expiry is not on the wire.
+
+`shorten` is **not** a break: its `at` names the first **dropped** block and there is no divergence, so its
+keep is the whole new list and its re-bill is normally `0`.
+
+**9.4.8.2 The definition.** Over a session's rows that carry usage (`usage_missing` false with both
+counters present), in the ordering of §9.4.1:
+
+- `miss(n) = usage.input_total(n) − usage.input_cached(n)` (saturating) — the token count the `input_miss`
+  bucket prices (§6); this section defines no token count of its own.
+- `peak(n−1) = max { usage.input_total(k) : k < n, usage-carrying }`, and `peak(0) = 0`.
+- `growth(n) = max(0, in(n) − peak(n−1))` — the step's own growth; `rebill(n) = max(0, miss(n) − growth(n))`;
+  `surplus(n) = max(0, growth(n) − miss(n))`.
+
+> **`summary.rebill.tokens` — the session's *re-billed tokens* — is the measured cache-miss volume of the
+> session's steps above the session's one-pass floor, counted step by step and floored at zero on each
+> step: `Σ_n max(0, (in(n) − cached(n)) − max(0, in(n) − peak(n−1)))`.**
+
+`Σ growth(n) = max_n in(n)` (the positive increments of a running maximum telescope), so the report also
+prints the identity **`rebilled = Σmiss − floor + surplus`** with `Σmiss = Σ(in − cached)` and
+`floor = max(in)` — the reader can check the subtraction on the page, as §9.4.5 does for the three buckets.
+
+Three consequences, each a rule:
+
+1. **The session's cold start cannot be a re-bill.** `rebill(first) = (in − cached) − in = −cached ≤ 0 → 0`:
+   the first step's growth is its whole prompt, so nothing existed to re-send.
+2. **The clamp at zero is arithmetic, not concealment.** `rebill_tok` counts tokens billed twice and is
+   non-negative by construction; a pre-clamp negative means the cache covered tokens this session had not
+   itself sent (a shared prefix another session cached, an overlap between two requests) — those go to
+   `surplus`, which the identity adds back, so nothing is lost from the report. This is **not** §9.4.3's
+   `gap_ms` rule: a `gap_ms` is a measured difference whose sign is information; a re-bill has no negative
+   population to print.
+3. **The floor is the session's largest prompt, not its last one.** They coincide on the ordinary
+   append-only session, where the number equals `Σmiss − final context`; where a session shortened after
+   its peak, the final context is not a floor — that content was already paid for once — and a
+   final-context floor would book the compaction's replacement text as a re-bill.
+
+**9.4.8.3 The money, and where its price comes from.** Per row, in that row's currency:
+`rebill_nano(n) = floor(rebill_tok(n) × cost.input_miss(n) / miss(n))`, taken only when `miss(n) > 0` (a
+zero miss implies a zero re-bill by 9.4.8.2). `cost.input_miss ÷ miss` **is** the `p_miss` the cost engine
+applied to that row — band (§4.10), peak multiplier and currency included — so this surface reads **no
+price table, declares no price and derives none from a page** (constraint 5); the money it needs is already
+in the record. `--config` stays required for §9.4.1's reasons. A **plan** row's re-billed tokens are counted
+in `plan_tokens` and priced into no currency line (§4.6 rule 4, GAP-Q17); a row whose re-billed tokens no
+currency prices (`cost.input_miss == 0` while `miss > 0`, a cache replay, ADR-042) contributes tokens and is
+counted in `unpriced_rows`. Sums never cross a currency (§4.8), rounding is integer NanoUsd (ADR-006)
+floored **per row**. The figure is **never added to a measured money line**: `Σcost.total` is the money the
+provider billed, and this prices tokens billed under another request's counters.
+
+**9.4.8.4 The label.** `inferred` — for the token figure and for the money. The rule is §7's composition
+rule applied one step further: *a restatement of measured figures stays `measured`; a figure whose
+computation asserts a fact the provider never recorded is `inferred`.* `Σmiss` and `floor` are
+restatements; the re-bill asserts that particular tokens were **billed a second time**, a claim no record
+carries and which rests on a model of what a one-pass session would have paid.
+
+It must **not** be called, and the surface prints none of: **`verified`** (no control, no second world —
+`ADR-058`; only a paired control or the replay ladder mints it); **a saving**, "tokens saved", "wasted",
+"avoidable" (it is money already spent, and the ledger cannot see why the client re-sent); **a measured
+difference** (its inputs are measured, the difference is not); **`reprefill_tokens`** (§6's
+`result.plan_switch` figure — a different quantity whose name has an owner); or **a cost the gateway
+charged**.
+
+**9.4.8.5 The summary block, in both forms.** The `summary` object gains `rebill`, and the text form prints
+the same nine values in three lines — a field never appears in one form and not the other (§9.4.1):
+
+| Key | What it carries | Label |
+|---|---|---|
+| `tokens` | 9.4.8.2's figure | **inferred** |
+| `money_nano` | one amount per currency (9.4.8.3); `{}` when no currency receives one | **inferred** |
+| `plan_tokens` | re-billed tokens on a `coding_plan` account — counted, never a currency zero | **inferred** |
+| `rows` | how many rows carry `rebill_tok > 0` | count |
+| `miss_tokens` | `Σ(in − cached)` over the usage-carrying rows | measured |
+| `floor_tokens` | `max(in)` over the same rows | measured |
+| `surplus_tokens` | `Σ surplus(n)` | **inferred** |
+| `excluded_rows` | rows without usage — excluded from every figure, and counted | count |
+| `unpriced_rows` | rows with re-billed tokens no currency prices | count |
+
+```text
+re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage)
+re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
+re-billed plan   0 tokens (marginal 0 — allowance headroom, not a zero price)
+```
+
+The `re-billed plan` line appears only when `plan_tokens > 0` (the `money` line's `plan rows` rule); the
+other two always appear.
+
+**9.4.8.6 Zeros, absences, `--last`, and a session across accounts.**
+
+| Case | Contract |
+|---|---|
+| a session with no break and no cache miss | `tokens: 0`, `rows: 0`, `money_nano: {}`, `plan_tokens: 0`, `surplus_tokens: 0`, with `miss_tokens`/`floor_tokens` still measured and equal. **A zero — never `null`, never an absent key.** |
+| a session where no row carries usage | `tokens: null`, `rows: 0`, `money_nano: {}`, `excluded_rows: steps`, and the text prints `re-billed — (no step carries usage)`. This is the one null, and it is §7's absence rule. |
+| some rows without usage | excluded from every figure and **counted**; the number stands on the rows that measured |
+| `--last <n>` | no `rebill` figure moves — it is computed over the session's steps, as `steps`, `money` and `by class` are (§9.4.1) |
+| a session across routes, accounts or currencies | tokens are account-agnostic and **not** split per route (the floor is a session fact; splitting it needs an allocation rule no measurement supports); money is per currency and never summed across; plan rows are counted in `plan_tokens`; `unpriced_rows` states what nothing priced |
+| a reused session key | §9.4.5's rule — no boundary is invented; the span and a large `gap_ms` are the evidence |
+
+**Nothing else of this section moves**: the five class words, the flag vocabulary, the three buckets, the
+`plan` label, the exits, and the refusals of 9.4.6 (which gains 9.4.8.4's never-list and one bullet: the
+surface prints no verdict on *why* a client re-sent).
 
 ## Publication note (2026-10-03, R62-2)
 
