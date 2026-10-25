@@ -245,6 +245,13 @@ route and not an alias, so it resolves to nothing and comes back as `404 unknown
 deliberately not enabled in v0.1: it returns an explicit error instead of guessing, and the selector
 slot is reserved for a plugin.
 
+A `404` names what you can ask for instead of what you typed: its body carries your own string back
+under `details.requested` and the deployment's resolvable alias names under `details.resolvable`
+(at most 8, byte order — `details.resolvable_total` says how many the roster holds, so a truncated
+list is visible). Every unresolvable string answers the same one word — vadis does not tell a
+client which half of a `provider/model` route was wrong, because that would be a roster oracle the
+model list deliberately withholds.
+
 One shape deserves a warning because it looks like a typo and is not. Some vendors sell a 1M-context
 variant of a model as a **separate model id with an `[1m]` suffix** — for at least one vendor the
 suffix turned out to be a client-side switch the server refuses as an id, so whether it is a real

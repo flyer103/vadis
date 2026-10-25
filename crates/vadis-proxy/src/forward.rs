@@ -96,6 +96,13 @@ pub struct ForwardFailure {
     pub code: ErrorCode,
     pub message: String,
     pub details: Option<Value>,
+    /// ADR-061 D2: details carried by the **§8 client body only** —
+    /// populated today by the resolution failure's resolvable set, which
+    /// the trace record deliberately never mirrors (§3.5: a roster echo
+    /// per failed request would put a config fact in a traffic log for
+    /// no reader). `details` stays the record-visible channel; this
+    /// field is read by [`Self::client_body_details`] alone.
+    pub client_details: Option<Value>,
 }
 
 impl ForwardFailure {
@@ -105,9 +112,63 @@ impl ForwardFailure {
             code,
             message: message.into(),
             details: None,
+            client_details: None,
         }
     }
+
+    /// The details the §8 client body carries: the record's own
+    /// `details` when present, else the client-only set a resolution
+    /// failure answers with (ADR-061 D2/§3.5 — the split is the point:
+    /// the client learns what it may ask for, the traffic log does not
+    /// echo the roster).
+    pub fn client_body_details(&self) -> Option<Value> {
+        self.details.clone().or_else(|| self.client_details.clone())
+    }
 }
+
+/// ADR-061 D2: the one failure every client-formed resolution refusal
+/// answers with — no alias, an unknown provider half, a model not on
+/// that provider; the three are indistinguishable in the body (the
+/// distinguishing word is a roster-structure oracle ADR-055 §3 keeps
+/// behind the list, and a `404` must not become a query that answers
+/// "does this provider exist").
+///
+/// The message names the client's own string and nothing else; the
+/// `resolvable` set is **alias names only**, at most
+/// [`RESOLVABLE_NAMES_CAP`] of them in the list's own byte-ascending
+/// order, with the roster's total beside it so a truncation is visible
+/// rather than silent. No provider name, no provider-native id, no
+/// `provider/model` string the client did not itself send may appear in
+/// any member — the guard argument is ADR-055 §3's (same credential the
+/// list answers, so the same disclosure and no more).
+pub(crate) fn unknown_model_failure(
+    aliases: &std::collections::BTreeMap<String, RouteSpec>,
+    model: &str,
+) -> ForwardFailure {
+    let resolvable: Vec<&str> = aliases
+        .keys()
+        .take(RESOLVABLE_NAMES_CAP)
+        .map(String::as_str)
+        .collect();
+    let mut f = ForwardFailure::new(
+        404,
+        ErrorCode::UnknownModel,
+        format!("unknown model or alias '{model}'"),
+    );
+    f.client_details = Some(serde_json::json!({
+        "requested": model,
+        "resolvable": resolvable,
+        "resolvable_total": aliases.len(),
+    }));
+    f
+}
+
+/// The truncation bound of a `404` body's `resolvable` set (ADR-061
+/// §3.2): a contract constant, not a computed value — the body stays an
+/// error rather than an inventory, and `resolvable_total` beside it
+/// tells a truncated client to ask `GET /v1/models`, which answers the
+/// whole set under the same credential.
+pub(crate) const RESOLVABLE_NAMES_CAP: usize = 8;
 
 /// The unusable-`X-Vadis-Transform` refusal's record (DESIGN §12.12's
 /// failure table: "the pre-pipeline record class of spec §6"): the same
@@ -990,6 +1051,7 @@ impl Forwarder {
                     "protocol_in": proto_in.as_str(),
                     "supports": supports,
                 })),
+                client_details: None,
             });
         }
 
@@ -1583,6 +1645,7 @@ impl Forwarder {
                                 code: ErrorCode::Internal,
                                 message: "the state store rejected the upstream intent".into(),
                                 details: Some(json!({"stage": "intent"})),
+                                client_details: None,
                             });
                         }
                     }
@@ -1944,6 +2007,7 @@ impl Forwarder {
                                                     "account_state": "overflow",
                                                     "reason": "quota_exhausted",
                                                 })),
+                                                client_details: None,
                                             });
                                         }
                                     }
@@ -2129,6 +2193,7 @@ impl Forwarder {
                                 // refused — the cap or the floor, one word.
                                 "retry_refused": retry_refused_word,
                             })),
+                            client_details: None,
                         });
                     }
                     AttemptOutcome::WrittenNoResponse(err) => {
@@ -2160,6 +2225,7 @@ impl Forwarder {
                                 // retry is the recovery.
                                 "retry_refused": "billed",
                             })),
+                            client_details: None,
                         });
                     }
                 }
@@ -2191,6 +2257,7 @@ impl Forwarder {
                 "upstream_status": last_upstream_status,
                 "error_class": last_class.map(|c| c.as_str()),
             })),
+            client_details: None,
         })
     }
 
@@ -2379,6 +2446,7 @@ impl Forwarder {
                     "account_state": account_of_route(&tier, &state.route).as_str(),
                     "reason": code.as_str(),
                 })),
+                client_details: None,
             }),
         }
     }
@@ -2434,11 +2502,10 @@ impl Forwarder {
         }
         if let Some((provider, m)) = model.split_once('/') {
             match self.config.providers.iter().find(|p| p.name == provider) {
-                None => Err(ForwardFailure::new(
-                    404,
-                    ErrorCode::UnknownProvider,
-                    format!("unknown provider '{provider}'"),
-                )),
+                // ADR-061 D2: the three client-formed branches answer
+                // one word and one body — which half failed is a
+                // roster-structure oracle the guarded list refuses.
+                None => Err(unknown_model_failure(&self.config.aliases, model)),
                 Some(p) => {
                     if p.models.iter().any(|mm| mm.id == m) {
                         Ok((
@@ -2449,20 +2516,12 @@ impl Forwarder {
                             "explicit",
                         ))
                     } else {
-                        Err(ForwardFailure::new(
-                            404,
-                            ErrorCode::UnknownModel,
-                            format!("unknown model '{m}' on provider '{provider}'"),
-                        ))
+                        Err(unknown_model_failure(&self.config.aliases, model))
                     }
                 }
             }
         } else {
-            Err(ForwardFailure::new(
-                404,
-                ErrorCode::UnknownModel,
-                format!("unknown model or alias '{model}'"),
-            ))
+            Err(unknown_model_failure(&self.config.aliases, model))
         }
     }
 
@@ -2985,6 +3044,7 @@ impl Forwarder {
                 )
             },
             details: Some(details),
+            client_details: None,
         }
     }
 }
@@ -3934,5 +3994,143 @@ mod walk_tests {
             "rollover": "hourly",
         }))
         .unwrap()
+    }
+
+    // ---- ADR-061 D2: one word, one body, the resolvable set beside it ----
+
+    fn aliases_map(pairs: &[(&str, &str)]) -> BTreeMap<String, RouteSpec> {
+        pairs
+            .iter()
+            .map(|(name, route)| {
+                (
+                    name.to_string(),
+                    serde_json::from_value(serde_json::Value::String(route.to_string()))
+                        .expect("a route parses"),
+                )
+            })
+            .collect()
+    }
+
+    fn details_of(pairs: &[(&str, &str)], model: &str) -> (ForwardFailure, Value) {
+        let f = unknown_model_failure(&aliases_map(pairs), model);
+        let d = f.client_body_details().expect("the set is carried");
+        (f, d)
+    }
+
+    /// The body's three members, exactly: `requested` verbatim,
+    /// `resolvable` (alias names, byte order, the list's own) and
+    /// `resolvable_total`. The message names the client's string and
+    /// nothing else — no provider, no branch.
+    #[test]
+    fn unknown_model_failure_names_the_resolvable_set() {
+        let (f, d) = details_of(
+            &[
+                ("coding-fast", "p/m2"),
+                ("chat-fast", "p/m0"),
+                ("a-fast", "p/m1"),
+            ],
+            "gpt-5.4",
+        );
+        assert_eq!(f.status, 404);
+        assert_eq!(f.code, ErrorCode::UnknownModel);
+        assert_eq!(f.message, "unknown model or alias 'gpt-5.4'");
+        assert_eq!(d["requested"], "gpt-5.4");
+        assert_eq!(
+            d["resolvable"],
+            serde_json::json!(["a-fast", "chat-fast", "coding-fast"]),
+            "alias names in ascending byte order — the list's own order"
+        );
+        assert_eq!(d["resolvable_total"], 3);
+        let members: Vec<&str> = d
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(members, vec!["requested", "resolvable", "resolvable_total"]);
+    }
+
+    /// A 12-alias roster names the first 8 in byte order and carries the
+    /// total beside them, so the truncation is visible rather than
+    /// silent (ADR-061 §3.2's contract constant).
+    #[test]
+    fn resolvable_set_truncates_at_eight_with_the_total_beside() {
+        let roster: Vec<(String, &str)> =
+            (0..12).map(|i| (format!("alias-{i:02}"), "p/m")).collect();
+        let refs: Vec<(&str, &str)> = roster.iter().map(|(n, r)| (n.as_str(), *r)).collect();
+        let (_, d) = details_of(&refs, "nope");
+        assert_eq!(d["resolvable"].as_array().expect("an array").len(), 8);
+        assert_eq!(d["resolvable"][0], "alias-00");
+        assert_eq!(d["resolvable"][7], "alias-07");
+        assert_eq!(
+            d["resolvable_total"], 12,
+            "the total names what was held back"
+        );
+    }
+
+    /// The empty roster answers the empty set and a 0 — never an omitted
+    /// key, never a 500 (ADR-061 §3.6).
+    #[test]
+    fn empty_roster_answers_the_empty_set() {
+        let (f, d) = details_of(&[], "anything");
+        assert_eq!(f.status, 404);
+        assert_eq!(d["resolvable"], serde_json::json!([]));
+        assert_eq!(d["resolvable_total"], 0);
+    }
+
+    /// §3.5: the trace record never mirrors the set. The failure's
+    /// record-visible channel stays empty — the set is the client
+    /// body's alone.
+    #[test]
+    fn the_record_never_carries_the_resolvable_set() {
+        let f = unknown_model_failure(&aliases_map(&[("a", "p/m")]), "gpt-5.4");
+        assert!(f.details.is_none(), "the record-visible channel");
+        let te = crate::accounting::trace_error_for_failure(&f);
+        assert!(
+            te.details.is_none(),
+            "errors[0].details carries no roster echo"
+        );
+        assert_eq!(te.kind, "transform_error");
+        assert_eq!(te.message, "unknown model or alias 'gpt-5.4'");
+    }
+
+    /// The three client-formed branches are indistinguishable — one
+    /// word, one message, one body (the buffered path's resolve; the
+    /// streaming twin calls the same builder).
+    #[test]
+    fn the_three_resolution_branches_are_indistinguishable() {
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![provider("p", WireApi::Chat)],
+            aliases: aliases_map(&[("fast", "p/m")]),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let fwd = forwarder(config, HashMap::new());
+        for model in ["gpt-5.4", "no-such-provider/m", "p/nope"] {
+            let err = fwd.resolve_route(model).expect_err("none of these resolve");
+            assert_eq!(err.status, 404, "{model}");
+            assert_eq!(err.code, ErrorCode::UnknownModel, "{model}");
+            assert_eq!(
+                err.message,
+                format!("unknown model or alias '{model}'"),
+                "{model}"
+            );
+            let d = err.client_body_details().expect("the set is carried");
+            assert_eq!(d["requested"], model, "{model}");
+            assert_eq!(d["resolvable"], serde_json::json!(["fast"]), "{model}");
+            assert_eq!(d["resolvable_total"], 1, "{model}");
+            assert!(
+                !err.message.contains("no-such-provider") || model.contains("no-such-provider"),
+                "a provider name the client did not send never appears: {}",
+                err.message
+            );
+        }
     }
 }

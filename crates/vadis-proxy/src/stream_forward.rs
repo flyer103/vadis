@@ -358,6 +358,7 @@ impl Forwarder {
                         // budget remains for a retry.
                         "retry_refused": "budget",
                     })),
+                    client_details: None,
                 })
             }
         };
@@ -416,6 +417,7 @@ impl Forwarder {
                     code: ErrorCode::InvalidRequest,
                     message: format!("request body is not parsable JSON: {e}"),
                     details: None,
+                    client_details: None,
                 })
             }
         };
@@ -425,6 +427,7 @@ impl Forwarder {
                 code: ErrorCode::InvalidRequest,
                 message: "request body is missing the string field 'model'".into(),
                 details: None,
+                client_details: None,
             });
         };
         facts.requested_model = Some(model.to_string());
@@ -435,6 +438,7 @@ impl Forwarder {
                 message: "model 'auto' is not supported in v0.1 (a plugin takes it over; the slot is reserved)"
                     .into(),
                 details: None,
+                client_details: None,
             });
         }
         let (mut primary, selection_source) = match resolve_route(&self.config, model) {
@@ -543,6 +547,7 @@ impl Forwarder {
                 code: ErrorCode::UnknownProvider,
                 message: format!("unknown provider '{}'", primary.provider),
                 details: None,
+                client_details: None,
             });
         };
         if !provider.supports.contains(&proto_in) {
@@ -559,6 +564,7 @@ impl Forwarder {
                     "protocol_in": proto_in.as_str(),
                     "supports": supports,
                 })),
+                client_details: None,
             });
         }
         // ADR-051 §2.1: a declared cell is a native cell — the request is
@@ -581,6 +587,7 @@ impl Forwarder {
                         "request body is not a well-formed top-level JSON object: {e:?}"
                     ),
                     details: None,
+                    client_details: None,
                 })
             }
         };
@@ -918,6 +925,7 @@ impl Forwarder {
                             proto_in.as_str()
                         ),
                         details: Some(json!({"stream": true})),
+                        client_details: None,
                     });
                 };
                 candidates.push(Candidate {
@@ -955,6 +963,7 @@ impl Forwarder {
                     "error_class": None::<&'static str>,
                     "stream": true,
                 })),
+                client_details: None,
             });
         }
 
@@ -987,6 +996,7 @@ impl Forwarder {
                     code: ErrorCode::Internal,
                     message: format!("cannot build the streaming transport: {e}"),
                     details: None,
+                    client_details: None,
                 })
             }
         };
@@ -1220,6 +1230,7 @@ impl Forwarder {
                                 "cannot rewrite the outbound model to the native id: {e:?}"
                             ),
                             details: Some(json!({"stream": true})),
+                            client_details: None,
                         })
                     }
                 };
@@ -1257,6 +1268,7 @@ impl Forwarder {
                                 code: ErrorCode::Internal,
                                 message: "the state store rejected the upstream intent".into(),
                                 details: Some(json!({"stage": "intent"})),
+                                client_details: None,
                             });
                         }
                     }
@@ -1565,6 +1577,7 @@ impl Forwarder {
                                                         "reason": "quota_exhausted",
                                                         "stream": true,
                                                     })),
+                                                    client_details: None,
                                                 });
                                             }
                                         }
@@ -1664,6 +1677,7 @@ impl Forwarder {
                                     )
                                 },
                                 details: Some(details),
+                                client_details: None,
                             });
                         }
                         OpenHead::NotSent(kind, code, message) => {
@@ -1791,6 +1805,7 @@ impl Forwarder {
                                     // word (spec §4.2's closed set).
                                     "retry_refused": retry_refused_word,
                                 })),
+                                client_details: None,
                             });
                         }
                         OpenHead::UnknownOutcome(message) => {
@@ -1814,6 +1829,7 @@ impl Forwarder {
                                     // request may have been billed.
                                     "retry_refused": "billed",
                                 })),
+                                client_details: None,
                             });
                         }
                     }
@@ -1851,6 +1867,7 @@ impl Forwarder {
                     "error_class": None::<&'static str>,
                     "stream": true,
                 })),
+                client_details: None,
             });
         }
         // The loop-end fall-through (ADR-023 Decision 4): a walk that got
@@ -1886,6 +1903,7 @@ impl Forwarder {
                 "error_class": last_class.map(|c| c.as_str()),
                 "stream": true,
             })),
+            client_details: None,
         })
     }
 
@@ -1950,12 +1968,12 @@ fn resolve_route(
     }
     match model.split_once('/') {
         Some((provider, m)) => match config.providers.iter().find(|p| p.name == provider) {
-            None => Err(ForwardFailure {
-                status: 404,
-                code: ErrorCode::UnknownProvider,
-                message: format!("unknown provider '{provider}'"),
-                details: None,
-            }),
+            // ADR-061 D2: the streaming twin answers exactly what the
+            // buffered path answers — one word, one body, no branch.
+            None => Err(crate::forward::unknown_model_failure(
+                &config.aliases,
+                model,
+            )),
             Some(p) if p.models.iter().any(|mm| mm.id == m) => Ok((
                 RouteSpec {
                     provider: provider.to_string(),
@@ -1963,19 +1981,15 @@ fn resolve_route(
                 },
                 "explicit",
             )),
-            Some(_) => Err(ForwardFailure {
-                status: 404,
-                code: ErrorCode::UnknownModel,
-                message: format!("unknown model '{m}' on provider '{provider}'"),
-                details: None,
-            }),
+            Some(_) => Err(crate::forward::unknown_model_failure(
+                &config.aliases,
+                model,
+            )),
         },
-        None => Err(ForwardFailure {
-            status: 404,
-            code: ErrorCode::UnknownModel,
-            message: format!("unknown model or alias '{model}'"),
-            details: None,
-        }),
+        None => Err(crate::forward::unknown_model_failure(
+            &config.aliases,
+            model,
+        )),
     }
 }
 

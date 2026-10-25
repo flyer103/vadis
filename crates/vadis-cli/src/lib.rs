@@ -599,8 +599,11 @@ pub async fn serve(config_path: &str) -> i32 {
                     resp
                 }
                 vadis_proxy::StreamOutcome::Failure(f) => {
+                    let details = f.client_body_details();
                     let mut body = ErrorBody::new(f.code, f.message, request_id);
-                    body.error.details = f.details;
+                    // ADR-061 D2: the client body carries the resolution
+                    // failure's resolvable set; the trace record does not.
+                    body.error.details = details;
                     (
                         StatusCode::from_u16(f.status).expect("failure status maps"),
                         Json(body),
@@ -630,8 +633,11 @@ pub async fn serve(config_path: &str) -> i32 {
                 resp
             }
             ForwardOutcome::Failure(f) => {
+                let details = f.client_body_details();
                 let mut body = ErrorBody::new(f.code, f.message, request_id);
-                body.error.details = f.details;
+                // ADR-061 D2: the client body carries the resolution
+                // failure's resolvable set; the trace record does not.
+                body.error.details = details;
                 (
                     StatusCode::from_u16(f.status).expect("failure status maps"),
                     Json(body),

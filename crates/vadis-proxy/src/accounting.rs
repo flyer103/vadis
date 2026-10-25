@@ -851,6 +851,7 @@ mod tests {
             code: ErrorCode::UpstreamError,
             message: "x".into(),
             details: None,
+            client_details: None,
         };
         let te = trace_error_for_failure(&f);
         assert_eq!(te.kind, "upstream_error");
