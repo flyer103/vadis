@@ -141,7 +141,8 @@ roster (§4). The route's id — the roster entry's model id, not the client's s
 request carries (§2). The form the client used is recorded in the trace as `selection_source`
 (`explicit` / `alias`), and the client's literal string as `decision.requested_model` (§6). A bare
 provider-native model id is **not** an accepted inbound form: it is not a `provider/model` route and not
-an alias, so it resolves to nothing and is answered `404 unknown_model`.
+an alias, so it resolves to nothing and is answered `404 unknown_model` — one word for every branch of a
+resolution failure, with a body that names the aliases this deployment can resolve (§8, ADR-061 D2).
 
 With an explicit specification, vadis still runs the **Guard stage** (quota / cost cap / capability /
 `max_tokens`); on a guard hit it acts per the configured policy (reject and explain why, or downgrade to
@@ -322,7 +323,7 @@ and is optional; its semantics, its defaults and its hard rules are §4.6.
 is what the outbound request carries (§2). A client never needs to know it: it writes a `provider/model`
 route or an alias (§3), and vadis substitutes the resolved id. Pasting a bare native id into a client is
 therefore **not** a shortcut — the inbound grammar has no bare-model form, so it resolves to nothing and
-the client gets `404 unknown_model`.
+the client gets `404 unknown_model` whose body names the aliases that would resolve (§8).
 
 **The roster is one block, and exactly one of two keys names it.** `providers:` (inline, the block above)
 and `providers_file:` (§4.14) are **mutually exclusive**: a root file that writes both is refused, and one
@@ -983,7 +984,8 @@ switch, refused 400 `[1211]` by the upstream when sent as an id), each side must
 tag explicitly to complete the pairing; the pairing is never inferred from id equality.
 
 - **A name, not an address.** A client never writes a tag: it writes `provider/model` or an alias (§3), and a
-  bare tag resolves to nothing (`404 unknown_model`). The tag is never on the wire and never reaches a provider.
+  bare tag resolves to nothing (`404 unknown_model`, whose body names the aliases that would). The tag is never
+  on the wire and never reaches a provider.
 - **§2's two mutations are unchanged.** The outbound `model` is still the resolved route's own native id, and
   `decision.requested_model` is still the client's own string verbatim. The tag moves neither; it exists so a
   policy can name a pair the ids cannot.
@@ -3027,7 +3029,7 @@ rely on each upstream's own error shape):
 | `stateful_unsupported` | 400 | stateful inbound and stickiness cannot keep fidelity (ADR-004; **cannot fire in v0.1** — no request is ever judged stateful, gap G-F) |
 | `unauthorized` | 401 | the request carried no token, or a token that does not match the one `server.auth_token_env` names (§4.7). Decided at the boundary: no upstream is contacted, so it is **not** the start of a failover walk |
 | `cost_cap_exceeded` | 403 | guard cost cap hit (including a `plan_policy.overflow_monthly_cap_usd` cap, §4.6) |
-| `unknown_provider` / `unknown_model` | 404 | `provider/model` or an alias does not resolve |
+| `unknown_model` | 404 | the client's `model` string does not resolve — no alias of that name, a `provider/model` whose provider is not on the roster, or one whose model is not declared on that provider. **One word for all three** (ADR-061 D2): the branches are deliberately indistinguishable, and the body names the set the deployment *can* resolve (the clause below). `unknown_provider` keeps its place in this vocabulary for the two internal invariants that can still reach it — a resolved route found missing from the loaded roster — and has **no client-request producer**, the same stance as `not_implemented` above |
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not declaring the inbound protocol in its `supports`** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
@@ -3047,6 +3049,18 @@ Behavior clauses:
   by the same rules: before the pipeline, no fallback walk, no retry, no upstream contact, no state-store row,
   and **one** trace line (§6) — a body the vadis will not read is refused before it is buffered, and the
   client is told which rule refused it rather than being handed the HTTP layer's own bare `413`.
+- **an unresolvable `model` → `404 unknown_model`, and the body names the set this deployment can resolve**
+  (ADR-061 D2). `error.details` carries exactly three members: `requested` (the client's own string, verbatim,
+  never truncated), `resolvable` (**alias names only**, at most **8**, in ascending byte order of the name —
+  the same names and the same order `GET /v1/models` publishes, §4.19 — and `[]` for an empty roster) and
+  `resolvable_total` (the roster's alias count, always present, so a truncated answer is visible rather than
+  silent). `error.message` stays `unknown model or alias '<requested>'` on every branch. **Never** in any
+  member, `message` included: a provider name, a provider-native model id, a `provider/model` string the client
+  did not itself send, the alias→route mapping, the number of routes or providers, or *why* the string failed.
+  The set is not a new disclosure — this refusal sits behind §4.7's guard, the same credential that reads
+  §4.19 — and ADR-055 §3 is the ruling that keeps the alias set a guarded deployment fact rather than a
+  liveness fact. `X-Vadis-Request-Id` is present as on every refusal; the trace record is unchanged
+  (`decision.requested_model` already carries the string verbatim, §6).
 - transform failure → **fall back to the original** (fail-safe), the trace records
   `errors[].kind = transform_error`, and the request is forwarded as usual.
 - upstream 5xx / 429 / quota exhaustion → switch per config's `fallback` chain (§4.2; switching loses the
