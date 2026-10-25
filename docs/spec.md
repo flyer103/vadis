@@ -3642,7 +3642,7 @@ ones).
 | `by class` | the five counts, each with `new_tok` and money under the same labels | carries the row-level labels through |
 | `top steps` | the five largest `new_tok`, as `#step (class, +k blocks)` | — |
 | `cache` | `Σcached / Σin` over rows that carry usage, with the excluded count | a ratio of measured figures; null when no row carries usage. It is not a saving (§7) |
-| `re-billed` | `R tokens (inferred)  = Σ miss M − floor F + surplus S   (K rows re-billed; E rows without usage)` — then one money line per currency (`A nano CUR`, **inferred**, at each row's own measured miss rate) and, only when non-zero, `plan T tokens (marginal 0 — allowance headroom, not a zero price)` | **§9.4.8's contract**: `R` is the one-pass-floor definition, `M`/`F`/`S` are its printed operands (`M`, `F` measured; `S` inferred), and no figure here is a saving, a `verified` figure or a measured difference |
+| `re-billed` | `R tokens (inferred)  = Σ miss M − floor F + surplus S   (K rows re-billed; E rows without usage; U rows unpriced)` — then one money line per currency (`A nano CUR`, **inferred**, at each row's own measured miss rate) and, only when non-zero, `plan T tokens (marginal 0 — allowance headroom, not a zero price)` | **§9.4.8's contract**: `R` is the one-pass-floor definition, `M`/`F`/`S` are its printed operands (`M`, `F` measured; `S` inferred), and no figure here is a saving, a `verified` figure or a measured difference |
 | `by break kind` | for each of the four block kinds — `system`, `tool`, `message`, `input_item`, always all four (`0` when never) — how many **`rewrite`** rows diverge at that kind, and the sum of their `rebill_tok` | a restatement of columns 11 and 19; the audit's *which kind of block breaks prefixes* split; a `rewrite` with no resolvable kind lands in no bucket rather than in a guess |
 | `top rebilled` | the five largest `rebill_tok`, as `#step (class, at, N tok)`, largest first, ties by step order; `—` when none, never padded with zero rows | the answer to *which step cost me the money* — the question `top steps` does not answer |
 
@@ -3784,20 +3784,23 @@ the same nine values in three lines — a field never appears in one form and no
 | `unpriced_rows` | rows with re-billed tokens no currency prices | count |
 
 ```text
-re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage)
+re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage; 0 rows unpriced)
 re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
 re-billed plan   0 tokens (marginal 0 — allowance headroom, not a zero price)
 ```
 
-The `re-billed plan` line appears only when `plan_tokens > 0` (the `money` line's `plan rows` rule); the
-other two always appear.
+All nine values appear in the text form: the counts clause carries `rows`, `excluded_rows` and
+`unpriced_rows`; the first line carries `tokens`, `miss_tokens`, `floor_tokens` and `surplus_tokens`; the
+money line carries `money_nano` and prints `—` (with the counts clause unchanged) when no currency receives
+a figure; the `re-billed plan` line appears **only when `plan_tokens > 0`** (the `money` line's
+`plan rows` rule), and its absence means zero.
 
 **9.4.8.6 Zeros, absences, `--last`, and a session across accounts.**
 
 | Case | Contract |
 |---|---|
-| a session with no break and no cache miss | `tokens: 0`, `rows: 0`, `money_nano: {}`, `plan_tokens: 0`, `surplus_tokens: 0`, with `miss_tokens`/`floor_tokens` still measured and equal. **A zero — never `null`, never an absent key.** |
-| a session where no row carries usage | `tokens: null`, `rows: 0`, `money_nano: {}`, `excluded_rows: steps`, and the text prints `re-billed — (no step carries usage)`. This is the one null, and it is §7's absence rule. |
+| a session with no break and no cache miss | `tokens: 0`, `rows: 0`, `money_nano: {}`, `plan_tokens: 0`, `surplus_tokens: 0`, with `miss_tokens`/`floor_tokens` still measured and equal; the text prints `re-billed 0 tokens (inferred)  = Σ miss F − floor F + surplus 0   (0 rows re-billed; E rows without usage; 0 rows unpriced)` and `re-billed money — …`. **A zero — never `null`, never an absent key.** |
+| a session where no row carries usage | `tokens: null`, `rows: 0`, `money_nano: {}`, `excluded_rows: steps`, and the text prints `re-billed — (no step carries usage)` in place of the arithmetic line. This is the one null, and it is §7's absence rule. |
 | some rows without usage | excluded from every figure and **counted**; the number stands on the rows that measured |
 | `--last <n>` | no `rebill` figure moves — it is computed over the session's steps, as `steps`, `money` and `by class` are (§9.4.1) |
 | a session across routes, accounts or currencies | tokens are account-agnostic and **not** split per route (the floor is a session fact; splitting it needs an allocation rule no measurement supports); money is per currency and never summed across; plan rows are counted in `plan_tokens`; `unpriced_rows` states what nothing priced |

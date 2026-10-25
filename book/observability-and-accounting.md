@@ -229,7 +229,7 @@ block, and its re-bill is normally `0`.
 **The session figure — and why it says `inferred`.** The summary adds the rows up:
 
 ```text
-re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage)
+re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage; 0 rows unpriced)
 re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
 ```
 

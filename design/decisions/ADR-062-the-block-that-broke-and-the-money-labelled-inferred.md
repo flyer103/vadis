@@ -294,13 +294,17 @@ a field never appears in one form and not the other):
 The text form prints three lines, in this order, after the existing `top steps` line:
 
 ```
-re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage)
+re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage; 0 rows unpriced)
 re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
 re-billed plan   0 tokens (marginal 0 — allowance headroom, not a zero price)
 ```
 
-The `re-billed plan` line is printed **only when `plan_tokens > 0`** (the `money` line's own `plan rows`
-rule); the other two are always printed.
+**Every one of the nine keys is printed in that text form** — the counts clause carries `rows`,
+`excluded_rows` and `unpriced_rows`, the first line carries `tokens`/`miss_tokens`/`floor_tokens`/
+`surplus_tokens`, the money line carries `money_nano` (and prints `—` when no currency receives one) — so
+neither form can carry a figure the other hides. The `re-billed plan` line is printed **only when
+`plan_tokens > 0`** (the `money` line's own `plan rows` rule); its absence means zero, and it is a label
+rather than a number, so it is the one cell allowed to be absent.
 
 **Two groupings, both restatements of `rebill_tok`, both added because the audit's two findings are
 groupings:**
