@@ -2032,13 +2032,6 @@ impl Forwarder {
                             attempt_index += 1;
                             continue 'keys;
                         }
-                        let _classified_id = self.record_classification(
-                            request_id,
-                            attempt_index,
-                            None,
-                            &cls,
-                            Some(candidate),
-                        );
                         // ADR-060 D3, spec §4.2's evidence table row 1:
                         // the request bytes were never fully written —
                         // nothing was billed, and on the buffered medium
@@ -2046,19 +2039,41 @@ impl Forwarder {
                         // is retried once, 250 ms, BEFORE the walk (a
                         // walk is a route change and pays a re-prefill,
                         // ADR-011 item 9). This is the retry's one
-                        // buffered call site.
+                        // buffered call site. The classification row is
+                        // written inside the verdict, its action the
+                        // recovery actually taken (ADR-060 §4.3 +
+                        // conf_29's owner receipt, 2026-10-24):
+                        // `retry_same_route` on the attempt the retry
+                        // rescues-or-replaces, the class's own walk
+                        // action on the one it does not.
                         let retry_refused_word = match same_route_retry_verdict(
                             retries_used,
                             started,
                             self.config.server.request_timeout.0,
                         ) {
                             SameRouteRetry::Allowed => {
+                                let _ = self.record_classification_retry(
+                                    request_id,
+                                    attempt_index,
+                                    None,
+                                    &cls,
+                                    Some(candidate),
+                                );
                                 tokio::time::sleep(retry_backoff()).await;
                                 retries_used += 1;
                                 attempt_index += 1;
                                 continue 'keys;
                             }
-                            SameRouteRetry::Refused(word) => word,
+                            SameRouteRetry::Refused(word) => {
+                                let _classified_id = self.record_classification(
+                                    request_id,
+                                    attempt_index,
+                                    None,
+                                    &cls,
+                                    Some(candidate),
+                                );
+                                word
+                            }
                         };
                         if let Some(next) = self.next_candidate(
                             &candidates,
@@ -2462,7 +2477,35 @@ impl Forwarder {
         cls: &Classification,
         route: Option<&RouteSpec>,
     ) -> Option<vadis_core::EventId> {
-        self.record_classification_inner(request_id, attempt_index, status, cls, route, None)
+        self.record_classification_inner(request_id, attempt_index, status, cls, route, None, None)
+    }
+
+    /// The same-route retry twin of [`Self::record_classification`]
+    /// (ADR-060 §4.3: one `error.classified` per failed attempt, its
+    /// action the recovery ACTUALLY taken). Where the bounded
+    /// same-route retry (ADR-060 §8.4 — the pre-write row 1, the rule's
+    /// whole live surface) is about to run, the row's action names it
+    /// instead of the class's own walk action, so a retried request
+    /// leaves an ordered pair in the log: `retry_same_route` first,
+    /// the walk's action on the next failed attempt (conf_29's owner
+    /// receipt, 2026-10-24).
+    pub(crate) fn record_classification_retry(
+        &self,
+        request_id: &str,
+        attempt_index: u32,
+        status: Option<u16>,
+        cls: &Classification,
+        route: Option<&RouteSpec>,
+    ) -> Option<vadis_core::EventId> {
+        self.record_classification_inner(
+            request_id,
+            attempt_index,
+            status,
+            cls,
+            route,
+            None,
+            Some("retry_same_route"),
+        )
     }
 
     /// The rotation twin (ADR-049 §3 rules 3/6): the classification row
@@ -2492,9 +2535,11 @@ impl Forwarder {
             cls,
             None,
             Some((to_key_index, reprefill_tokens, switch_cost_nano)),
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_classification_inner(
         &self,
         request_id: &str,
@@ -2503,9 +2548,15 @@ impl Forwarder {
         cls: &Classification,
         route: Option<&RouteSpec>,
         rotation: Option<(u32, Option<u64>, Option<u64>)>,
+        action_override: Option<&'static str>,
     ) -> Option<vadis_core::EventId> {
         let store = self.store.as_ref()?;
-        let action = if rotation.is_some() {
+        let action = if let Some(word) = action_override {
+            // ADR-060 §4.3: the row's action is the recovery actually
+            // taken, which the caller has already decided — the
+            // class's own action is the default, never a mask.
+            word
+        } else if rotation.is_some() {
             "rotate_credential"
         } else if cls.class.fails_over() {
             // ADR-011 item 7 + ADR-049 §3: the pool's rotation arm runs

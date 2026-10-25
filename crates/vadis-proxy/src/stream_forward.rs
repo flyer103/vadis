@@ -1698,31 +1698,44 @@ impl Forwarder {
                                 attempt_index += 1;
                                 continue 'keys;
                             }
-                            self.record_classification(
-                                request_id,
-                                attempt_index,
-                                None,
-                                &cls,
-                                Some(&cand.route),
-                            );
                             // ADR-060 D3, spec §4.2's evidence table row 1
                             // (the streaming twin of the buffered call
                             // site): no request bytes went out — nothing
                             // billed, nothing forwarded — so the SAME
                             // route is retried once, 250 ms, BEFORE the
-                            // walk.
+                            // walk. The classification row is written
+                            // inside the verdict, its action the recovery
+                            // actually taken (ADR-060 §4.3 + conf_29's
+                            // owner receipt, 2026-10-24): the buffered
+                            // twin's ordered pair, on this medium too.
                             let retry_refused_word = match crate::forward::same_route_retry_verdict(
                                 retries_used,
                                 started,
                                 self.config.server.request_timeout.0,
                             ) {
                                 crate::forward::SameRouteRetry::Allowed => {
+                                    let _ = self.record_classification_retry(
+                                        request_id,
+                                        attempt_index,
+                                        None,
+                                        &cls,
+                                        Some(&cand.route),
+                                    );
                                     tokio::time::sleep(crate::forward::retry_backoff()).await;
                                     retries_used += 1;
                                     attempt_index += 1;
                                     continue 'keys;
                                 }
-                                crate::forward::SameRouteRetry::Refused(word) => word,
+                                crate::forward::SameRouteRetry::Refused(word) => {
+                                    self.record_classification(
+                                        request_id,
+                                        attempt_index,
+                                        None,
+                                        &cls,
+                                        Some(&cand.route),
+                                    );
+                                    word
+                                }
                             };
                             if let Some(next) =
                                 self.next_candidate_for(&candidates, &attempted, cls.class)

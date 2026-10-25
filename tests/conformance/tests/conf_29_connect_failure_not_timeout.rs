@@ -2,21 +2,32 @@
 //! **a connection failure is not a timeout.** A connect refusal is a
 //! deterministic, sub-millisecond transport failure in which *no request
 //! byte ever left the process* — nothing can have been billed — so it
-//! classifies as `connect_failure` with `action = fallback_provider`
-//! and walks the fallback chain. The earlier classifier flattened every
-//! no-status failure to `timeout` (which never fails over), polluting
-//! the "why did we switch" evidence and putting the recovery action on
-//! the wrong class.
+//! classifies as `connect_failure` and its recovery walks the fallback
+//! chain. The earlier classifier flattened every no-status failure to
+//! `timeout` (which never fails over), polluting the "why did we switch"
+//! evidence and putting the recovery action on the wrong class.
 //!
 //! Two claims, both with the upstream pointed at a closed local port:
 //!
-//!   (a) empty chain: `error.classified` carries `reason =
-//!       "connect_failure"`, `action = "fallback_provider"`, `matched =
-//!       "no-status"`, `status = null` — never the `timeout` / `abort`
-//!       pair — and the client's terminal 502 names the same class;
+//!   (a) empty chain: each `error.classified` carries `reason =
+//!       "connect_failure"`, `matched = "no-status"`, `status = null` —
+//!       never the `timeout` / `abort` pair — and the client's terminal
+//!       502 names the same class;
 //!   (b) a live fallback exists: the chain is actually walked (the
-//!       fallback answers 200, the trace records `failover_from`), and
-//!       the dead provider is never re-attempted.
+//!       fallback answers 200, the trace records `failover_from`).
+//!
+//! **Receipt (owner ruling, 2026-10-24 — ADR-060 §4.2, restated §8.3):**
+//! ADR-060 D3 rules one bounded same-route retry, before the walk, for a
+//! pre-write failure such as this one, and §4.3 one `error.classified`
+//! per failed attempt — so a connect failure that retried and failed
+//! again legitimately writes TWO classification rows, not one. The
+//! `== 1` counts in (a) and (b) were amended to `== 2` under that ruling
+//! and strengthened to the ordered pair: the FIRST row's action is the
+//! recovery actually taken first (`retry_same_route`), the SECOND's is
+//! the walk's (`fallback_provider`); both rows stay `connect_failure`.
+//! The number changed because a retry was ruled into existence
+//! (ADR-060), not because a test was made to pass. Every other
+//! assertion is unchanged.
 
 #![forbid(unsafe_code)]
 
@@ -157,28 +168,44 @@ async fn conf_29_connect_failure_is_not_a_timeout() {
 
     assert_eq!(status, 502, "connect refused with an empty chain is a 502");
 
-    // The classification event: reason connect_failure, action matched.
+    // The classification events: one row per failed attempt (ADR-060
+    // §4.3). The bounded same-route retry that §4.2 rules for a
+    // pre-write failure makes the attempts two, so the rows are two —
+    // the count moved 1 → 2 by the owner's ruling of 2026-10-24
+    // (ADR-060 §4.2, restated §8.3), not by loosening the case.
     let events = classified_events(&dir);
     assert_eq!(
         events.len(),
-        1,
-        "exactly one error.classified for the request"
+        2,
+        "one error.classified per failed attempt: the same-route retry made the attempts two (ADR-060 §4.3, owner ruling 2026-10-24)"
     );
-    let ev = &events[0];
+    // The ruling's strengthening — the ordered pair: the first row's
+    // action is the recovery actually taken first (the same-route
+    // retry), the second's is the walk's.
     assert_eq!(
-        ev["reason"], "connect_failure",
+        events[0]["reason"], "connect_failure",
         "a connection failure must not be classified timeout (body: {body:?})"
     );
     assert_eq!(
-        ev["action"], "fallback_provider",
-        "nothing was billed: the action walks the chain (ADR-011 item 6 row 1)"
+        events[0]["action"], "retry_same_route",
+        "the first failed attempt's recovery was the bounded same-route retry, before the walk (ADR-060 §4.2/§8.4)"
     );
-    assert_eq!(ev["matched"], "no-status");
     assert_eq!(
-        ev["status"],
-        serde_json::Value::Null,
-        "no answer arrived, so no status exists"
+        events[1]["reason"], "connect_failure",
+        "the retried attempt failed the same pre-write way"
     );
+    assert_eq!(
+        events[1]["action"], "fallback_provider",
+        "nothing was billed: the second failure walks the chain (ADR-011 item 6 row 1)"
+    );
+    for (i, ev) in events.iter().enumerate() {
+        assert_eq!(ev["matched"], "no-status", "row {i}");
+        assert_eq!(
+            ev["status"],
+            serde_json::Value::Null,
+            "no answer arrived on either attempt, so no status exists (row {i})"
+        );
+    }
 
     // The client-facing failure names the same class (spec §8).
     let v: serde_json::Value = serde_json::from_slice(&body).expect("error body is json");
@@ -220,7 +247,8 @@ async fn conf_29_connect_failure_walks_the_fallback_chain() {
 
     assert_eq!(status, 200, "the fallback answered: {body:?}");
 
-    // The dead provider was attempted exactly once; the live one once.
+    // The dead provider's bounded same-route retry (ADR-060 §4.2) never
+    // left the dead route; the live one served the walk's request.
     let requests = live.requests();
     assert_eq!(
         requests.len(),
@@ -228,10 +256,26 @@ async fn conf_29_connect_failure_walks_the_fallback_chain() {
         "the fallback provider served the request"
     );
 
+    // One row per failed attempt (ADR-060 §4.3): the dead route's
+    // same-route retry ran first and failed, then the walk followed —
+    // the count moved 1 → 2 by the owner's ruling of 2026-10-24
+    // (ADR-060 §4.2, restated §8.3), strengthened to the ordered pair.
     let events = classified_events(&dir);
-    assert_eq!(events.len(), 1, "one classification for the dead attempt");
+    assert_eq!(
+        events.len(),
+        2,
+        "one classification per failed attempt: the retry made the dead route's attempts two (ADR-060 §4.3)"
+    );
     assert_eq!(events[0]["reason"], "connect_failure");
-    assert_eq!(events[0]["action"], "fallback_provider");
+    assert_eq!(
+        events[0]["action"], "retry_same_route",
+        "the first failed attempt's recovery was the same-route retry, before the walk (ADR-060 §4.2)"
+    );
+    assert_eq!(events[1]["reason"], "connect_failure");
+    assert_eq!(
+        events[1]["action"], "fallback_provider",
+        "the retry's failure walks the chain (ADR-011 item 6 row 1)"
+    );
 
     // The failover event ties the switch to the class, and the trace
     // names the origin route (spec §6 result.failover_from).
