@@ -35,21 +35,10 @@ impl StreamHead {
     /// the bytes that arrived. Consumes the head: a failure head has
     /// no second reader, and the success path relays the body instead
     /// of reading it.
-    pub async fn into_upstream_response(self, idle_timeout: Duration) -> crate::UpstreamResponse {
-        self.into_upstream_response_with_read_status(idle_timeout)
-            .await
-            .0
-    }
-
-    /// [`Self::into_upstream_response`] plus the read's own outcome:
-    /// `true` when the body read ENDED by failing (a mid-read error or
-    /// the idle bound) rather than by the upstream closing it — the
-    /// fact ADR-060 D3's evidence table row 2 turns on (an error head
-    /// whose body could not be read served none of its body).
-    pub async fn into_upstream_response_with_read_status(
+    pub async fn into_upstream_response(
         mut self,
         idle_timeout: Duration,
-    ) -> (crate::UpstreamResponse, bool) {
+    ) -> crate::UpstreamResponse {
         let status = self.status;
         let retry_after = self.retry_after.clone();
         let content_type = self.content_type.clone();
@@ -57,28 +46,16 @@ impl StreamHead {
         // Both `Failed` shapes (a mid-body read error and the idle
         // bound) end the loop like `Ended`: a read that ends short is
         // fewer evidence bytes, never an outcome of its own (the
-        // classification's input, R12) — but the flag says the read
-        // itself failed, which the retry rule reads.
-        let mut read_failed = false;
-        loop {
-            match read_chunk(&mut self, idle_timeout).await {
-                StreamRead::Chunk(c) => body.extend_from_slice(&c),
-                StreamRead::Ended => break,
-                StreamRead::Failed { .. } => {
-                    read_failed = true;
-                    break;
-                }
-            }
+        // classification's input, R12).
+        while let StreamRead::Chunk(c) = read_chunk(&mut self, idle_timeout).await {
+            body.extend_from_slice(&c);
         }
-        (
-            crate::UpstreamResponse {
-                status,
-                retry_after,
-                content_type,
-                body: Bytes::from(body),
-            },
-            read_failed,
-        )
+        crate::UpstreamResponse {
+            status,
+            retry_after,
+            content_type,
+            body: Bytes::from(body),
+        }
     }
 }
 

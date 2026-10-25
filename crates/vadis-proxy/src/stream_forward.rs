@@ -1431,8 +1431,7 @@ impl Forwarder {
                             // read that ends short leaves the classifier the
                             // bytes that arrived.
                             let status = head.status;
-                            let (resp, read_failed) =
-                                head.into_upstream_response_with_read_status(idle).await;
+                            let resp = head.into_upstream_response(idle).await;
                             // ADR-060 D2: the bounded, redacted slice of
                             // the upstream's own error body, from the same
                             // bytes the classifier reads below — attached
@@ -1592,34 +1591,12 @@ impl Forwarder {
                                 }),
                                 session.as_deref(),
                             );
-                            // ADR-060 D3, spec §4.2's evidence table row 2:
-                            // an ERROR-STATUS head whose body could not be
-                            // read — the attempt served none of its body
-                            // and a refusal generates nothing, so nothing
-                            // was billed and the SAME route is retried
-                            // once, before the walk. A body that WAS read
-                            // is row 7 (the walk's business, unchanged).
-                            let deterministic_class = matches!(
-                                cls.class,
-                                vadis_core::error_class::ErrorClass::FormatError
-                                    | vadis_core::error_class::ErrorClass::ContentPolicyBlocked
-                            );
-                            if read_failed
-                                && !deterministic_class
-                                && matches!(
-                                    crate::forward::same_route_retry_verdict(
-                                        retries_used,
-                                        started,
-                                        self.config.server.request_timeout.0,
-                                    ),
-                                    crate::forward::SameRouteRetry::Allowed
-                                )
-                            {
-                                tokio::time::sleep(crate::forward::retry_backoff()).await;
-                                retries_used += 1;
-                                attempt_index += 1;
-                                continue 'keys;
-                            }
+                            // ADR-060 §8.2: the head is the decision — any
+                            // status, any body length, complete or truncated.
+                            // The attempt is terminal here; the walk below is
+                            // its recovery, and no same-route retry is a
+                            // candidate (a read that ends short is fewer
+                            // evidence bytes, never a retry input — R12/E4).
                             if let Some(next) =
                                 self.next_candidate_for(&candidates, &attempted, cls.class)
                             {
