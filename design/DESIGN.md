@@ -1983,6 +1983,18 @@ no listed predicate") and `:992` still calls `0 < lcp` "the listed predicate"; `
 to its parent by this card's own acceptance, so the residue is registered **`S-R1`** — due: the next card
 that opens `steps.rs`.
 
+**Register line (2026-10-26, U1 — finding (i) above, `identity.client`: registered *open* by the L review,
+ruled here).** ADR-061 D3 turns the field into a derivation: one pure function of the `User-Agent` header,
+evaluated once per request at the boundary, into the closed vocabulary `{codex, hermes, claude-code, other}`
+with `other` for an absent or unmatched header — so the 8,260 rows already written stay comparable — and the
+raw header recorded in no form at all (§12.3/§12.8 above lose the `client_ua_raw` promise this sketch used to
+carry). The finding closes **as a contract, not as an observation**: the shipped build still writes `other` for
+every client until a vocabulary word is bound to an attested header value (ADR-061 §4.3), and this deployment's
+own client sends its SDK's UA rather than an attribution header (ADR-061 §4.4, measured) — so any surface that
+prints a client column prints `other` until that client opts in. `thread_id`'s null is declared in the same
+ruling (ADR-061 §4.7). Findings (ii) `turn_index` and (iii) `ts` are untouched by this round; no `CONF` id
+moves.
+
 **Register line (2026-10-18, `ADR-058` — one word, one meaning: `measured` is not `verified`).**
 `ADR-058` (`design/decisions/ADR-058-measured-is-not-verified.md`) rules the vocabulary that three frozen
 documents had been using for two different quantities: **`measured` = one observation** (a number the provider
