@@ -93,7 +93,9 @@ fn route_context(config: &VadisConfig, route: &RouteSpec) -> u64 {
 mod tests {
     use super::*;
 
-    /// A config with one provider `p` holding the given models (id,
+    /// A config with one provider `secret-provider` (a string no test's
+    /// client-facing assertion names, so the export boundary's provider
+    /// half is witnessed, not vacuous) holding the given models (id,
     /// context spelling) and the given aliases (name → route). The price
     /// block is inert here — `models_body` never reads it — but the
     /// parser requires it, so it is the minimal shape the roster's own
@@ -124,7 +126,7 @@ mod tests {
             "cache": {"sticky": true, "breakeven": {"enabled": true, "min_remaining_turns": 2, "safety_factor": 1.1}},
             "trace": {"dir": "./t", "rollover": "hourly"},
             "providers": [{
-                "name": "p",
+                "name": "secret-provider",
                 "urls": {"chat": "https://x.example/v1/chat/completions"},
                 "api_key_env": "P_KEY",
                 "wire_api": "chat",
@@ -148,9 +150,9 @@ mod tests {
         let cfg = config(
             &[("m0", "128k"), ("m1", "200k"), ("m2", "1m")],
             &[
-                ("coding-fast", "p/m2"),
-                ("chat-fast", "p/m0"),
-                ("coding-bulk", "p/m1"),
+                ("coding-fast", "secret-provider/m2"),
+                ("chat-fast", "secret-provider/m0"),
+                ("coding-bulk", "secret-provider/m1"),
             ],
         );
         let body = models_body(&cfg);
@@ -168,7 +170,7 @@ mod tests {
     /// breaks this even if the byte string above was edited to match.
     #[test]
     fn every_entry_has_exactly_the_five_keys() {
-        let cfg = config(&[("m", "200k")], &[("a", "p/m")]);
+        let cfg = config(&[("m", "200k")], &[("a", "secret-provider/m")]);
         let body = models_body(&cfg);
         let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
         let entry = v["data"][0].as_object().expect("an object");
@@ -205,7 +207,10 @@ mod tests {
     fn the_alias_publishes_the_routes_window() {
         let cfg = config(
             &[("small", "200k"), ("big", "1m")],
-            &[("cheap", "p/small"), ("roomy", "p/big")],
+            &[
+                ("cheap", "secret-provider/small"),
+                ("roomy", "secret-provider/big"),
+            ],
         );
         let v: serde_json::Value = serde_json::from_slice(&models_body(&cfg)).expect("json");
         let by_id = |id: &str| {
@@ -226,7 +231,14 @@ mod tests {
     /// insertion order here is the reverse of the answer's.
     #[test]
     fn order_is_byte_ascending_not_insertion() {
-        let cfg = config(&[("m", "1")], &[("b", "p/m"), ("a", "p/m"), ("Z", "p/m")]);
+        let cfg = config(
+            &[("m", "1")],
+            &[
+                ("b", "secret-provider/m"),
+                ("a", "secret-provider/m"),
+                ("Z", "secret-provider/m"),
+            ],
+        );
         let v: serde_json::Value = serde_json::from_slice(&models_body(&cfg)).expect("json");
         let ids: Vec<&str> = v["data"]
             .as_array()
@@ -254,7 +266,7 @@ mod tests {
     #[test]
     fn escaping_is_serde_jsons() {
         let tricky = "quote\"back\\slash\ttab";
-        let cfg = config(&[("m", "1")], &[(tricky, "p/m")]);
+        let cfg = config(&[("m", "1")], &[(tricky, "secret-provider/m")]);
         let body = models_body(&cfg);
         let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(
@@ -274,7 +286,10 @@ mod tests {
     /// the route contributes, and it arrives as a number.
     #[test]
     fn no_route_string_in_the_body() {
-        let cfg = config(&[("secret-model", "1")], &[("alias", "p/secret-model")]);
+        let cfg = config(
+            &[("secret-model", "1")],
+            &[("alias", "secret-provider/secret-model")],
+        );
         let text = String::from_utf8(models_body(&cfg)).expect("utf-8");
         assert!(!text.contains("secret-provider"));
         assert!(
@@ -289,23 +304,30 @@ mod tests {
 
     /// Purity, observed as bytes: two calls over one roster are
     /// byte-identical, and a config whose maps are equal but distinct
-    /// objects answers the same bytes too.
+    /// objects answers the same bytes too — the helper is pure, so the
+    /// same inputs build a second config whose maps are equal to (and
+    /// distinct from) the first's.
     #[test]
     fn two_calls_are_byte_identical() {
-        let cfg = config(
-            &[("m1", "1"), ("m2", "1k")],
-            &[("x", "p/m1"), ("y", "p/m2")],
-        );
+        let models = &[("m1", "1"), ("m2", "1k")];
+        let aliases = &[("x", "secret-provider/m1"), ("y", "secret-provider/m2")];
+        let cfg = config(models, aliases);
         let first = models_body(&cfg);
         let second = models_body(&cfg);
         assert_eq!(first, second);
+        let other = config(models, aliases);
+        assert!(
+            !std::ptr::eq(&cfg.aliases, &other.aliases),
+            "the two configs are distinct objects"
+        );
+        assert_eq!(first, models_body(&other));
         assert_eq!(first, models_body_from_config(&cfg));
     }
 
     /// The config-level seam answers what the builder does.
     #[test]
     fn config_seam_matches_builder() {
-        let cfg = config(&[("m1", "1")], &[("fast", "p/m1")]);
+        let cfg = config(&[("m1", "1")], &[("fast", "secret-provider/m1")]);
         assert_eq!(models_body_from_config(&cfg), models_body(&cfg));
     }
 }
