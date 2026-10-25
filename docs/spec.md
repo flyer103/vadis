@@ -2173,7 +2173,7 @@ exists and says what it can route.** It dials nothing, prices nothing, and write
 | Any other method on the path, admitted | `405` with an `allow` header naming `GET` (axum's `get` route emits `GET,HEAD`; the contract names `GET` and accepts the wire value); **no** §8 error body, **no** trace record, no event row |
 | Auth precedes method dispatch | a non-`GET` **without** a valid token is the guard's `401` (with its one record), never a `405`: the guard is the route's own layer and decides before the method router does, exactly as on `/metrics` and `/state/events`. Both directions are asserted (`CONF-107`) |
 | Status set | admitted: exactly `{200, 405}`; refused: exactly `{401}`. Never `404` (the route is served), never `500`, never `501` |
-| Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it the configuration's `aliases:` map — nothing else: **not** the store, **not** the trace, **not** a config file, **not** the network |
+| Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it **two** reads: the configuration's `aliases:` map, and — per alias, for its `context_length` — the route's roster model entry (`providers[i].models[j].context`, the window's single source, ADR-061 §2.2); nothing else: **not** the store, **not** the trace, **not** a config file (the revision is already in memory — nothing is opened, parsed or discovered at request time), **not** the network |
 | Writes | nothing on the admitted arm (a refusal writes the guard's one record): no trace record, no event row, no cost, no session, no prefix block |
 
 **The body** (the alias names and the window values are illustrative — a real body carries the roster's own
@@ -2238,14 +2238,18 @@ this round has"*, and the need was measured). Single-model retrieval (`GET /v1/m
 would turn the endpoint into an alias-name oracle — and a query string is **ignored** rather than
 refused (an OpenAI-compatible client appends one without meaning anything by it).
 
-**Assertions.** `CONF-107`: the three-alias roster's `200` with exactly three ids in order and two
-byte-identical calls; each entry's five keys with `context_length` equal to the `context` its alias's route
-declares; the route strings' absence from the body; the guard's `401` with exactly one
+**Assertions.** `CONF-107` asserts today: the three-alias roster's `200` with exactly three ids in order and two
+byte-identical calls; each entry's key set by equality over **four** keys (`id`, `object`, `created`, `owned_by` —
+the case contains no `context_length`); the route strings' absence from the body; the guard's `401` with exactly one
 `protocol_in: "models"` record; the empty roster's `200` with `data: []`; the `200` arm's empty stage
 set (no trace line, no event row, no cost, no session, no prefix); the method face (`405` admitted,
 `401` unauthenticated) and the reload. DESIGN §12.8's row carries them. **One amendment is owed by the
 owner**, not by an implementing change: limb (a) asserts the entry key set by equality over four keys
-(`tests/conformance/tests/conf_107_v1_models_lists_aliases.rs`) and now needs five — AGENTS constraint 9
+(`tests/conformance/tests/conf_107_v1_models_lists_aliases.rs`) and now needs five — the fifth key and
+its *value* (the `context` the alias's route declares, following the route) together; until the owner rules,
+both are asserted in the unit suite (`crates/vadis-proxy/src/models_read.rs`:
+`every_entry_has_exactly_the_five_keys` for the key set and the integer form,
+`the_alias_publishes_the_routes_window` for the value and its route-coupling). AGENTS constraint 9
 puts conformance assertions outside the mutable scope, so ADR-061 §2.7 states the exact amendment and no
 card may edit the case to reach a green suite.
 
