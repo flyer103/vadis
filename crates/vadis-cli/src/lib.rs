@@ -1095,14 +1095,18 @@ pub async fn serve(config_path: &str) -> i32 {
     #[derive(Clone, Copy)]
     struct ClientWord(&'static str);
 
-    /// The one derivation call on the request path (ADR-061 §4.2's
-    /// "once"): reads the extension the guard inserted. The guard is the
-    /// outermost layer on every route that writes a record (§12.11), so
-    /// the extension is structurally always present here.
+    /// Where the request path reads the boundary's word (ADR-061 §4.2's
+    /// "once"): the extension the guard inserted, never a second
+    /// derivation — the engine entry point the serving path calls
+    /// (`forward_with_client` / `forward_stream_with_client`) takes the
+    /// same word as a parameter. The guard is the outermost layer on
+    /// every route that writes a record (§12.11), so the extension is
+    /// structurally always present; the `unwrap_or` is the SAME posture
+    /// the revision read one layer down takes (degrade, do not abort a
+    /// response over a trace-only field) — the table's own fallback
+    /// word, never a re-derivation.
     fn client_word(exts: &axum::http::Extensions) -> &'static str {
-        exts.get::<ClientWord>()
-            .expect("the guard layer derived the client word (ADR-061 D3)")
-            .0
+        exts.get::<ClientWord>().map(|w| w.0).unwrap_or("other")
     }
 
     /// One boundary guard pass — and THE capture point of the whole
