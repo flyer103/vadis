@@ -2153,7 +2153,9 @@ the figure against a live gateway. DESIGN §12.8's rows carry them.
 
 *Status: **served** — the contract below, the handler and `CONF-107` land together (§9.3's rule). The
 route's home and the seam it joins are `design/DESIGN.md` §12.8; the authority, the rejected alternatives
-and the register are [ADR-055](../design/decisions/ADR-055-the-model-list-surface.md).*
+and the register are [ADR-055](../design/decisions/ADR-055-the-model-list-surface.md). The entry's fifth key,
+`context_length`, is [ADR-061](../design/decisions/ADR-061-a-window-a-refusal-that-names-the-set-and-who-called.md)'s
+amendment (§2 of it), which also supersedes ADR-055 §4's refusal of the context window there and nowhere else.*
 
 **One endpoint, one namespace, one reader: the loaded configuration's `aliases:` keys, read from the
 revision in force and answered as the OpenAI model-list shape — so a client that probes
@@ -2172,15 +2174,16 @@ exists and says what it can route.** It dials nothing, prices nothing, and write
 | Reads | the revision **the request captured at receive** (`§4.15` rule 3; ADR-040 D2's capture-once), and through it the configuration's `aliases:` map — nothing else: **not** the store, **not** the trace, **not** a config file, **not** the network |
 | Writes | nothing on the admitted arm (a refusal writes the guard's one record): no trace record, no event row, no cost, no session, no prefix block |
 
-**The body** (the alias names are illustrative; each entry has exactly four keys, in the order below):
+**The body** (the alias names and the window values are illustrative — a real body carries the roster's own
+numbers; each entry has exactly five keys, in the order below):
 
 ```json
 {
   "object": "list",
   "data": [
-    { "id": "chat-fast",   "object": "model", "created": 0, "owned_by": "vadis" },
-    { "id": "coding-bulk", "object": "model", "created": 0, "owned_by": "vadis" },
-    { "id": "coding-fast", "object": "model", "created": 0, "owned_by": "vadis" }
+    { "id": "chat-fast",   "object": "model", "created": 0, "owned_by": "vadis", "context_length": 131072 },
+    { "id": "coding-bulk", "object": "model", "created": 0, "owned_by": "vadis", "context_length": 204800 },
+    { "id": "coding-fast", "object": "model", "created": 0, "owned_by": "vadis", "context_length": 1048576 }
   ]
 }
 ```
@@ -2193,30 +2196,56 @@ exists and says what it can route.** It dials nothing, prices nothing, and write
 | `data[].object` | string | **the constant `"model"`** — the OpenAI entry shape's own value |
 | `data[].created` | integer | **the constant `0`**, always. vadis holds no per-alias creation instant, so any other value would be invented; a constant also keeps the body a pure function of the roster (§4's determinism discipline — the wall clock, the process start and the file's mtime are each rejected) |
 | `data[].owned_by` | string | **the constant `"vadis"`.** The alias namespace is the operator's (and vadis's), not the provider's; naming the provider here would publish the routing this surface deliberately withholds |
+| `data[].context_length` | integer | **the context window of the model the entry's route resolves to**, in tokens: the `context` that route's roster model entry declares (`providers[i].models[j].context`, §4; §12.5's scalar convention, `k` = 1024 and `m` = 1024²), published at the alias and **always present** — never `null`, never a default, never inferred. Appended after `owned_by` so the four keys above keep their pinned positions (ADR-061 §2.1) |
+
+**The window is the route's, and the roster is its only source.** A client configured with an alias must read
+the number of the route that alias will actually reach: an alias pointed at a 1 M model answers `1048576`, and
+an alias repointed at another route answers that route's number on the next revision. This is why an alias may
+**not** declare a window of its own — a second place to write one number is a second number eventually, and the
+copy a client reads would be the one that drifts from the route the serving path uses (§4.0's single-source
+discipline, applied to a non-price fact). It is also why no value is derived: not from a sibling model, not
+from the family tag, not from the vendor's page at request time. The resolution is guaranteed rather than
+hopeful — an alias naming a route the roster does not hold is a **load error** (§4), so every entry of this
+body has exactly one model entry to read its window from. Nothing on the serving path consumes `context`
+today, so publishing it can change no decision, no price and no byte of any request.
+
+**The key's name is the one a client reads.** `context_length` is the first key in the window-key table of the
+client this surface was measured against, whose `/models` read keys entries by `id` — the alias name — and
+caches the value it finds (ADR-061 §2.1/§2.3 carry the citation). A name outside such a table would be a
+correct number nobody reads, and a nested one would be invisible to a flat read.
 
 **Order and byte stability.** `data[]` is ascending by `id`; two calls answered by one revision are
 **byte-identical** (no clock, no random, no per-process state). The order is a property of the
-contract, not a promise a reader may infer from an implementation's choice of map.
+contract, not a promise a reader may infer from an implementation's choice of map. The fifth key does not touch
+either property: its position is a constant of the shape and its value is a pure function of the roster.
 
 **Reload.** `aliases` is a reloadable face (§4.15): after an accepted reload the list follows the new
 revision **without a restart**, while a request already in flight is answered by the revision that
 admitted it (rule 3, the capture-once read). Nothing about this endpoint is a reload-refused key.
 
-**What may not be exported.** The body is `object` plus `data[]`; anything a later round adds is a
+**What may not be exported.** The body is `object` plus `data[]`, and each entry's five keys;
+anything a later round adds is a
 contract change, not an extension. Specifically **not** carried here: the resolved `provider/model`
 route (it publishes the deployment's account topology), the provider list, the `account:` / plan
-family classification, per-model metadata (context window, price, the declared `supports` cells —
-price has one source, §4.0), any `/metrics` counter and any figure, and a per-call
+family classification, the model's **price** and its declared `supports` cells (§4.0's single source and
+ADR-051's wiring facts), any `/metrics` counter and any figure, and a per-call
 `X-Vadis-Request-Id` on the `200` arm (no request exists to correlate; `/metrics` and `/state/events`
-already answer the same way). Single-model retrieval (`GET /v1/models/{id}`) is a **non-goal** — it
+already answer the same way). The context window **is** carried — as the fifth key above, and only as a number
+whose source is the roster (ADR-061 §2.6: ADR-055 §4's refusal of it rested on *"no client need this round
+has"*, and the need was measured). Single-model retrieval (`GET /v1/models/{id}`) is a **non-goal** — it
 would turn the endpoint into an alias-name oracle — and a query string is **ignored** rather than
 refused (an OpenAI-compatible client appends one without meaning anything by it).
 
 **Assertions.** `CONF-107`: the three-alias roster's `200` with exactly three ids in order and two
-byte-identical calls; the route strings' absence from the body; the guard's `401` with exactly one
+byte-identical calls; each entry's five keys with `context_length` equal to the `context` its alias's route
+declares; the route strings' absence from the body; the guard's `401` with exactly one
 `protocol_in: "models"` record; the empty roster's `200` with `data: []`; the `200` arm's empty stage
 set (no trace line, no event row, no cost, no session, no prefix); the method face (`405` admitted,
-`401` unauthenticated) and the reload. DESIGN §12.8's row carries them.
+`401` unauthenticated) and the reload. DESIGN §12.8's row carries them. **One amendment is owed by the
+owner**, not by an implementing change: limb (a) asserts the entry key set by equality over four keys
+(`tests/conformance/tests/conf_107_v1_models_lists_aliases.rs`) and now needs five — AGENTS constraint 9
+puts conformance assertions outside the mutable scope, so ADR-061 §2.7 states the exact amendment and no
+card may edit the case to reach a green suite.
 
 ### 4.20 The silence of a stream (the gap bound, a truncation's cause, the three buckets, and a silent route's cooldown)
 
