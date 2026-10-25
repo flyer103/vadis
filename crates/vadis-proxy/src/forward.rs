@@ -101,8 +101,10 @@ pub struct ForwardFailure {
     /// the trace record deliberately never mirrors (§3.5: a roster echo
     /// per failed request would put a config fact in a traffic log for
     /// no reader). `details` stays the record-visible channel; this
-    /// field is read by [`Self::client_body_details`] alone.
-    pub client_details: Option<Value>,
+    /// field is read by [`Self::client_body_details`] alone. Boxed so
+    /// the failure stays small enough for every `Result<_, _>` it rides
+    /// (clippy's `result_large_err` guards the walk's hot paths).
+    pub client_details: Option<Box<Value>>,
 }
 
 impl ForwardFailure {
@@ -122,7 +124,9 @@ impl ForwardFailure {
     /// the client learns what it may ask for, the traffic log does not
     /// echo the roster).
     pub fn client_body_details(&self) -> Option<Value> {
-        self.details.clone().or_else(|| self.client_details.clone())
+        self.details
+            .clone()
+            .or_else(|| self.client_details.clone().map(|b| *b))
     }
 }
 
@@ -155,11 +159,11 @@ pub(crate) fn unknown_model_failure(
         ErrorCode::UnknownModel,
         format!("unknown model or alias '{model}'"),
     );
-    f.client_details = Some(serde_json::json!({
+    f.client_details = Some(Box::new(serde_json::json!({
         "requested": model,
         "resolvable": resolvable,
         "resolvable_total": aliases.len(),
-    }));
+    })));
     f
 }
 

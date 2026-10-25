@@ -57,6 +57,9 @@ pub fn too_large_message(limit: usize, content_length: Option<u64>) -> String {
 /// mode refusal's `mode_refused_record` write: decided at the boundary,
 /// nothing parsed, planned or attempted, `event_id: 0`, `usage_missing:
 /// true`, nothing priced, no store row).
+// The record's field-by-field class (spec §6) decides the signature;
+// the ADR-061 D3 `client` word is the eighth member.
+#[allow(clippy::too_many_arguments)]
 pub fn too_large_record(
     request_id: &str,
     proto_in: WireApi,
