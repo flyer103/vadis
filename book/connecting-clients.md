@@ -53,10 +53,16 @@ surfaces is [`docs/spec.md` §9.3](../docs/spec.md).
 ([`docs/spec.md` §4.19](../docs/spec.md), [ADR-055](../design/decisions/ADR-055-the-model-list-surface.md))
 answers the OpenAI model list of the **alias names** your config declares — behind the same
 token guard as everything else, and with the resolved `provider/model` routes deliberately
-absent: the list names aliases only, never what each alias routes to. It is the path a client
-that probes `<base_url>/models` for reachability asks for (codex's `doctor` check is one), and
-it follows a config reload without a restart. A gateway built from an older tree answers `404`
-there — the surface is as new as the build that serves it.
+absent: the list names aliases only, never what each alias routes to. Each entry also carries
+`context_length`, the context window of the route the alias resolves to (read the probe with
+the token — a client that probes unauthenticated learns nothing and keeps its own fallback
+assumption). So a client configured with an alias sizes its context from the route that will
+actually serve it: an alias pointed at a 1 M route answers `1048576`, and repointing the alias
+changes the number on the next revision. The window is a transcription of what your roster
+declares — its accuracy is a config duty, not something the gateway can check. It is the path a
+client that probes `<base_url>/models` for reachability asks for (codex's `doctor` check is
+one), and it follows a config reload without a restart. A gateway built from an older tree
+answers `404` there — the surface is as new as the build that serves it.
 
 ## Per-client setup
 
