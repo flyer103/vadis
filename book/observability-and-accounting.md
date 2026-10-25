@@ -257,6 +257,12 @@ re-billed), and the five steps that re-billed the most. The full column contract
 [ADR-057](../design/decisions/ADR-057-the-step-ledger.md) and, for this part,
 [ADR-062](../design/decisions/ADR-062-the-block-that-broke-and-the-money-labelled-inferred.md).
 
+A note on one word: the command's own header line still prints the older word **`verified`** on the token
+and block columns, and the `cache` line prints it too. Those are single observations, so the contract —
+[`docs/spec.md` §9.4.3](../docs/spec.md), and the sentence above — says **`measured`**; `verified` is
+reserved for a designed comparison between two runs. The wording is a known defect of the printed header,
+corrected by the change that lands the re-bill columns, and nothing in this section depends on it.
+
 Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
 fixed trace through the same code path that served it) and **`vadis trace tail`** (follow the live
 decision stream). They are planned; the reports above do not depend on them. Until they land, the
