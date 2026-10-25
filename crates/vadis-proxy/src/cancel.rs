@@ -154,6 +154,11 @@ pub(crate) struct CancelSlot {
     ctx: Mutex<Option<CancelCtx>>,
     attempts: AtomicU32,
     wrote_full_request: AtomicBool,
+    /// The transport PROVED the current attempt's write incomplete
+    /// (a `NotSent` outcome: no request bytes went out). While false,
+    /// an in-flight attempt's write status is *not disproved* — it may
+    /// have been fully written and billed (ADR-060 §2.3.1, R2).
+    write_disproved: AtomicBool,
     /// The last head status that arrived, when one did (an error head
     /// being composed when the client left is arm A with its
     /// `upstream_status` intact).
@@ -178,6 +183,7 @@ impl CancelSlot {
             ctx: Mutex::new(None),
             attempts: AtomicU32::new(0),
             wrote_full_request: AtomicBool::new(false),
+            write_disproved: AtomicBool::new(false),
             upstream_status: AtomicU16::new(0),
             has_upstream_status: AtomicBool::new(false),
             upstream_ms: AtomicU32::new(0),
@@ -210,21 +216,34 @@ impl CancelSlot {
     /// evidence flag, reset to "not (yet) fully written" — the outcome
     /// sets it true when the request bytes were fully written, and an
     /// attempt dropped mid-write keeps the honest `false` (nothing this
-    /// process observed reached a full write). The head-status pair is
-    /// reset with them (ADR-060 D1, R4): a previous attempt's error
-    /// head is not "the answering head" of the attempt a drop lands on,
-    /// so no attempt may inherit its predecessor's status.
+    /// process observed reached a full write). `write_disproved` is
+    /// reset with it: a new attempt's write status is not disproved
+    /// until its own transport says so. The head-status pair is reset
+    /// too (ADR-060 D1, R4): a previous attempt's error head is not
+    /// "the answering head" of the attempt a drop lands on, so no
+    /// attempt may inherit its predecessor's status.
     pub(crate) fn note_attempt(&self, attempts: u32) {
         self.attempts.store(attempts, Ordering::SeqCst);
         self.wrote_full_request.store(false, Ordering::SeqCst);
+        self.write_disproved.store(false, Ordering::SeqCst);
         self.upstream_status.store(0, Ordering::SeqCst);
         self.has_upstream_status.store(false, Ordering::SeqCst);
     }
 
     /// The outcome's evidence: the request bytes were fully written
     /// (`Responded` / `WrittenNoResponse` / a stream head arrived).
+    /// This flag is *observed* evidence, never the negation of a
+    /// bill: `false` means this process did not observe a full write,
+    /// not that none happened (spec §6, R2).
     pub(crate) fn note_wrote_full_request(&self) {
         self.wrote_full_request.store(true, Ordering::SeqCst);
+    }
+
+    /// The transport's counter-evidence: no request bytes went out
+    /// (`NotSent`) — the one outcome that proves nothing could have
+    /// been charged for the current attempt.
+    pub(crate) fn note_write_disproved(&self) {
+        self.write_disproved.store(true, Ordering::SeqCst);
     }
 
     /// A head arrived (any status): its status and head latency, kept
@@ -369,11 +388,16 @@ impl Drop for CancelGuard {
             )
         } else {
             // Arm A: no response body was in flight. `stage` is
-            // ADR-011 item 6's evidence word — an attempt was submitted
-            // and the request bytes were fully written ⇒ the attempt
-            // may have been billed (`unknown_outcome`); anything else
-            // could not have been charged (`not_billed`).
-            let stage = if attempts >= 1 && wrote_full_request {
+            // ADR-011 item 6's evidence word, in its CONSERVATIVE
+            // direction (spec §6, R2): an attempt was submitted and
+            // its write was not disproved ⇒ the attempt may have been
+            // billed (`unknown_outcome`) — the guard must not assert
+            // non-billing about a submitted attempt it could not
+            // observe; only the transport's own `NotSent` evidence (no
+            // request bytes went out) or the absence of any attempt
+            // proves `not_billed`.
+            let write_disproved = slot.write_disproved.load(Ordering::SeqCst);
+            let stage = if attempts >= 1 && !write_disproved {
                 "unknown_outcome"
             } else {
                 "not_billed"
@@ -561,16 +585,59 @@ mod tests {
         assert_eq!(e["details"]["wrote_full_request"], false);
     }
 
-    /// Arm A, the maybe-billed shape: an attempt was submitted and its
-    /// request fully written ⇒ `stage: unknown_outcome`, the attempt
-    /// count carried.
+    /// Arm A, the conservative direction (R2): an attempt was submitted
+    /// and is still in flight — this process observed no full write and
+    /// the transport disproved nothing ⇒ `stage: unknown_outcome`. The
+    /// guard must not assert non-billing about a submitted attempt it
+    /// could not observe; `wrote_full_request` says `false` as the
+    /// honest *observed* word, never as the negation of a bill.
     #[test]
-    fn arm_a_names_unknown_outcome_when_the_attempt_fully_wrote() {
+    fn arm_a_names_unknown_outcome_for_every_submitted_attempt() {
         let _flag = FLAG_LOCK.lock().unwrap();
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
         let guard = CancelGuard::new(None, Some(t));
         guard.slot().refresh(ctx("req-b"));
+        guard.slot().note_attempt(1);
+        drop(guard);
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        assert_eq!(rec["result"]["status"], 499);
+        assert_eq!(rec["result"]["attempts"], 1);
+        assert_eq!(rec["errors"][0]["details"]["stage"], "unknown_outcome");
+        assert_eq!(rec["errors"][0]["details"]["wrote_full_request"], false);
+    }
+
+    /// Arm A, the disproved direction (R2): the attempt's own transport
+    /// proved no request bytes went out (`NotSent`) — the one evidence
+    /// that licenses `not_billed` over a submitted attempt.
+    #[test]
+    fn arm_a_stays_not_billed_when_the_transport_disproved_the_write() {
+        let _flag = FLAG_LOCK.lock().unwrap();
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
+        let guard = CancelGuard::new(None, Some(t));
+        guard.slot().refresh(ctx("req-b2"));
+        guard.slot().note_attempt(1);
+        guard.slot().note_write_disproved();
+        drop(guard);
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        assert_eq!(rec["result"]["attempts"], 1);
+        assert_eq!(rec["errors"][0]["details"]["stage"], "not_billed");
+        assert_eq!(rec["errors"][0]["details"]["wrote_full_request"], false);
+    }
+
+    /// Arm A, the observed-evidence arm: the outcome reported the
+    /// request fully written ⇒ `unknown_outcome` with the observed word
+    /// carried in the row.
+    #[test]
+    fn arm_a_carries_the_observed_full_write_with_unknown_outcome() {
+        let _flag = FLAG_LOCK.lock().unwrap();
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let t = trace.clone() as std::sync::Arc<dyn vadis_core::TraceWriter>;
+        let guard = CancelGuard::new(None, Some(t));
+        guard.slot().refresh(ctx("req-b3"));
         guard.slot().note_attempt(1);
         guard.slot().note_wrote_full_request();
         drop(guard);

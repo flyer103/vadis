@@ -2010,6 +2010,10 @@ impl Forwarder {
                         // the classification evidence: a connect failure is
                         // `connect_failure` and walks the chain, a connect
                         // timeout keeps the `timeout` verdict.
+                        // ADR-060 D1 (R2): this is the one outcome that
+                        // PROVES the write incomplete — the cancelled-row
+                        // guard may say `not_billed` over this attempt.
+                        cancel.note_write_disproved();
                         let evidence = ErrorEvidence {
                             status: None,
                             retry_after: None,
@@ -3505,7 +3509,10 @@ mod walk_tests {
     /// `CancelGuard::new` in `forward`): dropping the handler future
     /// mid-attempt — what hyper does when the client disconnects —
     /// writes exactly one terminal row: `499`, kind `canceled`,
-    /// `stage: not_billed`, and no other row ever.
+    /// `stage: unknown_outcome` (an attempt was submitted and its
+    /// write was not disproved — the conservative direction, spec
+    /// §6/R2; the hanging transport reported no outcome at all), and
+    /// no other row ever.
     #[tokio::test]
     async fn dropping_the_buffered_future_mid_attempt_writes_the_canceled_row() {
         let trace = std::sync::Arc::new(CaptureTrace::default());
@@ -3556,7 +3563,7 @@ mod walk_tests {
         assert_eq!(rec["result"]["attempts"], 1);
         let e = &rec["errors"][0];
         assert_eq!(e["kind"], "canceled");
-        assert_eq!(e["details"]["stage"], "not_billed");
+        assert_eq!(e["details"]["stage"], "unknown_outcome");
         assert_eq!(e["details"]["canceled_by"], "client");
     }
 

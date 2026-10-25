@@ -1264,11 +1264,6 @@ impl Forwarder {
                     None
                 };
 
-                let attempt_started = Instant::now();
-                // ADR-060 D3: this attempt now exists — the terminal
-                // record's `result.attempts` and the cancelled-row
-                // guard's snapshot read this count.
-                facts.attempts = attempt_index + 1;
                 // ADR-060 D2 (R4): the refusal slice is per attempt —
                 // a walk that moved past an error head must not let
                 // that attempt's `upstream_body` ride the terminal
@@ -1281,15 +1276,6 @@ impl Forwarder {
                 facts.upstream_body = None;
                 facts.last_upstream_status = None;
                 last_upstream_status = None;
-                // ADR-060 D1: refresh the cancelled-row guard to this
-                // attempt's facts — a drop mid-attempt (head phase)
-                // strands exactly this state.
-                cancel.refresh(crate::cancel::snapshot_facts(
-                    facts,
-                    &cand.route.provider,
-                    &cand.route.model,
-                ));
-                cancel.note_attempt(facts.attempts);
                 // The rotation arm (ADR-049 §3 rule 3), the streaming twin:
                 // a credential-class failure whose pool still holds an
                 // untried key retries the SAME route on the next key —
@@ -1300,6 +1286,22 @@ impl Forwarder {
                 // one per route per request, reset by the walk's move.
                 let mut retries_used: u32 = 0;
                 'keys: loop {
+                    let attempt_started = Instant::now();
+                    // ADR-060 D3: this attempt now exists — the terminal
+                    // record's `result.attempts` and the cancelled-row
+                    // guard's snapshot read this count. Inside the keys
+                    // loop (the buffered twin's own position), so every
+                    // same-route retry and credential rotation is its own
+                    // attempt for the guard too: a drop mid-retry strands
+                    // the retry's count and evidence, not the first
+                    // attempt's stale pair (ADR-060 D1, R2).
+                    facts.attempts = attempt_index + 1;
+                    cancel.refresh(crate::cancel::snapshot_facts(
+                        facts,
+                        &cand.route.provider,
+                        &cand.route.model,
+                    ));
+                    cancel.note_attempt(facts.attempts);
                     match open_head(&client, &cand, &outbound).await {
                         OpenHead::Head(head) => {
                             let head_ms = Some(attempt_started.elapsed().as_millis() as u32);
@@ -1672,6 +1674,10 @@ impl Forwarder {
                             // `connect_failure` on both paths. No
                             // upstream.responded row: the attempt never reached
                             // the upstream.
+                            // ADR-060 D1 (R2): the one outcome that PROVES the
+                            // write incomplete — the cancelled-row guard may
+                            // say `not_billed` over this attempt.
+                            cancel.note_write_disproved();
                             let evidence = ErrorEvidence {
                                 status: None,
                                 retry_after: None,
@@ -2794,9 +2800,10 @@ mod tests {
     /// `forward_stream`): dropping the handler future mid-head-phase —
     /// what hyper does when the client disconnects before any response
     /// head exists — writes exactly one terminal row: `499`, kind
-    /// `canceled`, `stage: not_billed` (an attempt was submitted but
-    /// this process never observed a full write), and NO second row
-    /// ever appears.
+    /// `canceled`, `stage: unknown_outcome` (an attempt was submitted
+    /// and its write was not disproved — the conservative direction,
+    /// spec §6/R2; `wrote_full_request: false` is the honest *observed*
+    /// word), and NO second row ever appears.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dropping_the_head_phase_future_writes_the_canceled_row() {
         let port = slow_head_listener().await;
@@ -2822,7 +2829,7 @@ mod tests {
         assert_eq!(rec["result"]["attempts"], 1);
         let e = &rec["errors"][0];
         assert_eq!(e["kind"], "canceled");
-        assert_eq!(e["details"]["stage"], "not_billed");
+        assert_eq!(e["details"]["stage"], "unknown_outcome");
         assert_eq!(e["details"]["canceled_by"], "client");
         assert_eq!(e["details"]["wrote_full_request"], false);
     }

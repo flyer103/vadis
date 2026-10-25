@@ -116,7 +116,7 @@ taken here.
 | `usage` / `cost` / `quota_after` | zeroed / `0` / `null` | zeroed unless the tap completed; never invented |
 | `errors[0].kind` | **`canceled`** | `upstream_error` (the truncation shape, §4.20.3) |
 | `errors[0].details` | `{ stage: "unknown_outcome" \| "not_billed", canceled_by: "client" \| "shutdown", attempt, wrote_full_request }` | `{ error_class: "stream_truncated", stream: true, stream_end: "client_closed", relayed_bytes, since_last_byte_ms, retry_refused: "forwarded" }` |
-| accounting class | the attempt may have been billed (`unknown_outcome`) when one was submitted and fully written; `not_billed` when nothing could have been charged | the upstream may have billed what it generated; `usage_missing` says no measurement exists |
+| accounting class | the attempt may have been billed (`unknown_outcome`) when one was submitted and its write was not **disproved** — observed complete, or in flight and not disproved (`wrote_full_request` is the *observed* word, never the negation of a bill); `not_billed` when no attempt was submitted or the transport proved no request bytes went out | the upstream may have billed what it generated; `usage_missing` says no measurement exists |
 
 `canceled` is the **second trace-only kind** (`trace_write_failed` is the first): a request the client
 abandoned produces no client-visible body, so §8's `error.type` table gains no row and must not. The kind

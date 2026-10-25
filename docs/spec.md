@@ -2747,10 +2747,15 @@ and the state truth already names this case (DESIGN §12.10.3 R5; §8's crash wi
   additive while a changed **type** is not — so `schema_version` stays **2**. The consequence is stated rather
   than hidden: arm A counts in `failed` (`result.status` is not 2xx) and `errors[0].kind` is what separates it
   from a refusal.
-- **`details.stage`** is `unknown_outcome` when an attempt was submitted and the request bytes were fully
-  written — the attempt **may have been billed**, which is §8's word for exactly this and the word the
-  buffered path's `WrittenNoResponse` class already carries — and `not_billed` otherwise (nothing left this
-  process that a provider could charge for: an attempt that never reached a full write, or no attempt at all).
+- **`details.stage`** is `unknown_outcome` whenever an attempt was submitted and its write was not
+  **disproved** — the attempt **may have been billed**, which is §8's word for exactly this and the word the
+  buffered path's `WrittenNoResponse` class already carries. The full-write evidence the row rests on is
+  *observed, or not disproved*: `wrote_full_request` is the **observed** word (true only when an outcome or
+  a head proved the full write; `false` means this process did not observe one, never that none happened),
+  and an attempt still in flight counts as not disproved, because a submitted attempt this process cannot
+  observe may already have been fully written upstream. `not_billed` is written only when no attempt was
+  submitted, or when the attempt's own transport proved no request bytes went out (the `NotSent` outcome —
+  a connect or pre-write failure).
 - **`details.canceled_by`** ∈ `{client, shutdown}`: the two producers (a disconnect; the graceful drain).
   **`details.attempt`** / **`details.wrote_full_request`** are the evidence ADR-011 item 6 is written over.
 - Arm B is §4.20.3's truncation shape with its fourth cause word, so it lands in `stream_incomplete`
