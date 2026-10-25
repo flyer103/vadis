@@ -4186,11 +4186,57 @@ mod walk_tests {
             assert_eq!(d["requested"], model, "{model}");
             assert_eq!(d["resolvable"], serde_json::json!(["fast"]), "{model}");
             assert_eq!(d["resolvable_total"], 1, "{model}");
-            assert!(
-                !err.message.contains("no-such-provider") || model.contains("no-such-provider"),
-                "a provider name the client did not send never appears: {}",
-                err.message
-            );
         }
+    }
+
+    /// The 404-side twin of `CONF-107` limb (b) / `models_read`'s export
+    /// boundary: the serialized §8 client body — built exactly as the
+    /// handler builds it (`ErrorBody::new` + `client_body_details`) —
+    /// over a roster whose provider name and native model ids are
+    /// strings the client did **not** send. Neither may appear, and no
+    /// `/` may appear outside the client's own `requested` echo.
+    #[test]
+    fn the_404_body_leaks_no_roster_string_the_client_did_not_send() {
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![provider("secret-provider", WireApi::Chat)],
+            aliases: aliases_map(&[
+                ("fast", "secret-provider/native-secret-a"),
+                ("bulk", "secret-provider/native-secret-b"),
+            ]),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let fwd = forwarder(config, HashMap::new());
+        // The client's own string carries a `/`, so the one place a
+        // slash may appear is its own echo.
+        let requested = "no-such-provider/totally-unknown";
+        let err = fwd
+            .resolve_route(requested)
+            .expect_err("the roster does not hold this route");
+        assert_eq!(err.status, 404);
+        // The exact construction the handler's failure arm runs:
+        // `ErrorBody::new` then the client-only details.
+        let mut body = vadis_core::error::ErrorBody::new(err.code, err.message.clone(), "req-404");
+        body.error.details = err.client_body_details();
+        let text = serde_json::to_string(&body).expect("the body serializes");
+        assert!(
+            !text.contains("secret-provider"),
+            "the provider name never appears: {text}"
+        );
+        assert!(
+            !text.contains("native-secret"),
+            "a native model id never appears: {text}"
+        );
+        // No `/` outside `requested`: strip the client's own echo (its
+        // spelling needs no JSON escaping) and no slash may remain.
+        let outside = text.replace(requested, "");
+        assert!(!outside.contains('/'), "no route string survives: {text}");
     }
 }
