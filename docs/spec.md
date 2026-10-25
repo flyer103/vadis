@@ -2514,7 +2514,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | Field group | Contents |
 |---|---|
 | config | `config_digest` — a **top-level** field beside `schema_version`, not a nested group (the byte digest of the root file and the roster, §4.14; see below) |
-| identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (UA-normalized), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id`, `turn_index` |
+| identity | `request_id`, `event_id` (the state-truth anchor, §4.5), `client` (**derived** from `User-Agent` into the closed vocabulary `codex` \| `hermes` \| `claude-code` \| `other` — ADR-061 D3; `other` for an absent or unmatched header; the raw header is **never** recorded, in any form), `session` (from §4 `key_sources`, preferring `prompt_cache_key`), `thread_id` (**always `null`** in v0.1 — a statement, not a gap: ADR-061 D3), `turn_index` |
 | protocol | `protocol_in`, `protocol_out`, `translated` (bool), `lossy[]` |
 | decision | `provider`, `model` (the resolved **provider-native** model id, §2 — the string the upstream received), `requested_model` (the client's own `model` string, verbatim; `null` when the request carried none), `selection_source` (explicit/alias/plugin), `plugin_chain[]`, `decision_ms`, `key_index` (**ADR-049**: the credential of the provider's pool that served — an integer index into the entry's `api_keys`, `null` when the entry holds one credential; the key's *value* is never a trace field, §4.6.1) |
 | state | `stateful_inbound` (`store != false` or non-empty `previous_response_id`), `sticky_hit`, `cache_control_breaks` |
@@ -2525,6 +2525,29 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
+
+**The `identity` group's attribution is derived, and one of its words is a declared constant.** `client` is
+produced by one pure function of the request's `User-Agent` header, evaluated **once** per request at the
+boundary where the headers are read — before the pipeline, so the pre-pipeline refusal records (§4.7's `401`,
+§4.13's `413`) carry the same value an ordinary row does — against an ordered table of
+ASCII-case-insensitive **prefix** rules whose only targets are the closed vocabulary
+`{codex, hermes, claude-code, other}` (DESIGN §12.3's `ClientKind`). A request with no `User-Agent`, an empty
+one, or one matching no rule is **`other`**: the unknown bucket is kept so a row written before this round and a
+row written after it stay comparable. The header value itself is **never** recorded — not verbatim, not
+truncated, not hashed; not in the trace, not in the event log, not in an error body — and no derived artefact of
+it is recorded either: the vocabulary word is the whole observation (ADR-061 §4.6). A word enters the table only
+with the header value **attested** behind it — the client's own source, or a dated capture of the wire — because
+a plausible-looking prefix is not evidence and a wrong word is durable (ADR-061 §4.8). A client that sends no
+attribution header reads `other`; ADR-061 §4.4 records the measurement for the client this deployment runs and
+leaves the one-line remedy with that client, never a guess in the gateway.
+
+`thread_id` is `null` on every record of this build, and the null is a **statement**, not a writer's omission:
+this process observed no thread identity. The only client-sent string that could populate it is
+`previous_response_id`, which this build does not inspect (§2's byte rule and the G-F note below), and whose
+inspection would also make `state.stateful_inbound` a real value — **ADR-004 item 3's arrival**, which is one
+contract change and lands as one (ADR-061 §4.7). `session` is the only conversation-scoped identity a client
+actually sends, and it already has its own field; deriving a second name from that one input would be a
+duplicate column, not a second fact.
 
 **`protocol` records what left the process outbound, and `translated` records an event — never a comparison.**
 `protocol_out` names the wire the request's bytes actually went out on. Because only a route that **declares the
@@ -2730,6 +2753,7 @@ field for field, with exactly three differences, named under the table.
 | `identity.request_id` | allocated, from the same counter as every request | §8's error body and `X-Vadis-Request-Id` carry it |
 | `identity.event_id` | **`0`** | no `request.received` row exists: the guard runs before §4.5's row 1, which is *"once per request that entered the pipeline"*. `0` is never a real id (`events.event_id` starts at 1), and it is the same sentinel the parse / route / capability rejections already write |
 | `identity.session` / `thread_id` / `turn_index` | `null` / `null` / `0` | session resolution reads the body and the sticky projection; a refused request has neither, and its body is **never parsed** |
+| `identity.client` | the vocabulary word the boundary's derivation produced from `User-Agent`, exactly as on every other record | the header is read at the boundary, so attribution is the one identity fact a refused request **does** carry (ADR-061 D3) — and a refusal is precisely when an operator wants to know who was refused |
 | `protocol.protocol_in` | the endpoint's own protocol | the route is known before the body is read |
 | `protocol.protocol_out` / `translated` / `lossy` | `null` / `false` / `[]` (omitted on the wire when empty, as on every record) | no route was selected |
 | `decision.provider` / `model` | `""` / `""` | no route was attempted — the empty-string convention the pre-route failure path already uses |
