@@ -434,7 +434,7 @@ mod tests {
     /// exact match.
     #[test]
     fn a_configured_credential_is_redacted_exactly() {
-        let body = format!(r#"{{"message":"key sk-live-SECRETVALUE123 was rejected"}}"#);
+        let body = r#"{"message":"key sk-live-SECRETVALUE123 was rejected"}"#.to_string();
         let v = capture(body.as_bytes(), &cred()).expect("parses");
         assert_eq!(v["message"], "key [redacted] was rejected");
         assert!(!v["message"].as_str().unwrap().contains("SECRETVALUE"));

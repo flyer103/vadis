@@ -2563,21 +2563,28 @@ mod tests {
     /// The R4 rig's config: a `refuser` provider whose upstream answers
     /// an error head with a body, then a `dead` provider on a closed
     /// port as the fallback — the walk's two steps.
-    fn walk_test_config(attempt_ms: u64, request_ms: u64, refuser_port: u16, dead_port: u16) -> VadisConfig {
-        let provider = |name: &str, port: u16| serde_json::json!({
-            "name": name,
-            "urls": { "chat": format!("http://127.0.0.1:{port}/v1/chat/completions") },
-            "api_key_env": "UNIT_STREAM_KEY",
-            "wire_api": "chat",
-            "supports": ["chat"],
-            "models": [{
-                "id": "m", "context": "128k",
-                "price": { "input_miss": 0.001, "input_hit": 0.0001,
-                           "cache_write": 0.0, "output": 0.002,
-                           "peak": { "multiplier": 1.0, "windows": [] } },
-                "source": "unit fixture"
-            }]
-        });
+    fn walk_test_config(
+        attempt_ms: u64,
+        request_ms: u64,
+        refuser_port: u16,
+        dead_port: u16,
+    ) -> VadisConfig {
+        let provider = |name: &str, port: u16| {
+            serde_json::json!({
+                "name": name,
+                "urls": { "chat": format!("http://127.0.0.1:{port}/v1/chat/completions") },
+                "api_key_env": "UNIT_STREAM_KEY",
+                "wire_api": "chat",
+                "supports": ["chat"],
+                "models": [{
+                    "id": "m", "context": "128k",
+                    "price": { "input_miss": 0.001, "input_hit": 0.0001,
+                               "cache_write": 0.0, "output": 0.002,
+                               "peak": { "multiplier": 1.0, "windows": [] } },
+                    "source": "unit fixture"
+                }]
+            })
+        };
         serde_json::from_value(serde_json::json!({
             "server": {
                 "addr": "127.0.0.1:0",
@@ -2599,7 +2606,11 @@ mod tests {
     /// A port that is (almost certainly) closed: bind, read the port,
     /// drop the listener. The walk's connect-failure step points here.
     fn dead_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
     }
 
     fn forwarder(cfg: VadisConfig, trace: Option<std::sync::Arc<CaptureTrace>>) -> Forwarder {
@@ -2932,9 +2943,8 @@ mod tests {
                                     let mut resp = axum::response::Response::new(
                                         axum::body::Body::from_stream(ok_items),
                                     );
-                                    *resp.status_mut() =
-                                        axum::http::StatusCode::from_u16(s.status)
-                                            .expect("upstream status maps");
+                                    *resp.status_mut() = axum::http::StatusCode::from_u16(s.status)
+                                        .expect("upstream status maps");
                                     if let Some(ct) = s.content_type {
                                         if let Ok(v) = ct.parse() {
                                             resp.headers_mut()
@@ -3187,9 +3197,16 @@ mod tests {
             walk_test_config(10_000, 10_000, refuser_port, dead),
             Some(trace.clone()),
         );
-        let body = br#"{"model":"refuser/m","messages":[{"role":"user","content":"x"}],"stream":true}"#;
+        let body =
+            br#"{"model":"refuser/m","messages":[{"role":"user","content":"x"}],"stream":true}"#;
         let outcome = f
-            .forward_stream(WireApi::Chat, body, "req-r4", &[], TransformMode::Passthrough)
+            .forward_stream(
+                WireApi::Chat,
+                body,
+                "req-r4",
+                &[],
+                TransformMode::Passthrough,
+            )
             .await;
         match outcome {
             StreamOutcome::Failure(f) => {
