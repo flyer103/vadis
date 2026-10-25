@@ -95,6 +95,18 @@ pub struct StepRow {
     /// arrow form of column 16 exists only when it differs from
     /// `status`.
     pub upstream_status: Option<u16>,
+    /// Σ `prefix.blocks[i < lcp].tokens` — the inferred size of the
+    /// prefix the previous step also carried, i.e. the part of the
+    /// prompt **the break did not touch** (§9.4.3 column 18).
+    /// **inferred** (GAP-Q14, like `new_tok`). Never null: a row whose
+    /// `lcp == 0` prints a genuine empty sum, the same measured zero
+    /// `kept 0` prints beside it — never the `—` absence.
+    pub kept_tok: u64,
+    /// §9.4.8's step term — the tokens this step billed **above its
+    /// own growth**: `max(0, miss − growth)` over the usage-carrying
+    /// rows. **inferred**. Null exactly when `in`/`cached` are (the
+    /// row carries no usage; §9.4.3's absence rule).
+    pub rebill_tok: Option<u64>,
     /// The closed §9.4.4 vocabulary, in table order.
     pub flags: Vec<String>,
 }
@@ -121,6 +133,52 @@ pub struct ClassAgg {
     pub plan_rows: u64,
     /// Rows with `usage_missing: true` — excluded from the money sums.
     pub without_usage: u64,
+}
+
+/// §9.4.8's summary block: the session's **re-billed tokens** — the
+/// measured cache-miss volume above the session's one-pass floor —
+/// with its printed operands (`Σmiss`, `floor`, `surplus`), its
+/// per-currency money and its two groupings. `tokens` is the one
+/// member allowed to be null: when no row carries usage, §9.4.8.6's
+/// absence rule applies (the object itself is still present, in both
+/// forms, with `excluded_rows == steps`).
+#[derive(Debug, Default, Clone)]
+pub struct Rebill {
+    /// §9.4.8.2's figure — **inferred**. `None` only when no row
+    /// carries usage.
+    pub tokens: Option<u64>,
+    /// One amount per currency (§9.4.8.3) — **inferred**, priced at
+    /// each row's own measured miss rate; `{}` when no currency
+    /// receives one. Never crosses a currency (§4.8).
+    pub money_nano: BTreeMap<String, u64>,
+    /// Re-billed tokens on a `coding_plan` account — counted, never a
+    /// zero in a currency line (GAP-Q17). **inferred**.
+    pub plan_tokens: u64,
+    /// How many rows carry `rebill_tok > 0`.
+    pub rows: u64,
+    /// `Σ(in − cached)` over the usage-carrying rows — the identity's
+    /// first operand. measured.
+    pub miss_tokens: u64,
+    /// `max(in)` over the same rows — the session's largest prompt,
+    /// the one-pass floor (§9.4.8.2 consequence 3). measured.
+    pub floor_tokens: u64,
+    /// `Σ surplus(n)` — the clamp's correction (§9.4.8.2). **inferred**.
+    pub surplus_tokens: u64,
+    /// Rows without usage — excluded from every figure, counted.
+    pub excluded_rows: u64,
+    /// Rows with re-billed tokens no currency prices (§9.4.8.3).
+    pub unpriced_rows: u64,
+    /// §9.4.5's `by break kind`: for each of the four block kinds,
+    /// always all four (`BREAK_KINDS`'s order), the count of `rewrite`
+    /// rows whose `at` names that kind and the sum of their
+    /// `rebill_tok` (a no-usage row sums 0). A `rewrite` whose block
+    /// carries no kind has `at: null` and lands in no bucket — an
+    /// absence, never a guess.
+    pub by_break_kind: BTreeMap<&'static str, (u64, u64)>,
+    /// §9.4.5's `top rebilled`: the five largest `rebill_tok` rows,
+    /// largest first, ties by step order — `(step, class, at,
+    /// rebill_tok)`; never padded with zero rows.
+    pub top_rebilled: Vec<(u32, &'static str, Option<String>, u64)>,
 }
 
 /// The report: the ordered rows plus the §9.4.5 summary. Every summary
@@ -151,6 +209,8 @@ pub struct Report {
     pub cache: Option<(u64, u64)>,
     /// Rows excluded from the cache ratio (`usage_missing`).
     pub cache_excluded: u64,
+    /// §9.4.8's re-bill block — always present, in both forms.
+    pub rebill: Rebill,
 }
 
 /// A session's records read from the trace files, plus the two facts
@@ -291,6 +351,10 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
     let mut prev_hashes: Vec<String> = Vec::new();
     let mut prev_ts_ms: Option<i64> = None;
     let mut prev_overhead_ms: u32 = 0;
+    // §9.4.8.2's running maximum of `usage.input_total` over the
+    // preceding usage-carrying rows — `peak(0) = 0`. Pure state of the
+    // fold, like `prev_hashes` beside it.
+    let mut peak_prev: u64 = 0;
 
     for (n, (ts_ms, _seq, rec)) in keyed.iter().enumerate() {
         // The previous step **in sorted order** — for a shorten's first
@@ -371,6 +435,14 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
             .filter_map(|b| b.get("tokens").and_then(Value::as_u64))
             .sum();
 
+        // §9.4.3 column 18 — the kept prefix's token weight, the
+        // complement of `new_tok` over the same block list.
+        let kept_tok: u64 = blocks
+            .iter()
+            .take(lcp)
+            .filter_map(|b| b.get("tokens").and_then(Value::as_u64))
+            .sum();
+
         // -- measured facts ------------------------------------------------
         let usage_missing = rec.get("usage_missing").and_then(Value::as_bool) == Some(true);
         let usage = rec.get("usage");
@@ -379,6 +451,21 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
         } else {
             let g = |k: &str| usage.and_then(|u| u.get(k)).and_then(Value::as_u64);
             (g("input_total"), g("input_cached"), g("output"))
+        };
+        // §9.4.3 column 19 / §9.4.8.2's step term, over the
+        // usage-carrying rows only (both counters present — the same
+        // predicate the `cache` ratio uses). The arithmetic itself is
+        // the §9.4.8.2 sentence: `max(0, miss − growth)`, with
+        // `growth = max(0, in − peak(n−1))` — the session's own cold
+        // start falls out at `rebill(1) = −cached(1) → 0`, a
+        // consequence, never a special case.
+        let rebill_tok: Option<u64> = match (vin, vcached) {
+            (Some(in_tot), Some(cached)) => {
+                let miss = in_tot.saturating_sub(cached);
+                let growth = in_tot.saturating_sub(peak_prev);
+                Some(miss.saturating_sub(growth))
+            }
+            _ => None,
         };
         let provider = rec
             .get("decision")
@@ -467,12 +554,18 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
             head_ms,
             status: rstatus,
             upstream_status,
+            kept_tok,
+            rebill_tok,
             flags: flags_of(rec, &provider),
         });
 
         prev_hashes = hashes;
         prev_ts_ms = Some(*ts_ms);
         prev_overhead_ms = wall_ms;
+        // `peak(n)` admits only usage-carrying rows (§9.4.8.2).
+        if let (Some(in_tot), Some(_)) = (vin, vcached) {
+            peak_prev = peak_prev.max(in_tot);
+        }
     }
 
     // -- the summary (§9.4.5): a restatement of the rows above --------
@@ -495,6 +588,7 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
         top_steps: Vec::new(),
         cache: None,
         cache_excluded: 0,
+        rebill: Rebill::default(),
         rows: Vec::new(),
         files_read: st.files_read,
     };
@@ -546,6 +640,107 @@ pub fn reduce(st: &SessionTrace) -> Result<Report, String> {
         .take(5)
         .map(|i| (rows[i].step, rows[i].class, rows[i].blocks))
         .collect();
+
+    // -- the re-bill block (§9.4.8): the same rows, one more fold ----
+    // A second running `peak` over the same predicate — fold state
+    // again, so the summary restates the rows without `StepRow`
+    // carrying the intermediate terms.
+    let mut reb = Rebill::default();
+    for k in BREAK_KINDS {
+        reb.by_break_kind.insert(k, (0, 0));
+    }
+    let mut peak: u64 = 0;
+    for (row, (_ts, _seq, rec)) in rows.iter().zip(keyed.iter()) {
+        // `by break kind` (§9.4.5): rewrite rows only, keyed by the
+        // kind `at` names — an `at: null` rewrite (no resolvable kind)
+        // lands in no bucket, an absence, never a guess.
+        if row.class == "rewrite" {
+            if let Some(kind) = row.at.as_deref().and_then(|a| a.split(':').nth(1)) {
+                if let Some((count, sum)) = reb.by_break_kind.get_mut(kind) {
+                    *count += 1;
+                    *sum += row.rebill_tok.unwrap_or(0);
+                }
+            }
+        }
+        match (row.r#in, row.cached) {
+            (Some(in_tot), Some(cached)) => {
+                let miss = in_tot.saturating_sub(cached);
+                let growth = in_tot.saturating_sub(peak);
+                let rebill = miss.saturating_sub(growth);
+                let surplus = growth.saturating_sub(miss);
+                reb.miss_tokens += miss;
+                reb.floor_tokens = reb.floor_tokens.max(in_tot);
+                reb.surplus_tokens += surplus;
+                reb.tokens = Some(reb.tokens.unwrap_or(0) + rebill);
+                if rebill > 0 {
+                    reb.rows += 1;
+                }
+                match &row.money {
+                    // A plan row is counted, never priced (§9.4.8.3,
+                    // GAP-Q17): its tokens land in `plan_tokens` and
+                    // no currency line receives a zero.
+                    Some(Money::Plan) => reb.plan_tokens += rebill,
+                    Some(Money::Amount { currency, .. }) => {
+                        let input_miss = rec
+                            .get("cost")
+                            .and_then(|c| c.get("input_miss"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        if rebill > 0 && miss > 0 {
+                            if input_miss == 0 {
+                                // Re-billed tokens no currency prices —
+                                // counted and labelled, never
+                                // zero-filled (§9.4.8.3).
+                                reb.unpriced_rows += 1;
+                            } else {
+                                // Integer NanoUsd, floored per row, at
+                                // the row's own measured miss rate —
+                                // `p_miss` as the cost engine applied
+                                // it; no price table is read here.
+                                let nano =
+                                    ((rebill as u128 * input_miss as u128) / miss as u128) as u64;
+                                *reb.money_nano.entry(currency.clone()).or_insert(0) += nano;
+                            }
+                        }
+                    }
+                    // A usage-carrying row is never `usage_missing`, so
+                    // its money is always present; the arm exists for
+                    // the match, not a case.
+                    None => unreachable!("a usage-carrying row always carries money"),
+                }
+                peak = peak.max(in_tot);
+            }
+            _ => reb.excluded_rows += 1,
+        }
+    }
+    // `top rebilled` (§9.4.5): the five largest `rebill_tok`, largest
+    // first, ties by step order — never padded with zero rows.
+    let mut ridx: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.rebill_tok.is_some_and(|t| t > 0))
+        .map(|(i, _)| i)
+        .collect();
+    ridx.sort_by(|&a, &b| {
+        rows[b]
+            .rebill_tok
+            .unwrap()
+            .cmp(&rows[a].rebill_tok.unwrap())
+            .then(a.cmp(&b))
+    });
+    reb.top_rebilled = ridx
+        .into_iter()
+        .take(5)
+        .map(|i| {
+            (
+                rows[i].step,
+                rows[i].class,
+                rows[i].at.clone(),
+                rows[i].rebill_tok.unwrap(),
+            )
+        })
+        .collect();
+    rep.rebill = reb;
     rep.rows = rows;
     Ok(rep)
 }
@@ -621,6 +816,11 @@ fn number_as_u32(v: &Value) -> u32 {
 /// five (§9.4.5): a class that never occurs prints `count 0`, a count,
 /// never a zero the reader infers from an absence.
 pub const CLASSES: [&str; 5] = ["first", "append", "repeat", "shorten", "rewrite"];
+
+/// The four `prefix::BlockKind` words, in §9.4.5's print order —
+/// `by break kind` prints all four (a kind that never breaks a prefix
+/// prints `0/0`), never the subset the rows happened to carry.
+pub const BREAK_KINDS: [&str; 4] = ["system", "tool", "message", "input_item"];
 
 /// The rows `--last <n>` selects (§9.4.1): the SAME tail slice in both
 /// output forms — one rule, so `--json` cannot silently diverge from
@@ -957,6 +1157,240 @@ mod tests {
             trace_dir: "/tmp".into(),
         };
         reduce(&st).expect("reduces")
+    }
+
+    fn report_plan(records: Vec<Value>, plan_providers: &[&str]) -> Report {
+        let st = SessionTrace {
+            records,
+            files_read: 1,
+            plan_providers: plan_providers.iter().map(|s| s.to_string()).collect(),
+            trace_dir: "/tmp".into(),
+        };
+        reduce(&st).expect("reduces")
+    }
+
+    /// `rec` with the usage counters (and optionally the miss money)
+    /// set — the inputs §9.4.8.2 folds over. The provider stays `p`
+    /// unless the caller repoints it (the `plan` label is per-provider).
+    fn rec_usage(ts: &str, hashes: &[(&str, u64)], input_total: u64, input_cached: u64) -> Value {
+        let mut r = rec(ts, hashes);
+        r["usage"]["input_total"] = serde_json::json!(input_total);
+        r["usage"]["input_cached"] = serde_json::json!(input_cached);
+        r
+    }
+
+    fn on_provider(mut r: Value, provider: &str) -> Value {
+        r["decision"]["provider"] = serde_json::json!(provider);
+        r
+    }
+
+    /// §9.4.8.2 consequence 1: the session's own cold start cannot be
+    /// a re-bill — `rebill(1) = −cached(1) → 0` by construction, on a
+    /// session that grew, not a degenerate one.
+    #[test]
+    fn rebill_first_is_zero_by_construction() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 10_000, 0),
+            rec_usage(
+                "2026-10-18T05:00:01.100Z",
+                &[("a", 10), ("b", 5)],
+                15_000,
+                10_000,
+            ),
+        ]);
+        assert_eq!(
+            rep.rows[0].rebill_tok,
+            Some(0),
+            "rebill(first) = −cached → 0"
+        );
+        assert_eq!(
+            rep.rows[1].rebill_tok,
+            Some(0),
+            "a perfect-cache append is all growth"
+        );
+        assert_eq!(rep.rebill.tokens, Some(0));
+        // kept_tok: the complement of new_tok over the same list.
+        assert_eq!(rep.rows[1].kept_tok, 10);
+        assert_eq!(rep.rows[1].new_tok, 5);
+    }
+
+    /// §9.4.8.1's second shape: a same-session cold re-prefill (a
+    /// `rewrite` with `lcp == 0`) bills the whole prompt minus its own
+    /// growth — the entire `in` when the prompt stayed below the
+    /// session's peak, `in − growth` when it grew past it.
+    #[test]
+    fn cold_reprefill_bills_the_whole_prompt_minus_growth() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 10_000, 0),
+            // the previous prompt replaced (first block differs):
+            // below the peak ⇒ the whole prompt is a re-bill.
+            rec_usage("2026-10-18T05:00:01.100Z", &[("z", 8)], 8_000, 0),
+            // and one that grew past the peak ⇒ in − growth.
+            rec_usage("2026-10-18T05:00:02.100Z", &[("y", 9)], 20_000, 0),
+        ]);
+        assert_eq!(rep.rows[1].class, "rewrite");
+        assert_eq!(rep.rows[1].kept_tok, 0, "lcp == 0 ⇒ a genuine empty sum");
+        assert_eq!(rep.rows[1].rebill_tok, Some(8_000), "the whole prompt");
+        assert_eq!(rep.rows[2].rebill_tok, Some(20_000 - 10_000), "in − growth");
+    }
+
+    /// §9.4.8.2's identity on a session with a clamped row (a row
+    /// whose miss fell short of its growth — the surplus path):
+    /// `rebilled = Σmiss − floor + surplus` must hold on the page.
+    #[test]
+    fn rebill_identity_holds_on_a_clamped_session() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 100, 20),
+            // miss 10 < growth 100 ⇒ rebill clamps to 0, surplus 90.
+            rec_usage("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)], 200, 190),
+        ]);
+        let rb = &rep.rebill;
+        assert_eq!(rb.tokens, Some(0));
+        assert_eq!(rb.miss_tokens, 90);
+        assert_eq!(rb.floor_tokens, 200);
+        assert_eq!(rb.surplus_tokens, 110);
+        assert_eq!(
+            rb.tokens.unwrap(),
+            rb.miss_tokens + rb.surplus_tokens - rb.floor_tokens,
+            "the identity holds with the clamp's correction added back \
+             (evaluated add-first: the page's `Σmiss − floor + surplus` \
+             can go negative mid-sum, the u64 fold never does)"
+        );
+    }
+
+    /// §9.4.8.6's first case: a session with no break and no cache
+    /// miss reports exactly 0 — a zero, never null, never an absent
+    /// key.
+    #[test]
+    fn a_no_break_session_reports_exactly_zero() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 100, 0),
+            rec_usage("2026-10-18T05:00:01.100Z", &[("a", 10), ("b", 5)], 150, 100),
+            rec_usage(
+                "2026-10-18T05:00:02.100Z",
+                &[("a", 10), ("b", 5), ("c", 1)],
+                180,
+                150,
+            ),
+        ]);
+        let rb = &rep.rebill;
+        assert_eq!(rb.tokens, Some(0));
+        assert_eq!(rb.rows, 0);
+        assert!(rb.money_nano.is_empty());
+        assert_eq!(rb.plan_tokens, 0);
+        assert_eq!(rb.surplus_tokens, 0);
+        assert_eq!(
+            rb.miss_tokens, rb.floor_tokens,
+            "Σmiss = floor on a one-pass chain"
+        );
+    }
+
+    /// §9.4.8.2 consequence 3, worked: on `(10k,0)(15k,10k)(3k,0)` the
+    /// peak floor reports 3 000 — the replacement text's own miss —
+    /// where a final-context floor would book 15 000.
+    #[test]
+    fn the_floor_is_the_peak_not_the_final_context() {
+        let rep = report(vec![
+            rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 10_000, 0),
+            rec_usage(
+                "2026-10-18T05:00:01.100Z",
+                &[("a", 10), ("b", 5)],
+                15_000,
+                10_000,
+            ),
+            // compaction: shorter, and the cache missed it all.
+            rec_usage("2026-10-18T05:00:02.100Z", &[("a", 3)], 3_000, 0),
+        ]);
+        assert_eq!(rep.rebill.tokens, Some(3_000));
+        assert_eq!(rep.rebill.miss_tokens, 18_000);
+        assert_eq!(rep.rebill.floor_tokens, 15_000);
+        assert_eq!(rep.rebill.surplus_tokens, 0);
+    }
+
+    /// §9.4.8.6's absence case: no row carries usage ⇒ `tokens` is
+    /// null (the one null), the object still present, every row
+    /// counted in `excluded_rows`.
+    #[test]
+    fn rebill_tokens_null_when_no_step_carries_usage() {
+        let mut no_usage = rec("2026-10-18T05:00:00.100Z", &[("a", 7)]);
+        no_usage["usage_missing"] = serde_json::json!(true);
+        let rep = report(vec![no_usage]);
+        assert_eq!(rep.rows[0].rebill_tok, None);
+        let rb = &rep.rebill;
+        assert_eq!(rb.tokens, None, "§9.4.8.6's one null");
+        assert_eq!(rb.rows, 0);
+        assert!(rb.money_nano.is_empty());
+        assert_eq!(rb.excluded_rows, 1, "excluded_rows == steps");
+    }
+
+    /// §9.4.8.3: the money is each row's own measured miss rate —
+    /// `floor(rebill_tok × cost.input_miss / miss)` per row — never a
+    /// price table read. A plan row counts tokens into `plan_tokens`
+    /// and prices nothing; an unpriced row (`input_miss == 0` while
+    /// `miss > 0`) contributes tokens and is counted, never
+    /// zero-filled.
+    #[test]
+    fn rebill_money_uses_each_rows_own_measured_miss_rate() {
+        let mut metered = rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 10_000, 0);
+        metered["cost"]["input_miss"] = serde_json::json!(50_000); // 5 nano/tok
+        let mut unpriced = rec_usage("2026-10-18T05:00:01.100Z", &[("z", 8)], 8_000, 0);
+        unpriced["cost"]["input_miss"] = serde_json::json!(0);
+        unpriced["cost"]["currency"] = serde_json::json!("USD");
+        let mut plan = rec_usage("2026-10-18T05:00:02.100Z", &[("y", 9)], 9_000, 0);
+        plan["cost"]["input_miss"] = serde_json::json!(90_000);
+        // `m` is metered, `p` is the plan provider — only row 3 rides it.
+        let rep = report_plan(
+            vec![on_provider(metered, "m"), on_provider(unpriced, "m"), plan],
+            &["p"],
+        );
+        // Row 1 is all growth (the session's own cold start ⇒ rebill 0);
+        // rows 2-3 sit below the peak ⇒ the whole prompt is the re-bill.
+        assert_eq!(rep.rows[0].rebill_tok, Some(0));
+        assert_eq!(rep.rows[1].rebill_tok, Some(8_000));
+        assert_eq!(rep.rows[2].rebill_tok, Some(9_000));
+        assert_eq!(rep.rebill.tokens, Some(17_000));
+        assert_eq!(rep.rebill.rows, 2);
+        assert_eq!(rep.rebill.unpriced_rows, 1, "tokens, no money, counted");
+        assert!(
+            rep.rebill.money_nano.is_empty(),
+            "no currency received a figure"
+        );
+        assert_eq!(
+            rep.rebill.plan_tokens, 9_000,
+            "the plan row counts tokens, prices nothing"
+        );
+    }
+
+    /// §9.4.8.3's priced arm, exercised: a rewrite below the peak on a
+    /// metered row prices at its own miss rate; a plan rewrite counts
+    /// into `plan_tokens` and prices into no currency line.
+    #[test]
+    fn a_priced_rebill_and_a_plan_rebill() {
+        let mut first = rec_usage("2026-10-18T05:00:00.100Z", &[("a", 10)], 10_000, 2_000);
+        first["cost"]["input_miss"] = serde_json::json!(64_000); // 8 nano/tok over 8 000 miss
+        let mut rewrite = rec_usage("2026-10-18T05:00:01.100Z", &[("z", 6)], 6_000, 0);
+        rewrite["cost"]["input_miss"] = serde_json::json!(30_000); // 5 nano/tok over 6 000 miss
+        rewrite["cost"]["currency"] = serde_json::json!("CNY");
+        let mut plan_rewrite = rec_usage("2026-10-18T05:00:02.100Z", &[("y", 4)], 4_000, 0);
+        plan_rewrite["cost"]["input_miss"] = serde_json::json!(40_000);
+        // `m` is metered (rows 1-2), `p` is the plan provider (row 3).
+        let rep = report_plan(
+            vec![
+                on_provider(first, "m"),
+                on_provider(rewrite, "m"),
+                plan_rewrite,
+            ],
+            &["p"],
+        );
+        assert_eq!(rep.rows[1].rebill_tok, Some(6_000));
+        assert_eq!(rep.rows[2].rebill_tok, Some(4_000));
+        assert_eq!(rep.rebill.tokens, Some(10_000));
+        // 6 000 × 30 000 / 6 000 = 30 000 nano CNY — nothing else.
+        assert_eq!(rep.rebill.money_nano.get("CNY"), Some(&30_000));
+        assert_eq!(rep.rebill.money_nano.len(), 1);
+        assert_eq!(rep.rebill.plan_tokens, 4_000);
+        assert_eq!(rep.rebill.unpriced_rows, 0);
+        assert_eq!(rep.rebill.rows, 2);
     }
 
     /// The five classes, over the §9.4.2 predicates — including the
