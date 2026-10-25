@@ -183,7 +183,7 @@ Where `stats` answers a window-wide question, `vadis steps --session <key> --con
 session-shaped one: **inside this session, which step broke my prefix, and what did each step cost?**
 It reads the trace files only (it never opens the store, so it runs while `serve` is live), orders the
 session's requests by when they started, and classifies each one by the relation between its prefix
-blocks and the previous request's — a pure hash comparison, so the class is a *name over a verified
+blocks and the previous request's — a pure hash comparison, so the class is a *name over a measured
 relation*, never a claim about what the client intended. Every row also carries the relation itself:
 how many blocks were kept, added or dropped, and the index and kind of the first block that diverged.
 
@@ -192,25 +192,70 @@ table is your config's):
 
 ```text
 $ vadis steps --session 5f3a… --config config.yaml
-step start                  gap_ms route        in  cached out money     blocks kept at           new_tok class   wall_ms head_ms status flags
-1    2026-10-18T05:17:54.312Z —    deepseek/deepseek-chat 14409 960  512 412n USD  +22   0    —          14409  first  812    790    200
-5    2026-10-18T05:24:02.881Z 4120  deepseek/deepseek-chat 14520 14400 498 118n USD  +1    12   —           120  append 344    291    200
-9    2026-10-18T05:31:47.004Z 918  deepseek/deepseek-chat 12877 1024  812 5128n USD +4    1    #1:message  11876  rewrite 1204   990    200
+step start                  gap_ms route        in  cached out money     blocks kept at           new_tok class   wall_ms head_ms status kept_tok rebill_tok flags
+1    2026-10-18T05:17:54.312Z —    deepseek/deepseek-chat 14409 960  512 412n USD  +22   0    —          14409  first  812    790    200    0        0
+5    2026-10-18T05:24:02.881Z 4120  deepseek/deepseek-chat 14520 14400 498 118n USD  +1    12   —           120  append 344    291    200    14400    9
+9    2026-10-18T05:31:47.004Z 918  deepseek/deepseek-chat 12877 1024  812 5128n USD +4    1    #1:message  11876  rewrite 1204   990    200    1001     11853
 ```
 
 Row 9 is the one the command exists for: the client changed something early (block `#1`, a message),
 so the twelve blocks after it were re-sent and re-priced at the cache-miss rate — `new_tok 11876`
 (**inferred**: a proportional attribution, not a count the provider made), while the `cached` column
-stays the provider's own counter (**verified**) and never a figure derived from the blocks. A row
+stays the provider's own counter (**measured**) and never a figure derived from the blocks. A row
 whose upstream reported no usage prints `—` in the token and money columns — an absence, never a zero
 — and a row served by a `coding_plan` provider prints `plan` in the money column, because allowance
 headroom is not a price.
 
+**Reading a break's price.** Two columns weigh it. `kept_tok` is the prefix the break did **not** touch —
+step 9 kept one block, 1001 tokens, because everything after block `#1` changed. `rebill_tok` is what the
+request billed a **second** time: 11853 tokens, the whole prompt after the divergence, which the upstream
+had already been paid for once in the previous turn. Step 5, an ordinary append, re-billed 9. Three orders
+of magnitude apart — and that gap is the whole economics of keeping a prefix stable.
+
+**Four row shapes, and how to tell them apart.** A re-bill is a *row* fact (`rebill_tok > 0`) and a break
+is a *block* fact (`at` present). They are independent columns, and the combination is the diagnosis:
+
+| What you are looking at | `class` | `kept` / `kept_tok` | `at` | `rebill_tok` |
+|---|---|---|---|---|
+| the session's **own cold start** — nothing was sent before it | `first` | `0` / `0` | `—` | **`0`**, always: the first request's growth *is* its whole prompt, so it can never have re-sent anything |
+| a **cold re-prefill inside the session** — the prompt was replaced, not extended | `rewrite` (occasionally `repeat`) | `0` / `0` | `#0:<kind>` (on a `repeat`: `—`) | **≈ `in`** — the whole prompt |
+| a **mid-prefix break** — something early changed and the tail was re-sent | `rewrite` | `k` / `> 0` | `#k:<kind>` | the tail above the step's own growth |
+| **no break at all** — the prefix did not change, the upstream's cache missed it anyway | `append` / `repeat` / `shorten` | full | `—` | `> 0`; the row's flags name a route or plan switch when one happened (a new cache namespace), and otherwise the surface claims no cause |
+
+The first and the second both print `kept 0`; `class` separates them (`first` versus `rewrite`) and `at`
+says whether anything diverged at all. A `shorten` is **not** a break: its `at` names the first *dropped*
+block, and its re-bill is normally `0`.
+
+**The session figure — and why it says `inferred`.** The summary adds the rows up:
+
+```text
+re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage)
+re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
+```
+
+`Σ miss` is every miss the session paid, `floor` is its **largest** prompt — every token of it had to be
+prefilled at least once, so it is the session's unavoidable minimum — and the difference is the part of
+the bill that came from the prefix changing rather than from the conversation growing. `surplus` is the
+correction for the rows where an upstream's cache covered tokens this session had not itself sent. The
+money line prices those tokens at the very miss rate that priced them, which is why no price table is read
+to produce it.
+
+Read it as a **decomposition, not a saving**: it is money already spent, it is labelled `inferred` (a
+local estimate with no control — `measured` is a number the provider itself reported, and `verified` is
+reserved for a designed comparison between two runs), and it is never added to the cost column, which is
+what the provider actually billed. It also cannot tell you *why* a client re-sent: an edit, a compaction,
+a rewind and a cache expiry all produce the same number, because none of them is on the wire. A session
+that never broke reports `re-billed 0 tokens` — a zero, never a blank — and a session with no measured
+usage at all reports `—`, which is an absence, not a zero.
+
 The summary after the rows restates them: the session's span, the three outcome buckets, the money per
 currency (a sum never crosses a currency, and plan rows are counted, never added), the five class
-counts, the largest five steps, and the cache ratio over the rows that carry usage. The full column
-contract is [`docs/spec.md` §9.4](../docs/spec.md); the design reasoning is
-[ADR-057](../design/decisions/ADR-057-the-step-ledger.md).
+counts, the largest five steps, the cache ratio over the rows that carry usage, the re-billed figure with
+its operands and money, **which kind of block** the session's breaks diverged at (and what those breaks
+re-billed), and the five steps that re-billed the most. The full column contract is
+[`docs/spec.md` §9.4](../docs/spec.md) (§9.4.8 for the re-bill); the design reasoning is
+[ADR-057](../design/decisions/ADR-057-the-step-ledger.md) and, for this part,
+[ADR-062](../design/decisions/ADR-062-the-block-that-broke-and-the-money-labelled-inferred.md).
 
 Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
 fixed trace through the same code path that served it) and **`vadis trace tail`** (follow the live
