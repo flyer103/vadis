@@ -1265,10 +1265,22 @@ impl Forwarder {
                 };
 
                 let attempt_started = Instant::now();
-                // ADR-060 D3: this attempt now exists (the terminal
+                // ADR-060 D3: this attempt now exists — the terminal
                 // record's `result.attempts` and the cancelled-row
-                // guard's snapshot read this count).
+                // guard's snapshot read this count.
                 facts.attempts = attempt_index + 1;
+                // ADR-060 D2 (R4): the refusal slice is per attempt —
+                // a walk that moved past an error head must not let
+                // that attempt's `upstream_body` ride the terminal
+                // record of an attempt that answered no head of its
+                // own. Cleared here, written only by the answered arm
+                // below. `last_upstream_status` is cleared with it:
+                // the terminal record's `upstream_status` names the
+                // answering head of the attempt that failed, and a
+                // previous attempt's 429 is not that.
+                facts.upstream_body = None;
+                facts.last_upstream_status = None;
+                last_upstream_status = None;
                 // ADR-060 D1: refresh the cancelled-row guard to this
                 // attempt's facts — a drop mid-attempt (head phase)
                 // strands exactly this state.
@@ -2202,6 +2214,10 @@ fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
         "detail": trunc.reason,
         "stream": true,
     });
+    // ADR-060 §4.3 (spec §4.20.3, R1): the per-attempt cause word rides
+    // the classification row too, beside its `detail` — the sequence of
+    // causes across attempts is readable from the log alone.
+    payload["stream_end"] = json!(trunc.stream_end);
     let mut cooldown_write: Option<(String, String, i64)> = None;
     if trunc.stream_end == "idle_timeout" {
         let (provider, model) = split_route_label(&st.route_label);
@@ -2450,6 +2466,59 @@ mod tests {
         }
     }
 
+    /// Captures every event the walks and the relay append, for
+    /// assertions on the event log's own rows (`error.classified`
+    /// carries the per-attempt cause word, R1).
+    #[derive(Default)]
+    struct CaptureStore {
+        events: StdMutex<Vec<(vadis_core::store::EventKind, Value)>>,
+    }
+
+    impl vadis_core::store::Store for CaptureStore {
+        fn append(
+            &self,
+            ev: vadis_core::store::NewEvent<'_>,
+        ) -> Result<vadis_core::store::EventId, vadis_core::store::StoreError> {
+            let mut events = self.events.lock().unwrap();
+            events.push((ev.kind, ev.payload.clone()));
+            Ok(vadis_core::store::EventId(events.len() as i64))
+        }
+        fn project(
+            &self,
+            _w: vadis_core::store::ProjectionWrite<'_>,
+        ) -> Result<(), vadis_core::store::StoreError> {
+            Ok(())
+        }
+        fn query(
+            &self,
+            _q: vadis_core::store::Query<'_>,
+        ) -> Result<vadis_core::store::QueryRow, vadis_core::store::StoreError> {
+            Ok(vadis_core::store::QueryRow::Count(0))
+        }
+        fn rebuild(
+            &self,
+            _which: vadis_core::store::Projection,
+        ) -> Result<vadis_core::store::RebuildStats, vadis_core::store::StoreError> {
+            Ok(vadis_core::store::RebuildStats::default())
+        }
+        fn schema_version(&self) -> Result<u32, vadis_core::store::StoreError> {
+            Ok(1)
+        }
+    }
+
+    impl CaptureStore {
+        /// Every `error.classified` payload, in append order.
+        fn classified(&self) -> Vec<Value> {
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| matches!(k, vadis_core::store::EventKind::ErrorClassified))
+                .map(|(_, v)| v.clone())
+                .collect()
+        }
+    }
+
     /// A config whose one `mock` provider serves chat from the given
     /// loopback port, under the given bounds.
     fn test_config(attempt_ms: u64, request_ms: u64, upstream_port: u16) -> VadisConfig {
@@ -2484,12 +2553,66 @@ mod tests {
         .unwrap()
     }
 
+    /// The R4 rig's config: a `refuser` provider whose upstream answers
+    /// an error head with a body, then a `dead` provider on a closed
+    /// port as the fallback — the walk's two steps.
+    fn walk_test_config(attempt_ms: u64, request_ms: u64, refuser_port: u16, dead_port: u16) -> VadisConfig {
+        let provider = |name: &str, port: u16| serde_json::json!({
+            "name": name,
+            "urls": { "chat": format!("http://127.0.0.1:{port}/v1/chat/completions") },
+            "api_key_env": "UNIT_STREAM_KEY",
+            "wire_api": "chat",
+            "supports": ["chat"],
+            "models": [{
+                "id": "m", "context": "128k",
+                "price": { "input_miss": 0.001, "input_hit": 0.0001,
+                           "cache_write": 0.0, "output": 0.002,
+                           "peak": { "multiplier": 1.0, "windows": [] } },
+                "source": "unit fixture"
+            }]
+        });
+        serde_json::from_value(serde_json::json!({
+            "server": {
+                "addr": "127.0.0.1:0",
+                "upstream_attempt_timeout": format!("{attempt_ms}ms"),
+                "request_timeout": format!("{request_ms}ms"),
+            },
+            "session": { "key_sources": ["prompt_cache_key"], "ttl": "11h" },
+            "cache": { "sticky": true,
+                       "breakeven": { "enabled": true, "min_remaining_turns": 2, "safety_factor": 1.1 } },
+            "trace": { "dir": "./state/traces", "rollover": "hourly" },
+            "providers": [provider("refuser", refuser_port), provider("dead", dead_port)],
+            "aliases": {},
+            "plugins": [],
+            "fallback": ["dead/m"]
+        }))
+        .unwrap()
+    }
+
+    /// A port that is (almost certainly) closed: bind, read the port,
+    /// drop the listener. The walk's connect-failure step points here.
+    fn dead_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
     fn forwarder(cfg: VadisConfig, trace: Option<std::sync::Arc<CaptureTrace>>) -> Forwarder {
+        forwarder_with(cfg, trace, None)
+    }
+
+    fn forwarder_with(
+        cfg: VadisConfig,
+        trace: Option<std::sync::Arc<CaptureTrace>>,
+        store: Option<std::sync::Arc<CaptureStore>>,
+    ) -> Forwarder {
         Forwarder {
             config: cfg,
             transports: HashMap::new(),
-            api_keys: HashMap::from([("mock".to_string(), vec!["sk-unit".to_string()])]),
-            store: None,
+            api_keys: HashMap::from([
+                ("mock".to_string(), vec!["sk-unit".to_string()]),
+                ("refuser".to_string(), vec!["sk-unit".to_string()]),
+                ("dead".to_string(), vec!["sk-unit".to_string()]),
+            ]),
+            store: store.map(|s| s as std::sync::Arc<dyn vadis_core::store::Store>),
             trace: trace.map(|t| t as std::sync::Arc<dyn vadis_core::TraceWriter>),
             transform_engine: None,
             response_cache: None,
@@ -2800,7 +2923,12 @@ mod tests {
             }
         });
         let trace = std::sync::Arc::new(CaptureTrace::default());
-        let f = forwarder(test_config(10_000, 10_000, port), Some(trace.clone()));
+        let store = std::sync::Arc::new(CaptureStore::default());
+        let f = forwarder_with(
+            test_config(10_000, 10_000, port),
+            Some(trace.clone()),
+            Some(store.clone()),
+        );
         let outcome = f
             .forward_stream(
                 WireApi::Chat,
@@ -2832,5 +2960,97 @@ mod tests {
         assert_eq!(e["details"]["error_class"], "stream_truncated");
         assert_eq!(e["details"]["retry_refused"], "forwarded");
         assert!(e["details"]["relayed_bytes"].as_u64().unwrap_or(0) > 0);
+        // ADR-060 §4.3 / spec §4.20.3 (R1): the classification row —
+        // `error.classified`, written before the terminal record —
+        // carries the same `stream_end` cause word beside its `detail`,
+        // so the per-attempt sequence of causes is readable from the
+        // log alone. This cut is an upstream that dropped the body
+        // mid-stream: the word is `upstream_ended_early`.
+        let classified = store.classified();
+        assert_eq!(
+            classified.len(),
+            1,
+            "exactly one classification for the one truncated attempt"
+        );
+        assert_eq!(classified[0]["reason"], "stream_truncated");
+        assert_eq!(classified[0]["action"], "abort");
+        assert_eq!(
+            classified[0]["stream_end"], "upstream_ended_early",
+            "the per-attempt cause word rides the classification row"
+        );
+    }
+
+    /// ADR-060 D2 (R4): the refusal slice and the answering head are
+    /// per attempt. The first attempt answers a 429 error head WITH a
+    /// body (the walk's failover input); every later attempt — here a
+    /// connect failure that never sent a byte — must not carry that
+    /// slice as its own `errors[0].details.upstream_body`, and the
+    /// terminal record names no `upstream_status` it did not answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_next_attempt_carries_no_previous_attempts_refusal_slice() {
+        // The refuser: accepts, reads the request, answers 429 with a
+        // JSON error body (a body the slice would carry if it leaked).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let refuser_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 8192];
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), s.read(&mut buf))
+                            .await;
+                    let body = br#"{"error":{"message":"rate limited for key sk-unit","type":"rate_limit_error"}}"#;
+                    let head = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = s.write_all(head.as_bytes()).await;
+                    let _ = s.write_all(body).await;
+                });
+            }
+        });
+        let dead = dead_port();
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = forwarder(
+            walk_test_config(10_000, 10_000, refuser_port, dead),
+            Some(trace.clone()),
+        );
+        let body = br#"{"model":"refuser/m","messages":[{"role":"user","content":"x"}],"stream":true}"#;
+        let outcome = f
+            .forward_stream(WireApi::Chat, body, "req-r4", &[], TransformMode::Passthrough)
+            .await;
+        match outcome {
+            StreamOutcome::Failure(f) => {
+                assert_eq!(f.status, 502, "the terminal failure is the walk's end");
+            }
+            StreamOutcome::Success(_) => panic!("a 429 then a dead fallback cannot serve"),
+        }
+        let records = trace.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1, "one terminal record");
+        let rec: serde_json::Value = serde_json::from_str(&records[0]).unwrap();
+        // The walk really moved: the 429's failover plus the dead
+        // route's attempts make `attempts >= 2` — this is what proves
+        // an error head with a body existed on an EARLIER attempt.
+        assert!(
+            rec["result"]["attempts"].as_u64().unwrap_or(0) >= 2,
+            "the walk must have moved past the 429 to the dead route: {}",
+            records[0]
+        );
+        assert_eq!(
+            rec["result"]["upstream_status"],
+            serde_json::Value::Null,
+            "no attempt of the terminal failure answered a head"
+        );
+        let e = &rec["errors"][0];
+        assert_eq!(e["details"]["error_class"], "connect_failure");
+        assert!(
+            e["details"].get("upstream_body").is_none(),
+            "the terminal record must not carry the 429 attempt's refusal slice: {}",
+            e["details"]
+        );
     }
 }

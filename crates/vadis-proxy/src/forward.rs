@@ -1605,6 +1605,18 @@ impl Forwarder {
                 // record's `result.attempts` and the cancelled-row
                 // guard read this count.
                 facts.attempts = attempt_index + 1;
+                // ADR-060 D2 (R4): the refusal slice is per attempt —
+                // a walk that moved past an error head must not let
+                // that attempt's `upstream_body` ride the terminal
+                // record of a later attempt (the buffered twin of the
+                // streaming walk's clear). `last_upstream_status` is
+                // cleared with it: the terminal record's
+                // `upstream_status` names the answering head of the
+                // attempt that failed, and a previous attempt's is not
+                // that.
+                facts.upstream_body = None;
+                facts.last_upstream_status = None;
+                last_upstream_status = None;
                 // ADR-060 D1: refresh the cancelled-row guard to this
                 // attempt's facts — a drop mid-attempt strands exactly
                 // this state, and the outcome below sets the evidence.

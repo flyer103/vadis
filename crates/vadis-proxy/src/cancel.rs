@@ -206,14 +206,19 @@ impl CancelSlot {
         self.ctx.lock().unwrap().take()
     }
 
-    /// The attempt bookkeeping at an attempt's start: the count and the
+    /// The attempt bookkeeping at an attempt's start: the count, the
     /// evidence flag, reset to "not (yet) fully written" — the outcome
     /// sets it true when the request bytes were fully written, and an
     /// attempt dropped mid-write keeps the honest `false` (nothing this
-    /// process observed reached a full write).
+    /// process observed reached a full write). The head-status pair is
+    /// reset with them (ADR-060 D1, R4): a previous attempt's error
+    /// head is not "the answering head" of the attempt a drop lands on,
+    /// so no attempt may inherit its predecessor's status.
     pub(crate) fn note_attempt(&self, attempts: u32) {
         self.attempts.store(attempts, Ordering::SeqCst);
         self.wrote_full_request.store(false, Ordering::SeqCst);
+        self.upstream_status.store(0, Ordering::SeqCst);
+        self.has_upstream_status.store(false, Ordering::SeqCst);
     }
 
     /// The outcome's evidence: the request bytes were fully written
