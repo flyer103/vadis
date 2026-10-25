@@ -2050,6 +2050,37 @@ long-term home, and the recipe's `report.json` is its acceptance test. What it d
 trace field, no `CONF` id, no gate, threshold, corpus or L1-envelope value; `vadis stats`'s
 `verified_savings_tokens` stays 0 after a successful pair, because a record cannot see its counterfactual.
 
+**Register line (2026-10-26, `W1` — the re-billed prefix, `ADR-062`).** `ADR-062`
+(`design/decisions/ADR-062-the-block-that-broke-and-the-money-labelled-inferred.md`) extends the landed step
+ledger (`ADR-057`, spec §9.4) with the two facts the week audit had to compute out of tree: **which block
+broke a session's prefix, and how much of its miss volume was re-prefill rather than new content.** Two row
+columns are appended — `kept_tok` (the inferred weight of the prefix the break did not touch) and
+`rebill_tok` (the tokens this step billed above its own growth) — and the summary gains **one** number,
+`summary.rebill.tokens`, defined as the measured miss volume above the session's **one-pass floor**
+(`max usage.input_total`), with its operands printed (`rebilled = Σmiss − floor + surplus`) so the
+subtraction is checkable on the page. The money reuses each row's own measured miss rate
+(`cost.input_miss ÷ miss`, i.e. `p_miss` as the cost engine applied it) — **no price table is read, no price
+is declared, no band or peak is re-derived**. The number is **`inferred`** and carries a named never-list:
+not `verified` (`ADR-058`), not a saving, not a measured difference, not `reprefill_tokens` (that is
+`result.plan_switch`'s decision-time estimate for a cache-namespace change — a different quantity), not a
+cost the gateway charged; it is never added to a measured money line. A **cold start** cannot carry a
+re-bill (`rebill(first) = −cached → 0`, arithmetic, not a special case), which is how the four row shapes
+(cold start / same-session cold re-prefill / mid-prefix break / no-break cache miss) are told apart in
+columns that already exist: **no sixth class word**, no flag, no bucket and no money rule moves.
+**Two stale contracts this ruling had to stand on, both registered:** **F1** the *shipped* command prints
+`verified` on single observations (header, `cache` line, module docs, and a unit test that asserts the word)
+— `ADR-058`'s correction reached spec §9.4.3, `ADR-057` and the book's label table, not the implementation,
+which landed afterwards; §5 A1–A4 of the ADR freeze the five sites and the assertion for its implementing
+card, and the book is corrected now. **F2** spec §9.4.2 and `ADR-057` §2.2 called the block index a
+byte-order ordinal with a factor-of-four justification, while `extract_prefix_blocks` has enumerated in the
+**provider's template order** since the 2026-09-20 Plan A decision (`CONF-31`, spec §6) — the sentence is
+corrected in place and the quoted 4× was a pre-Plan-A measurement, so it is no longer restated (`ADR-057` is
+append-only and keeps its text). Also registered: **F3**, a limit of the definition, not a defect — a
+compaction that replaces text with new text contributes its replacement's miss to the figure, and the label
+is what keeps that from reading as waste (the ledger records no content, `ADR-005`). What this round does
+**not** move: no product byte, no trace field, no `schema_version`, no `CONF` id (the first free stays
+`CONF-121`; the card allocates no case), no gate, threshold, corpus or L1-envelope value (AGENTS 9).
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**
