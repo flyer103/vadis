@@ -264,8 +264,8 @@ async fn conf_107_v1_models_lists_aliases() {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["created", "id", "object", "owned_by"],
-            "an entry carries exactly the four keys of the shape, got {obj:?}"
+            vec!["context_length", "created", "id", "object", "owned_by"],
+            "an entry carries exactly the five keys of the shape (the fifth, context_length, is ADR-061 §2's amendment, owner-ruled 2026-10-26), got {obj:?}"
         );
         assert_eq!(entry["object"], "model", "the entry's own object word");
         assert_eq!(
