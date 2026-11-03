@@ -333,6 +333,287 @@ pub fn plan_tier(config: &VadisConfig, policy: &PlanPolicyCfg) -> Vec<RouteSpec>
     tier
 }
 
+// -- ADR-063: the failover chain's one order owner -----------------------
+//
+// The ruling (ADR-063 §2): the failover candidate order is a rule, not a
+// knob — healthy before cooling, plan before metered, cheap before dear;
+// where the configuration cannot be compared (two currencies, or a price
+// the config does not declare — a defensive arm, §2.1) the operator's
+// declared order decides. Everything below is the **pure** half of that
+// rule: a total six-term key and a stable sort over positions `1..`.
+// Position 0 is never moved by the sort (it is the resolved route;
+// re-ordering the head is selection, not failover — §2.2). The proxy's
+// two walks build the declared list, snapshot each candidate's facts
+// (config + one cooldown projection read at the instant the caller
+// already takes for eligibility), call `order_chain` once, and walk the
+// result — the record then explains the same value (§6), never a
+// re-derivation.
+
+/// The ruling's own name, the frozen `rule` token of the record (ADR-063
+/// §6.2).
+pub const ORDER_RULE: &str = "cheapest_healthy_first";
+
+/// ADR-063 §2.1 term 2: which side of the plan boundary a candidate is
+/// on. Plan routes rank ahead of metered ones because their marginal
+/// price is 0 (spec §4.6 rule 4) — the derivation of ADR-049 §5.1's
+/// "plans drain first", not a second statement of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainTier {
+    Plan,
+    Metered,
+}
+
+impl ChainTier {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Metered => "metered",
+        }
+    }
+}
+
+/// How a position in the order was placed (ADR-063 §6.2's `basis`
+/// vocabulary, closed): `plan` = term 2 with §5.1's declaration order,
+/// `price` = terms 4–5, `declared_currency` = price was not compared
+/// across a currency boundary (the candidate sits behind one: term 3,
+/// not terms 4–5, decided its position relative to every candidate
+/// outside its own currency group), `declared_no_price` = the entry
+/// declares no `input_miss` — the defensive arm of §2.1, unreachable
+/// through a validated config and present so the key is total and the
+/// vocabulary closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderBasis {
+    Plan,
+    Price,
+    DeclaredCurrency,
+    DeclaredNoPrice,
+}
+
+impl OrderBasis {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Price => "price",
+            Self::DeclaredCurrency => "declared_currency",
+            Self::DeclaredNoPrice => "declared_no_price",
+        }
+    }
+}
+
+/// One candidate's order facts (ADR-063 §2.1's inputs, one row per key
+/// term): everything here is a config read or a cooldown-projection read
+/// the caller took at one instant — never a computation, estimate or
+/// conversion. Built by [`order_facts_for_route`] from the roster; a
+/// caller that cannot reach a roster entry (defensive only: the loader
+/// refuses an unpriceable model, and the walk's `unknown_provider` skip
+/// owns the off-roster case) gets the all-`None` price arm so the key
+/// stays total.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChainOrderCandidate {
+    pub route: RouteSpec,
+    pub tier: ChainTier,
+    /// The provider entry's own currency (§4.8) — a group name, never an
+    /// amount; never compared with another currency and never converted.
+    pub currency: crate::cost::Currency,
+    /// The declared per-1K miss price, as written (`price.tiers` models
+    /// by their **first band**, §5.6 rule 4). `None` is the defensive
+    /// `declared_no_price` arm — the loader refuses that shape
+    /// (`config.rs` `quad_to_table` / the empty-band rule), so no
+    /// validated roster can produce it.
+    pub input_miss: Option<f64>,
+    /// The declared per-1K output price, as written. Absent sorts after
+    /// every ranked candidate in its currency group (term 5).
+    pub output: Option<f64>,
+    /// `Some(up_to)` when the entry is a `price.tiers` model — the first
+    /// band's own ceiling, so the record's quote cannot be mistaken for
+    /// a band-faithful one (ADR-063 §6.2).
+    pub band: Option<f64>,
+    /// The entry's declared peak multiplier, recorded because a base
+    /// price compared in a peak window is not the price the request paid.
+    pub peak_multiplier: f64,
+    /// ADR-063 §2.1 term 1 / ADR-056 §2.5: a live route-scoped
+    /// `stream_silence` row was read for this candidate at the decision
+    /// instant. **Advisory**: it moves the candidate to the back of the
+    /// order and no further — a sort cannot refuse.
+    pub silence: bool,
+    /// The advisory row's `until_us`, when `silence` is set — carried so
+    /// the record's `advisory` member can name the window it read.
+    pub silence_until_us: Option<i64>,
+}
+
+/// One ordered position: the candidate's facts plus the basis that placed
+/// it. `declared_index` (the position in the declared list, term 6) is
+/// not carried — it is consumed by the sort.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderedCandidate {
+    pub facts: ChainOrderCandidate,
+    pub basis: OrderBasis,
+}
+
+/// Read one route's order facts off the roster (ADR-063 §2.1's "where it
+/// comes from" column). Pure in the config; `silence_until_us` is the
+/// caller's one cooldown-projection read (`availability`'s single owner),
+/// `Some` meaning a live route-scoped `stream_silence` row. A route with
+/// no roster entry gets the USD default and the `None` price arm — the
+/// walk's `unknown_provider` skip excludes it before any attempt and the
+/// record lists it in `excluded[]`, so the defaults are never serialized
+/// as a fact.
+pub fn order_facts_for_route(
+    config: &VadisConfig,
+    route: &RouteSpec,
+    silence_until_us: Option<i64>,
+) -> ChainOrderCandidate {
+    let provider = config.providers.iter().find(|p| p.name == route.provider);
+    let Some(provider) = provider else {
+        return ChainOrderCandidate {
+            route: route.clone(),
+            tier: ChainTier::Metered,
+            currency: crate::cost::Currency::Usd,
+            input_miss: None,
+            output: None,
+            band: None,
+            peak_multiplier: 1.0,
+            silence: silence_until_us.is_some(),
+            silence_until_us,
+        };
+    };
+    let model = provider.models.iter().find(|m| m.id == route.model);
+    let (input_miss, output, band, peak_multiplier) = match model {
+        // §5.6 rule 4: a `price.tiers` model ranks by its FIRST band
+        // (the loader enforces ascending ceilings with the unceiled
+        // band last, so `tiers[0]` is it). An empty band list is
+        // refused at load, so the `None` arm is the defensive
+        // `declared_no_price` one — answered, never hunted in a roster.
+        Some(m) => match &m.price.tiers {
+            Some(tiers) => match tiers.first() {
+                Some(band) => (
+                    band.input_miss.map(|v| v.0),
+                    band.output.map(|v| v.0),
+                    band.up_to.map(|v| v.0),
+                    m.price.peak.multiplier.0,
+                ),
+                None => (None, None, None, m.price.peak.multiplier.0),
+            },
+            None => (
+                m.price.input_miss.map(|v| v.0),
+                m.price.output.map(|v| v.0),
+                None,
+                m.price.peak.multiplier.0,
+            ),
+        },
+        None => (None, None, None, 1.0),
+    };
+    ChainOrderCandidate {
+        route: route.clone(),
+        tier: if provider.account == AccountKind::CodingPlan {
+            ChainTier::Plan
+        } else {
+            ChainTier::Metered
+        },
+        currency: provider.currency,
+        input_miss,
+        output,
+        band,
+        peak_multiplier,
+        silence: silence_until_us.is_some(),
+        silence_until_us,
+    }
+}
+
+/// The pure order owner (ADR-063 §2): a stable sort of the declared list
+/// under the six-term key, **position 0 pinned** (the resolved route —
+/// §2.2's head boundary). The key is lexicographic and ascending:
+///
+/// 1. `silence` — 0 not cooling, 1 silence-cooling (ADR-056 §2.5's
+///    preference, stated as a rank; a sort cannot refuse);
+/// 2. `tier` — plan (marginal 0) before metered (ADR-049 §5.1 derived);
+/// 3. `currency` — the index of the first appearance of that currency
+///    among the declared metered candidates (metered only; groups are
+///    ordered by declaration, never compared, never converted);
+/// 4. `input_miss` — the declared per-1K miss price; undeclared sorts
+///    after every ranked candidate in its currency group;
+/// 5. `output` — the declared per-1K output price; absent = after every
+///    ranked one;
+/// 6. `declared` — the candidate's index in the declared list (the
+///    pre-rule order; §5.1's declaration order inside the plan tier).
+///
+/// Purity (AGENTS constraint 2 / ADR-063 §7): terms 2–6 read the input
+/// facts, term 1 reads a fact the caller already took, and nothing else —
+/// two evaluations on one revision with one projection state give one
+/// order. Terms 3–5 are skipped for plan candidates (constant in the
+/// key), so on a plan tier the key reduces to term 6 — §5.1 exactly —
+/// and on a single-currency metered set it reduces to §5.6 rule 1.
+pub fn order_chain(candidates: Vec<ChainOrderCandidate>) -> Vec<OrderedCandidate> {
+    // Term 3's group numbering: the order in which each currency first
+    // appears among the declared METERED candidates. Plan candidates
+    // never consult it.
+    let mut groups: Vec<crate::cost::Currency> = Vec::new();
+    for c in &candidates {
+        if c.tier == ChainTier::Metered && !groups.contains(&c.currency) {
+            groups.push(c.currency);
+        }
+    }
+    let group_of = |c: &ChainOrderCandidate| -> usize {
+        match c.tier {
+            ChainTier::Plan => 0,
+            ChainTier::Metered => groups.iter().position(|g| *g == c.currency).unwrap_or(0),
+        }
+    };
+    let key_of = |c: &ChainOrderCandidate, declared: usize| -> (u8, u8, usize, f64, f64, usize) {
+        let silence = u8::from(c.silence);
+        match c.tier {
+            // Terms 3–5 are constant inside the plan tier: every plan
+            // candidate is price-equal at marginal 0 (§4.6 rule 4), so
+            // the only information left is term 6 — §5.1's own order.
+            ChainTier::Plan => (silence, 0, 0, 0.0, 0.0, declared),
+            ChainTier::Metered => (
+                silence,
+                1,
+                group_of(c),
+                c.input_miss.unwrap_or(f64::INFINITY),
+                c.output.unwrap_or(f64::INFINITY),
+                declared,
+            ),
+        }
+    };
+    let basis_of = |c: &ChainOrderCandidate| -> OrderBasis {
+        match c.tier {
+            ChainTier::Plan => OrderBasis::Plan,
+            ChainTier::Metered if c.input_miss.is_none() => OrderBasis::DeclaredNoPrice,
+            ChainTier::Metered if groups.first().is_some_and(|g| *g != c.currency) => {
+                OrderBasis::DeclaredCurrency
+            }
+            ChainTier::Metered => OrderBasis::Price,
+        }
+    };
+    let declared: Vec<&ChainOrderCandidate> = candidates.iter().collect();
+    let mut tail: Vec<(usize, &ChainOrderCandidate)> = declared
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(i, c)| (i, *c))
+        .collect();
+    tail.sort_by(|a, b| {
+        key_of(a.1, a.0)
+            .partial_cmp(&key_of(b.1, b.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut ordered: Vec<OrderedCandidate> = Vec::with_capacity(candidates.len());
+    if let Some(head) = declared.first() {
+        ordered.push(OrderedCandidate {
+            facts: (**head).clone(),
+            basis: basis_of(head),
+        });
+    }
+    for (_, c) in tail {
+        ordered.push(OrderedCandidate {
+            facts: c.clone(),
+            basis: basis_of(c),
+        });
+    }
+    ordered
+}
+
 /// The pure rule (DESIGN §12.10.8's `PlanFirstRule`, generalized by ADR-049
 /// §5.2 to the tier). Constructed from the validated config **and the
 /// tier derived from it**; `decide` reads projections only.
@@ -1612,5 +1893,458 @@ mod tests {
         // Zero stays zero (the rig default: deadline == since).
         p.cooldown = DurationVal(0);
         assert_eq!(p.cooldown_us(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // order_chain (ADR-063 §2.1's key) — the pure owner's own witnesses.
+    // Every candidate here is built DIRECTLY: the facts are the unit of
+    // test, and the defensive arms (an unpriceable candidate among them,
+    // R75-0-F7) exist so the key stays total — no validated roster can
+    // produce them, so no fixture ever hunts for one.
+    // ------------------------------------------------------------------
+
+    fn cand(
+        provider: &str,
+        tier: ChainTier,
+        currency: crate::cost::Currency,
+        input_miss: Option<f64>,
+        output: Option<f64>,
+    ) -> ChainOrderCandidate {
+        ChainOrderCandidate {
+            route: route(provider, "m"),
+            tier,
+            currency,
+            input_miss,
+            output,
+            band: None,
+            peak_multiplier: 1.0,
+            silence: false,
+            silence_until_us: None,
+        }
+    }
+
+    fn routes(ordered: &[OrderedCandidate]) -> Vec<String> {
+        ordered
+            .iter()
+            .map(|o| o.facts.route.provider.clone())
+            .collect()
+    }
+
+    #[test]
+    fn single_candidate_order_is_the_identity() {
+        // Term 6 preserves the declared list: one candidate, one
+        // position — "identical to before this branch", not "except".
+        let ordered = order_chain(vec![cand(
+            "only",
+            ChainTier::Metered,
+            crate::Currency::Usd,
+            Some(1.0),
+            Some(2.0),
+        )]);
+        assert_eq!(routes(&ordered), vec!["only"]);
+        assert_eq!(ordered[0].basis, OrderBasis::Price);
+    }
+
+    #[test]
+    fn dearer_declared_first_walks_second_under_price() {
+        // The incident's own shape, as a relation: the entry written
+        // first declares the dearer input — the rule attempts the
+        // cheaper one first, by rule rather than by declaration.
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(2.0),
+            ),
+            cand(
+                "dear",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(9.0),
+                Some(1.0),
+            ),
+            cand(
+                "cheap",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(2.0),
+                Some(9.0),
+            ),
+        ]);
+        assert_eq!(routes(&ordered), vec!["head", "cheap", "dear"]);
+        assert_eq!(ordered[1].basis, OrderBasis::Price);
+        assert_eq!(ordered[2].basis, OrderBasis::Price);
+        // `output` is the tie-break: same input_miss, cheaper output
+        // first (§5.6 rule 1, the metered instance of this key).
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "out-dear",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(5.0),
+            ),
+            cand(
+                "out-cheap",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(4.0),
+            ),
+        ]);
+        assert_eq!(routes(&ordered), vec!["head", "out-cheap", "out-dear"]);
+    }
+
+    #[test]
+    fn head_stays_at_zero_even_when_dearest() {
+        // §2.2's head boundary: re-ordering position 0 is selection, not
+        // failover — the sort runs over positions 1.. only.
+        let ordered = order_chain(vec![
+            cand(
+                "head-dear",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(99.0),
+                Some(99.0),
+            ),
+            cand(
+                "cheap",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+        ]);
+        assert_eq!(routes(&ordered), vec!["head-dear", "cheap"]);
+    }
+
+    #[test]
+    fn plan_candidates_precede_metered_whatever_the_table_says() {
+        // Term 2 derives §5.1: a plan's marginal price is 0, so its
+        // declared table never enters the sort — even a plan entry
+        // priced like a premium route walks before any metered one.
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "metered",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(0.5),
+                Some(0.5),
+            ),
+            cand(
+                "plan-a",
+                ChainTier::Plan,
+                crate::Currency::Usd,
+                Some(50.0),
+                Some(50.0),
+            ),
+            cand(
+                "plan-b",
+                ChainTier::Plan,
+                crate::Currency::Cny,
+                Some(99.0),
+                Some(99.0),
+            ),
+        ]);
+        assert_eq!(
+            routes(&ordered),
+            vec!["head", "plan-a", "plan-b", "metered"]
+        );
+        assert_eq!(ordered[1].basis, OrderBasis::Plan);
+        assert_eq!(ordered[2].basis, OrderBasis::Plan);
+        // The plan tier keeps its declaration order (term 6 inside the
+        // tier — §5.1's own argument: price-equal at marginal 0).
+        assert_eq!(ordered[1].facts.route.provider, "plan-a");
+        assert_eq!(ordered[2].facts.route.provider, "plan-b");
+    }
+
+    #[test]
+    fn currency_groups_follow_first_declaration_and_are_never_compared() {
+        // Term 3: the first-declared currency's group walks first; a
+        // cheap route on the far side of the boundary is NOT preferred
+        // over a dear one on this side — no FX exists (§4.8), and the
+        // operator's declaration is the only non-invented evidence.
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "cny-dear",
+                ChainTier::Metered,
+                crate::Currency::Cny,
+                Some(8.0),
+                Some(8.0),
+            ),
+            cand(
+                "cny-cheap",
+                ChainTier::Metered,
+                crate::Currency::Cny,
+                Some(2.0),
+                Some(2.0),
+            ),
+            cand(
+                "usd-cheap",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(0.5),
+                Some(0.5),
+            ),
+        ]);
+        assert_eq!(
+            routes(&ordered),
+            vec!["head", "usd-cheap", "cny-cheap", "cny-dear"]
+        );
+        // Inside each group the price decided; across the boundary it
+        // could not — the basis says so.
+        assert_eq!(ordered[1].basis, OrderBasis::Price);
+        assert_eq!(ordered[2].basis, OrderBasis::DeclaredCurrency);
+        assert_eq!(ordered[3].basis, OrderBasis::DeclaredCurrency);
+    }
+
+    #[test]
+    fn silence_moves_a_candidate_to_the_back_but_never_removes_it() {
+        // Term 1 (ADR-056 §2.5's preference as a rank): a cooling
+        // candidate walks behind every healthy one, and a sort cannot
+        // refuse — the candidate keeps a position.
+        let mut cooling = cand(
+            "cooling-cheap",
+            ChainTier::Metered,
+            crate::Currency::Usd,
+            Some(0.1),
+            Some(0.1),
+        );
+        cooling.silence = true;
+        cooling.silence_until_us = Some(1_000);
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cooling,
+            cand(
+                "healthy-dear",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(5.0),
+                Some(5.0),
+            ),
+        ]);
+        assert_eq!(
+            routes(&ordered),
+            vec!["head", "healthy-dear", "cooling-cheap"]
+        );
+        // Term 1 outranks term 2: a cooling PLAN candidate walks behind
+        // a healthy metered one (the preference is the first term).
+        let mut cooling_plan = cand(
+            "cooling-plan",
+            ChainTier::Plan,
+            crate::Currency::Usd,
+            None,
+            None,
+        );
+        cooling_plan.silence = true;
+        cooling_plan.silence_until_us = Some(1_000);
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cooling_plan,
+            cand(
+                "healthy-metered",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(5.0),
+                Some(5.0),
+            ),
+        ]);
+        assert_eq!(
+            routes(&ordered),
+            vec!["head", "healthy-metered", "cooling-plan"]
+        );
+    }
+
+    #[test]
+    fn unpriced_candidate_sorts_last_in_its_group_as_declared_no_price() {
+        // R75-0-F7's witness: the defensive arm is a TOTALITY guarantee,
+        // unreachable through a validated config — so the candidate is
+        // fed to the pure function directly, never hunted in a roster.
+        // It sorts after every ranked candidate in its currency group,
+        // keeps its declared position against its unranked peers, and
+        // its basis names the arm — no stand-in number exists.
+        let ordered = order_chain(vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "unpriced",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                None,
+                Some(1.0),
+            ),
+            cand(
+                "priced",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(9.0),
+                Some(9.0),
+            ),
+            cand(
+                "unpriced-later",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                None,
+                None,
+            ),
+        ]);
+        assert_eq!(
+            routes(&ordered),
+            vec!["head", "priced", "unpriced", "unpriced-later"]
+        );
+        assert_eq!(ordered[2].basis, OrderBasis::DeclaredNoPrice);
+        assert_eq!(ordered[3].basis, OrderBasis::DeclaredNoPrice);
+        // The undeclared price never became a number the sort compared:
+        // `priced` (input 9.0) still walks before `unpriced` (no input
+        // at all) — INFINITY-ordering, not a zero substituted in.
+        assert!(ordered[2].facts.input_miss.is_none());
+    }
+
+    #[test]
+    fn order_is_a_pure_function_of_its_facts() {
+        // Constraint 2 / §7: two evaluations on one fact set give one
+        // order — no clock, no RNG, no turn number inside.
+        let facts = vec![
+            cand(
+                "head",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "b",
+                ChainTier::Metered,
+                crate::Currency::Cny,
+                Some(1.0),
+                Some(1.0),
+            ),
+            cand(
+                "c",
+                ChainTier::Metered,
+                crate::Currency::Usd,
+                Some(3.0),
+                Some(1.0),
+            ),
+            cand(
+                "d",
+                ChainTier::Plan,
+                crate::Currency::Usd,
+                Some(2.0),
+                Some(2.0),
+            ),
+        ];
+        assert_eq!(order_chain(facts.clone()), order_chain(facts));
+    }
+
+    #[test]
+    fn order_facts_read_the_rosters_own_numbers() {
+        // The reader half: a banded model reports its FIRST band's
+        // prices and ceiling, the flat model its own scalars, and the
+        // peak multiplier travels with both — every number the config
+        // states, none computed (§6.2).
+        use crate::config::{CeilingVal, ModelCfg, PriceCfg, ProviderCfg, TierCfg};
+        let banded = ModelCfg {
+            id: "banded".into(),
+            family: None,
+            context: crate::config::ContextVal(128_000),
+            price: PriceCfg {
+                input_miss: None,
+                input_hit: None,
+                cache_write: None,
+                output: None,
+                peak: crate::config::PeakCfg {
+                    multiplier: crate::config::MultiplierVal(1.5),
+                    windows: Vec::new(),
+                },
+                tiers: Some(vec![TierCfg {
+                    up_to: Some(CeilingVal(128_000.0)),
+                    input_miss: Some(crate::config::PriceVal(0.001)),
+                    input_hit: Some(crate::config::PriceVal(0.0001)),
+                    cache_write: Some(crate::config::PriceVal(0.0)),
+                    output: Some(crate::config::PriceVal(0.002)),
+                }]),
+            },
+            source: "fixture: order facts unit".into(),
+        };
+        let p = tiered_policy();
+        let mut cfg = tiered_config(&p);
+        let mut provider = ProviderCfg {
+            name: "p-band".into(),
+            region: crate::config::Region::Intl,
+            currency: crate::Currency::Cny,
+            urls: [(
+                crate::config::WireApi::Chat,
+                "http://127.0.0.1:1/chat/completions".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            api_key_env: Some("K".to_string()),
+            api_keys: None,
+            wire_api: crate::config::WireApi::Chat,
+            supports: vec![crate::config::WireApi::Chat],
+            account: crate::config::AccountKind::Api,
+            models: vec![banded],
+            quota: None,
+        };
+        provider.currency = crate::Currency::Cny;
+        cfg.providers.push(provider);
+        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), None);
+        assert_eq!(facts.tier, ChainTier::Metered);
+        assert_eq!(facts.currency, crate::Currency::Cny);
+        assert_eq!(facts.input_miss, Some(0.001));
+        assert_eq!(facts.output, Some(0.002));
+        assert_eq!(facts.band, Some(128_000.0));
+        assert_eq!(facts.peak_multiplier, 1.5);
+        assert!(!facts.silence);
+        // A silence row read by the caller is carried, never re-derived.
+        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), Some(9_999));
+        assert!(facts.silence);
+        assert_eq!(facts.silence_until_us, Some(9_999));
+        // An off-roster route: the all-None defensive arm — the walk's
+        // `unknown_provider` skip owns it, so no fact is invented.
+        let facts = order_facts_for_route(&cfg, &route("nobody", "m"), None);
+        assert_eq!(facts.input_miss, None);
+        assert_eq!(facts.tier, ChainTier::Metered);
     }
 }
