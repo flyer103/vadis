@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use vadis_core::config::{PlanPolicyCfg, ProviderCfg, VadisConfig};
 use vadis_core::quota::{next_reset, window_start_for};
-use vadis_core::store::{Query, QueryRow, Store};
+use vadis_core::store::{CooldownRow, Query, QueryRow, Store};
 
 /// ADR-011's route-availability answer for the provider at `now_us`:
 /// a live cooldown row that has not expired refuses it right now
@@ -66,17 +66,78 @@ pub fn route_silence_cooling(
     model: &str,
     now_us: i64,
 ) -> bool {
+    route_silence_row(store, provider, model, now_us).is_some()
+}
+
+/// The advisory row itself (ADR-063 §6.2's `advisory` member): the same
+/// read as [`route_silence_cooling`], returning the row so the failover
+/// record can name the window it read (`until_us`) instead of a bare
+/// boolean — one read, one source, no re-derivation at record time.
+pub fn route_silence_row(
+    store: Option<&Arc<dyn Store>>,
+    provider: &str,
+    model: &str,
+    now_us: i64,
+) -> Option<CooldownRow> {
     let Some(store) = store else {
-        return false;
+        return None;
     };
-    matches!(
-        store.query(Query::Cooldown {
-            provider,
-            model: Some(model),
-        }),
+    match store.query(Query::Cooldown {
+        provider,
+        model: Some(model),
+    }) {
         Ok(QueryRow::Cooldown(Some(row)))
-            if row.scope == "route" && row.reason == "stream_silence" && row.until_us > now_us
-    )
+            if row.scope == "route" && row.reason == "stream_silence" && row.until_us > now_us =>
+        {
+            Some(row)
+        }
+        _ => None,
+    }
+}
+
+/// ADR-063 §3.1's **reason-aware, scope-aware binding predicate**, in
+/// one expression: a route is unavailable iff a live cooldown row
+/// blocks it **and** that row is either provider-wide or route-scoped
+/// with a reason other than `stream_silence` — the advisory word never
+/// binds (ADR-056 §2.5.3: a binding silence row could end a chain, and
+/// a one-route deployment would answer 502 for a minute rather than
+/// attempt the route that was answering). The provider-wide question is
+/// asked first so a live provider row cannot be hidden behind a route
+/// row the union read may prefer.
+///
+/// The route-scoped, non-silence arm has a reader and no writer today
+/// (`R75-0-F1`: `Demotion.provider_wide` is true on every path), which
+/// is deliberate — the day a class writes a route row, this order
+/// already respects it, with no change here.
+pub fn binding_cooldown_row(
+    store: Option<&Arc<dyn Store>>,
+    provider: &str,
+    model: &str,
+    now_us: i64,
+) -> Option<CooldownRow> {
+    let Some(store) = store else {
+        return None;
+    };
+    if let Ok(QueryRow::Cooldown(Some(row))) = store.query(Query::Cooldown {
+        provider,
+        model: None,
+    }) {
+        if row.until_us > now_us {
+            return Some(row);
+        }
+    }
+    match store.query(Query::Cooldown {
+        provider,
+        model: Some(model),
+    }) {
+        Ok(QueryRow::Cooldown(Some(row)))
+            if row.until_us > now_us
+                && (row.scope == "provider" || row.reason != "stream_silence") =>
+        {
+            Some(row)
+        }
+        _ => None,
+    }
 }
 
 /// The local counter's window verdict (spec §4.6 rule 3, GAP-Q1; L1d's
@@ -463,6 +524,111 @@ mod tests {
         let s = Some(&store);
         assert!(!route_silence_cooling(s, "p1", "m1", 999_999_999));
         assert!(provider_in_cooldown(s, "p1", 999_999_999));
+    }
+
+    // ------------------------------------------------------------------
+    // route_silence_row + binding_cooldown_row (ADR-063 §3.1: the
+    // reason-aware binding predicate, and the advisory row it refuses
+    // to treat as one)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_advisory_row_travels_with_its_window() {
+        // The record's `advisory` member needs `until_us`, not a boolean:
+        // the row getter answers the same read, one source.
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(silence_row("p1", "m1", 1_000_000_000)),
+            row_for_provider: None,
+        });
+        let row = route_silence_row(Some(&store), "p1", "m1", 999_999_999)
+            .expect("the silence row is live");
+        assert_eq!(row.until_us, 1_000_000_000);
+        assert_eq!(row.reason, "stream_silence");
+        assert_eq!(row.scope, "route");
+        assert!(route_silence_row(Some(&store), "p1", "m1", 1_000_000_000).is_none());
+    }
+
+    #[test]
+    fn an_advisory_row_never_binds() {
+        // §3.3: a `stream_silence` row is a POSITION, never an exclusion
+        // — the binding predicate must answer none for it, so the sort
+        // (which cannot refuse) stays the only mechanism that sees it.
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(silence_row("p1", "m1", 1_000_000_000)),
+            row_for_provider: None,
+        });
+        let s = Some(&store);
+        assert!(binding_cooldown_row(s, "p1", "m1", 999_999_999).is_none());
+        // The same route's silence row must not bind another route
+        // either, and no row exists for it at all.
+        assert!(binding_cooldown_row(s, "p1", "m2", 999_999_999).is_none());
+        // No store: nothing binds.
+        assert!(binding_cooldown_row(None, "p1", "m1", 0).is_none());
+    }
+
+    #[test]
+    fn a_provider_wide_row_binds_every_route_of_the_provider() {
+        // ADR-011 item 4's provider-wide demotion: any live provider row
+        // excludes every route of that provider — the row comes back so
+        // the record can name `{scope, reason, until_us}`.
+        let row = CooldownRow {
+            scope: "provider".into(),
+            provider: "p1".into(),
+            model: String::new(),
+            until_us: 1_000_000_000,
+            reason: "quota_exhausted".into(),
+        };
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: None,
+            row_for_provider: Some(row.clone()),
+        });
+        let s = Some(&store);
+        let got = binding_cooldown_row(s, "p1", "any-model", 999_999_999)
+            .expect("the provider row binds the route");
+        assert_eq!(got.scope, "provider");
+        assert_eq!(got.reason, "quota_exhausted");
+        // Expired: nothing binds.
+        assert!(binding_cooldown_row(s, "p1", "any-model", 1_000_000_000).is_none());
+        // Another provider: not its row.
+        assert!(binding_cooldown_row(s, "p2", "any-model", 999_999_999).is_none());
+    }
+
+    #[test]
+    fn a_route_scoped_class_row_binds_only_its_route() {
+        // ADR-011 item 5's route-scoped half — a reader today, a writer
+        // the day a class writes one (R75-0-F1): any non-silence reason
+        // word on a route row binds that route alone, and the sibling
+        // route of the same provider stays available.
+        let row = CooldownRow {
+            scope: "route".into(),
+            provider: "p1".into(),
+            model: "m1".into(),
+            until_us: 1_000_000_000,
+            reason: "rate_limit".into(),
+        };
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(row),
+            row_for_provider: None,
+        });
+        let s = Some(&store);
+        let got = binding_cooldown_row(s, "p1", "m1", 999_999_999)
+            .expect("the route row binds its route");
+        assert_eq!(got.scope, "route");
+        assert_eq!(got.reason, "rate_limit");
+        // The advisory word on a route row still does not bind, whatever
+        // the scope says around it.
+        let silence = CooldownRow {
+            scope: "route".into(),
+            provider: "p1".into(),
+            model: "m1".into(),
+            until_us: 1_000_000_000,
+            reason: "stream_silence".into(),
+        };
+        let store: Arc<dyn Store> = Arc::new(RouteStore {
+            row_for_route: Some(silence),
+            row_for_provider: None,
+        });
+        assert!(binding_cooldown_row(Some(&store), "p1", "m1", 999_999_999).is_none());
     }
 
     // ------------------------------------------------------------------
