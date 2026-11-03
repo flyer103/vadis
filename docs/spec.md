@@ -414,8 +414,10 @@ whose implementation is ADR-036's machinery (§4.3's honesty note above).
 |---|---|---|
 | `fallback` | ordered `provider/model` list | **Global granularity** (v0.1 has no per-model / per-alias chain); an empty list = no failover |
 
-On upstream 5xx / 429 / quota exhaustion, switch in order to "the next route **not yet attempted**";
-switching loses the prefix cache, so the trace must record `failover_from` and the resulting re-prefill
+On upstream 5xx / 429 / quota exhaustion, switch in order to "the next route **not yet attempted**" — *in
+order* being the ruled order of the paragraph **The walk holds an order, and the order is a rule** below,
+never the order the chain happens to be written in; switching loses the prefix cache, so the trace must
+record `failover_from` and the resulting re-prefill
 cost (§6 "result"). Chain exhausted → `502 upstream_error` (upstream attempt timeout →
 `504 upstream_timeout`). List entries must be routes that exist in the roster (aliases do not take part
 in fallback). For a request covered by `plan_policy` (§4.6), the family's `overflow` route is tried **before**
@@ -437,6 +439,52 @@ freezes (`details.stage: "no_available_route"`), and the trace records the termi
 **was** attempted and the walk then had nothing left to try, the refusal is §8's attempt-exhausted shape
 instead: the walk's refusal has **two conditions, one shape each**, and both paths produce each shape
 identically (§8).
+
+**The walk holds an order, and the order is a rule (ADR-063).** The candidate list a request's walk holds —
+the resolved route, then the plan tier's remaining members in declaration order, then the family's metered
+walk, then the global `fallback` entries — is **ordered by one key** before it is walked, and the walk
+attempts it in that order. The key is lexicographic and ascending:
+
+| # | Term | Values | Read from |
+|---|---|---|---|
+| 1 | `silence` | `0` the route is not silence-cooling · `1` it is | the route-scoped `stream_silence` row (§4.20.5), at the decision instant |
+| 2 | `tier` | `0` a plan route (marginal price 0, §4.6 rule 4) · `1` a metered one | the candidate's provider's `account:` |
+| 3 | `currency` *(metered only)* | the index of that `currency`'s **first appearance** among the declared list's candidates | the provider entry's `currency:` (§4.8) |
+| 4 | `input_miss` *(metered only)* | the declared per-1K miss price, ascending; **a candidate that declares none sorts after every ranked one in its currency group** | the model entry's `price` block (a `price.tiers` model: its **first band**, §4.10 / §4.6.1) |
+| 5 | `output` *(metered only)* | the declared per-1K output price, ascending; absent = after every ranked one | the same block |
+| 6 | `declared` | the candidate's position in the declared list — the tier's `primary`-head declaration order, the metered walk's order, then `fallback`'s | as §4.6/§4.2 declare it |
+
+Six consequences are normative, not commentary:
+
+- **Position 0 is the resolved route and is never moved by the ordering.** A cheaper candidate does not
+  displace the route the client named or the guard settled on; that would be a selection decision on every
+  request, and a route change is a cache event (ADR-014 constraint 1). The ordering governs the tail.
+- **A plan candidate's terms 3–5 are skipped**: inside a plan the marginal price is 0, so a plan route ranks
+  before every metered candidate *because* it is cheapest, and the tier's members tie and fall to term 6 —
+  which is §4.6.1/ADR-049 §5.1's declaration order with `primary` at the head, unchanged. A plan's declared
+  price table never enters the ordering.
+- **Two currencies are never compared.** Term 3 names a **group**, not an amount: the groups appear in the
+  order the operator declared their first member, and within a group the price terms apply. No exchange rate
+  is used, anywhere, ever (§4.8, constraint 5). A `cheapest` family's metered set cannot exercise this term —
+  §4.6.1 refuses a mixed-currency set at load.
+- **A candidate with no declared `input_miss` cannot occur, and the key still orders it.** Every model entry
+  states all four prices (§4.0, §4.10 rule 6) and an empty band list is refused, so this term defines a
+  position only to keep the key **total**; the record's `declared_no_price` names it if the defensive arm
+  ever fires (ADR-063 §2.1). Such a candidate is never *ineligible*: price availability is an ordering fact,
+  never an eligibility rule.
+- **An advisory `stream_silence` row is term 1, never a filter.** A cooling candidate keeps its place in the
+  list and moves to the back; the ordering can never remove a candidate, so a lone cooling route is still
+  attempted (§4.20.5's "never refuses a request" holds by construction).
+- **A binding cooldown removes a candidate.** A route is unavailable iff a live cooldown row blocks it **and**
+  that row is either provider-wide or route-scoped with a reason other than `stream_silence` (ADR-011 item 4;
+  the route-scoped half of item 5 is the same predicate the day a class writes such a row). A failure class
+  that does not fail over (ADR-011 item 3) produces **no** order, no move and no `failover.triggered` row —
+  its record is `error.classified`'s `action`.
+
+The order is a **pure function of (stable config, the cooldown projection, one clock read)** — no turn
+number, no clock beyond the cooldown comparison, no RNG (constraint 2), and a session that has spilled keeps
+its binding (§6 rule 1 of §4.6.1). The rows it was built over, the candidates it excluded and the declared
+price that placed the chosen one are recorded by `failover.triggered` (§6, `result.failover_order`).
 
 **Every candidate re-enters the family guard before it is attempted.** A candidate's route — the one the request
 resolved to, or any entry of the chain the walk reaches, whether reached on the first decision or by a
@@ -702,7 +750,7 @@ Neither spelling is a reshaped section (the `state:` / `retention` precedent).
 | `on_primary_exhausted` | `spill` \| `block` | `spill` | `spill`: the family continues on `overflow` at its real price. `block`: the request is refused with a **readable** reason (§8 `quota_exceeded`, 429) instead of being served from the metered account — the mode for an operator who would rather fail than spend. |
 | `recover` | `probe` \| `none` | `probe` | `probe`: after `cooldown`, the next session's first request is admitted as a probe on `primary`; success switches the family back and is recorded. `none`: no automatic probe — the family returns at the plan's own window boundary when one is declared, and otherwise only by an operator action. |
 | `cooldown` | duration | `15m` | The minimum interval between the move away from `primary` and the first admitted probe. A floor, not a schedule: ADR-011's cooldown for that provider must also allow the attempt, and rule 3 below may defer the probe further. |
-| `overflow_selection` | `declared` \| `cheapest` | `declared` | **ADR-049.** `declared`: a spill attempts the policy's `overflow` route — today's behaviour, byte-identical. `cheapest`: the family's **metered candidate set** — every roster route whose provider is `account: api` and whose model entry carries the family tag (§4.8's tag is the set; adding a metered provider is a roster edit and nothing else) — is walked in **ascending `price.input_miss`, then `price.output`, then roster declaration order**. A route change is paid as a re-prefill, an input event, so the ranking orders on that term first. All candidates must share one `currency` (§4.8: a ranking *is* a comparison, and two currencies are never compared — a mixed family is a load error naming the family and the currencies). A `price.tiers` model ranks by its first band (§4.10; the same convention §6's own infeasibility figures use, and no estimate). The order is a pure function of (roster, config) and is **resolved once and pinned to the session** — a later reload re-ranks new sessions only (ADR-014 constraint 1: a route change is a cache event). The ranking resolves **after** per-wire eligibility (§4.2/ADR-022): the mode changes the order, never the eligibility rules |
+| `overflow_selection` | `declared` \| `cheapest` | `declared` | **ADR-049.** `declared`: a spill attempts the policy's `overflow` route — today's behaviour, byte-identical. `cheapest`: the family's **metered candidate set** — every roster route whose provider is `account: api` and whose model entry carries the family tag (§4.8's tag is the set; adding a metered provider is a roster edit and nothing else) — is walked in **ascending `price.input_miss`, then `price.output`, then roster declaration order**. A route change is paid as a re-prefill, an input event, so the ranking orders on that term first. All candidates must share one `currency` (§4.8: a ranking *is* a comparison, and two currencies are never compared — a mixed family is a load error naming the family and the currencies). A `price.tiers` model ranks by its first band (§4.10; the same convention §6's own infeasibility figures use, and no estimate). The order is a pure function of (roster, config) and is **resolved once and pinned to the session** — a later reload re-ranks new sessions only (ADR-014 constraint 1: a route change is a cache event). The ranking resolves **after** per-wire eligibility (§4.2/ADR-022): the mode changes the order, never the eligibility rules. **The mode selects the family's metered *set*, not the order of the chain** (ADR-063): under `declared` the set is one route, so the ordering is vacuous inside it — its `overflow` behaviour stays byte-identical — while the list the walk holds after that set (the plan tier above it, the global `fallback` below it) is ordered by §4.2's one rule in both modes. Under `cheapest` the ranking above **is** that rule's metered instance (§4.2's terms 4–6), so the product has one ordering, not two |
 | `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative or non-finite value is a load error, and so is setting it on a family whose `overflow` route's provider is of a currency other than USD: the cap is denominated in **USD** (its own name), and comparing a USD ceiling with a spend in another currency is the silent mixing §4.8 forbids — so the policy refuses to load instead (message names `plan_policy.overflow_monthly_cap_usd` and the currency it found). |
 
 **Hard rules** (the parts an implementation may not improvise; ADR-014 items 1–11 are normative):
@@ -2460,7 +2508,7 @@ summary of it names the route-scoped case — *"every other failure is a fact ab
 | Second landing | the **same** object inside the `error.classified` payload as `demotion`, with exactly `{scope, provider, model, until_us, ttl_s, reason}` — the incremental write and `rebuild_cooldown` share one source, so the projection reproduces from the log (CONF-21's identity) |
 | Trigger | **one** such truncation (no streak, no counter — a counter would be state the log cannot rebuild); a truncation whose `stream_end` is `upstream_ended_early`, `request_timeout` or `client_closed` writes **nothing** (the first two because the upstream's behaviour is not a stall and our own deadline is not the route's fault, the third because the client left and the route is healthy) |
 | TTL | **60 s** — a code constant, not a config key |
-| Effect | the candidate walk **prefers** an eligible candidate whose route is not silence-cooling, and leaves a cooling one **only when such a candidate exists**. The skip narrates `result.failover_from` naming the abandoned route and writes **no** `failover.triggered` row (ADR-024) |
+| Effect | the candidate walk's **order** puts an eligible candidate whose route is not silence-cooling ahead of a cooling one, and leaves a cooling route to be attempted **only when no such candidate exists** — it is term 1 of §4.2's one ordering key (ADR-063), so the preference is a *position* and never a filter. The skip narrates `result.failover_from` naming the abandoned route and writes **no** `failover.triggered` row (ADR-024) |
 | Never | it **never refuses a request**: a `stream_silence` row is not a reason for `no_available_route`, never appears in `skipped[]`, and when it is the only eligible route the request is attempted as usual. It is *advisory*, and `reason = "stream_silence"` is the value that says so |
 | Not touched | `QuotaExhausted`'s semantics and every other class's answer from `demotes_provider()`; every binding (provider-wide) demotion keeps today's hard semantics exactly; the probe gate's `primary_cooling_down` (§9.1) keeps asking the **provider-wide** question, so a 60 s selection preference can never move a family's account |
 
@@ -2527,7 +2575,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | response cache | `cache` — **present iff this record's response came from the recorded store** (§4.17), i.e. iff no upstream call was made: `verdict` (`inferred`, always — §7 / constraint 4), `key_digest` (the `sha256` of the client's inbound body bytes **as received**), `replayed` (`request_id` of the record the bytes came from + its `session` + its `turn_index`), `replayed_bytes` (how many response bytes were returned — a count of bytes, never a price and never a saving). See the paragraph below for the three properties a reader must not have to derive |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
-| result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
+| result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), **`failover_order`** (**ADR-063**: the order the walk held at the move that abandoned a route — **present-and-`null`** whenever no route moved, the stance `failover_from` takes, so the key set never changes shape; its members are the paragraph **`result.failover_order`** below), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
 | failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
 
 **The `identity` group's attribution is derived, and one of its words is a declared constant.** `client` is
@@ -2908,6 +2956,44 @@ candidate the ranking offered). Every later move in the same request is the **ev
 `plan.switched` row per move, in order, each carrying its own `from_route` / `to_route`. So `to` must not be
 read as "where this request stopped" — for the walk as a whole the events are the record, and for the
 settlement it is `decision.*` (and `chosen` under `cheapest`).
+
+**`result.failover_order` answers a fourth question, and it is the incident's (ADR-063).** The members above
+name what left, what arrived, why and what the move priced; none of them says **why that destination and not
+another**, which is the question an operator asks of a fallback that cost an order of magnitude more than the
+route it replaced. The group is present exactly when a `failover.triggered` row was written for this request
+(a route **moved**; spec §4.2's narration predicate and ADR-024 are untouched — a request that skipped a
+cooling route before any attempt carries `null` here, as it carries `null` in `failover_from` at the same
+moment), and it is `null` otherwise:
+
+```
+result.failover_order = {
+  "rule": "cheapest_healthy_first",          // the ruling's name, frozen (ADR-063 §2)
+  "candidates": [ { "route", "tier": "plan" | "metered", "currency",
+                    "basis": "plan" | "price" | "declared_currency" | "declared_no_price",
+                    "price": { "currency", "input_miss", "output", "band", "peak_multiplier" } | null,
+                    "advisory": null | { "reason": "stream_silence", "until_us" } } ],   // in walk order; [0] is `chosen`
+  "excluded":   [ { "route", "reason": "demoted" | "keyless" | "wire_mismatch" | "unknown_provider" | "attempted",
+                    "cooldown": null | { "scope": "provider" | "route", "reason", "until_us" } } ],
+  "chosen":     "<provider>/<model>",
+  "from_price": { "currency", "input_miss", "output", "band", "peak_multiplier" } | null,
+  "currency":   "<the chosen route's currency>"
+}
+```
+
+**Every number in the group is the configuration's, read at decision time**: the declared as-written prices of
+the entry (a `price.tiers` model reports its **first band** and names it in `band`, so the reading is not
+mistakable for a band-faithful quote), the declared `peak_multiplier` (a base price compared inside a peak
+window is not the price the request paid), `null` where the config declares nothing — **never a stand-in, and
+never an exchange rate** (§4.8, constraint 5). `basis` says how a position was placed: `plan` (the tier, term 2
+with §4.6.1's declaration order), `price` (terms 4–5), `declared_currency` (price was not compared across a
+currency boundary), `declared_no_price` (the defensive arm: an entry with no `input_miss` cannot load — §4.0,
+§4.10 rule 6 — so this value is emitted only if the code's own defensive arm fires, and it never makes a
+candidate ineligible). Three invariants a reader may assert: `chosen` equals the row's `to` and equals
+`candidates[0].route` (the walk takes the head — one value, one expression; an ADR-051 §2.4 guard
+**redirection** may still move the *attempt* off that head, and that move is `plan_switch`'s record, which
+does not change this row and does not make the invariant weaker); `currency` equals the payload's
+own and the chosen candidate's; and no route appears in both arrays, with no `stream_silence` row ever in
+`excluded` (§4.20.5's advisory rule, checkable rather than trusted).
 
 | what moved the request | `failover_from` | `plan_switch` |
 |---|---|---|

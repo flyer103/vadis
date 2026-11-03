@@ -1731,11 +1731,17 @@ must gain it in step, and numbering only grows, never changes (a removed case ke
 never crosses the 3×3 matrix (§12.10.9, ADR-022, ADR-051 — a candidate is attempted only on a cell its entry
 declares), and never narrates a displacement onto a candidate it cannot
 serve (§12.10.9, ADR-023 — the narration predicate *is* the eligibility predicate).** The
-chain walks "the next route **not yet attempted**" in list order, skipping routes of a provider
+chain walks "the next route **not yet attempted**" in *list order*, skipping routes of a provider
 already attempted in this request (the in-request form of ADR-011 item 4's provider-level demotion:
 a second attempt on a dead provider is the failure mode it designs out). Routes already attempted
 are never retried within one request — the "not yet attempted" rule subsumes per-route retries on
-the buffered path. The five CONF cases of this card (01/02/03/10-chain/14) are un-ignored by the
+the buffered path. **Since ADR-063 (R75-0) "list order" is a *derived* order and no longer the order the
+entries happen to be written in**: spec §4.2's one key (health, tier, currency group, declared price,
+declaration) is computed by **one pure owner in `vadis-core`** beside `plan_tier`/`metered_walk`
+(`plan.rs:283`, `:304`), and both forwarding paths call it — the chain is built twice today
+(`forward.rs:1391` for the buffered path, `stream_forward.rs:872` for the streamed one) and the two copies
+are the drift this ADR removes rather than a second call site. `R2` does the collapsing; the ruling, the key
+and the record's three invariants are `ADR-063` §2/§6. The five CONF cases of this card (01/02/03/10-chain/14) are un-ignored by the
 round that lands the provider adapters and the buffered forwarding path; CONF-01/02/03 then kept their
 original assertion (the client's `model` string verbatim) until the 2026-09-19 ruling (`3074957`) changed the contract: it
 rewrote their expected upstream body to the native id and parked all three `#[ignore]`d behind the wiring (`233e05e`),
@@ -1858,6 +1864,22 @@ fourth walk this line named, the zero-byte failover, is deleted with the relay's
 false-incompletion control); amendments A1 (conf_105), A2 (conf_41) and A3 (conf_87) landed as frozen.
 One conflict the contract carried internally is resolved and recorded at spec §4.20.1's range row: the
 1 s floor contradicted the same contract's 400 ms rigs; the rigs win, the floor is 100 ms.
+
+**Register line (2026-11-03, R75-0 — the failover order, `ADR-063`).** The contract card rules the one thing
+the 2026-10-22 failover left unruled: **the order of the candidate list a request's walk holds**. It adds no
+config key, no price, no code and **no `CONF` id** (AGENTS 9 — the four assertions of ADR-063 §9 are `R3`'s,
+on rigs of its own), and the register below is what a reader of the next round needs.
+
+| Item | State after this card |
+|---|---|
+| spec §4.2's ordering key (health, tier, currency group, declared price, declaration) | **contracted, not served** — today's chain walks in the order the entries were written (`forward.rs:1391`, `stream_forward.rs:872`, two copies of one chain); `R2` lands the one owner in `vadis-core` and both call sites |
+| `failover.triggered`'s three new members (`currency`, `from_price`, `order`) + `EVENT_SCHEMA_VERSION` 2 → 3 | **contracted** — `R2` writes them from the same order value the walk used; the row is the incident's fourth question and nothing else answers it today (§6 of ADR-063) |
+| spec §6's `result.failover_order` (the trace mirror) | **contracted** — additive, so `TRACE_SCHEMA_VERSION` stays 2 (the `config_digest` / `cache` precedent) |
+| `R75-0-F1` (ADR-011 item 5's route-scoped demotion has a reader and no writer — a plain `429`, i.e. `RateLimit`, demotes nothing today) | **registered** — the ordering predicate already answers the route-scoped case; the writer is a class-scope round's (§3.1 of ADR-063) |
+| `R75-0-F2` (the order is blind to a candidate's `context`; inherited from `R66-0-F1` and now more likely to bite) | **registered** — a pre-filter needs a request-size estimate the vadis does not have (`GAP-Q14/Q20`) |
+| `R75-0-F3` (a plan route named in the global `fallback` list now walks before the metered candidates) | **registered as a consequence**, not a side effect — plan-before-metered is the owner's own instruction of 2026-10-04 |
+| the `book/` sentence and `config.example.yaml`'s `fallback` comment | **`R2`'s** (constraint 8 — the user-facing text lands with the behaviour, ADR-056 §6.3's precedent); this card ships no claim about a behaviour not yet served |
+| a `fallback_selection` key, an explicit ordered chain key, a quality axis, a second ranking implementation | **not built and not registered as wanted** — ADR-063 §5.1/§11 carry the argument; the first would restore today's order with one key if the rule ever proves wrong |
 
 **Register line (2026-10-06, R69-2b): ADR-051 §2.5.3 — the shipped root's second `plan_policies:`
 family — deferred.** Reason: the obstacle is the wizard's anchoring contract, not the parser (the
@@ -2513,7 +2535,7 @@ follows ADR-009 item 4's single question (*may this fact be recomputed?*).
 | 5 | forward — the intent | `upstream.submitted` | **before** the attempt's request bytes are handed to the wire | **FULL** | route, `attempt_index`, `attempt_id`, `body_hash` of **that attempt's** byte-final bytes (note R4) |
 | 6 | forward — the outcome | `upstream.responded` | when the response head + body complete (buffered) or the stream ends (SSE) | FULL | status, raw `usage?`, latency, `wrote_full_request` |
 | 7 | classifier (a failure, `vadis-providers` → `vadis-core`) | `error.classified` | after `classify_upstream_error` returns, before the action's effect (ADR-011 item 8) | NORMAL | status, `reason`, `action`, matched table entry, `retry_after_s?`, `demotion?` |
-| 8 | failover: a route switch | `failover.triggered` | after the classification chose `FallbackProvider`, before the next `upstream.submitted` | FULL | reason, from → to, `reprefill_tokens` (inferred), `switch_cost_nano` (inferred) |
+| 8 | failover: a route switch | `failover.triggered` | after the classification chose `FallbackProvider`, before the next `upstream.submitted` | FULL | reason, from → to, `reprefill_tokens` (inferred), `switch_cost_nano` (inferred) **and its `currency`** (§4.8), `from_price` (the abandoned route's declared price), and `order` — the ranked candidate list with each position's `basis` and declared `price`, the `excluded[]` candidates with their reasons, and the `chosen` one (**ADR-063** §6; the trace mirrors the same object as `result.failover_order`, spec §6) |
 | 9 | usage normalization | — | **no event**: usage lands in the trace; an upstream that reported none sets `usage_missing` and nothing is charged | — | — |
 | 10 | cost | `cost.computed` | once usage is known, **after** the trace line was appended (note R2) | FULL | the five-tier cost **and the `currency` its amounts are in** (§4.8), `trace_ref` |
 | 11 | quota | `quota.charged` | with `cost.computed`, before a buffered response is released | FULL | provider, plan, tokens charged, remaining, `trace_ref` |
@@ -2530,6 +2552,17 @@ ambiguity ADR-018 removes from the trace, one store away from it — and the sto
 with the trace version of §12.6: a reader that knows only v1 can refuse a v2 row rather than add a CNY row
 into a USD sum. The rest of the event vocabulary is untouched, and the lossy kind parsing of ADR-009 item 7
 is unaffected (the kind is unchanged; only the payload is wider).
+
+**Row 8 joins them, and the version moves again (ADR-063 §6.5).** `failover.triggered` carries a
+`switch_cost_nano` too, and until ADR-063 it carried **no unit** — the third money member in the log and the
+only one a reader had to guess at, on the row that prices the move most likely to change currency (a
+destination's table denominates the switch cost, spec §4.8, and the chain may cross providers). So the row
+gains `"currency"` beside the figure, and `EVENT_SCHEMA_VERSION` moves **2 → 3** for ADR-018's own reason: a
+reader that knows only v2 can refuse a v3 row rather than count a CNY switch cost as USD. The upcast rule is
+one sentence: **`currency` absent on a `failover.triggered` row means the row predates this contract, and its
+`switch_cost_nano` must not be summed with a v3 row's** (ADR-009 item 7's stance — old rows are never
+rewritten, readers upcast). The trace is unmoved: `result.failover_order` is an added key, and an added key
+never moves `TRACE_SCHEMA_VERSION` (the `config_digest` / `cache` precedent, §12.6), so the trace stays **2**.
 
 **The invariant to review at every state-changing call site** (ADR-010's consequence): *does
 the intent row precede the effect?* Row 5 is the one that carries money — it commits before
