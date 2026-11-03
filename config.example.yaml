@@ -173,6 +173,12 @@ fallback:
   # "the next route not yet tried"; switching loses the prefix cache, so the
   # trace must record `failover_from` and the resulting re-prefill cost
   # (spec §6 "outcome" / DESIGN §5).
+  # Order (ADR-063): the chain is walked cheapest healthy first — plans before
+  # metered routes, cheaper before dearer by each entry's declared price; a
+  # chain whose entries cannot be compared (two currencies) keeps the order
+  # written here. The walk always starts at the route the client named; this
+  # list is the tail, and every hop's `failover.triggered` event records the
+  # order it used with each position's basis and declared price.
   # Chain exhausted → 502 upstream_error (upstream attempt timeout → 504
   # upstream_timeout); error body per spec §8.
   - deepseek/deepseek-v4-pro

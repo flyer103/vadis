@@ -147,6 +147,17 @@ routed by the family's own state — its plan first — rather than billed at th
 happened to land on (see
 [Cost and caching](cost-and-caching.md#plan-first-routing-the-subscription-first-the-metered-account-as-the-spill)).
 
+**The chain's own order is a rule, not the order you wrote.** When a request fails over, the tail of the
+chain is walked **cheapest healthy first**: routes still under a cooldown are left for last among the
+healthy ones, subscription (plan) routes walk before metered ones, and among metered routes the cheaper
+declared price walks first — with one boundary the operator owns: a chain whose entries cannot be
+compared (entries priced in two different currencies) keeps the order you wrote, because no exchange
+rate is ever invented. The walk always starts at the route your client named; only the tail is ordered.
+And every hop explains itself: the `failover.triggered` event and the trace's `result.failover_order`
+carry the full order the walk held — each position's basis and declared price, the candidates it refused
+and why, and the chosen one — so a hop can be reconstructed from its own record, without the config file
+that priced it.
+
 **hermes** speaks the same native `responses` wire as codex through its codex transport.
 The setup below was smoke-verified end to end (two turns in one session, the second a tool
 call, real upstream); the commands and outputs are quoted from that run.
