@@ -2140,7 +2140,13 @@ impl Forwarder {
                             {
                                 let (reprefill, switch_cost) =
                                     self.failover_cost(session.as_deref(), &next);
-                                self.record_failover(
+                                // ADR-063 §6.4: the trace mirror carries
+                                // the same order value the event row
+                                // explains — the FIRST move's evidence
+                                // (the `failover_from` convention), so a
+                                // multi-hop request names the move its
+                                // story starts from.
+                                let rec = self.record_failover(
                                     request_id,
                                     attempt_index,
                                     candidate,
@@ -2149,7 +2155,13 @@ impl Forwarder {
                                     session.as_deref(),
                                     reprefill,
                                     switch_cost,
+                                    &chain_order,
+                                    &attempted_providers,
+                                    proto_in,
                                 );
+                                if facts.failover_order.is_none() {
+                                    facts.failover_order = Some(rec);
+                                }
                             }
                             failover_origin(&mut facts.failover_from, candidate);
                             attempt_index += 1;
@@ -2258,7 +2270,10 @@ impl Forwarder {
                             {
                                 let (reprefill, switch_cost) =
                                     self.failover_cost(session.as_deref(), &next);
-                                self.record_failover(
+                                // ADR-063 §6.4, the transport arm's twin:
+                                // the first move's order is the trace
+                                // mirror (the `failover_from` convention).
+                                let rec = self.record_failover(
                                     request_id,
                                     attempt_index,
                                     candidate,
@@ -2267,7 +2282,13 @@ impl Forwarder {
                                     session.as_deref(),
                                     reprefill,
                                     switch_cost,
+                                    &chain_order,
+                                    &attempted_providers,
+                                    proto_in,
                                 );
+                                if facts.failover_order.is_none() {
+                                    facts.failover_order = Some(rec);
+                                }
                             }
                             failover_origin(&mut facts.failover_from, candidate);
                             attempt_index += 1;
@@ -3073,7 +3094,16 @@ impl Forwarder {
     }
 
     /// `failover.triggered` (FULL), before the next intent (§12.10.5 row 8).
-    /// Shared by both forwarding paths.
+    /// Shared by both forwarding paths. ADR-063 §6 adds three payload
+    /// members — `currency` (the unit `switch_cost_nano` is denominated
+    /// in, the destination's, §4.8), `from_price` (the abandoned route's
+    /// declared price, null when the entry declares none) and `order`
+    /// (the walk-ordered candidates with each position's basis and
+    /// declared price, the excluded ones with their reasons, the chosen
+    /// one) — all built **from the same order value the walk used**
+    /// (`order`, the caller's `chain_order`), never a re-derivation.
+    /// Returns the trace-mirror object (`result.failover_order`, §6.4)
+    /// so the caller records one value in both media.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_failover(
         &self,
@@ -3085,7 +3115,11 @@ impl Forwarder {
         session: Option<&str>,
         reprefill: Option<u64>,
         switch_cost_nano: Option<u64>,
-    ) {
+        order: &[OrderedCandidate],
+        attempted_providers: &[String],
+        proto_in: WireApi,
+    ) -> vadis_core::trace::FailoverOrderRec {
+        let rec = self.failover_order_rec(order, attempted_providers, proto_in, to, from);
         self.append_event(
             EventKind::FailoverTriggered,
             request_id,
@@ -3101,9 +3135,143 @@ impl Forwarder {
                 // route's input_miss — both null when no ledger exists.
                 "reprefill_tokens": reprefill,
                 "switch_cost_nano": switch_cost_nano,
+                // ADR-063 §6.1: the unit `switch_cost_nano` is
+                // denominated in — the destination's currency (§4.8).
+                "currency": rec.currency.as_code(),
+                // The abandoned route's declared price, both sides of
+                // the comparison in the row (§6.1) — null when the
+                // entry declares none, never a stand-in number.
+                "from_price": serde_json::to_value(&rec.from_price).unwrap_or(Value::Null),
+                // §6.2: the order object — eligibility already applied
+                // on the candidates, binding facts only in `excluded`.
+                "order": {
+                    "rule": rec.rule,
+                    "candidates": serde_json::to_value(&rec.candidates)
+                        .unwrap_or(Value::Array(Vec::new())),
+                    "excluded": serde_json::to_value(&rec.excluded)
+                        .unwrap_or(Value::Array(Vec::new())),
+                    "chosen": rec.chosen,
+                },
             }),
             session,
         );
+        rec
+    }
+
+    /// Build ADR-063 §6's record from the order value the walk used:
+    /// the eligibility sequence of §3.2 runs over the ordered list
+    /// (attempted → demoted → unknown_provider → keyless →
+    /// wire_mismatch), so an ineligible candidate lands in `excluded[]`
+    /// with its reason — **never ordered as if healthy** — and the
+    /// eligible remainder keeps the walk order. The `demoted` entries
+    /// name the binding row's own `{scope, reason, until_us}` (§3.1's
+    /// predicate, read at record time); an advisory `stream_silence`
+    /// row never excludes — it is the candidate's `advisory` member
+    /// (§3.3). Every number is the config's own (§6.2): prices are the
+    /// declared quote, and a route with no declared price reports
+    /// `basis: declared_no_price` and `price: null` — the defensive
+    /// arm, never a substituted figure.
+    fn failover_order_rec(
+        &self,
+        order: &[OrderedCandidate],
+        attempted_providers: &[String],
+        proto_in: WireApi,
+        to: &RouteSpec,
+        from: &RouteSpec,
+    ) -> vadis_core::trace::FailoverOrderRec {
+        use vadis_core::trace::{
+            FailoverOrderRec, OrderAdvisoryRec, OrderCandidateRec, OrderCooldownRec,
+            OrderExcludedRec,
+        };
+        let mut candidates: Vec<OrderCandidateRec> = Vec::new();
+        let mut excluded: Vec<OrderExcludedRec> = Vec::new();
+        for entry in order {
+            let route = &entry.facts.route;
+            // §3.2's sequence, in the ADR's own letter order — the first
+            // matching condition names the reason.
+            let exclusion: Option<(&'static str, Option<OrderCooldownRec>)> =
+                if attempted_providers.contains(&route.provider) {
+                    Some((SKIP_ATTEMPTED, None))
+                } else if let Some(row) = crate::availability::binding_cooldown_row(
+                    self.store.as_ref(),
+                    &route.provider,
+                    &route.model,
+                    now_us(),
+                ) {
+                    Some((
+                        SKIP_DEMOTED,
+                        Some(OrderCooldownRec {
+                            scope: row.scope,
+                            reason: row.reason,
+                            until_us: row.until_us,
+                        }),
+                    ))
+                } else if self.provider(route).is_none() {
+                    Some((SKIP_UNKNOWN_PROVIDER, None))
+                } else if !self.transports.contains_key(&route.provider) {
+                    Some((SKIP_KEYLESS, None))
+                } else if !self
+                    .provider(route)
+                    .is_some_and(|p| p.supports.contains(&proto_in))
+                {
+                    Some((SKIP_WIRE_MISMATCH, None))
+                } else {
+                    None
+                };
+            match exclusion {
+                Some((reason, cooldown)) => excluded.push(OrderExcludedRec {
+                    route: route.to_string(),
+                    reason: reason.to_string(),
+                    cooldown,
+                }),
+                None => candidates.push(OrderCandidateRec {
+                    route: route.to_string(),
+                    tier: entry.facts.tier.as_str().to_string(),
+                    currency: entry.facts.currency,
+                    basis: entry.basis.as_str().to_string(),
+                    price: self.price_quote(route),
+                    advisory: entry.facts.silence.then_some(OrderAdvisoryRec {
+                        reason: REASON_STREAM_SILENCE.to_string(),
+                        until_us: entry.facts.silence_until_us.unwrap_or(i64::MAX),
+                    }),
+                }),
+            }
+        }
+        FailoverOrderRec {
+            rule: vadis_core::plan::ORDER_RULE.to_string(),
+            candidates,
+            excluded,
+            // §6.3's first invariant, one value written twice: the walk
+            // takes the head of the order, so `chosen` IS the payload's
+            // `to` (a guard redirection after this row is
+            // `plan_switch`'s record, exactly as today).
+            chosen: to.to_string(),
+            currency: self.route_currency(to),
+            from_price: self.price_quote(from),
+        }
+    }
+
+    /// One route's declared price quote (ADR-063 §6.2): the roster's own
+    /// numbers via the order-facts reader — a `price.tiers` model
+    /// reports its first band's prices and ceiling, and a value the
+    /// config does not declare stays `None`. `None` overall only when
+    /// the entry declares nothing price-shaped (the defensive
+    /// `declared_no_price` arm — the loader refuses that shape, so no
+    /// validated roster reaches it).
+    fn price_quote(&self, route: &RouteSpec) -> Option<vadis_core::trace::OrderPriceRec> {
+        let facts = order_facts_for_route(&self.config, route, None);
+        if facts.input_miss.is_none() && facts.output.is_none() {
+            return None;
+        }
+        Some(vadis_core::trace::OrderPriceRec {
+            currency: facts.currency,
+            input_miss: facts.input_miss,
+            output: facts.output,
+            band: facts
+                .band
+                .map(|up_to| vadis_core::trace::OrderBandRec { up_to }),
+            peak_multiplier: facts.peak_multiplier,
+        })
     }
 
     /// The session's prefix token total from the `cache_ledger` projection
@@ -3205,6 +3373,13 @@ pub(crate) const SKIP_UNKNOWN_PROVIDER: &str = "unknown_provider";
 pub(crate) const SKIP_KEYLESS: &str = "keyless";
 pub(crate) const SKIP_WIRE_MISMATCH: &str = "wire_mismatch";
 pub(crate) const SKIP_DEMOTED: &str = "demoted";
+/// ADR-063 §3.2(a)'s in-request form, the one reason word the frozen
+/// `skipped[]` vocabulary did not need (a skipped candidate was never
+/// attempted by definition): in the failover order's `excluded[]` it
+/// names a candidate whose provider this request already attempted —
+/// ADR-011 item 4's in-request provider exclusion, stated where the
+/// record needs it.
+pub(crate) const SKIP_ATTEMPTED: &str = "attempted";
 
 /// One `skipped[]` entry: the route in its `<provider>/<model>` wire form
 /// and the one-word reason. Shared by both forwarding paths so the two

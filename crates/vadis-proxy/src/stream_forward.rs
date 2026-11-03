@@ -1690,7 +1690,12 @@ impl Forwarder {
                             {
                                 let (reprefill, switch_cost) =
                                     self.failover_cost(session.as_deref(), &next);
-                                self.record_failover(
+                                // ADR-063 §6.4, the streaming twin: the
+                                // trace mirror carries the same order the
+                                // event row explains — the FIRST move's
+                                // evidence (the `failover_from`
+                                // convention).
+                                let rec = self.record_failover(
                                     request_id,
                                     attempt_index,
                                     &cand.route,
@@ -1699,7 +1704,13 @@ impl Forwarder {
                                     session.as_deref(),
                                     reprefill,
                                     switch_cost,
+                                    &chain_order,
+                                    &attempted,
+                                    proto_in,
                                 );
+                                if facts.failover_order.is_none() {
+                                    facts.failover_order = Some(rec);
+                                }
                                 if failover_from.is_none() {
                                     failover_from = Some(cand.route.clone());
                                 }
@@ -1835,7 +1846,10 @@ impl Forwarder {
                             {
                                 let (reprefill, switch_cost) =
                                     self.failover_cost(session.as_deref(), &next);
-                                self.record_failover(
+                                // ADR-063 §6.4, the transport arm's
+                                // streaming twin: the first move's order
+                                // is the trace mirror.
+                                let rec = self.record_failover(
                                     request_id,
                                     attempt_index,
                                     &cand.route,
@@ -1844,7 +1858,13 @@ impl Forwarder {
                                     session.as_deref(),
                                     reprefill,
                                     switch_cost,
+                                    &chain_order,
+                                    &attempted,
+                                    proto_in,
                                 );
+                                if facts.failover_order.is_none() {
+                                    facts.failover_order = Some(rec);
+                                }
                                 if failover_from.is_none() {
                                     failover_from = Some(cand.route.clone());
                                 }
