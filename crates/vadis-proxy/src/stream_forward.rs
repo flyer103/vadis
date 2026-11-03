@@ -162,6 +162,10 @@ struct RelayCtx {
     /// spec §6 `result.plan_switch` (ADR-014): the displacement the
     /// pre-flight recorded, carried to the relay's terminal record.
     plan_switch: Option<vadis_core::trace::PlanSwitchRec>,
+    /// spec §6 `result.failover_order` (ADR-063 §6.4): the order value
+    /// the pre-relay walk held, set when a failover moved the request
+    /// before any byte was relayed, carried to the terminal record.
+    failover_order: Option<vadis_core::trace::FailoverOrderRec>,
     /// spec §6 `state.sticky_hit`: the session already had a binding row
     /// at pre-flight (the same value bind_session received).
     sticky_hit: bool,
@@ -315,6 +319,7 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            failover_order: None,
             // The one sticky read (spec §6): false until the session is
             // resolved (see below) — one value per request.
             sticky_hit: false,
@@ -729,6 +734,7 @@ impl Forwarder {
                     now_epoch_s,
                     now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
+                    failover_order: facts.failover_order.clone(),
                     // The one value (spec §6): the read from session
                     // resolution, before this binding write.
                     sticky_hit,
@@ -802,6 +808,7 @@ impl Forwarder {
                     now_epoch_s,
                     now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
+                    failover_order: facts.failover_order.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
                     transforms: facts.transform_records.clone(),
@@ -1418,6 +1425,7 @@ impl Forwarder {
                                     client: facts.client,
                                     blocks: facts.blocks.clone(),
                                     plan_switch: facts.plan_switch.clone(),
+                                    failover_order: facts.failover_order.clone(),
                                     // The one value (spec §6): the read from
                                     // session resolution, carried through — the
                                     // relay's record is not a second opinion.
@@ -2406,6 +2414,7 @@ fn record_terminal(ctx: &RelayCtx, st: &RelayState, truncated: Option<Truncation
         now_epoch_s: ctx.now_epoch_s,
         now_us: ctx.now_us,
         plan_switch: ctx.plan_switch.clone(),
+        failover_order: ctx.failover_order.clone(),
         sticky_hit: ctx.sticky_hit,
         transform_mode: ctx.transform_mode,
         transforms: ctx.transform_records.clone(),

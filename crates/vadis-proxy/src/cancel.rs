@@ -100,6 +100,10 @@ pub(crate) struct CancelCtx {
     pub now_epoch_s: u64,
     pub now_us: i64,
     pub plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `result.failover_order` (ADR-063 §6.4): the order value
+    /// the walk held, carried so a cancelled request's terminal row
+    /// mirrors the same evidence an ordinary record would.
+    pub failover_order: Option<vadis_core::trace::FailoverOrderRec>,
     pub sticky_hit: bool,
     pub transform_mode: TransformMode,
     pub transforms: Vec<TransformRecord>,
@@ -137,6 +141,7 @@ pub(crate) fn snapshot_facts(
         now_epoch_s: facts.now_epoch_s,
         now_us: facts.now_us,
         plan_switch: facts.plan_switch.clone(),
+        failover_order: facts.failover_order.clone(),
         sticky_hit: facts.sticky_hit,
         transform_mode: facts.transform_mode,
         transforms: facts.transform_records.clone(),
@@ -449,6 +454,7 @@ impl Drop for CancelGuard {
             now_epoch_s: ctx.now_epoch_s,
             now_us: ctx.now_us,
             plan_switch: ctx.plan_switch.clone(),
+            failover_order: ctx.failover_order.clone(),
             sticky_hit: ctx.sticky_hit,
             transform_mode: ctx.transform_mode,
             transforms: ctx.transforms.clone(),
@@ -556,6 +562,8 @@ mod tests {
             now_epoch_s: 1_789_992_000,
             now_us: 1_789_992_000_000_000,
             plan_switch: None,
+            // Fixture row: the walk never moved it.
+            failover_order: None,
             sticky_hit: false,
             transform_mode: TransformMode::Passthrough,
             transforms: Vec::new(),
@@ -566,7 +574,6 @@ mod tests {
             failover_from: None,
         }
     }
-
     /// Arm A, the no-attempt shape: dropping an untouched guard writes
     /// exactly one row — `499`, `kind: canceled`, `stage: not_billed`,
     /// `canceled_by: client`, `attempts: 0`.

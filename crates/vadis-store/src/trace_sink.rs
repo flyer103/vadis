@@ -225,6 +225,8 @@ mod tests {
                 attempts: 1,
                 failover_from: None,
                 plan_switch: None,
+                // Fixture record: no failover moved it.
+                failover_order: None,
                 overhead_ms: 0,
                 upstream_ms: None,
             },

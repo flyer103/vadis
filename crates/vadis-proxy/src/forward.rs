@@ -268,6 +268,9 @@ pub fn mode_refused_record(
             attempts: 0,
             failover_from: None,
             plan_switch: None,
+            // The pre-pipeline refusal never reaches the walk, so no
+            // order exists.
+            failover_order: None,
             overhead_ms,
             upstream_ms: None,
         },
@@ -708,6 +711,10 @@ pub(crate) struct RequestFacts<'a> {
     /// move) or when a 403 `quota_exhausted` on the family's primary
     /// spilled it mid-request.
     pub(crate) plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `result.failover_order` (ADR-063 §6.4): the order value
+    /// the walk held, set when a failover moved this request; `None`
+    /// until then (present-and-null on the wire).
+    pub(crate) failover_order: Option<vadis_core::trace::FailoverOrderRec>,
     /// spec §6 `state.sticky_hit`: **one per-request predicate, read
     /// once before any binding write** (the R21-1 freeze). The value is
     /// fixed at session resolution — "did this session already have a
@@ -820,6 +827,7 @@ impl Forwarder {
             attempted_route: None,
             last_upstream_status: None,
             plan_switch: None,
+            failover_order: None,
             // The one sticky read (spec §6): a request that has not yet
             // resolved its session cannot have a binding row — false by
             // definition, never recomputed later.
@@ -915,6 +923,7 @@ impl Forwarder {
                 now_epoch_s: facts.now_epoch_s,
                 now_us: facts.now_us,
                 plan_switch: facts.plan_switch.clone(),
+                failover_order: facts.failover_order.clone(),
                 // The one value (spec §6): read at session resolution,
                 // before this request's binding write — not recomputed
                 // here at record time, where the same request's write
@@ -1248,6 +1257,7 @@ impl Forwarder {
                     now_epoch_s,
                     now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
+                    failover_order: facts.failover_order.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
                     transforms: facts.transform_records.clone(),
@@ -1332,6 +1342,7 @@ impl Forwarder {
                     now_epoch_s,
                     now_us: facts.now_us,
                     plan_switch: facts.plan_switch.clone(),
+                    failover_order: facts.failover_order.clone(),
                     sticky_hit,
                     transform_mode: facts.transform_mode,
                     transforms: facts.transform_records.clone(),
@@ -1896,6 +1907,7 @@ impl Forwarder {
                                 now_epoch_s,
                                 now_us: facts.now_us,
                                 plan_switch: facts.plan_switch.clone(),
+                                failover_order: facts.failover_order.clone(),
                                 sticky_hit,
                                 transform_mode: facts.transform_mode,
                                 transforms: facts.transform_records.clone(),

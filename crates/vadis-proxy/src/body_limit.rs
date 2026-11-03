@@ -142,6 +142,8 @@ pub fn too_large_record(
             attempts: 0,
             failover_from: None,
             plan_switch: None,
+            // The bound refuses before the walk, so no order exists.
+            failover_order: None,
             overhead_ms,
             upstream_ms: None,
         },

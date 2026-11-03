@@ -364,12 +364,20 @@ pub struct ResultRec {
     /// `"<provider>/<model>"` when the request switched away from a failed
     /// route (spec §6 `failover_from`).
     pub failover_from: Option<String>,
-    /// spec §6 `plan_switch` (ADR-014): present-and-null whenever the plan
+    /// spec §6 `result.plan_switch` (ADR-014): present-and-null whenever the plan
     /// policy did not displace this request's account — the same stance
     /// as `prefix.continuity`, never omitted. It is **not** a second name
     /// for `failover_from`: a failure-class fact sets that field, the
     /// plan policy's account state sets this one (spec §6's own table).
     pub plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `result.failover_order` (ADR-063 §6.4): present-and-null on
+    /// every record that no failover moved — the same stance as
+    /// `failover_from`, so the key set never changes shape. The order
+    /// object the walk held (candidates, exclusions, chosen) plus the two
+    /// members the event keeps at its payload's top level (`currency`,
+    /// `from_price`). Additive: one added key never moves
+    /// `TRACE_SCHEMA_VERSION` (the `config_digest` precedent).
+    pub failover_order: Option<FailoverOrderRec>,
     pub overhead_ms: u32,
     pub upstream_ms: Option<u32>,
 }
@@ -431,6 +439,116 @@ impl PlanSwitchRec {
     pub fn settled_on(&mut self, route: &str) {
         self.chosen = Some(route.to_string());
     }
+}
+
+// -- ADR-063 §6: the failover order's record surfaces --------------------
+
+/// ADR-063 §6.2: one candidate's declared price quote — the config's own
+/// numbers, read at decision time, **none computed, estimated or
+/// converted**. `input_miss`/`output` are the entry's as-written values
+/// (a `price.tiers` model reports its first band and says so in `band`);
+/// a value the config does not declare is `null`, never a stand-in;
+/// `peak_multiplier` is the entry's declared multiplier, recorded
+/// because a base price compared in a peak window is not the price the
+/// request paid; and no exchange rate appears anywhere (§5.6 rule 3's
+/// prohibition, extended to the record).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderPriceRec {
+    pub currency: Currency,
+    pub input_miss: Option<f64>,
+    pub output: Option<f64>,
+    pub band: Option<OrderBandRec>,
+    pub peak_multiplier: f64,
+}
+
+/// The first band's own inclusive ceiling, `Some` only for a
+/// `price.tiers` model (ADR-063 §6.2) — so the quote cannot be mistaken
+/// for a band-faithful one.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderBandRec {
+    pub up_to: f64,
+}
+
+/// ADR-063 §6.2 / ADR-056 §2.5: the advisory member of a candidate the
+/// order placed at the back because its route-scoped `stream_silence`
+/// row was live at the decision instant. An advisory row **never**
+/// excludes a candidate — a sort cannot refuse — and this member is how
+/// the record keeps that distinction visible.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderAdvisoryRec {
+    pub reason: String,
+    pub until_us: i64,
+}
+
+/// One position of `order.candidates[]` (ADR-063 §6.2), in walk order:
+/// the route, its tier, its currency, the `basis` that placed it, its
+/// declared price (or `null` — the defensive `declared_no_price` arm,
+/// unreachable through a validated config), and its advisory silence
+/// row when one was read.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderCandidateRec {
+    pub route: String,
+    pub tier: String,
+    pub currency: Currency,
+    pub basis: String,
+    pub price: Option<OrderPriceRec>,
+    pub advisory: Option<OrderAdvisoryRec>,
+}
+
+/// One entry of `order.excluded[]` (ADR-063 §6.2/§3.2): a candidate the
+/// eligibility sequence refused before any attempt, with the walk's own
+/// frozen skip vocabulary (`demoted` | `keyless` | `wire_mismatch` |
+/// `unknown_provider` | `attempted`) plus `attempted`'s in-request form.
+/// Binding facts only — an advisory `stream_silence` row never appears
+/// here (§3.3).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderExcludedRec {
+    pub route: String,
+    pub reason: String,
+    pub cooldown: Option<OrderCooldownRec>,
+}
+
+/// The binding cooldown row an exclusion names (ADR-063 §3.1): the
+/// row's own `scope` and `reason` words, and its `until_us`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderCooldownRec {
+    pub scope: String,
+    pub reason: String,
+    pub until_us: i64,
+}
+
+/// spec §6 `result.failover_order` (ADR-063 §6.4): the order object the
+/// walk held — walk-ordered eligible candidates, each with its basis and
+/// declared price; the excluded ones with their reasons; the chosen
+/// candidate (== the payload's `to`, one value written twice, §6.3) —
+/// plus `currency` and `from_price` beside it (the trace mirror carries
+/// the two members the event keeps at its payload's top level, so a
+/// reader holding only this object is never left with an unlabelled
+/// `switch_cost_nano`). Built **from the same order value the walk
+/// used** — never a re-derivation.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct FailoverOrderRec {
+    /// The ruling's own name (ADR-063 §2's frozen token,
+    /// `plan::ORDER_RULE`).
+    pub rule: String,
+    pub candidates: Vec<OrderCandidateRec>,
+    pub excluded: Vec<OrderExcludedRec>,
+    pub chosen: String,
+    /// §4.8: the unit `switch_cost_nano` is denominated in — the
+    /// destination's currency (== the chosen candidate's, §6.3's second
+    /// invariant).
+    pub currency: Currency,
+    /// The declared price of the route in `from` (`null` when that
+    /// entry declares none) — both sides of the comparison in the row,
+    /// because the config revision that priced it is not (ADR-063 §6.1).
+    pub from_price: Option<OrderPriceRec>,
 }
 
 /// spec §6 "failure details": the internal failure record — several
@@ -701,6 +819,8 @@ mod tests {
                 attempts: 1,
                 failover_from: None,
                 plan_switch: None,
+                // Fixture record: no failover moved it.
+                failover_order: None,
                 overhead_ms: 1,
                 upstream_ms: Some(2),
             },

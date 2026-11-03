@@ -139,6 +139,11 @@ pub struct AccountCtx<'a> {
     /// plan policy displaced this request's account (ADR-014); `None` on
     /// every other request (present-and-null on the wire).
     pub plan_switch: Option<PlanSwitchRec>,
+    /// spec §6 `result.failover_order` (ADR-063 §6.4): the order value
+    /// the walk held, set by the forwarding path when a failover moved
+    /// the request; `None` on every other request (present-and-null on
+    /// the wire).
+    pub failover_order: Option<vadis_core::trace::FailoverOrderRec>,
     /// spec §6 `state.sticky_hit`: the session already had a binding row
     /// when the request arrived (the sticky-hit input forward.rs
     /// computes for bind_session — one value, both sinks).
@@ -673,6 +678,9 @@ impl<'a> Accountant<'a> {
                 attempts,
                 failover_from,
                 plan_switch: ctx.plan_switch.clone(),
+                // ADR-063 §6.4: the order value the walk used, mirrored
+                // present-and-null (the `failover_from` stance).
+                failover_order: ctx.failover_order.clone(),
                 overhead_ms,
                 upstream_ms,
             },

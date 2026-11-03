@@ -221,6 +221,8 @@ pub fn refused_record(
             attempts: 0,
             failover_from: None,
             plan_switch: None,
+            // The auth guard never reaches the walk, so no order exists.
+            failover_order: None,
             overhead_ms,
             upstream_ms: None,
         },
