@@ -25,8 +25,9 @@ use vadis_core::error_class::{
     classify_upstream_error, Classification, ErrorClass, ErrorEvidence, TransportCause,
 };
 use vadis_core::plan::{
-    account_of_route, displacement_reason, metered_walk, plan_tier, route_in_family, PlanFirstRule,
-    PlanMove, PlanRequest, PlanStateRow, REASON_PRIMARY_RECOVERED,
+    account_of_route, displacement_reason, metered_walk, order_chain, order_facts_for_route,
+    plan_tier, route_in_family, OrderedCandidate, PlanFirstRule, PlanMove, PlanRequest,
+    PlanStateRow, REASON_PRIMARY_RECOVERED,
 };
 use vadis_core::prefix::{attribute_tokens, body_sha16, extract_prefix_blocks, PrefixBlock};
 use vadis_core::store::{EventKind, NewEvent, ProjectionWrite, Query, QueryRow, Store};
@@ -1430,6 +1431,22 @@ impl Forwarder {
             }
         }
 
+        // ADR-063 §2 (the buffered chain, site 2 of §12): the walk holds
+        // a list produced by the ONE order owner — a stable sort of the
+        // declared list above under the six-term key (silence, tier,
+        // currency group by first declaration, declared input_miss,
+        // declared output, declared index), **position 0 pinned** (the
+        // resolved route: re-ordering the head is selection, not
+        // failover). Eligibility stays the walk's own rule, applied as
+        // it goes (§3.2: eligibility first, then the order over what is
+        // left — the record below lists the refused ones in
+        // `excluded[]`, never as ordered-though-unhealthy). The order
+        // value is kept: `failover.triggered` explains THE SAME value,
+        // never a re-derivation (§6).
+        let chain_order: Vec<OrderedCandidate> = self.chain_order(&candidates, facts.now_us);
+        let candidates: Vec<RouteSpec> =
+            chain_order.iter().map(|o| o.facts.route.clone()).collect();
+
         let mut attempted_providers: Vec<String> = Vec::new();
         // The family's primary refused by ADR-011's cooldown projection
         // before any attempt (spec §6's producer table, CONF-42): set by
@@ -1508,7 +1525,12 @@ impl Forwarder {
                 }
             }
             let candidate: &RouteSpec = redirected.as_ref().unwrap_or(candidate);
-            if self.provider_in_cooldown(&candidate.provider) {
+            // ADR-063 §3.1: the pre-attempt binding check is the
+            // reason-aware, route-level predicate (a provider-wide row
+            // or a route-scoped non-silence row refuses this candidate);
+            // the advisory silence word is term 1 of the order above,
+            // never a refusal.
+            if self.route_unavailable(candidate) {
                 // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
                 // `failover_from` table, row 2): the projection refused
                 // this candidate before any attempt, so the walk moves on
@@ -2607,6 +2629,45 @@ impl Forwarder {
         crate::availability::provider_in_cooldown(self.store.as_ref(), provider, now_us())
     }
 
+    /// ADR-063 §3.1's reason-aware, route-level binding predicate on
+    /// this method's own clock read — the walk's pre-attempt check and
+    /// `next_candidate`'s eligibility both go through here, so the two
+    /// statements of one rule share one owner (the ADR-023 Decision 2
+    /// stance, restated for the binding half).
+    pub(crate) fn route_unavailable(&self, route: &RouteSpec) -> bool {
+        crate::availability::binding_cooldown_row(
+            self.store.as_ref(),
+            &route.provider,
+            &route.model,
+            now_us(),
+        )
+        .is_some()
+    }
+
+    /// ADR-063 §2/§12 site 1: the declared list → the ordered chain, via
+    /// the pure owner in `vadis_core::plan`. One snapshot per request:
+    /// each candidate's facts are read from the roster and the cooldown
+    /// projection at the caller's ONE clock word (`now_us` — the same
+    /// instant eligibility takes), then `order_chain` sorts positions
+    /// `1..` under the six-term key with position 0 pinned. Purity
+    /// (constraint 2): the same config + the same projection state give
+    /// the same order — no second clock, no RNG.
+    pub(crate) fn chain_order(&self, declared: &[RouteSpec], now_us: i64) -> Vec<OrderedCandidate> {
+        let facts: Vec<_> = declared
+            .iter()
+            .map(|route| {
+                let silence = crate::availability::route_silence_row(
+                    self.store.as_ref(),
+                    &route.provider,
+                    &route.model,
+                    now_us,
+                );
+                order_facts_for_route(&self.config, route, silence.map(|row| row.until_us))
+            })
+            .collect();
+        order_chain(facts)
+    }
+
     /// `error.classified` (NORMAL) — §12.10.5 row 7, ADR-011 item 8. Every
     /// classification writes one event, even when the action is abort.
     /// Returns the event id the demotion projection rides on. Shared by
@@ -2804,24 +2865,24 @@ impl Forwarder {
         // predicate — the same conditions the walk's own loop applies, so a
         // destination is named only if the walk will actually attempt it.
         // The loop's order is kept (provider entry, wire, key/transport,
-        // not-attempted, not-in-cooldown) so both statements of one rule
-        // cannot drift again. ADR-056 §2.5 adds the advisory half the walk
-        // itself applies: a silence-cooling route is named only when no
-        // eligible non-cooling candidate exists — the narration must not
-        // promise a destination the walk would skip past.
+        // not-attempted, not-bound-by-cooldown) so both statements of one
+        // rule cannot drift again. ADR-063 §3.3 removes the advisory
+        // second pass this function used to take: the silence preference
+        // is TERM 1 of the order the caller already sorted `candidates`
+        // by, so the first eligible candidate in that list IS the
+        // non-cooling-preferred one — one mechanism, not two.
         let eligible = |c: &RouteSpec| {
             !attempted_providers.contains(&c.provider)
-                && !self.provider_in_cooldown(&c.provider)
+                // ADR-063 §3.1's reason-aware binding predicate: a live
+                // provider-wide row, or a route-scoped row whose reason is
+                // not the advisory silence word.
+                && !self.route_unavailable(c)
                 // The provider check doubles as existence: no entry, no
                 // `supports` to consult, no candidate.
                 && self.provider(c).is_some_and(|p| p.supports.contains(&proto_in))
                 && self.transports.contains_key(&c.provider)
         };
-        candidates
-            .iter()
-            .find(|c| eligible(c) && !self.route_silence_cooling(c))
-            .or_else(|| candidates.iter().find(|c| eligible(c)))
-            .cloned()
+        candidates.iter().find(|c| eligible(c)).cloned()
     }
 
     pub(crate) fn append_event(

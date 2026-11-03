@@ -866,7 +866,19 @@ impl Forwarder {
         // position (ADR-024 ruling 2) so the serialiser can emit the
         // chain's own order whichever stage appended an entry.
         let mut skipped: Vec<ChainSkipped> = Vec::new();
-        let mut chain_pos: usize = 0;
+        // ADR-063 §2 (the streamed chain, site 3 of §12): the offered
+        // chain is ordered by the ONE owner before this block's
+        // eligibility filter runs — position 0 (the resolved route)
+        // pinned, the tail sorted under the six-term key (silence, tier,
+        // currency group, declared prices, declared index) at the
+        // request's ONE clock word. The value is kept beside `skipped`:
+        // `failover.triggered` explains THE SAME order, never a
+        // re-derivation (§6). The dedup below is the construction loop's
+        // own rule (each route once, first occurrence), moved in front
+        // of the sort so the key's term 6 sees the declared list the
+        // buffered twin builds.
+        let chain_order: Vec<vadis_core::plan::OrderedCandidate>;
+        let ordered_declared: Vec<RouteSpec>;
         {
             // The offered chain (spec §4.2 refined by §4.6 / ADR-049
             // §5.1/§5.7): the family's ACTIVE route, the plan tier's
@@ -899,10 +911,17 @@ impl Forwarder {
                     }
                 }
             }
-            for route in routes
-                .into_iter()
-                .chain(self.config.fallback.iter().cloned())
-            {
+            for r in &self.config.fallback {
+                if !routes.contains(r) {
+                    routes.push(r.clone());
+                }
+            }
+            chain_order = self.chain_order(&routes, facts.now_us);
+            ordered_declared = chain_order.iter().map(|o| o.facts.route.clone()).collect();
+        }
+        let mut chain_pos: usize = 0;
+        {
+            for route in ordered_declared {
                 // The offered-chain position (ADR-024 ruling 2): every
                 // route this loop visits — candidate or skip — advances
                 // it, so a skip entry can name where in the chain it
@@ -1174,7 +1193,10 @@ impl Forwarder {
                 if let Some(sub) = redirected {
                     cand = sub;
                 }
-                if self.provider_in_cooldown(&cand.route.provider) {
+                // ADR-063 §3.1, the buffered twin's binding check: the
+                // reason-aware route-level predicate, never the advisory
+                // silence word alone.
+                if self.route_unavailable(&cand.route) {
                     // The pre-attempt cooldown skip (ADR-011 item 4; spec §6's
                     // `failover_from` table, row 2): the projection refused
                     // this candidate before any attempt, so the walk moves on
@@ -1959,17 +1981,19 @@ impl Forwarder {
         if !class.fails_over() {
             return None;
         }
-        // ADR-056 §2.5's advisory half, mirroring the walk's own skip: a
-        // silence-cooling route is named only when no eligible
-        // non-cooling candidate exists, so the narration and the walk
-        // cannot disagree about where the request lands.
+        // ADR-023 Decision 2's twin, with ADR-063 §3.3's simplification:
+        // the candidates arrive already ordered (the construction loop
+        // sorted the offered chain under the six-term key), so the
+        // silence preference — term 1 of that key — needs no second pass
+        // here; the first eligible candidate in walk order is the
+        // non-cooling-preferred one, and the narration cannot promise a
+        // destination the walk would skip past.
         let eligible = |c: &Candidate| {
-            !attempted.contains(&c.route.provider) && !self.provider_in_cooldown(&c.route.provider)
+            !attempted.contains(&c.route.provider) && !self.route_unavailable(&c.route)
         };
         candidates
             .iter()
-            .find(|c| eligible(c) && !self.route_silence_cooling(&c.route))
-            .or_else(|| candidates.iter().find(|c| eligible(c)))
+            .find(|c| eligible(c))
             .map(|c| c.route.clone())
     }
 }
