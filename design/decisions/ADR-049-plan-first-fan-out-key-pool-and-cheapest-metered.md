@@ -601,3 +601,40 @@ for the first.*
 cases) are untouched, no key is added, and no assertion is edited (AGENTS constraint 9 / ADR-012 — this is a
 wording repair, not a measurement, and it moves no gate, corpus, threshold or L1-envelope value). It closes
 the item R66's close-out carried as **F-12** against the code at `5d78f7b`; `CONF-91` stays the witness.
+
+## Dated note (2026-11-03, R75-0 — append-only, `ADR-063`)
+
+**This note records what a later ADR generalized, and the one promise it amends. Not one line above it is
+edited.**
+
+1. **§5.6's ranking is no longer the metered tier's private rule; it is the metered instance of one rule
+   about every candidate list the walk holds.** `ADR-063` §2 orders the list by *(health, tier, currency
+   group, declared `input_miss`, declared `output`, declaration)*. On a single-currency metered set — the only
+   shape this ADR allows a `cheapest` family to have, §5.6 rule 3 — terms 4–6 **are** §5.6 rule 1's key,
+   verbatim: ascending `input_miss`, then `output`, then roster declaration order, a `price.tiers` model by
+   its first band. Nothing in §5.6's ranking moves; what moves is the claim that it is the *only* price order
+   in the product (it is now the *same* one, applied to the chain too).
+2. **"`declared`: today's behaviour, byte-identical" (§5.5) is true of the tier and no longer of the chain.**
+   Under `declared` a spill still attempts exactly one metered route — the policy's `overflow` — so the
+   family's own behaviour is byte-identical. What the ruling changes is the **list the walk holds after that
+   route**: the plan tier above it and the global `fallback` entries below it are ordered by §4.2's rule in
+   *both* modes. The mode therefore selects a **set**; it does not select an order, and it is not a second
+   ordering authority beside `ADR-063`.
+3. **§5.1 is untouched, and now derived.** The plan tier still walks in declaration order with `primary` at
+   its head, and the *reason* this ADR gives is the reason `ADR-063`'s key reproduces it: an in-plan marginal
+   price is 0 (§4.6 rule 4), so a plan route ranks before every metered candidate **because it is cheapest**,
+   the tier's members tie at 0, and declaration order is what breaks the tie. No plan tier is ever ranked by
+   its declared price table, and no key orders it.
+4. **§5.6 rule 3's refusal is not extended and not relaxed.** A `cheapest` **family's** mixed-currency
+   candidate set is still a load error: that set is *discovered* from a family tag the operator did not write,
+   so a mixed set there is an accident. A chain is an *authored* list, whose currency boundary is a
+   declaration, so `ADR-063` groups it instead (term 3) — never converts it.
+5. **§7(e)'s `plan_switch.candidates` / `chosen` are untouched.** The failover's own order is a **new** trace
+   member (`result.failover_order`, spec §6) and a **new** payload object on `failover.triggered`
+   (`ADR-063` §6), because a failover is not a plan switch: §7(e)'s members answer *which account the policy
+   moved*; the new object answers *why this destination and not another*. Neither is a second name for the
+   other.
+
+**What this note does not do.** It adds no key, no refusal and no price; it moves no gate, corpus, threshold,
+`CONF` id or assertion (AGENTS constraint 9); and it does not re-open §3's pool, §4's family list, §6's pins
+or §5.7's walk shape.

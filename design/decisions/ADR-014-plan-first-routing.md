@@ -295,3 +295,28 @@ working tree (its file paths and round-record names, its state record, charter, 
 model and replay contract, its scripts and module names, and the kanban card ids), each
 replaced by the neutral phrase the sentence needs. Nothing else moved — no figure,
 threshold, `§`/`ADR`/`CONF` id, code sample or contract sentence.
+
+## Dated note (2026-11-03, R75-0 — append-only)
+
+**One label in this document narrows; none of its reasoning moves.** The Background says the global `fallback`
+chain *"is a **failure** mechanism, not an economic preference"*, and gives three reasons: it does not prefer
+the plan while both routes are healthy, it is not session-aware, and it cannot express spill-and-return.
+**All three reasons stand** — ADR-063 rules the *order of the candidate list a walk holds*, and an order is
+not a state: it cannot prefer a healthy plan over a metered account, it re-decides per decision, and it still
+cannot express "spill now, return when the plan is usable". The `Alternatives considered` row that rejects
+*"express it with the fallback chain alone"* therefore stands verbatim, for exactly the reason it gives.
+
+What narrows is the clause **"not an economic preference"**, and it narrows to the half it was ever true of.
+The chain's **membership** is still the operator's declaration and its **trigger** is still a failure; its
+**order** is now economic and ruled — healthy before cooling, plan before metered, cheapest healthy first,
+declaration only where the config cannot be compared (`ADR-063` §2, spec §4.2). So the sentence reads, after
+this note: *the chain is a failure mechanism whose members you declare and whose order is economic.*
+
+The step that made an order affordable is the one this ADR's own Background constraint 1 imposes: the order
+is a function of **stable config** plus the cooldown projection, evaluated at the decision point — never a
+per-request re-decision of the route the client asked for, which is the flip this document exists to forbid
+(ADR-063 §2.2 pins the head for the same reason).
+
+**What this note does not do.** It re-opens no decision of this ADR — the session granularity (item 1), the
+probe (item 3), the rule order (item 9) and the guard's mechanism are untouched, no key is added, no case
+moves, and no price or threshold is touched.

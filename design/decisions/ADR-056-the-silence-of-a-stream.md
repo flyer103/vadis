@@ -682,3 +682,34 @@ boundary, so both are `R74-1`'s to land (AGENTS constraint 8).
   exists to avoid.
 - **Not** *"R74-0 changed a product byte."* The diff is `design/`, `docs/` and three parked case files;
   `crates/`, `config.example.yaml`, `book/` and `README.md` are untouched.
+
+## Dated note (2026-11-03, R75-0 — append-only, `ADR-063`)
+
+**§2.5's "what it does" gains a place in a key, and keeps every property it had.** The row's effect is
+written above as *"the walk **prefers** an eligible candidate whose route is not silence-cooling, and leaves a
+cooling one only when such a candidate exists"*. `ADR-063` §2 states the same rule as **term 1 of the order of
+the candidate list** (spec §4.2): not cooling before cooling, everything else unchanged. The change is one of
+mechanism, not of meaning:
+
+- **The three properties hold by construction rather than by a second pass.** A sort cannot remove an element,
+  so a `stream_silence` candidate can never be the cause of `no_available_route`, can never enter `skipped[]`,
+  and is still attempted when it is the only route — §2.5.3's advisory rule is now unfalsifiable by the code
+  rather than observed of it. `next_candidate`'s two-pass find (`forward.rs:2781`) is the second mechanism
+  this replaces; `R2` deletes it rather than wrapping it.
+- **The record keeps the two facts apart.** A cooling candidate appears in `failover.triggered`'s
+  `order.candidates[]` with its `advisory: {reason: "stream_silence", until_us}` and **never** in
+  `order.excluded[]` (ADR-063 §6.3 invariant 3). The advisory row is therefore not merely un-refusing; it is
+  visibly a position, which is the reading §2.5.3 asked a future reader not to "fix".
+- **The cooldown itself is untouched.** K = 1, the 60 s constant, the route scope with the native model id,
+  the two-sites-one-source `demotion` object (§6.2), the probe gate's deliberate blindness (§2.5.4) and the
+  `reason = "stream_silence"` discriminator are exactly as ruled here. `ADR-063` adds no writer, no TTL and no
+  reason word; it reads the row this ADR writes.
+
+**One asymmetry this note states so it is not read as a regression.** Rank 1 sits above the tier term, so a
+*plan* route that is silence-cooling is preferred against in favour of a healthy metered one — which is what
+§2.5 already does (its preference is unqualified by tier), and which spends money for a minute. That is the
+trade this ADR's TTL and trigger were chosen for, and the record's `advisory` member is what makes the trade
+visible afterwards.
+
+**What this note does not do.** It changes no byte of the relay (§2.5's byte path is unmoved), no case
+(`CONF-108/109/110` keep their assertions), no figure, and no section of this document above it.
