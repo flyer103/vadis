@@ -19,7 +19,12 @@ pub struct EventId(pub i64);
 /// money-bearing payloads (`cost.computed`, `plan.switched`) gain a
 /// `"currency"` field — a reader that knows only v1 can refuse a v2 row
 /// rather than add a CNY row into a USD sum.
-pub const EVENT_SCHEMA_VERSION: i64 = 2;
+/// Version **3** (ADR-063 §6.5): `failover.triggered` gains its own
+/// `currency` (the unit of its `switch_cost_nano`) — a reader that knows
+/// only v2 would read a CNY `switch_cost_nano` into a USD sum. A row whose
+/// `currency` is absent predates the contract and must not be summed with
+/// a v3 row's.
+pub const EVENT_SCHEMA_VERSION: i64 = 3;
 
 /// The closed event-kind set (ADR-010 item 2, plus `error.classified` from
 /// ADR-011 and `restart.marked` from ADR-010 item 4). Enforced in code, not

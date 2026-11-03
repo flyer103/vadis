@@ -219,7 +219,13 @@ async fn conf_54_cny_route_records_and_reports_in_cny() {
             .find(|e| e.request_id.as_deref() == Some(spill_id))
             .expect("the spill's cost.computed row");
         assert_eq!(spill_row.payload["currency"], "CNY");
-        assert_eq!(spill_row.schema_version, 2, "EVENT_SCHEMA_VERSION 2");
+        assert_eq!(
+            spill_row.schema_version, 3,
+            "EVENT_SCHEMA_VERSION 3 (ADR-063 §6.5; owner ruling 2026-11-04): \
+             failover.triggered carries its own currency — a v2-only reader \
+             would sum CNY into USD; a row without a `currency` predates the \
+             contract and is never summed with a v3 row's switch_cost_nano"
+        );
     }
 
     // (c) the mixed window reports per currency, no combined total.
