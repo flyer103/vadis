@@ -98,9 +98,9 @@ retried or skipped, what "healthy" means). The order that satisfies all three at
 ## 2. The ruling
 
 > **The failover candidate order is a rule, not a knob — healthy before cooling, plan before metered, cheap
-> before dear, and where the configuration cannot be compared (two currencies, or no price declared) the
-> operator's declared order decides; the walk takes the head of that order, and `failover.triggered` records
-> the order, the exclusions and the declared price that placed it.**
+> before dear; where the configuration cannot be compared (two currencies, or a price the config does not
+> declare — a defensive arm, §2.1) the operator's declared order decides; the walk takes the head of that
+> order, and `failover.triggered` records the order, the exclusions and the declared price that placed it.**
 
 Concretely, and normatively: **the walk holds a list; the list is produced by `R2`'s one owner as a stable
 sort of the declared list under the key below; position 0 is never moved by the sort (it is the resolved route);
