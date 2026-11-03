@@ -226,19 +226,24 @@ The first and the second both print `kept 0`; `class` separates them (`first` ve
 says whether anything diverged at all. A `shorten` is **not** a break: its `at` names the first *dropped*
 block, and its re-bill is normally `0`.
 
-**The session figure — and why it says `inferred`.** The summary adds the rows up:
+**The session figure — and why it says `inferred`.** The summary adds the rows up — and on this page you
+can check it: every operand below is the arithmetic of the three rows printed above:
 
 ```text
-re-billed        84120 tokens (inferred)  = Σ miss 212000 − floor 132000 + surplus 4120   (3 rows re-billed; 0 rows without usage; 0 rows unpriced)
-re-billed money  1261800 nano USD (inferred; each row's own measured miss rate — no price table is read here)
+re-billed        11862 tokens (inferred)  = Σ miss 25422 − floor 14520 + surplus 960   (2 rows re-billed; 0 rows without usage; 0 rows unpriced)
+re-billed money  5136 nano USD (inferred; each row's own measured miss rate — no price table is read here)
 ```
 
-`Σ miss` is every miss the session paid, `floor` is its **largest** prompt — every token of it had to be
-prefilled at least once, so it is the session's unavoidable minimum — and the difference is the part of
-the bill that came from the prefix changing rather than from the conversation growing. `surplus` is the
-correction for the rows where an upstream's cache covered tokens this session had not itself sent. The
-money line prices those tokens at the very miss rate that priced them, which is why no price table is read
-to produce it.
+`Σ miss` is every miss the session paid — each row's `in − cached`, added: `(14409 − 960) + (14520 − 14400) + (12877 − 1024) = 13449 + 120 + 11853 = 25422`. `floor` is its **largest** prompt — every token of it had to be
+prefilled at least once, so it is the session's unavoidable minimum; here that is step 5's `in 14520` —
+and the difference is the part of the bill that came from the prefix changing rather than from the
+conversation growing. `surplus` is the correction for the rows where an upstream's cache covered tokens
+this session had not itself sent: row 1's `cached 960`, a cold start, all of it covered before the session
+sent anything. The identity closes on the rows' own re-bill column — `0 + 9 + 11853 = 11862 = 25422 − 14520 + 960` — and the two rows that re-billed are steps 5 and 9 (step 1 is the session's own cold start,
+which re-bills nothing by construction). The money line prices those tokens at the very miss rate that
+priced them, each row's own bill in the ratio its re-bill bears to its miss — step 9 re-billed every token
+it missed (11853 of 11853: its whole 5128 nano), step 5 nine of its 120 (`9/120` of its 118 nano, 8) — so
+`5128 + 8 = 5136`, which is why no price table is read to produce it.
 
 Read it as a **decomposition, not a saving**: it is money already spent, it is labelled `inferred` (a
 local estimate with no control — `measured` is a number the provider itself reported, and `verified` is
