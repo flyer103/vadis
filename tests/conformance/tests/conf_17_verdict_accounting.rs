@@ -139,6 +139,10 @@ fn empty_record() -> DecisionRecord {
             upstream_status: Some(200),
             attempts: 1,
             failover_from: None,
+            // Present-and-null (ADR-063 §6.4): this fixture's request never
+            // fails over, so it carries no order. The additive-field edit is
+            // the owner's ruling of 2026-11-04 (the `attempts: 1` precedent).
+            failover_order: None,
             plan_switch: None,
             overhead_ms: 0,
             upstream_ms: None,
