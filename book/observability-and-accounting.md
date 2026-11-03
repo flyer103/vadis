@@ -262,11 +262,17 @@ re-billed), and the five steps that re-billed the most. The full column contract
 [ADR-057](../design/decisions/ADR-057-the-step-ledger.md) and, for this part,
 [ADR-062](../design/decisions/ADR-062-the-block-that-broke-and-the-money-labelled-inferred.md).
 
-A note on one word: the command's own header line still prints the older word **`verified`** on the token
-and block columns, and the `cache` line prints it too. Those are single observations, so the contract —
-[`docs/spec.md` §9.4.3](../docs/spec.md), and the sentence above — says **`measured`**; `verified` is
-reserved for a designed comparison between two runs. The wording is a known defect of the printed header,
-corrected by the change that lands the re-bill columns, and nothing in this section depends on it.
+A note on one word: the command's own header — the third line it prints, above the column header — now
+states the split this section uses. Quoted verbatim from the built binary, so the book and the binary
+cannot drift apart silently:
+
+```text
+wall_ms spans the whole request on a streamed row (not the gateway's own overhead); new_tok is inferred; in/cached/out and the block facts are measured; kept_tok and rebill_tok are inferred (a proportional attribution, and a miss volume above the session's one-pass floor); class names the measured block relation (kept/blocks/at), not what the client did
+```
+
+No `verified` survives anywhere in the text form — the `cache` summary line says `measured` too ("input
+tokens, measured — the provider's own counters") — and the contract, [`docs/spec.md` §9.4.3](../docs/spec.md),
+agrees with the sentence above: `verified` is reserved for a designed comparison between two runs.
 
 Two things are deliberately **not** served in v0.1: **`vadis replay`** (recompute cost and cache over a
 fixed trace through the same code path that served it) and **`vadis trace tail`** (follow the live
