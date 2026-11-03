@@ -141,8 +141,8 @@ async fn conf_118_the_json_form_is_the_contract() {
     // client's intent — a shorten may be a compaction, a trim, a rewind).
     let text = steps::render_text(&rep3, None);
     assert!(
-        text.contains("class names the verified block relation"),
-        "the header says what class is"
+        text.contains("class names the measured block relation"),
+        "the header says what class is (the word is `measured` per ADR-062 §5 / ADR-058 §5's measured/verified split, owner-ruled 2026-10-26)"
     );
     for (word, count) in [
         ("first", "count 1"),
