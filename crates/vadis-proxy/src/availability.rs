@@ -79,9 +79,7 @@ pub fn route_silence_row(
     model: &str,
     now_us: i64,
 ) -> Option<CooldownRow> {
-    let Some(store) = store else {
-        return None;
-    };
+    let store = store?;
     match store.query(Query::Cooldown {
         provider,
         model: Some(model),
@@ -115,9 +113,7 @@ pub fn binding_cooldown_row(
     model: &str,
     now_us: i64,
 ) -> Option<CooldownRow> {
-    let Some(store) = store else {
-        return None;
-    };
+    let store = store?;
     if let Ok(QueryRow::Cooldown(Some(row))) = store.query(Query::Cooldown {
         provider,
         model: None,
