@@ -1462,7 +1462,7 @@ impl Forwarder {
         // served. One entry per eligibility skip, in the chain's order.
         let mut skipped: Vec<(RouteSpec, &'static str)> = Vec::new();
 
-        for candidate in &candidates {
+        for (pos, candidate) in candidates.iter().enumerate() {
             if attempted_providers.iter().any(|p| p == &candidate.provider) {
                 continue;
             }
@@ -1545,21 +1545,27 @@ impl Forwarder {
                 }
                 continue;
             }
-            // ADR-056 §2.5 (spec §4.20.5): the advisory silence skip. A
+            // ADR-056 §2.5 + ADR-063 §2.2 (spec §4.20.5): the advisory
+            // silence skip, scoped to the PINNED HEAD — position 0, the
+            // only position term 1 of the order key cannot move. A
             // route whose own `stream_silence` row is live is preferred
-            // against, never refused — the walk moves past it only when
-            // the chain holds another candidate it would actually attempt,
-            // and attempts it as usual otherwise. The skip narrates
-            // `failover_from` (ADR-024's pre-attempt shape) and
-            // deliberately writes NO `skipped[]` entry and no
-            // `failover.triggered` row: a `demoted` entry would make an
-            // advisory row read binding, which §2.5.3 refuses.
-            if self.route_silence_cooling(candidate)
-                && candidates.iter().any(|c| {
-                    !attempted_providers.contains(&c.provider)
-                        && !self.provider_in_cooldown(&c.provider)
-                        && !self.route_silence_cooling(c)
-                })
+            // against, never refused — the head is abandoned only when
+            // the chain holds another candidate the walk would ACTUALLY
+            // ATTEMPT, and the guard is the walk's own eligibility
+            // predicate (`walk_eligible`, the same one
+            // `next_candidate` narrates by), so the narration and the
+            // walk cannot disagree: a destination is named only if the
+            // walk reaches for it. The skip narrates `failover_from`
+            // (ADR-024's pre-attempt shape) and deliberately writes NO
+            // `skipped[]` entry and no `failover.triggered` row: a
+            // `demoted` entry would make an advisory row read binding,
+            // which §2.5.3 refuses.
+            if pos == 0
+                && self.route_silence_cooling(candidate)
+                && candidates
+                    .iter()
+                    .skip(1)
+                    .any(|c| self.walk_eligible(c, &attempted_providers, proto_in))
             {
                 failover_origin(&mut facts.failover_from, candidate);
                 continue;
@@ -2683,7 +2689,22 @@ impl Forwarder {
                     &route.model,
                     now_us,
                 );
-                order_facts_for_route(&self.config, route, silence.map(|row| row.until_us))
+                // §12 site 5 / §7.1: the binding row is read at the SAME
+                // single clock word and travels inside the order value,
+                // so the record below answers from the snapshot — never
+                // a second read, never a second clock.
+                let binding = crate::availability::binding_cooldown_row(
+                    self.store.as_ref(),
+                    &route.provider,
+                    &route.model,
+                    now_us,
+                );
+                order_facts_for_route(
+                    &self.config,
+                    route,
+                    silence.map(|row| row.until_us),
+                    binding,
+                )
             })
             .collect();
         order_chain(facts)
@@ -2869,6 +2890,30 @@ impl Forwarder {
         Some(id)
     }
 
+    /// The buffered walk's own eligibility — ONE predicate, asked by
+    /// both statements of the rule (ADR-023 Decision 2): the provider
+    /// entry exists and declares the inbound cell (`supports`, the
+    /// declared-cell rule ADR-051 §2.1), a transport was built for it
+    /// at startup, it was not attempted in this request, and no
+    /// binding cooldown row refuses the route — §3.1's reason-aware
+    /// `route_unavailable`, whose provider-wide arm subsumes the
+    /// provider-cooldown question for every reason word.
+    fn walk_eligible(
+        &self,
+        route: &RouteSpec,
+        attempted_providers: &[String],
+        proto_in: WireApi,
+    ) -> bool {
+        !attempted_providers.contains(&route.provider)
+            && !self.route_unavailable(route)
+            // The provider check doubles as existence: no entry, no
+            // `supports` to consult, no candidate.
+            && self
+                .provider(route)
+                .is_some_and(|p| p.supports.contains(&proto_in))
+            && self.transports.contains_key(&route.provider)
+    }
+
     /// The next unattempted candidate after a failure, when the class may
     /// fail over. Provider-exclusion: a provider already attempted in this
     /// request is never re-attempted (spec §4.2 + ADR-011 item 4).
@@ -2882,28 +2927,18 @@ impl Forwarder {
         if !class.fails_over() {
             return None;
         }
-        // ADR-023 Decision 2: the narration predicate *is* the eligibility
-        // predicate — the same conditions the walk's own loop applies, so a
-        // destination is named only if the walk will actually attempt it.
-        // The loop's order is kept (provider entry, wire, key/transport,
-        // not-attempted, not-bound-by-cooldown) so both statements of one
-        // rule cannot drift again. ADR-063 §3.3 removes the advisory
-        // second pass this function used to take: the silence preference
-        // is TERM 1 of the order the caller already sorted `candidates`
-        // by, so the first eligible candidate in that list IS the
-        // non-cooling-preferred one — one mechanism, not two.
-        let eligible = |c: &RouteSpec| {
-            !attempted_providers.contains(&c.provider)
-                // ADR-063 §3.1's reason-aware binding predicate: a live
-                // provider-wide row, or a route-scoped row whose reason is
-                // not the advisory silence word.
-                && !self.route_unavailable(c)
-                // The provider check doubles as existence: no entry, no
-                // `supports` to consult, no candidate.
-                && self.provider(c).is_some_and(|p| p.supports.contains(&proto_in))
-                && self.transports.contains_key(&c.provider)
-        };
-        candidates.iter().find(|c| eligible(c)).cloned()
+        // ADR-023 Decision 2: the narration predicate IS the walk's
+        // eligibility predicate (`walk_eligible`), so a destination is
+        // named only if the walk will actually attempt it. ADR-063 §3.3
+        // removed this function's advisory second pass — the silence
+        // preference is TERM 1 of the order the caller already sorted
+        // `candidates` by — and §2.2 keeps the advisory pass for the
+        // pinned head alone, inside the walk's own loop, under this
+        // same predicate: one mechanism, one guard, no drift.
+        candidates
+            .iter()
+            .find(|c| self.walk_eligible(c, attempted_providers, proto_in))
+            .cloned()
     }
 
     pub(crate) fn append_event(
@@ -3164,11 +3199,14 @@ impl Forwarder {
     /// wire_mismatch), so an ineligible candidate lands in `excluded[]`
     /// with its reason — **never ordered as if healthy** — and the
     /// eligible remainder keeps the walk order. The `demoted` entries
-    /// name the binding row's own `{scope, reason, until_us}` (§3.1's
-    /// predicate, read at record time); an advisory `stream_silence`
-    /// row never excludes — it is the candidate's `advisory` member
-    /// (§3.3). Every number is the config's own (§6.2): prices are the
-    /// declared quote, and a route with no declared price reports
+    /// name the binding row's own `{scope, reason, until_us}` as the
+    /// SNAPSHOT read it (§12 site 5: the row travels inside the order
+    /// value — no second projection read, no second clock, §7.1); an
+    /// advisory `stream_silence` row never excludes — it is the
+    /// candidate's `advisory` member (§3.3). `attempted` stays walk
+    /// state: it is a fact of the walk, not of the projection. Every
+    /// number is the config's own (§6.2): prices are the declared quote
+    /// the snapshot carries, and a route with no declared price reports
     /// `basis: declared_no_price` and `price: null` — the defensive
     /// arm, never a substituted figure.
     fn failover_order_rec(
@@ -3180,29 +3218,41 @@ impl Forwarder {
         from: &RouteSpec,
     ) -> vadis_core::trace::FailoverOrderRec {
         use vadis_core::trace::{
-            FailoverOrderRec, OrderAdvisoryRec, OrderCandidateRec, OrderCooldownRec,
-            OrderExcludedRec,
+            FailoverOrderRec, OrderAdvisoryRec, OrderBandRec, OrderCandidateRec, OrderCooldownRec,
+            OrderExcludedRec, OrderPriceRec,
+        };
+        // The record's declared price is the snapshot's own: the entry
+        // in the order value already carries the quote the walk was
+        // ordered by, so the record re-reads no roster for it.
+        let price_of = |facts: &vadis_core::plan::ChainOrderCandidate| -> Option<OrderPriceRec> {
+            if facts.input_miss.is_none() && facts.output.is_none() {
+                return None;
+            }
+            Some(OrderPriceRec {
+                currency: facts.currency,
+                input_miss: facts.input_miss,
+                output: facts.output,
+                band: facts.band.map(|up_to| OrderBandRec { up_to }),
+                peak_multiplier: facts.peak_multiplier,
+            })
         };
         let mut candidates: Vec<OrderCandidateRec> = Vec::new();
         let mut excluded: Vec<OrderExcludedRec> = Vec::new();
         for entry in order {
             let route = &entry.facts.route;
             // §3.2's sequence, in the ADR's own letter order — the first
-            // matching condition names the reason.
+            // matching condition names the reason. Every fact is the
+            // snapshot's own (the binding row came in with the order
+            // value) or a roster/transport shape the walk itself tests.
             let exclusion: Option<(&'static str, Option<OrderCooldownRec>)> =
                 if attempted_providers.contains(&route.provider) {
                     Some((SKIP_ATTEMPTED, None))
-                } else if let Some(row) = crate::availability::binding_cooldown_row(
-                    self.store.as_ref(),
-                    &route.provider,
-                    &route.model,
-                    now_us(),
-                ) {
+                } else if let Some(row) = entry.facts.binding.as_ref() {
                     Some((
                         SKIP_DEMOTED,
                         Some(OrderCooldownRec {
-                            scope: row.scope,
-                            reason: row.reason,
+                            scope: row.scope.clone(),
+                            reason: row.reason.clone(),
                             until_us: row.until_us,
                         }),
                     ))
@@ -3229,7 +3279,7 @@ impl Forwarder {
                     tier: entry.facts.tier.as_str().to_string(),
                     currency: entry.facts.currency,
                     basis: entry.basis.as_str().to_string(),
-                    price: self.price_quote(route),
+                    price: price_of(&entry.facts),
                     advisory: entry.facts.silence.then_some(OrderAdvisoryRec {
                         reason: REASON_STREAM_SILENCE.to_string(),
                         until_us: entry.facts.silence_until_us.unwrap_or(i64::MAX),
@@ -3246,32 +3296,23 @@ impl Forwarder {
             // `to` (a guard redirection after this row is
             // `plan_switch`'s record, exactly as today).
             chosen: to.to_string(),
-            currency: self.route_currency(to),
-            from_price: self.price_quote(from),
+            // §6.3's second invariant: the destination's currency, from
+            // its own entry in the same order value (the roster read is
+            // the defensive fallback for a `to` outside the chain — the
+            // redirected corner).
+            currency: order
+                .iter()
+                .find(|e| &e.facts.route == to)
+                .map(|e| e.facts.currency)
+                .unwrap_or_else(|| self.route_currency(to)),
+            // §6.1: the abandoned route's declared quote — its own
+            // entry in the same order value, null when that entry
+            // declares none, never a stand-in number.
+            from_price: order
+                .iter()
+                .find(|e| &e.facts.route == from)
+                .and_then(|e| price_of(&e.facts)),
         }
-    }
-
-    /// One route's declared price quote (ADR-063 §6.2): the roster's own
-    /// numbers via the order-facts reader — a `price.tiers` model
-    /// reports its first band's prices and ceiling, and a value the
-    /// config does not declare stays `None`. `None` overall only when
-    /// the entry declares nothing price-shaped (the defensive
-    /// `declared_no_price` arm — the loader refuses that shape, so no
-    /// validated roster reaches it).
-    fn price_quote(&self, route: &RouteSpec) -> Option<vadis_core::trace::OrderPriceRec> {
-        let facts = order_facts_for_route(&self.config, route, None);
-        if facts.input_miss.is_none() && facts.output.is_none() {
-            return None;
-        }
-        Some(vadis_core::trace::OrderPriceRec {
-            currency: facts.currency,
-            input_miss: facts.input_miss,
-            output: facts.output,
-            band: facts
-                .band
-                .map(|up_to| vadis_core::trace::OrderBandRec { up_to }),
-            peak_multiplier: facts.peak_multiplier,
-        })
     }
 
     /// The session's prefix token total from the `cache_ledger` projection
@@ -3837,6 +3878,316 @@ mod walk_tests {
             foreign_seen.lock().unwrap().len(),
             0,
             "the foreign transport was never handed a request"
+        );
+    }
+
+    // -- ADR-063 §2.2/§3.3 (R4-R blocker 1): the advisory pass is the
+    //    pinned head's, under the walk's own predicate -------------------
+
+    /// A transport whose attempt answers a bare 500 — the
+    /// `server_error` class, which fails over (ADR-011's table).
+    struct FailingTransport;
+
+    impl ProviderSend for FailingTransport {
+        fn send(
+            &self,
+            _req: HttpRequest<Bytes>,
+        ) -> impl Future<Output = vadis_providers::AttemptOutcome> + Send {
+            async {
+                vadis_providers::AttemptOutcome::Responded(vadis_providers::UpstreamResponse {
+                    status: 500,
+                    retry_after: None,
+                    content_type: Some("application/json".into()),
+                    body: Bytes::from_static(
+                        br#"{"error":{"message":"internal","type":"server_error"}}"#,
+                    ),
+                })
+            }
+        }
+    }
+
+    /// The `[H, K, C]` rig's store double: it captures every event (so
+    /// the `failover.triggered` row is assertable) and answers the
+    /// cooldown projection with one live route-scoped `stream_silence`
+    /// row for `cool/m` — ADR-056 §2.5's advisory row, which never
+    /// binds.
+    #[derive(Default)]
+    struct SilenceStore {
+        events: std::sync::Mutex<Vec<(vadis_core::store::EventKind, Value)>>,
+    }
+
+    impl vadis_core::store::Store for SilenceStore {
+        fn append(
+            &self,
+            ev: vadis_core::store::NewEvent<'_>,
+        ) -> Result<vadis_core::store::EventId, vadis_core::store::StoreError> {
+            let mut events = self.events.lock().unwrap();
+            events.push((ev.kind, ev.payload.clone()));
+            Ok(vadis_core::store::EventId(events.len() as i64))
+        }
+        fn project(
+            &self,
+            _w: vadis_core::store::ProjectionWrite<'_>,
+        ) -> Result<(), vadis_core::store::StoreError> {
+            Ok(())
+        }
+        fn query(
+            &self,
+            q: vadis_core::store::Query<'_>,
+        ) -> Result<vadis_core::store::QueryRow, vadis_core::store::StoreError> {
+            match q {
+                vadis_core::store::Query::Cooldown { provider, model } => Ok(
+                    vadis_core::store::QueryRow::Cooldown(match (provider, model) {
+                        ("cool", Some("m")) => Some(vadis_core::store::CooldownRow {
+                            scope: "route".into(),
+                            provider: "cool".into(),
+                            model: "m".into(),
+                            until_us: i64::MAX / 2,
+                            reason: "stream_silence".into(),
+                        }),
+                        _ => None,
+                    }),
+                ),
+                _ => Ok(vadis_core::store::QueryRow::Count(0)),
+            }
+        }
+        fn rebuild(
+            &self,
+            _which: vadis_core::store::Projection,
+        ) -> Result<vadis_core::store::RebuildStats, vadis_core::store::StoreError> {
+            Ok(vadis_core::store::RebuildStats::default())
+        }
+        fn schema_version(&self) -> Result<u32, vadis_core::store::StoreError> {
+            Ok(1)
+        }
+    }
+
+    /// The R4 verdict's own shape (R4-R blocker 1): a legal chain
+    /// `[H, K, C]` — H fails with a failing-over class, K is keyless
+    /// (entry present, no transport built), C carries a live
+    /// route-scoped `stream_silence` row. Term 1 of the order puts C
+    /// last; `next_candidate` skips K and answers C, so the
+    /// `failover.triggered` row names `to: C` — and the walk MUST then
+    /// attempt C (spec §6: "a candidate the walk will actually
+    /// attempt"; ADR-063 §3.3: a sort cannot produce
+    /// `no_available_route`). The advisory silence pass belongs to the
+    /// PINNED HEAD alone (§2.2) and its guard is the walk's own
+    /// eligibility predicate — never a tail position behind a weaker
+    /// guard that counts a candidate the walk would refuse for another
+    /// reason.
+    #[tokio::test]
+    async fn the_walk_attempts_a_silence_cooling_tail_behind_a_keyless_candidate() {
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        transports.insert("fails".into(), Arc::new(FailingTransport));
+        let cool_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transports.insert(
+            "cool".into(),
+            Arc::new(RecordingTransport {
+                seen: cool_seen.clone(),
+            }),
+        );
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("fails", WireApi::Chat),
+                provider("keyless", WireApi::Chat),
+                provider("cool", WireApi::Chat),
+            ],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: vec![
+                RouteSpec {
+                    provider: "keyless".into(),
+                    model: "m".into(),
+                },
+                RouteSpec {
+                    provider: "cool".into(),
+                    model: "m".into(),
+                },
+            ],
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let store = std::sync::Arc::new(SilenceStore::default());
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let mut f = forwarder(config, transports);
+        f.store = Some(store.clone());
+        f.trace = Some(trace.clone());
+
+        let (status, _details) = forward(&f, "fails/m").await;
+
+        assert_eq!(
+            status, 200,
+            "the silence-cooling tail serves — an advisory row never refuses (§2.5.3)"
+        );
+        assert_eq!(
+            cool_seen.lock().unwrap().len(),
+            1,
+            "the walk attempted C exactly once"
+        );
+        // The narration told the truth: the row names the destination
+        // the walk actually attempted (ADR-023 Decision 2).
+        let events = store.events.lock().unwrap().clone();
+        let triggered: Vec<&Value> = events
+            .iter()
+            .filter(|(k, _)| matches!(k, vadis_core::store::EventKind::FailoverTriggered))
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(triggered.len(), 1, "one failover.triggered row: {events:?}");
+        assert_eq!(triggered[0]["from"], "fails/m");
+        assert_eq!(triggered[0]["to"], "cool/m");
+        // §6.3 invariant 1 on the trace mirror: chosen == candidates[0].
+        let rec: serde_json::Value =
+            serde_json::from_str(&trace.records.lock().unwrap()[0]).unwrap();
+        let order = &rec["result"]["failover_order"];
+        assert_eq!(order["chosen"], "cool/m");
+        assert_eq!(
+            order["candidates"][0]["route"], "cool/m",
+            "chosen is the first eligible candidate in walk order: {order}"
+        );
+        assert_eq!(
+            order["candidates"][0]["advisory"]["reason"], "stream_silence",
+            "the advisory row is the candidate's advisory member, never an exclusion"
+        );
+    }
+
+    /// R4-R blocker 2: the record's `excluded[]` is the SNAPSHOT's own
+    /// — ADR-063 §12 site 5 ("from the same order value the walk used —
+    /// never a re-derivation") and §7.1's one clock read. A binding row
+    /// that APPEARS for a route between the `chain_order` snapshot and
+    /// the record (another request's short `Retry-After`, inside one
+    /// attempt's lifetime) must not move that route into `excluded[]`:
+    /// the walk never saw it, and `chosen != candidates[0].route`
+    /// (§6.3 invariant 1) is exactly what breaking this rule produces.
+    #[test]
+    fn the_record_reads_the_order_snapshot_not_the_projection_now() {
+        /// Answers the route-scoped cooldown read with a row the test
+        /// turns on late — the projection state that appears inside the
+        /// snapshot-to-record gap.
+        struct LateRowStore {
+            late: std::sync::Mutex<Option<vadis_core::store::CooldownRow>>,
+        }
+        impl vadis_core::store::Store for LateRowStore {
+            fn append(
+                &self,
+                _ev: vadis_core::store::NewEvent<'_>,
+            ) -> Result<vadis_core::store::EventId, vadis_core::store::StoreError> {
+                Err(vadis_core::store::StoreError::Sql("unused".into()))
+            }
+            fn project(
+                &self,
+                _w: vadis_core::store::ProjectionWrite<'_>,
+            ) -> Result<(), vadis_core::store::StoreError> {
+                Ok(())
+            }
+            fn query(
+                &self,
+                q: vadis_core::store::Query<'_>,
+            ) -> Result<vadis_core::store::QueryRow, vadis_core::store::StoreError> {
+                match q {
+                    vadis_core::store::Query::Cooldown { provider, model } => {
+                        let row =
+                            self.late.lock().unwrap().clone().filter(|r| {
+                                r.provider == provider && Some(r.model.as_str()) == model
+                            });
+                        Ok(vadis_core::store::QueryRow::Cooldown(row))
+                    }
+                    _ => Ok(vadis_core::store::QueryRow::Count(0)),
+                }
+            }
+            fn rebuild(
+                &self,
+                _which: vadis_core::store::Projection,
+            ) -> Result<vadis_core::store::RebuildStats, vadis_core::store::StoreError>
+            {
+                Ok(vadis_core::store::RebuildStats::default())
+            }
+            fn schema_version(&self) -> Result<u32, vadis_core::store::StoreError> {
+                Ok(1)
+            }
+        }
+
+        let config = VadisConfig {
+            server: server_cfg(),
+            session: session_cfg(),
+            cache: cache_cfg(),
+            trace: trace_cfg(),
+            providers: vec![
+                provider("p-a", WireApi::Chat),
+                provider("p-b", WireApi::Chat),
+            ],
+            aliases: BTreeMap::new(),
+            plugins: Vec::new(),
+            fallback: Vec::new(),
+            plan_policy: None,
+            plan_policies: None,
+            state: None,
+        };
+        let mut transports: HashMap<String, Arc<dyn ProviderTransport>> = HashMap::new();
+        transports.insert(
+            "p-a".into(),
+            Arc::new(RecordingTransport {
+                seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+        );
+        transports.insert(
+            "p-b".into(),
+            Arc::new(RecordingTransport {
+                seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+        );
+        let store = std::sync::Arc::new(LateRowStore {
+            late: std::sync::Mutex::new(None),
+        });
+        let f = Forwarder {
+            config,
+            transports,
+            api_keys: HashMap::from([
+                ("p-a".to_string(), vec!["sk-unit".to_string()]),
+                ("p-b".to_string(), vec!["sk-unit".to_string()]),
+            ]),
+            store: Some(store.clone()),
+            trace: None,
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        };
+        let a = RouteSpec {
+            provider: "p-a".into(),
+            model: "m".into(),
+        };
+        let b = RouteSpec {
+            provider: "p-b".into(),
+            model: "m".into(),
+        };
+        // The walk's one snapshot, at the request's own clock word.
+        let order = f.chain_order(&[a.clone(), b.clone()], now_us());
+        // The gap: a binding row for p-b/m appears AFTER the snapshot —
+        // an attempt's lifetime later, from the record's point of view.
+        *store.late.lock().unwrap() = Some(vadis_core::store::CooldownRow {
+            scope: "route".into(),
+            provider: "p-b".into(),
+            model: "m".into(),
+            until_us: i64::MAX / 2,
+            reason: "rate_limit".into(),
+        });
+        let rec = f.failover_order_rec(&order, &["p-a".to_string()], WireApi::Chat, &b, &a);
+        let routes: Vec<&str> = rec.candidates.iter().map(|c| c.route.as_str()).collect();
+        assert_eq!(
+            routes,
+            vec!["p-b/m"],
+            "p-b stays a candidate — the walk's world is the snapshot's, not the projection now"
+        );
+        assert_eq!(rec.excluded.len(), 1);
+        assert_eq!(rec.excluded[0].route, "p-a/m");
+        assert_eq!(rec.excluded[0].reason, "attempted");
+        assert_eq!(
+            rec.chosen, "p-b/m",
+            "§6.3 invariant 1: chosen == candidates[0]"
         );
     }
 

@@ -1216,20 +1216,28 @@ impl Forwarder {
                     }
                     continue;
                 }
-                // ADR-056 §2.5 (spec §4.20.5): the advisory silence skip,
-                // the streaming twin of the buffered walk's. A route whose
-                // own `stream_silence` row is live is preferred against,
-                // never refused — the walk moves past it only when the
-                // chain holds another candidate it would actually attempt,
-                // and attempts it as usual otherwise. The skip narrates
-                // `failover_from` (ADR-024's pre-attempt shape) and writes
-                // NO `skipped[]` entry and no `failover.triggered` row: an
-                // advisory row must never read binding (§2.5.3).
-                if self.route_silence_cooling(&cand.route)
+                // ADR-056 §2.5 + ADR-063 §2.2 (spec §4.20.5): the
+                // advisory silence skip, the streaming twin of the
+                // buffered walk's, scoped to the PINNED HEAD —
+                // chain_pos 0, the only position term 1 of the order
+                // key cannot move. A route whose own `stream_silence`
+                // row is live is preferred against, never refused — the
+                // head is abandoned only when the chain holds another
+                // candidate the walk would ACTUALLY ATTEMPT, and the
+                // guard is the walk's own eligibility predicate
+                // (`stream_walk_eligible`, the same one
+                // `next_candidate_for` narrates by), so the narration
+                // and the walk cannot disagree. The skip narrates
+                // `failover_from` (ADR-024's pre-attempt shape) and
+                // writes NO `skipped[]` entry and no
+                // `failover.triggered` row: an advisory row must never
+                // read binding (§2.5.3).
+                if cand.chain_pos == 0
+                    && self.route_silence_cooling(&cand.route)
                     && candidates.iter().any(|c| {
-                        !attempted.contains(&c.route.provider)
-                            && !self.provider_in_cooldown(&c.route.provider)
-                            && !self.route_silence_cooling(&c.route)
+                        c.chain_pos != 0
+                            && c.route != cand.route
+                            && self.stream_walk_eligible(&c.route, &attempted)
                     })
                 {
                     if failover_from.is_none() {
@@ -2007,14 +2015,25 @@ impl Forwarder {
         // silence preference — term 1 of that key — needs no second pass
         // here; the first eligible candidate in walk order is the
         // non-cooling-preferred one, and the narration cannot promise a
-        // destination the walk would skip past.
-        let eligible = |c: &Candidate| {
-            !attempted.contains(&c.route.provider) && !self.route_unavailable(&c.route)
-        };
+        // destination the walk would skip past. §2.2's surviving
+        // advisory pass lives in the walk's own loop, on the pinned head
+        // alone, under this same predicate.
         candidates
             .iter()
-            .find(|c| eligible(c))
+            .find(|c| self.stream_walk_eligible(&c.route, attempted))
             .map(|c| c.route.clone())
+    }
+
+    /// The streaming walk's own eligibility — ONE predicate, asked by
+    /// both statements of the rule (the buffered twin's
+    /// `walk_eligible`, reduced by what the construction loop already
+    /// refused: unknown-provider, undeclared-cell and keyless
+    /// candidates never became Candidates). What remains: not
+    /// attempted in this request, and §3.1's reason-aware
+    /// `route_unavailable` — whose provider-wide arm subsumes the
+    /// provider-cooldown question for every reason word.
+    fn stream_walk_eligible(&self, route: &RouteSpec, attempted: &[String]) -> bool {
+        !attempted.contains(&route.provider) && !self.route_unavailable(route)
     }
 }
 
@@ -3255,6 +3274,206 @@ mod tests {
             classified[0]["stream_end"], "upstream_ended_early",
             "the per-attempt cause word rides the classification row"
         );
+    }
+
+    /// The R4 verdict's corner (R4-R blocker 1), in the streaming
+    /// walk's own vocabulary. The construction loop refuses keyless
+    /// candidates before the walk, so the K of the buffered rig cannot
+    /// be keyless here — its streaming class is a **binding** row:
+    /// `blocked/m` carries a live route-scoped `rate_limit` row that
+    /// binds (ADR-063 §3.1), while `cool/m` carries a live route-scoped
+    /// `stream_silence` row that never does. Chain `[H, K, C]`: H
+    /// answers a 500 head (a failing-over class), K is refused
+    /// `demoted` before any attempt, C is last by term 1 of the order —
+    /// `next_candidate_for` answers C, and the walk MUST attempt C.
+    /// The old loop guard asked `any()` over "not attempted, not
+    /// provider-wide-cooling, not silence" — K passes that predicate
+    /// although the walk refuses it, so the guard handed the chain's
+    /// only attemptable route to a candidate that could only produce
+    /// `no_available_route`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_stream_walk_attempts_a_silence_cooling_tail_behind_a_bound_one() {
+        // H: accepts, reads the request, answers a 500 error head with
+        // a body — `server_error`, a failing-over class.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fails_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 8192];
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), s.read(&mut buf))
+                            .await;
+                    let body = br#"{"error":{"message":"internal","type":"server_error"}}"#;
+                    let head = format!(
+                        "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = s.write_all(head.as_bytes()).await;
+                    let _ = s.write_all(body).await;
+                });
+            }
+        });
+        // C: a working SSE upstream (head + chunks) — the route that
+        // must serve. K needs no listener: it is refused before any
+        // attempt, in either world.
+        let cool_port = trickle_listener().await;
+        let dead = dead_port();
+
+        let provider = |name: &str, port: u16| {
+            serde_json::json!({
+                "name": name,
+                "urls": { "chat": format!("http://127.0.0.1:{port}/v1/chat/completions") },
+                "api_key_env": "UNIT_STREAM_KEY",
+                "wire_api": "chat",
+                "supports": ["chat"],
+                "models": [{
+                    "id": "m", "context": "128k",
+                    "price": { "input_miss": 0.001, "input_hit": 0.0001,
+                               "cache_write": 0.0, "output": 0.002,
+                               "peak": { "multiplier": 1.0, "windows": [] } },
+                    "source": "unit fixture"
+                }]
+            })
+        };
+        let cfg: VadisConfig = serde_json::from_value(serde_json::json!({
+            "server": {
+                "addr": "127.0.0.1:0",
+                "upstream_attempt_timeout": "10s",
+                "request_timeout": "10s",
+            },
+            "session": { "key_sources": ["prompt_cache_key"], "ttl": "11h" },
+            "cache": { "sticky": true,
+                       "breakeven": { "enabled": true, "min_remaining_turns": 2, "safety_factor": 1.1 } },
+            "trace": { "dir": "./state/traces", "rollover": "hourly" },
+            "providers": [
+                provider("fails", fails_port),
+                provider("blocked", dead),
+                provider("cool", cool_port)
+            ],
+            "aliases": {},
+            "plugins": [],
+            "fallback": ["blocked/m", "cool/m"]
+        }))
+        .unwrap();
+
+        /// K's binding row plus C's advisory row, and every event
+        /// captured for assertions.
+        struct HkcStore {
+            events: StdMutex<Vec<(vadis_core::store::EventKind, Value)>>,
+        }
+        impl vadis_core::store::Store for HkcStore {
+            fn append(
+                &self,
+                ev: vadis_core::store::NewEvent<'_>,
+            ) -> Result<vadis_core::store::EventId, vadis_core::store::StoreError> {
+                let mut events = self.events.lock().unwrap();
+                events.push((ev.kind, ev.payload.clone()));
+                Ok(vadis_core::store::EventId(events.len() as i64))
+            }
+            fn project(
+                &self,
+                _w: vadis_core::store::ProjectionWrite<'_>,
+            ) -> Result<(), vadis_core::store::StoreError> {
+                Ok(())
+            }
+            fn query(
+                &self,
+                q: vadis_core::store::Query<'_>,
+            ) -> Result<vadis_core::store::QueryRow, vadis_core::store::StoreError> {
+                match q {
+                    vadis_core::store::Query::Cooldown { provider, model } => {
+                        let row = match (provider, model) {
+                            // K: a live route-scoped row whose reason is
+                            // not the advisory word — it BINDS (§3.1).
+                            ("blocked", Some("m")) => Some(vadis_core::store::CooldownRow {
+                                scope: "route".into(),
+                                provider: "blocked".into(),
+                                model: "m".into(),
+                                until_us: i64::MAX / 2,
+                                reason: "rate_limit".into(),
+                            }),
+                            // C: the advisory row — never binds (§2.5.3).
+                            ("cool", Some("m")) => Some(vadis_core::store::CooldownRow {
+                                scope: "route".into(),
+                                provider: "cool".into(),
+                                model: "m".into(),
+                                until_us: i64::MAX / 2,
+                                reason: "stream_silence".into(),
+                            }),
+                            _ => None,
+                        };
+                        Ok(vadis_core::store::QueryRow::Cooldown(row))
+                    }
+                    _ => Ok(vadis_core::store::QueryRow::Count(0)),
+                }
+            }
+            fn rebuild(
+                &self,
+                _which: vadis_core::store::Projection,
+            ) -> Result<vadis_core::store::RebuildStats, vadis_core::store::StoreError>
+            {
+                Ok(vadis_core::store::RebuildStats::default())
+            }
+            fn schema_version(&self) -> Result<u32, vadis_core::store::StoreError> {
+                Ok(1)
+            }
+        }
+
+        let store = std::sync::Arc::new(HkcStore {
+            events: StdMutex::new(Vec::new()),
+        });
+        let trace = std::sync::Arc::new(CaptureTrace::default());
+        let f = Forwarder {
+            config: cfg,
+            transports: HashMap::new(),
+            api_keys: HashMap::from([
+                ("fails".to_string(), vec!["sk-unit".to_string()]),
+                ("blocked".to_string(), vec!["sk-unit".to_string()]),
+                ("cool".to_string(), vec!["sk-unit".to_string()]),
+            ]),
+            store: Some(store.clone()),
+            trace: Some(trace.clone()),
+            transform_engine: None,
+            response_cache: None,
+            session_ttl_us: 0,
+        };
+        let outcome = f
+            .forward_stream(
+                WireApi::Chat,
+                br#"{"model":"fails/m","messages":[{"role":"user","content":"x"}],"stream":true}"#,
+                "req-hkc-stream",
+                &[],
+                TransformMode::Passthrough,
+            )
+            .await;
+
+        let status = match &outcome {
+            StreamOutcome::Success(s) => s.status,
+            StreamOutcome::Failure(f) => panic!(
+                "the silence-cooling tail must serve, refused: {} {:?}",
+                f.status, f.details
+            ),
+        };
+        assert_eq!(status, 200, "the advisory row orders, it never refuses");
+        // The narration told the truth: the row names the destination
+        // the walk actually attempted (ADR-023 Decision 2).
+        let events = store.events.lock().unwrap().clone();
+        let triggered: Vec<&Value> = events
+            .iter()
+            .filter(|(k, _)| matches!(k, vadis_core::store::EventKind::FailoverTriggered))
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(triggered.len(), 1, "one failover.triggered row: {events:?}");
+        assert_eq!(triggered[0]["from"], "fails/m");
+        assert_eq!(triggered[0]["to"], "cool/m");
+        // The trace row itself is the relay's, written when the body
+        // finishes (CONF-30's stage-set rule) — at head time the event
+        // log is the walk's own record, and it is the one asserted.
     }
 
     /// ADR-060 D2 (R4): the refusal slice and the answering head are

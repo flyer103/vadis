@@ -439,6 +439,14 @@ pub struct ChainOrderCandidate {
     /// The advisory row's `until_us`, when `silence` is set — carried so
     /// the record's `advisory` member can name the window it read.
     pub silence_until_us: Option<i64>,
+    /// ADR-063 §3.1's binding row as the caller read it at the ONE
+    /// decision instant (§7.1's single clock word) — carried on the
+    /// snapshot so the `failover.triggered` record's `excluded[]` entry
+    /// is the same object the walk's eligibility saw, never a
+    /// re-derivation at record time (§12 site 5). Not a sort term: a
+    /// bound candidate is excluded by eligibility (§3.2), never
+    /// reordered.
+    pub binding: Option<crate::store::CooldownRow>,
 }
 
 /// One ordered position: the candidate's facts plus the basis that placed
@@ -451,17 +459,21 @@ pub struct OrderedCandidate {
 }
 
 /// Read one route's order facts off the roster (ADR-063 §2.1's "where it
-/// comes from" column). Pure in the config; `silence_until_us` is the
-/// caller's one cooldown-projection read (`availability`'s single owner),
-/// `Some` meaning a live route-scoped `stream_silence` row. A route with
-/// no roster entry gets the USD default and the `None` price arm — the
-/// walk's `unknown_provider` skip excludes it before any attempt and the
-/// record lists it in `excluded[]`, so the defaults are never serialized
-/// as a fact.
+/// comes from" column). Pure in the config; `silence_until_us` and
+/// `binding` are the caller's two cooldown-projection reads at one
+/// instant (`availability`'s single owner, §7.1's one clock word),
+/// `Some`/`Some` meaning a live route-scoped `stream_silence` row / a
+/// live binding row. Neither is a sort term: the advisory row is term
+/// 1's input, the binding row is carried for the record (§12 site 5).
+/// A route with no roster entry gets the USD default and the `None`
+/// price arm — the walk's `unknown_provider` skip excludes it before
+/// any attempt and the record lists it in `excluded[]`, so the
+/// defaults are never serialized as a fact.
 pub fn order_facts_for_route(
     config: &VadisConfig,
     route: &RouteSpec,
     silence_until_us: Option<i64>,
+    binding: Option<crate::store::CooldownRow>,
 ) -> ChainOrderCandidate {
     let provider = config.providers.iter().find(|p| p.name == route.provider);
     let Some(provider) = provider else {
@@ -475,6 +487,7 @@ pub fn order_facts_for_route(
             peak_multiplier: 1.0,
             silence: silence_until_us.is_some(),
             silence_until_us,
+            binding,
         };
     };
     let model = provider.models.iter().find(|m| m.id == route.model);
@@ -517,6 +530,7 @@ pub fn order_facts_for_route(
         peak_multiplier,
         silence: silence_until_us.is_some(),
         silence_until_us,
+        binding,
     }
 }
 
@@ -1920,6 +1934,7 @@ mod tests {
             peak_multiplier: 1.0,
             silence: false,
             silence_until_us: None,
+            binding: None,
         }
     }
 
@@ -2329,7 +2344,7 @@ mod tests {
         };
         provider.currency = crate::Currency::Cny;
         cfg.providers.push(provider);
-        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), None);
+        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), None, None);
         assert_eq!(facts.tier, ChainTier::Metered);
         assert_eq!(facts.currency, crate::Currency::Cny);
         assert_eq!(facts.input_miss, Some(0.001));
@@ -2338,12 +2353,24 @@ mod tests {
         assert_eq!(facts.peak_multiplier, 1.5);
         assert!(!facts.silence);
         // A silence row read by the caller is carried, never re-derived.
-        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), Some(9_999));
+        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), Some(9_999), None);
         assert!(facts.silence);
         assert_eq!(facts.silence_until_us, Some(9_999));
+        // A binding row read by the caller travels the same way —
+        // carried for the record (§12 site 5), never a sort term.
+        let row = crate::store::CooldownRow {
+            scope: "provider".into(),
+            provider: "p-band".into(),
+            model: String::new(),
+            until_us: 9_999,
+            reason: "quota_exhausted".into(),
+        };
+        let facts = order_facts_for_route(&cfg, &route("p-band", "banded"), None, Some(row));
+        assert_eq!(facts.binding.as_ref().unwrap().reason, "quota_exhausted");
+        assert!(!facts.silence);
         // An off-roster route: the all-None defensive arm — the walk's
         // `unknown_provider` skip owns it, so no fact is invented.
-        let facts = order_facts_for_route(&cfg, &route("nobody", "m"), None);
+        let facts = order_facts_for_route(&cfg, &route("nobody", "m"), None, None);
         assert_eq!(facts.input_miss, None);
         assert_eq!(facts.tier, ChainTier::Metered);
     }

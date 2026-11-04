@@ -334,7 +334,7 @@ pub struct SessionBindingRow {
     pub expires_at_us: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CooldownRow {
     pub scope: String,
     pub provider: String,
