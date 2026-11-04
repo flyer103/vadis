@@ -338,6 +338,10 @@ plan_policy:
   overflow_selection: cheapest    # or `declared`, today's behaviour
 ```
 
+Under `declared`, exactly one promise has changed (ADR-063 §5.2): the mode still offers **exactly one
+metered route, byte-identically** — but the chain's own tail is no longer walked in declaration order;
+it is ordered by the same rule every chain's tail is ([the chain's order](connecting-clients.md)).
+
 With several families (say, one plan pair per model you use), write them as a list under
 `plan_policies:` — the parser and the routing have accepted the list since ADR-049, and the shipped
 template carries it (`vadis setup` walks it one family at a time). One of the two keys, never both —

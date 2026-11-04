@@ -1872,9 +1872,9 @@ on rigs of its own), and the register below is what a reader of the next round n
 
 | Item | State after this card |
 |---|---|
-| spec §4.2's ordering key (health, tier, currency group, declared price, declaration) | **contracted, not served** — today's chain walks in the order the entries were written (`forward.rs:1391`, `stream_forward.rs:872`, two copies of one chain); `R2` lands the one owner in `vadis-core` and both call sites |
-| `failover.triggered`'s three new members (`currency`, `from_price`, `order`) + `EVENT_SCHEMA_VERSION` 2 → 3 | **contracted** — `R2` writes them from the same order value the walk used; the row is the incident's fourth question and nothing else answers it today (§6 of ADR-063) |
-| spec §6's `result.failover_order` (the trace mirror) | **contracted** — additive, so `TRACE_SCHEMA_VERSION` stays 2 (the `config_digest` / `cache` precedent) |
+| spec §4.2's ordering key (health, tier, currency group, declared price, declaration) | **served** (landed on `feat/r75-failover`, 2026-11-04) — the one owner `vadis_core::plan::order_chain` sorts the declared list under the six-term key with position 0 pinned, and both call sites (`forward.rs` `chain_order`, `stream_forward.rs`) walk its output |
+| `failover.triggered`'s three new members (`currency`, `from_price`, `order`) + `EVENT_SCHEMA_VERSION` 2 → 3 | **served** (same landing) — written from the same order value the walk used, never a re-derivation (§12 site 5: the binding row travels inside the order snapshot); the row is the incident's fourth question and nothing else answers it (§6 of ADR-063) |
+| spec §6's `result.failover_order` (the trace mirror) | **served** (same landing) — additive, so `TRACE_SCHEMA_VERSION` stays 2 (the `config_digest` / `cache` precedent) |
 | `R75-0-F1` (ADR-011 item 5's route-scoped demotion has a reader and no writer — a plain `429`, i.e. `RateLimit`, demotes nothing today) | **registered** — the ordering predicate already answers the route-scoped case; the writer is a class-scope round's (§3.1 of ADR-063) |
 | `R75-0-F2` (the order is blind to a candidate's `context`; inherited from `R66-0-F1` and now more likely to bite) | **registered** — a pre-filter needs a request-size estimate the vadis does not have (`GAP-Q14/Q20`) |
 | `R75-0-F3` (a plan route named in the global `fallback` list now walks before the metered candidates) | **registered as a consequence**, not a side effect — plan-before-metered is the owner's own instruction of 2026-10-04 |
