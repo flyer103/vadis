@@ -112,6 +112,8 @@ fn seed(dir: &std::path::Path, cooldown_until_us: Option<i64>) {
             account: "overflow",
             to_route: "p-api/m1",
             cooldown_us: 0,
+            // DDL v4 (ADR-064 §2.4.3): the row's own cause word.
+            cause: "primary_exhausted",
             last_event: ev,
         })
         .unwrap();
