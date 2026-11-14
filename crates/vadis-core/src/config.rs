@@ -1972,21 +1972,19 @@ impl VadisConfig {
         if policy.silent_escalation.threshold < 2 {
             return Err(ConfigError::new(
                 format!("{prefix}.silent_escalation.threshold"),
-                format!(
-                    "must be >= 2: one silence fact is a selection fact (ADR-056's advisory \
-                     row), never an account fact — K = 1 is not a knob (spec §4.21)"
-                ),
+                "must be >= 2: one silence fact is a selection fact (ADR-056's advisory \
+                 row), never an account fact — K = 1 is not a knob (spec §4.21)"
+                    .to_string(),
             ));
         }
         let w_ms = policy.silent_escalation.window.0;
         if !(1_000..=3_600_000).contains(&w_ms) {
             return Err(ConfigError::new(
                 format!("{prefix}.silent_escalation.window"),
-                format!(
-                    "must be between 1s and 1h (inclusive): a shorter window can never hold \
-                     two facts and an hour is the largest window the duration grammar states \
-                     in one unit (spec §4.21)"
-                ),
+                "must be between 1s and 1h (inclusive): a shorter window can never hold \
+                 two facts and an hour is the largest window the duration grammar states \
+                 in one unit (spec §4.21)"
+                    .to_string(),
             ));
         }
 

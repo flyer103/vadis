@@ -301,10 +301,7 @@ pub enum ProjectionWrite<'a> {
     /// row that moves a family **back** to its plan tier deletes the
     /// tier's streak rows, so a family that returns inside the run that
     /// spilled it starts from zero.
-    SilenceStreakClear {
-        provider: &'a str,
-        model: &'a str,
-    },
+    SilenceStreakClear { provider: &'a str, model: &'a str },
 }
 
 /// The serving path's reads (DESIGN §12.10.4 `query`).
@@ -342,10 +339,7 @@ pub enum Query<'a> {
     /// One route's silence streak (the `silence_streak` projection,
     /// ADR-064 §2.3). Absent row ⇒ no counted fact has landed on the
     /// route (or the return trip cleared it, §2.5.4).
-    SilenceStreak {
-        provider: &'a str,
-        model: &'a str,
-    },
+    SilenceStreak { provider: &'a str, model: &'a str },
     /// The family's metered spend in the current UTC calendar month: the
     /// sum of measured `cost.computed` totals over the family's overflow
     /// route (DESIGN §12.10.8 — "no new counter exists to disagree with

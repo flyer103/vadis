@@ -28,8 +28,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OpenFlags};
 use vadis_core::store::{
     CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, PlanStateProjRow, Projection,
-    ProjectionWrite, Query, QueryRow, RebuildStats, SessionBindingRow, StreakRow, Store,
-    StoreError, StoredEvent, EVENT_SCHEMA_VERSION,
+    ProjectionWrite, Query, QueryRow, RebuildStats, SessionBindingRow, Store, StoreError,
+    StoredEvent, StreakRow, EVENT_SCHEMA_VERSION,
 };
 
 /// Store DDL version 1: the tables of DESIGN §12.10.4, verbatim in shape.
@@ -207,7 +207,10 @@ const REBUILD_DEFAULT_SILENCE_WINDOW_US: i64 = 300_000_000;
 /// home, read by the rebuild — the live path classifies before it
 /// writes, so the two spellings cannot disagree about one attempt.
 fn counted_silence_fact(payload: &serde_json::Value) -> Option<(&str, &str)> {
-    let stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let stream = payload
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !stream {
         return None;
     }
@@ -1730,51 +1733,61 @@ mod tests {
         // fold's arithmetic is exact (append stamps now; the test sets
         // the row's own ts immediately after, BEFORE the incremental
         // write that anchors on it).
-        let fact = |store: &SqliteStore, payload: serde_json::Value, ts: i64| EventId({
-            let id = store
-                .append(NewEvent {
-                    kind: EventKind::ErrorClassified,
-                    request_id: Some("req-1"),
-                    session: Some("sess-1"),
-                    body_hash: None,
-                    trace_ref: None,
-                    payload,
-                })
-                .unwrap()
-                .0;
-            store
-                .raw_connection()
-                .execute("UPDATE events SET ts_us = ?1 WHERE event_id = ?2", params![ts, id])
-                .unwrap();
-            id
-        });
-        let plan_switched = |store: &SqliteStore, ts: i64| EventId({
-            let id = store
-                .append(NewEvent {
-                    kind: EventKind::PlanSwitched,
-                    request_id: Some("req-1"),
-                    session: Some("sess-1"),
-                    body_hash: None,
-                    trace_ref: None,
-                    payload: json!({
-                        "family": "m1",
-                        "from_account": "overflow",
-                        "to_account": "primary",
-                        "from_route": "p-api/m1",
-                        "to_route": "p-plan/m1",
-                        "reason": "primary_recovered",
-                        "probe": true,
-                        "cooldown_ms": 0i64,
-                    }),
-                })
-                .unwrap()
-                .0;
-            store
-                .raw_connection()
-                .execute("UPDATE events SET ts_us = ?1 WHERE event_id = ?2", params![ts, id])
-                .unwrap();
-            id
-        });
+        let fact = |store: &SqliteStore, payload: serde_json::Value, ts: i64| {
+            EventId({
+                let id = store
+                    .append(NewEvent {
+                        kind: EventKind::ErrorClassified,
+                        request_id: Some("req-1"),
+                        session: Some("sess-1"),
+                        body_hash: None,
+                        trace_ref: None,
+                        payload,
+                    })
+                    .unwrap()
+                    .0;
+                store
+                    .raw_connection()
+                    .execute(
+                        "UPDATE events SET ts_us = ?1 WHERE event_id = ?2",
+                        params![ts, id],
+                    )
+                    .unwrap();
+                id
+            })
+        };
+        let plan_switched = |store: &SqliteStore, ts: i64| {
+            EventId({
+                let id = store
+                    .append(NewEvent {
+                        kind: EventKind::PlanSwitched,
+                        request_id: Some("req-1"),
+                        session: Some("sess-1"),
+                        body_hash: None,
+                        trace_ref: None,
+                        payload: json!({
+                            "family": "m1",
+                            "from_account": "overflow",
+                            "to_account": "primary",
+                            "from_route": "p-api/m1",
+                            "to_route": "p-plan/m1",
+                            "reason": "primary_recovered",
+                            "probe": true,
+                            "cooldown_ms": 0i64,
+                        }),
+                    })
+                    .unwrap()
+                    .0;
+                store
+                    .raw_connection()
+                    .execute(
+                        "UPDATE events SET ts_us = ?1 WHERE event_id = ?2",
+                        params![ts, id],
+                    )
+                    .unwrap();
+                id
+            })
+        };
         let s1 = |provider: &str| {
             json!({
                 "reason": "stream_truncated",
@@ -1835,16 +1848,16 @@ mod tests {
                 // The escalation's run of 2, observed at the instant it
                 // would fire: t0 and t0+10s joined one run (the t0+200s
                 // fact below has not reset it yet).
-                let QueryRow::SilenceStreak(pre) =
-                    a.query(Query::SilenceStreak { provider: "p-plan", model: "m1" }).unwrap()
+                let QueryRow::SilenceStreak(pre) = a
+                    .query(Query::SilenceStreak {
+                        provider: "p-plan",
+                        model: "m1",
+                    })
+                    .unwrap()
                 else {
                     panic!("expected a streak row");
                 };
-                assert_eq!(
-                    pre.as_ref().unwrap().count,
-                    2,
-                    "t0 and t0+10s join one run"
-                );
+                assert_eq!(pre.as_ref().unwrap().count, 2, "t0 and t0+10s join one run");
             }
         }
 
@@ -1879,8 +1892,12 @@ mod tests {
         // And the rows say what the sequence means: p-plan/m1 is a
         // post-return run of 1, p-api/m1 a run of 1.
         assert_eq!(rows_a.len(), 2, "two routes, two rows: {rows_a:?}");
-        let QueryRow::SilenceStreak(plan_row) =
-            a.query(Query::SilenceStreak { provider: "p-plan", model: "m1" }).unwrap()
+        let QueryRow::SilenceStreak(plan_row) = a
+            .query(Query::SilenceStreak {
+                provider: "p-plan",
+                model: "m1",
+            })
+            .unwrap()
         else {
             panic!("expected a streak row");
         };
@@ -1893,7 +1910,10 @@ mod tests {
         let before = a.projection_rows(Projection::SilenceStreak).unwrap();
         a.rebuild_with_silence_window(Projection::SilenceStreak, W)
             .unwrap();
-        assert_eq!(a.projection_rows(Projection::SilenceStreak).unwrap(), before);
+        assert_eq!(
+            a.projection_rows(Projection::SilenceStreak).unwrap(),
+            before
+        );
     }
 
     // (6c) ADR-064 §6.2 item 2: `plan_state.cause` — an incremental move
@@ -1987,7 +2007,11 @@ mod tests {
             .unwrap();
         }
         let s = SqliteStore::open(&db).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 4, "v1 migrates to the current DDL");
+        assert_eq!(
+            s.schema_version().unwrap(),
+            4,
+            "v1 migrates to the current DDL"
+        );
         let QueryRow::Events(evs) = s.query(Query::AllEvents).unwrap() else {
             panic!("expected events");
         };
