@@ -1044,6 +1044,72 @@ pub struct PlanPolicyCfg {
     /// first in both modes.
     #[serde(default)]
     pub overflow_selection: OverflowSelection,
+    /// ADR-064 (spec §4.21): the silence escalation's three knobs —
+    /// whether a run of counted silence facts on the family's active
+    /// plan route may move the account, how many facts, over how long.
+    /// Defaults are the ADR's frozen values; `threshold < 2` and a
+    /// `window` outside `1s`…`1h` are load refusals (validate below).
+    #[serde(default)]
+    pub silent_escalation: SilentEscalationCfg,
+}
+
+/// spec §4.21 `silent_escalation` (ADR-064 §2.7): the silence
+/// escalation's knobs, one object on the policy. `enabled: false` keeps
+/// the observation (S1's advisory row, S2's classification row) and
+/// switches off the move alone — the state is off, not the instrument.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SilentEscalationCfg {
+    /// Whether the rule may move the family. Default `true` (ADR-064
+    /// §2.7.2): it only ever runs for a family that already declared
+    /// `on_primary_exhausted: spill`.
+    #[serde(default = "default_silent_escalation_enabled")]
+    pub enabled: bool,
+    /// K: facts in one run that spill the family. `>= 2` — one fact is
+    /// ADR-056's advisory row, never an account fact, so a lower value
+    /// is a load refusal, not a knob (ADR-064 §2.1.3).
+    #[serde(default = "default_silent_escalation_threshold")]
+    pub threshold: u32,
+    /// W: the run's window, the §9.2 duration grammar, `1s`…`1h`
+    /// (both ends inclusive, both ends refused beyond — ADR-064 §2.7.1).
+    #[serde(default = "default_silent_escalation_window")]
+    pub window: DurationVal,
+}
+
+fn default_silent_escalation_enabled() -> bool {
+    true
+}
+
+fn default_silent_escalation_threshold() -> u32 {
+    2
+}
+
+fn default_silent_escalation_window() -> DurationVal {
+    DurationVal(5 * 60 * 1_000)
+}
+
+impl Default for SilentEscalationCfg {
+    /// The ADR-064 §2.7.1 frozen values — the object is never absent in
+    /// force: an unwritten key behaves as `{enabled: true, threshold: 2,
+    /// window: 5m}`.
+    fn default() -> Self {
+        Self {
+            enabled: default_silent_escalation_enabled(),
+            threshold: default_silent_escalation_threshold(),
+            window: default_silent_escalation_window(),
+        }
+    }
+}
+
+impl SilentEscalationCfg {
+    /// W in unix **microseconds** — the single ms→µs conversion, the
+    /// same discipline as [`PlanPolicyCfg::cooldown_us`] (ADR-016
+    /// §13.3 L1b). Saturates rather than wrapping.
+    pub fn window_us(&self) -> i64 {
+        i64::try_from(self.window.0)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1_000)
+    }
 }
 
 /// spec §4.6.1 `overflow_selection` (ADR-049 §5.5): the ranking mode of a
@@ -1892,6 +1958,34 @@ impl VadisConfig {
                     "provider '{}' is account: {}; {prefix}.overflow must be a route of a \
                      provider declaring account: api (spec §4.6)",
                     overflow.name, overflow.account
+                ),
+            ));
+        }
+
+        // ADR-064 §2.7.1 (spec §4.21): the escalation's two hard bounds.
+        // `threshold < 2` would silently recreate K = 1 — ADR-056 §2.5.3's
+        // single stall is a selection fact, never an account fact — so it
+        // is a refusal, not a clamp. The window's floor is one fact's own
+        // silence-to-verdict interval (a shorter W can never hold two
+        // facts, §2.1.1 (i)); its ceiling is the largest window the
+        // duration grammar can state in one unit (no `d`).
+        if policy.silent_escalation.threshold < 2 {
+            return Err(ConfigError::new(
+                format!("{prefix}.silent_escalation.threshold"),
+                format!(
+                    "must be >= 2: one silence fact is a selection fact (ADR-056's advisory \
+                     row), never an account fact — K = 1 is not a knob (spec §4.21)"
+                ),
+            ));
+        }
+        let w_ms = policy.silent_escalation.window.0;
+        if !(1_000..=3_600_000).contains(&w_ms) {
+            return Err(ConfigError::new(
+                format!("{prefix}.silent_escalation.window"),
+                format!(
+                    "must be between 1s and 1h (inclusive): a shorter window can never hold \
+                     two facts and an hour is the largest window the duration grammar states \
+                     in one unit (spec §4.21)"
                 ),
             ));
         }
@@ -3619,6 +3713,49 @@ mod tests {
         let cfg = planned_with(|p| p.overflow_monthly_cap_usd = Some(CapUsdVal(0.0)));
         cfg.validate().expect("a zero cap is legal");
         assert_eq!(CapUsdVal(0.5).to_nano().unwrap(), Nano(500_000_000));
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.21 / ADR-064 §2.7.1: the silence escalation's two hard
+    // bounds are load refusals, each naming its own key path.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn silent_escalation_bounds_are_load_refusals_naming_the_key() {
+        // K = 1 would silently recreate the single-fact account move
+        // ADR-056 §2.5.3 refused — it is not a knob.
+        let cfg = planned_with(|p| p.silent_escalation.threshold = 1);
+        let err = validate_err(&cfg);
+        assert!(
+            err.contains("plan_policy.silent_escalation.threshold"),
+            "got: {err}"
+        );
+
+        // Both ends of the window's range are refused: below 1s the window
+        // can never hold two facts; above 1h is past the grammar's largest
+        // single-unit window.
+        for ms in [999u64, 3_600_001] {
+            let cfg = planned_with(|p| p.silent_escalation.window = DurationVal(ms));
+            let err = validate_err(&cfg);
+            assert!(
+                err.contains("plan_policy.silent_escalation.window"),
+                "{ms}ms, got: {err}"
+            );
+        }
+
+        // The range's ends are themselves legal, and an unwritten key is
+        // the ADR's frozen default (§2.7.1), in force as 300 s in µs.
+        planned_with(|p| p.silent_escalation.window = DurationVal(1_000))
+            .validate()
+            .expect("window: 1s is the floor, legal");
+        planned_with(|p| p.silent_escalation.window = DurationVal(3_600_000))
+            .validate()
+            .expect("window: 1h is the ceiling, legal");
+        let cfg = planned();
+        cfg.validate().expect("the defaults validate");
+        let esc = &cfg.plan_policy.as_ref().unwrap().silent_escalation;
+        assert_eq!(*esc, SilentEscalationCfg::default());
+        assert_eq!(esc.window_us(), 300_000_000);
     }
 
     // -------------------------------------------------------------

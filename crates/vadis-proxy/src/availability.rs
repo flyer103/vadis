@@ -273,6 +273,7 @@ mod tests {
             cooldown: vadis_core::config::DurationVal(0),
             overflow_monthly_cap_usd: None,
             overflow_selection: vadis_core::config::OverflowSelection::Declared,
+            silent_escalation: Default::default(),
         }
     }
 

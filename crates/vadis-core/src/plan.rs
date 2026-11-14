@@ -964,6 +964,7 @@ mod tests {
             cooldown: DurationVal(15 * 60 * 1_000),
             overflow_monthly_cap_usd: None,
             overflow_selection: OverflowSelection::Declared,
+            silent_escalation: Default::default(),
         }
     }
 

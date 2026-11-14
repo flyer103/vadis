@@ -202,6 +202,13 @@ plan_policies:
     cooldown: 15m                      # default 15m: the floor between the move away from `primary` and the first admitted probe
     # overflow_selection: declared
     # overflow_monthly_cap_usd: 20.0   # optional: a ceiling on this family's **metered** spend in a UTC calendar month.
+    # silent_escalation: {enabled: true, threshold: 2, window: 5m}
+    #   ^ ADR-064 (spec §4.21), and these are its frozen defaults: two counted silence facts — a
+    #   stream that stalls mid-body, or a head that never arrives — on the family's active plan
+    #   route within the window spill the family to its metered account (reason: primary_silent),
+    #   even though the provider never said `quota exhausted`. The key is not askable in `vadis
+    #   setup` (spec §4.11); edit the file by hand. `threshold` must be >= 2 and `window` sits in
+    #   1s…1h — outside either bound the file refuses to load.
   - family: glm-5.3-flash              # the second family; its routes already exist in the roster (zai-plan, zai)
     primary: zai-plan/glm-5.3-flash
     overflow: zai/glm-5.3-flash

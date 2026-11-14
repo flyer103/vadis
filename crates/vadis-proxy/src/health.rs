@@ -504,6 +504,7 @@ mod tests {
             cooldown: DurationVal(cooldown_ms),
             overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
             overflow_selection: vadis_core::config::OverflowSelection::Declared,
+            silent_escalation: Default::default(),
         }
     }
 
