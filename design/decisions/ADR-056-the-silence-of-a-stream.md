@@ -713,3 +713,27 @@ visible afterwards.
 
 **What this note does not do.** It changes no byte of the relay (§2.5's byte path is unmoved), no case
 (`CONF-108/109/110` keep their assertions), no figure, and no section of this document above it.
+
+## Dated note (2026-11-14, `R76-0` — append-only, `ADR-064`)
+
+**§5.4's separation keeps its text, its reasoning and its consequence; what this note records is the door it
+left closed, and the family that now walks through it.** §2.5 writes one row per *stall*, scoped to the
+**route**, advisory, 60 s, invisible to the probe gate, and §5.4 states why the probe's account-level question
+must not read it: a short selection preference is not evidence about an account. All of that stands.
+
+`ADR-064` (`design/decisions/ADR-064-silent-exhaustion-escalation.md`, spec §4.21) rules the one case this
+ADR's instrument cannot reach and its separation should not: **inside a plan family that declared
+`on_primary_exhausted: spill`, a *run* of two counted silence facts within five minutes on the family's active
+plan route is an account fact, and it moves that family's state** (`reason: "primary_silent"`). The measured
+reason is §1.1's own population: the audited fortnight's plan exhaustion never produced the `403` that
+ADR-014 item 2's account move reads, and surfaced instead as 113 mid-body truncations and 4 head-never-arrived
+timeouts — all of which wrote §2.5's row and moved nothing.
+
+Three properties of this document are untouched, and the note states them so no future reader "fixes" the
+asymmetry: **K = 1 stays the row's trigger** (the escalation counts a different artefact — §1.3 of `ADR-064`
+shows why a row count cannot be a streak, since `provider_cooldown` is one upsert row per route); **the 60 s
+TTL, the `stream_end == "idle_timeout"` trigger and the advisory (never-binding) rule stay** (a head timeout
+contributes to the streak and writes **no** row — deliberate, `ADR-064` §2.5.3); and **§2.5.1's rejection of a
+streak is not reversed** — it stands for the row, and the streak this note admits is a separate projection with
+a rebuild path over the same classification rows (`ADR-064` §2.3.3), which is precisely the property §2.5.1
+found missing in the counter it refused. No byte of the relay, no case of §4, and no figure moves.

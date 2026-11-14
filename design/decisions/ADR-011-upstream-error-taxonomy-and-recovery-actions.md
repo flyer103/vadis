@@ -333,3 +333,29 @@ Registered with it: the `demotion` object's payload shape is fixed to
 `{scope, provider, model, until_us, ttl_s, reason}` for **every** demotion, because
 `rebuild_cooldown` reads five of those members and the incremental writer today emits two —
 ADR-056 §6.2 / finding `R74-0-F1`.
+
+## Dated note (2026-11-14, `R76-0` — append-only, `ADR-064`)
+
+**The class table does not move; one gap in item 8's wiring is closed.** `stream_truncated`'s action remains
+`abort`, **no class gains `fails_over`**, `demotes_provider()` still answers `true` for `QuotaExhausted` alone,
+and item 6 row 3's *no retry after a full write* is **enforced rather than relaxed**: `ADR-064`
+(`design/decisions/ADR-064-silent-exhaustion-escalation.md`, spec §4.21) makes that rule the reason the
+escalated family's K-th request is **not** retried onto the overflow route — its bytes were on the wire or the
+attempt may have been billed, so the move serves the requests that *follow* it.
+
+What this note records is the one thing this ADR's own item 8 implies and the code does not do: *"Every
+classification writes one event and mirrors it in the trace."* The **streaming head arm's** conservative
+`unknown_outcome` (`OpenHead::UnknownOutcome` in `crates/vadis-proxy/src/stream_forward.rs`, `details {stage:
+"unknown_outcome", error_class: "timeout", stream: true, retry_refused: "billed"}`) writes a trace line and **no
+`error.classified` row** — the only two writers of that kind are the buffered classification path
+(`forward.rs:2857`) and the truncation arm (`stream_forward.rs:2357`). So the log cannot answer *"how many head
+timeouts hit route R"*, which is exactly the population the audited fortnight's second failure shape consists
+of (4 rows, `upstream_ms` pinned at `server.upstream_attempt_timeout`). `R76-1` gives that arm the row item 8
+already requires — `reason: "timeout"`, `action: "abort"`, `matched: false`, `stream: true`, plus the `route`
+member the escalation's fold reads — additive on an events payload, no `EVENT_SCHEMA_VERSION` move, no class's
+meaning changed (finding `R76-0-F1`).
+
+Nothing else here moves: the priority order (item 2), the three adopted semantics (item 3), the accounting
+convention (item 9) and the "how often did we switch, for which reason" purpose of item 8's event are exactly
+as written — the escalation reuses the walk's existing account move and adds no reason *class*, only a
+`plan_switch` cause word (`primary_silent`) on the event the move already writes.

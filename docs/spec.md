@@ -308,6 +308,10 @@ plan_policy:                          # optional; §4.6 — the subscription fir
   on_primary_exhausted: spill          # spill | block   (default spill)
   recover: probe                       # probe | none    (default probe)
   cooldown: 15m                        # default 15m
+  silent_escalation:                   # §4.21; optional — the defaults below are the contract's values
+    enabled: true                      # default true; false = silence never moves the family
+    threshold: 2                       # K: counted silence facts in one run; >= 2, default 2
+    window: 5m                         # W: the run's length, 1s..1h, default 5m
   overflow_monthly_cap_usd: <float>    # optional; absent = no cap
 ```
 
@@ -751,6 +755,7 @@ Neither spelling is a reshaped section (the `state:` / `retention` precedent).
 | `recover` | `probe` \| `none` | `probe` | `probe`: after `cooldown`, the next session's first request is admitted as a probe on `primary`; success switches the family back and is recorded. `none`: no automatic probe — the family returns at the plan's own window boundary when one is declared, and otherwise only by an operator action. |
 | `cooldown` | duration | `15m` | The minimum interval between the move away from `primary` and the first admitted probe. A floor, not a schedule: ADR-011's cooldown for that provider must also allow the attempt, and rule 3 below may defer the probe further. |
 | `overflow_selection` | `declared` \| `cheapest` | `declared` | **ADR-049.** `declared`: a spill attempts the policy's `overflow` route — today's behaviour, byte-identical. `cheapest`: the family's **metered candidate set** — every roster route whose provider is `account: api` and whose model entry carries the family tag (§4.8's tag is the set; adding a metered provider is a roster edit and nothing else) — is walked in **ascending `price.input_miss`, then `price.output`, then roster declaration order**. A route change is paid as a re-prefill, an input event, so the ranking orders on that term first. All candidates must share one `currency` (§4.8: a ranking *is* a comparison, and two currencies are never compared — a mixed family is a load error naming the family and the currencies). A `price.tiers` model ranks by its first band (§4.10; the same convention §6's own infeasibility figures use, and no estimate). The order is a pure function of (roster, config) and is **resolved once and pinned to the session** — a later reload re-ranks new sessions only (ADR-014 constraint 1: a route change is a cache event). The ranking resolves **after** per-wire eligibility (§4.2/ADR-022): the mode changes the order, never the eligibility rules. **The mode selects the family's metered *set*, not the order of the chain** (ADR-063): under `declared` the set is one route, so the ordering is vacuous inside it — its `overflow` behaviour stays byte-identical — while the list the walk holds after that set (the plan tier above it, the global `fallback` below it) is ordered by §4.2's one rule in both modes. Under `cheapest` the ranking above **is** that rule's metered instance (§4.2's terms 4–6), so the product has one ordering, not two |
+| `silent_escalation` | object | `{enabled: true, threshold: 2, window: 5m}` | **§4.21.** The silence-escalation knobs: `enabled` (`true` \| `false`), `threshold` (K, **≥ 2**), `window` (W, a duration in **`1s` … `1h`**). A family whose active plan route reaches K counted silence facts within W — and whose `on_primary_exhausted` is `spill` — is moved to its next candidate exactly as a `403` moves it, with `plan_switch.reason = primary_silent`. The defaults are the contract's values (§4.21.1), so a config that writes neither the object nor its members serves them; `enabled: false` is the documented way to keep the pre-§4.21 behaviour |
 | `overflow_monthly_cap_usd` | f64 USD | absent = no cap | Optional guardrail on the family's **metered** spend in a UTC calendar month, compared against measured usage priced by the config table. Once the month's spend has reached it, the family's overflow requests are refused (`cost_cap_exceeded`, 403). The request that crosses the cap is served — its cost cannot be known beforehand — so the overshoot is bounded by one request. A negative or non-finite value is a load error, and so is setting it on a family whose `overflow` route's provider is of a currency other than USD: the cap is denominated in **USD** (its own name), and comparing a USD ceiling with a spend in another currency is the silent mixing §4.8 forbids — so the policy refuses to load instead (message names `plan_policy.overflow_monthly_cap_usd` and the currency it found). |
 
 **Hard rules** (the parts an implementation may not improvise; ADR-014 items 1–11 are normative):
@@ -763,8 +768,11 @@ Neither spelling is a reshaped section (the `state:` / `retention` precedent).
    upstream has judged `primary` usable (for example because another session's probe succeeded), and that move
    **must be recorded** (`result.plan_switch`, §6; the `plan.switched` event). A request with no session never
    probes.
-3. **The upstream is the authority on exhaustion; the local counter is a warning.** Only an upstream `403`
-   classified `quota_exhausted` (ADR-011) may move the account. The verdict is the *classification*, and the
+3. **The upstream is the authority on exhaustion; the local counter is a warning.** An upstream `403`
+   classified `quota_exhausted` (ADR-011) is the only signal that may move the account **on a billing fact**,
+   and §4.21's silence escalation is the only other mover — a *run* of counted silence facts on the family's
+   active plan route, under `spill` only, which is a fact about the route and the family, never a usage
+   verdict. The verdict is the *classification*, and the
    classification is made from the upstream's own answer — its status, its headers and its error body — on
    **both** forwarding paths (§4.2): a streaming request reads its own error head's body before the classifier
    runs, so this rule reaches the clients that stream, which is every shipped one. The local `quota_counters`
@@ -890,6 +898,9 @@ two rows).
 | **ADR-049**: `overflow_selection` is neither `declared` nor `cheapest` | load error | `plan_policies[i].overflow_selection` |
 | **ADR-049**: `cheapest` and the candidate set's currencies differ | load error | the family + the currencies found |
 | **ADR-049**: `cheapest` + `overflow_monthly_cap_usd` and any candidate's currency is not USD | load error | `plan_policies[i].overflow_monthly_cap_usd` + the currency |
+| **§4.21**: `silent_escalation.threshold` < 2 | load error | `plan_policy.silent_escalation.threshold` |
+| **§4.21**: `silent_escalation.window` outside `1s` … `1h`, or not a duration | load error | `plan_policy.silent_escalation.window` |
+| **§4.21**: any key inside `silent_escalation` that §4.21 does not define | load error | `plan_policy.silent_escalation` |
 
 The `block` refusal is a property of the **state**, not only of the spill trigger: any request inside a family
 whose account state is `overflow` — including a request of a session that was already in flight when the
@@ -1335,6 +1346,16 @@ happens to carry that entry's name:
   single-line scalar: the locator refuses it rather than answering with the entry's own dash line
   (ADR-052 §2.1). A row built on either would rewrite structure rather than a value, which the write
   strategy below forbids in every other case.
+
+**One key is outside the row set by ruling, not by omission (spec §4.21, ADR-064).**
+`plan_policy.silent_escalation` (and `plan_policies[i].silent_escalation`) is a **nested mapping**, so the
+grammar's `a.b[i].k` form reaches its header as a block value and the locator refuses it for the same reason it
+refuses `plan_policies[i]` itself. It is therefore **not askable**: the `routing` section builds its **eight**
+rows per declared family, unchanged, and no row is invented for the object or for either member. The reason it
+can be left unasked is the same one §4.20.1 gives for `server.stream_idle_timeout`: its defaults
+(`enabled: true, threshold: 2, window: 5m`) are the contract's frozen values, so a first configuration needs no
+answer, and the shipped root carries the key **as a comment only**. The witness is the section table's own unit
+test, which builds the row set over the shipped root: a row appearing there is the test failing.
 
 Both behaviours are witnessed by the **section table's own unit tests** (`setup/sections.rs`'s test
 module — the rows built for a fixture roster that writes `api_keys:`) rather than by a conformance case,
@@ -2535,6 +2556,210 @@ truncation leaves one route-scoped advisory row with its 60 s bound; the next re
 `failover.triggered` row; `QuotaExhausted` stays provider-wide; a lone cooling route is still served).
 `DESIGN` §12.8's rows carry them; `ADR-056` is the reasoning.
 
+### 4.21 Silent exhaustion escalates (a plan family's silence counter) — ADR-064
+
+*Status: **contracted, not served** — `R76-0` (`ADR-064`) froze this contract on the owner's 2026-11-14 round
+ruling; `R76-1` implements it, and until then `plan_policy[].silent_escalation` is a key the loader **refuses**
+(`deny_unknown_fields`), no `plan.switched` row carries `reason: "primary_silent"`, `/health` has no
+`escalation` member, and `CONF-121`/`CONF-122` are parked `#[ignore]`d.*
+
+**The finding.** A two-week trace audit of the owner's deployment (2026-10-04 → 2026-11-14, **15,040**
+requests) found the plan account's exhaustion **never** surfacing as `403 quota_exhausted` — the class §4.6
+rule 3 names as the billing mover — and instead surfacing as silence: **113** mid-body truncations
+(`stream_truncated`, 97 of them on 10-06→10-08) and **4** head-never-arrived timeouts (`upstream_ms` pinned at
+`server.upstream_attempt_timeout`). Nothing moved the family, so `on_primary_exhausted: spill` — the mechanism
+the operator configured — never fired, and every client paid the stall and retried into the same route. The walk
+was healthy; **the trigger vocabulary was incomplete.**
+
+Three facts, one contract. **What a counted fact is** (§4.21.2), **how a run of them moves a family**
+(§4.21.3–§4.21.4), and **what must not happen afterwards** (§4.21.5–§4.21.6).
+
+#### 4.21.1 The key
+
+| Key | Type | Default | Range | Semantics |
+|---|---|---|---|---|
+| `silent_escalation` | object | — | — | the knobs below; the object's presence is optional and its members' defaults are the contract's |
+| `silent_escalation.enabled` | bool | **`true`** | — | `false` ⇒ the rule never moves a family. Facts are still recorded (the advisory row for a mid-body silence, the classification row for both causes); only the move is off |
+| `silent_escalation.threshold` | integer | **`2`** | **`>= 2`** — a smaller value is a **load refusal** naming the key | **K**: the run's count that escalates |
+| `silent_escalation.window` | duration | **`5m`** | **`1s` … `1h`** — outside it the load is refused naming the key; the config duration grammar (`300ms`, `90s`, `15m`, `1h30m`; no `d` unit) | **W**: how long a run lasts from its first fact |
+
+- **The default is on, and that is not a new economic choice.** The rule only ever runs for a family whose
+  policy says `on_primary_exhausted: spill` — the operator's own declaration that spending beats stalling — so
+  default-on **makes an existing declaration reachable** rather than adding willingness to spend. `block`
+  families are never escalated (§4.21.4), and `enabled: false` restores the pre-§4.21 behaviour exactly.
+- **K = 2 is the floor because K = 1 is already spent.** One stall is a *selection* fact and writes a route
+  advisory row (§4.20.5); taking an account away on one stall is what §4.20.5's own availability reasoning
+  refuses. A config cannot recreate K = 1 through this key.
+- **W = 5 m is a product default, and it is justified rather than measured.** Two facts bracket it. A counted
+  fact's `ts_us` is the instant its silent stream was cut, so a W shorter than one silence-to-verdict interval
+  (the shipped `server.stream_idle_timeout` is 30 s) could never hold two facts — the mechanism would be dead by
+  construction. And a useful W must reach the client's retry latency: the audit's truncations were mostly
+  retried **within five minutes** (ADR-056 §1.1's 83 of 106), so a 60 s window would reach the immediate retry
+  but not the slow one. Against an
+  independence model over the audited counts, W = 5 m expects ≈5 runs of ≥2 facts inside the three-day
+  exhaustion window while a uniformly-spread healthy fortnight expects ≈0.5 — one false spill per six weeks,
+  each costing one cooldown of metered spend plus the switch's re-prefill. The figure is `inferred` and is a
+  **comparison, not a forecast**; `R76-1` replays the window instead of trusting it (`ADR-064` §6.4).
+- **Not in §4.11's askable set.** A nested mapping is a block value the wizard's locator refuses, so the
+  `routing` section's eight rows per family do not move (§4.11's own paragraph). The shipped examples carry the
+  key **as a comment only**, landed with the parser (GAP-Q15).
+- **Reloadable** (§4.15): read at each evaluation, so a revision that changes either value is applied, never
+  refused — like `server.stream_idle_timeout` and unlike the startup-built consumers. A reload does **not**
+  zero the run, does **not** retro-escalate and does **not** re-judge history (§4.21.5).
+
+#### 4.21.2 The counted fact — the exact predicate
+
+A **counted fact** is a classification record of one streaming attempt that satisfies exactly one of two rows:
+
+| # | The fact | The predicate (one fact, two spellings) |
+|---|---|---|
+| **S1** | the upstream went **silent after the head** | record: `errors[].details.error_class == "stream_truncated"` **and** `details.stream_end == "idle_timeout"`; event: the `error.classified` payload's `reason == "stream_truncated"` **and** `stream_end == "idle_timeout"` **and** `stream == true` |
+| **S2** | the **head never arrived** (the request bytes were fully written) | record: `errors[].details.stream == true` **and** `details.stage == "unknown_outcome"` **and** `details.error_class == "timeout"`; event: the same three facts on the payload (`stream`, `stage`, `reason == "timeout"`) |
+
+**The two spellings are one fact, and the fold reads the event's** (§4.21.3). They are not identical key sets
+— the record nests the class word under `details.error_class` while the event carries it as `reason` beside
+`stream_end` (`record_classified`'s existing shape) — so the contract states both rather than leaving an
+implementer to discover the difference. What must never differ is the **predicate's answer**: an arm writes a
+record and a row from one classification, so the two spellings cannot disagree about the same attempt.
+
+Both are facts about **the upstream being silent**; nothing else is counted, and each exclusion is a ruling:
+
+| Not counted | Why |
+|---|---|
+| `stream_end` of `upstream_ended_early`, `request_timeout` or `client_closed` | the first is a graceful early close (the shape an *answering* route takes — §4.20.5's own reason for separating the causes), the second is **our** bound, the third is the client leaving (ADR-060). None is a fact about the route |
+| `connect_failure`, `auth`, `rate_limit`, `5xx`, content or format refusals | not silence; and the fast-refusal arm carries no `details.stream`, so S2's predicate cannot match it |
+| any **buffered** (non-streaming) failure — a mid-body stall included | the predicate demands `details.stream == true`. This instrument's domain is the streaming relay, the same domain §4.20.5's row has |
+| a fact on the family's **metered** route | it is counted **on that route's own run**, and no family's plan tier can contain a metered route (a policy's `primary` provider must be `account: coding_plan` and ADR-049's tier is the family tag's `coding_plan` routes). The plan route's counter is therefore untouched by overflow traffic — structurally, with no special case |
+
+**Both counted facts must exist as classification rows, and S2's writer is owed.** S1 already writes one
+(`error.classified`, `reason: "stream_truncated"`, `action: "abort"`). S2's arm — the streaming
+`unknown_outcome` — writes only a trace line today, so **the log cannot answer "how many head timeouts hit
+route R"**. `R76-1` gives it the row ADR-011 item 8 already requires of every classification (`reason:
+"timeout"`, `action: "abort"`, `matched: false`, `stream: true`, `stage: "unknown_outcome"`), and **both**
+writers add a `route` member `{provider, model}` — the route's native model id, never an alias — so the run can
+be folded from `events` alone. The member is additive on an events payload: no `EVENT_SCHEMA_VERSION` move, no
+existing reader moves.
+
+#### 4.21.3 The run, and its home
+
+| Property | Value |
+|---|---|
+| Key | `(provider, model)` — the **route**, exactly the pair §4.20.5's advisory row is keyed by |
+| Run | starts at a counted fact; a later fact **joins** it iff `fact.ts_us − run.first_us <= W`, else it starts a new run at count 1 |
+| Live | iff `now − first_us <= W`; an expired run contributes **0** |
+| Escalates | when a fact makes the run's count reach **K** (§4.21.4 for the conditions) |
+| Home | the store's **`silence_streak`** table (store DDL version **4**, `DESIGN §12.10.4`), written by the same arm that classifies the fact |
+| Rebuild | a fold of the counted `error.classified` rows in `event_id` order — `ts_us`, the `route` member and the predicate only; no config, no clock, no trace (ADR-009 item 5) |
+| Not a cooldown | it never blocks a route, never appears in `skipped[]`, never causes `no_available_route`, and is invisible to the probe gate's `primary_cooling_down` |
+
+**Why its own artefact rather than a count of `provider_cooldown` rows.** That table is **one row per route**
+(an upsert keyed by `(scope, provider, model)`), so two facts inside one 60 s TTL leave one row — and at
+W = 5 m the first row has expired before the second fact lands in most pairs. A row count is not a fact count.
+The same reason is why ADR-056's K = 1 row cannot be reused for this purpose, and why §4.20.5's trigger, TTL
+and advisory rule are untouched by this section.
+
+**Why a run and not a sliding window.** A sliding window needs every timestamp or a per-read recomputation,
+and a steady drip of stalls can hold it open indefinitely (one fact per 0.9 W spills a family in a loop). A run
+is self-limiting, is two integers, and its rebuild is exact. The cost, stated: three facts at 0 m, 3 m and 6 m
+count 2 in the first run and 1 in the second, so a slow triple escalates once — the conservative direction for
+a mechanism whose false positive spends money.
+
+#### 4.21.4 The move
+
+**It fires once, at the instant a counted fact is written**, iff **all** of: the run reached K; the fact's
+route is the family's **active route** (`plan_state.route`, or the policy's `primary` when the family has no
+row); that route is **in the plan tier** (not already spilled); the policy's `on_primary_exhausted` is
+**`spill`**; and `silent_escalation.enabled` is true.
+
+**It performs the same move the `403` path performs, through the same writer, with one new argument — the cause
+word.** One `plan.switched` row at durability **FULL** (ADR-014 item 8's reason: it changes what every
+subsequent request in the family is billed), one `session.bound` re-point per live binding of the abandoned
+route (so the log says *these sessions moved*, DESIGN §12.10.5 note R7), and the `plan_state` projection from
+that same row. The **destination is the writer's existing answer**: under a singleton plan tier — every config
+written before ADR-049, and the shipped examples — the policy's `overflow` route; under a tier of several
+plans, the next plan member, and the family stays in-plan. This section adds a cause, not a second router.
+
+**`reason: primary_silent`** is the fifth member of §6's `plan_switch` vocabulary and the only **cause-shaped**
+one: the other four say where the family went, this one says why it left, so a reader learns the destination
+from `from` / `to` and from `account` rather than from the word. Reusing `primary_exhausted` would be a false
+statement — no upstream said "exhausted", and silence's whole problem is that the word never came. The
+`plan.switched` row carries the evidence it was decided on, as one additive member:
+
+```json
+{"reason": "primary_silent", "probe": false, "from_route": "p-plan/m1", "to_route": "p-api/m1",
+ "silence": {"count": 2, "threshold": 2, "window_us": 300000000}}
+```
+
+and **the requests that state displaces carry that same word**: `result.plan_switch.reason` on a
+state-driven displacement reads **the state's cause** (§6's producer table), so the trace and the event log
+agree about *why the family is spending money*. Invariant, checkable: on a record displaced by the family's
+state, `result.plan_switch.reason` equals the `reason` of the `plan.switched` row that produced that state.
+
+**`block` does not escalate.** Under `block` the operator declared *fail rather than spend*: there is no
+destination, and refusing would have to claim an exhaustion nobody declared (§8 has no word for "the plan went
+quiet"). A `block` family keeps exactly today's behaviour — the attempt fails the way it failed — and the gap
+is registered (`ADR-064` §9, `R76-0-F2`).
+
+**The K-th request is not retried.** The request whose attempt produced the K-th fact is the request that
+failed: its body was already partly on the wire (S1), or its bytes were fully written and no head came (S2).
+§4.2's head rule, ADR-011 item 6 row 3 and ADR-060 §8 forbid a retry in both shapes — the upstream may have
+billed it, and a relayed byte cannot be un-relayed. The escalation therefore serves the requests that **begin
+after** it; the K-th request ends exactly as its predecessors did. This is the one place the silence path
+differs from the `403` path, which retries the same request on the overflow route (ADR-014 item 5) because a
+`403` is a refusal with no bytes and no bill.
+
+**No relayed byte moves.** The escalation is decided after the body is over; the per-chunk write-through, the
+ordering, the "never fabricate a terminal" rule and the record's shape are untouched (AGENTS constraint 1).
+
+#### 4.21.5 The interplays
+
+- **Probe facts count.** A probe is admitted at a session boundary (ADR-014 item 3, unchanged) and attempts the
+  plan route; if the plan is still silent, the probe writes a counted fact and advances the run. It cannot
+  loop: the move is gated on the state (already spilled ⇒ nothing to move), and a probe is admitted at most
+  once per cooldown **and** once per session **and** not before the plan's declared window boundary.
+- **The two clocks never read each other.** **W (5 m) is this section's window over silence facts, and
+  `cooldown` (15 m default) is ADR-014's interval between the move and the first admitted probe: different
+  clocks, stated once** — a cooldown expiry admits a probe whatever the run says, and the escalation neither
+  shortens nor extends the probe deadline (a new `plan.switched` row makes `since` later, which is ADR-014's
+  own arithmetic, not a rule of this section).
+- **The return trip resets the run — one delete, and it is a correctness rule.** A `plan.switched` row that
+  moves a family back to `primary` (`reason: "primary_recovered"`, from a probe success or the plan's own
+  window boundary) **deletes** the family's plan-route run. Without it, a family that returns **inside** the run
+  that spilled it (a short `cooldown` — the test rigs use `0s`) would be re-spilled by the very next single
+  stall. A *successful ordinary request* does **not** reset it: the run is time-bounded, one success does not
+  un-happen two silences, and the data plane's success path gains no store write.
+- **Reload** does not zero the run (it is store state, untouched by `config.applied`), does not retro-escalate
+  (a lowered K is not evidence, so no config change can itself move a family), and applies new K/W to facts
+  that arrive afterwards.
+- **Restart** loses nothing: the run is in the store and, if the projection is lost, rebuilt from `events`.
+- **In-flight requests** are not recalled: the escalation applies to requests that **begin after** it, and a
+  later request reads the new state through the guard's ordinary rule (state `overflow` ⇒ `Downgrade`).
+- **A fact after the escalation** does not restart K and cannot re-move the family (§4.21.4's second condition).
+- **The overflow cap** is neither read nor written here: it refuses on the next request exactly as it does
+  after a `403` spill.
+
+#### 4.21.6 What this section does not change
+
+No relayed byte; no `result.status`; no `error.type`, HTTP status or §8 row; no `DecisionRecord.schema_version`
+(`plan_switch.reason` is a string in an optional object, ADR-049's precedent); no new `error.class` and no
+`fails_over` on any class; `demotes_provider()` untouched; **§4.20.5's row, its 60 s TTL, its
+`stream_end == "idle_timeout"` trigger and its advisory rule untouched** (a head timeout contributes to the
+run and writes **no** advisory row — an asymmetry this section states so it is not read as an omission); the
+probe predicate, the cooldown and the session-boundary rule untouched; ADR-063's ordering key untouched;
+`/metrics`'s frozen series set untouched (**no series is added**: a switch is counted by `vadis_plan_switches`
+whatever caused it, and the count lives in `/health` — `ADR-064` §2.8.4 registers the absence); `/state/events`
+untouched.
+
+#### 4.21.7 Assertions
+
+`CONF-121` (two counted facts inside W move the family with one `plan.switched` row `reason: "primary_silent"`
+carrying `silence.{count,threshold,window_us}`; the K-th request is not retried; the next request is displaced
+with that same word and `failover_from: null`; a head timeout counts; the return trip resets the run; the run
+survives a restart) and `CONF-122` (one fact never escalates — the over-trigger control; facts outside W never
+accumulate; the three non-counted causes never count; a metered route's facts never reach a plan route's run;
+`block` and a no-policy roster never move anything account-level; a reload does not zero the run).
+`DESIGN` §12.8's rows carry them; `ADR-064` is the reasoning.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
@@ -2933,9 +3158,11 @@ last two are §4.6.1/ADR-049's and are **present only under `overflow_selection:
 otherwise so the key set never changes shape): `from` / `to` are
 `provider/model` routes naming the request's **first displacement** — the route it was displaced **from** and
 the route the walk moved **to** at that displacement (the value the pre-walk writer can know);
-`reason ∈ {primary_exhausted, plan_exhausted, primary_cooling_down, primary_recovered}`
+`reason ∈ {primary_exhausted, plan_exhausted, primary_cooling_down, primary_recovered, primary_silent}`
 (`plan_exhausted` is §4.6.1/ADR-049's: the family moved from one **plan** member of its plan tier to the next
-and stayed in-plan — `account` is still `primary`); `probe` is a
+and stayed in-plan — `account` is still `primary`; `primary_silent` is §4.21/ADR-064's: the family's active
+plan route reached its silence threshold and the escalation displaced it — the **only cause-shaped** member of
+the set, and the two readings a reader owes it are stated in §4.21.4); `probe` is a
 boolean (this switch was the return trip of an admitted probe); `reprefill_tokens` and `switch_cost_nano` are the
 switch's cache price under §7's convention, and `cost_currency` is the unit `switch_cost_nano` is denominated in
 — the **destination** route's currency (§4.8), present whenever `plan_switch` is not null. The two money
@@ -3000,16 +3227,17 @@ own and the chosen candidate's; and no route appears in both arrays, with no `st
 | a failed attempt in this request (§4.2's walk) **with a candidate the walk can attempt next** | set — the route the attempt abandoned | set, `reason: primary_exhausted`, when the abandoned route was the family's `primary` |
 | a failed attempt in this request and **no** candidate the walk can attempt after it (the attempt-exhausted condition, §4.2/§8) | `null` — nothing moved: the refusal carries that attempt's own evidence (`upstream_status` / `error_class`), and a displacement with no destination would be a fact that never happened (ADR-010) | `null` |
 | ADR-011's cooldown refusing the resolved route **before** any attempt | set — the route the skip abandoned (ADR-011 item 4) — and a refusal does not undo it: the field is written whether the walk then serves, fails, or ends with nothing served, so a condition-N refusal whose chain opened on a cooling route carries it, on **both** media (ADR-024; `conf_42_non_primary_abandon_is_failover_only`, CONF-64) | set, `reason: primary_cooling_down`, **when the abandoned route was the family's `primary`**; `null` when it was not (the cooldown displaced the client's own choice, not the family's account) |
-| the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason: primary_exhausted` |
+| the family's account state, with no failure-class fact in this request | `null` (nothing failed here — saying otherwise would make the field mean "the route changed", which is this field's job) | set, `reason` = **the state's cause word** — `primary_exhausted` when a `403` moved it, `primary_silent` when §4.21's escalation did |
 | the family's account state returning to `primary` | `null` | set, `reason: primary_recovered` |
 
-**Each of the three `reason` values has a producing path.** A documented value no implementation can emit is a
+**Each of the five `reason` values has a producing path.** A documented value no implementation can emit is a
 defect, not a reserved word, so the producers are named here and witnessed by conformance cases (DESIGN §12.8):
 
 | `reason` | Produced when | The state write |
 |---|---|---|
-| `primary_exhausted` | (i) an attempt on the family's `primary` failed with an upstream `403 quota_exhausted` — the one signal that may move the account (§4.6 rule 3); (ii) the family's account state was already `overflow` and the policy displaced the request (`spill`) | (i) writes the `plan.switched` event (the family's account moves); (ii) writes nothing — the state already is the one the request is moved to |
-| `primary_cooling_down` | ADR-011's cooldown projection refused the family's `primary` route **before any attempt**, so the request was served by the family's `overflow` route while the account state stayed `primary` | writes **nothing**, and does **not** move the account: a cooldown is route availability, not a verdict on the plan (§4.6 rule 3 — only an upstream `403 quota_exhausted` may move it). The next request is decided by the state as usual, so once the cooldown expires the primary serves again with no probe needed |
+| `primary_exhausted` | (i) an attempt on the family's `primary` failed with an upstream `403 quota_exhausted` — the billing mover (§4.6 rule 3); (ii) the family's account state was already `overflow`, its cause is `primary_exhausted`, and the policy displaced the request (`spill`) | (i) writes the `plan.switched` event (the family's account moves); (ii) writes nothing — the state already is the one the request is moved to |
+| `primary_silent` | (i) a counted silence fact completed a run of K within W on the family's **active plan route** and §4.21's escalation displaced the family (`spill` only) — the `plan.switched` row is written with this word and carries `silence: {count, threshold, window_us}`; (ii) the family's account state was already off its plan tier, its **cause** is `primary_silent`, and the policy displaced the request | (i) writes the `plan.switched` event; (ii) writes nothing |
+| `primary_cooling_down` | ADR-011's cooldown projection refused the family's `primary` route **before any attempt**, so the request was served by the family's `overflow` route while the account state stayed `primary` | writes **nothing**, and does **not** move the account: a cooldown is route availability, not a verdict on the plan (§4.6 rule 3 — only a `403 quota_exhausted` classification or §4.21's silence escalation may move it, and a cooldown is neither, even when §4.20.5's row is what caused the skip). The next request is decided by the state as usual, so once the cooldown expires the primary serves again with no probe needed |
 | `primary_recovered` | an admitted probe on the primary succeeded (a probe, or another session's probe pulling a spilled session back) | writes the `plan.switched` event back to `primary` |
 
 A **displacement** and a **state transition** are therefore not the same thing (DESIGN §12.10.8): the
@@ -3346,7 +3574,8 @@ member:
   "recover": "probe",
   "account": "primary",
   "since": null,
-  "probe": null
+  "probe": null,
+  "escalation": { "count": 1, "threshold": 2, "window_ms": 300000 }
 }
 ```
 
@@ -3361,7 +3590,8 @@ and while the family is on the metered account:
   "recover": "probe",
   "account": "overflow",
   "since": "2026-09-20T08:14:02.113Z",
-  "probe": { "deadline": "2026-09-20T08:29:02.113Z", "admitted": false, "blocked_by": "window_not_reset" }
+  "probe": { "deadline": "2026-09-20T08:29:02.113Z", "admitted": false, "blocked_by": "window_not_reset" },
+  "escalation": { "count": 0, "threshold": 2, "window_ms": 300000 }
 }
 ```
 
@@ -3380,6 +3610,10 @@ and while the family is on the metered account:
 | `probe.deadline` | string | `since + cooldown`, with `cooldown` from the **currently loaded config** — the same recomputation the serving path does (ADR-014 item 10's mid-flight clause), so a knob change moves a future deadline rather than rewriting history. It is not the stored informational column, which a rebuild may have derived from a cooldown that has since changed. **Always computable when `probe` is present** |
 | `probe.admitted` | bool | whether a probe would be admitted **right now, given the current state and config** — judged for a session boundary, the only place a probe is admitted |
 | `probe.blocked_by` | string \| null | the **first** failing condition, in the guard's own evaluation order with the two request-shaped arms left out (§4.6 rule 2), one stable word: `recovery_disabled` → `cooldown` → `primary_cooling_down` → `window_not_reset`; `null` when `admitted` is true |
+| `escalation` | object | **§4.21 (ADR-064)**: the family's silence counter, read-only. Always present when the family is configured — it is state, like `account`, not a knob report |
+| `escalation.count` | integer | the **live** counted-fact run on the family's **currently active route**: `0` when the run has expired (`now − first_us > window`), when no fact has been counted, and when the active route is not in the plan tier (a spilled family escalates nothing, which is why the metered sample above reads `0`). Read from the `silence_streak` projection (§4.21.3) |
+| `escalation.threshold` | integer | K from the **currently loaded config** — the value the next counted fact would be judged against, `.threshold`'s default `2` |
+| `escalation.window_ms` | integer ms | W from the currently loaded config, in **milliseconds** — the same unit word `details.window_ms` uses (§4.20.3), so the two silence instruments do not spell a duration two ways |
 
 The situations in which a probe is **not** admitted, and where each appears in the response:
 
@@ -3393,8 +3627,10 @@ The situations in which a probe is **not** admitted, and where each appears in t
 | the request has **no session**, or is not a session's first request | **nothing.** `/health` reports state; "this request carries no session" is a property of a request that does not exist yet, so the response carries no word for it and must not imply that a sessionless request would probe — for every such request the claim would be false (§4.6 rule 2) |
 
 **No figure in this section is an estimate** (AGENTS constraint 5): every key is a read (the config, the
-`plan_state` row) or an arithmetic on two known instants (`since + cooldown`). There is no case in which
-`deadline` is unknown, and no inferred number is printed here.
+`plan_state` row, the `silence_streak` row) or an arithmetic on two known instants (`since + cooldown`).
+`escalation.count` is a **count** over recorded facts — never a cost, a saving or a prediction — and it is the
+only member here that moves between two `/health` reads without the config changing, which is what a counter
+is for. There is no case in which `deadline` is unknown, and no inferred number is printed here.
 
 ### 9.2 `vadis stats`
 

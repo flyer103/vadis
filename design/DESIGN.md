@@ -882,6 +882,14 @@ spec §6 field groups → Rust paths (auditable line by line):
   `schema_version` stays 1. It is **not** a second name for `failover_from` — spec §6's own table fixes which
   facts set which of the two (a failure-class fact sets `failover_from`; the plan policy's account state sets
   `plan_switch`) — and §12.10.8 lands the rest.
+- **`ResultRec.plan_switch.reason` is an open value set inside a closed shape** (ADR-049 added
+  `plan_exhausted`; **ADR-064** adds `primary_silent`, spec §4.21.4). The field is a `String` **only in the
+  sense that the word is data** — the writer emits a closed set of stable words, and `R76-1`'s doc comment on
+  `PlanSwitchRec` gains the two words it is missing. Two rules ride it: the word names **why** the request left
+  (`primary_silent` is the only cause-shaped member; the other four name where the family went), and on a
+  **state-driven** displacement the word is **the state's cause**, so the trace and the `plan.switched` row that
+  produced the state agree. No key is added, no `schema_version` move, and the object's three-way
+  present-and-null stance is unchanged.
 - `transform_mode` and `transforms[].edited_paths[]` are additions of the same class (ADR-019; spec §6):
   the mode is present on every record and the path list only on a step that changed a payload, so a
   reader that tolerates unknown fields reads an older record unchanged — an added key never moves the
@@ -982,7 +990,7 @@ Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a sessi
 `X-Vadis-Lossy` (when a lossy translation happened, DESIGN §7). On the SSE path all three headers must
 already have been sent before the first event.
 
-### 12.8 conformance case table (`CONF-01…CONF-120`)
+### 12.8 conformance case table (`CONF-01…CONF-122`)
 
 
 Location: the workspace member `vadis-conformance` (`tests/conformance/`), case file
@@ -1697,6 +1705,9 @@ section forbids (R50's/R66's/R69's precedent above). No existing assertion is to
 `CONF-88/89`'s arms and `CONF-91…104`'s — stays **byte-identical**. Nothing here moves a gate definition, a
 threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 / ADR-012).
 
+| CONF-121 | §4.21 (the escalation, `ADR-064`) + §4.6's two movers + §6's `plan_switch.reason` producer table + §9.1's `escalation` member | **two silence facts inside five minutes spill the family** — through the real `serve` assembly on a plan-first rig (`p-plan/m1` `coding_plan` → `p-api/m1` `api`, `spill`, `recover: probe`, `cooldown: 0s`, `silent_escalation: {threshold: 2, window: 5m}`, `upstream_attempt_timeout: 1s`, `stream_idle_timeout: 400ms`): (a) two stalled streams on `p-plan` leave `Query::PlanState` at `account: "overflow"`, exactly **one** `plan.switched` row with `reason: "primary_silent"`, `probe: false`, `from_route`/`to_route` and `silence: {count: 2, threshold: 2, window_us}`, while **neither** request was retried (`p-plan` saw 2, `p-api` 0) and both records carry the truncation with `plan_switch: null`; (b) the next request is served by `p-api` with `result.plan_switch.reason: "primary_silent"` and `result.failover_from: null`; (c) **the head that never arrived counts** — a listener that never answers, twice, leaves two `error.classified` rows (`reason: "timeout"`, `stage: "unknown_outcome"`, `stream: true`, a `route` member) and one `primary_silent` switch; (d) **the return trip resets the run** — a successful probe writes `primary_recovered`, `/health`'s `escalation.count` reads 0, and one further stall leaves the family `primary` at `count: 1`; (e) **the run survives a restart** — the second fact after a serve restart still completes a run of 2. Red at the base (the config is refused: the key does not exist), and red for a one-fact demotion, a retried truncated request, a `primary_exhausted` label on a silent move, a run left alive across the return, and an in-memory count | `R76-1`: the `silence_streak` projection + its writer (both fact arms), the pure escalation predicate, `record_plan_switch`'s cause argument and return-trip clear, `/health`'s `escalation` member |
+| CONF-122 | §4.21.2 (the counted predicate's exclusions) + §4.21.4 (`spill` only, per-route keys) + §4.21.5 (reload) — the **over-trigger controls** (`ADR-064`) | **nothing over-triggers, and nothing outside a plan family moves.** (a) **one fact never escalates** — one stall, then a clean request: no `plan.switched` row of any reason, the state reads `primary` (absent row), `p-plan` serves the second request, and `/health`'s `count` reads **1** (counted, not fired); (b) **facts outside W never accumulate** — under `window: 1s`, two stalls 1.5 s apart are two runs, `count: 1`, no switch; (c) **the causes that must not count** — `upstream_ended_early`, `request_timeout`, a client-abandoned body (`peer_aborts()` proves it) and a buffered mid-body stall: four facts, **zero** counted, no switch; (d) **a metered route's facts never reach a plan route's run** — after a spill, two aborts on `p-api` are recorded against `p-api/m1` and the family's `count` stays 0; (e) **`block` and no-policy** — a `block` family never writes a `plan.switched` row and never fabricates a `quota_exceeded` refusal for silence, and a no-policy roster answers `plan.configured: false` with no `escalation` member and no account-level move; (f) **a reload does not zero the run** — after the first fact rewrite to `threshold: 3`: `/health` reads `threshold: 3`, `count: 1`, the second fact makes it 2 and the family stays `primary`, and a third spills it with `silence.threshold == 3`. **The red control the card names is (a)**: an implementation that demotes on one row spills after the first stall. Also red for a sliding-window count, for counting any truncation, for a family-keyed streak, for escalating under `block`, and for a projection rebuilt on reload | `R76-1`: as `CONF-121`, plus the config's reload path for the two knobs |
+
 **Allocation of `CONF-107` (R73 — the model list surface, `ADR-055`) — recorded 2026-10-17 by the
 round's contract card, the R9/R10/R17/R22/R28/R29/R32/R43/R50/R51/R65/R66/R69/R71 precedent.** The
 allocation is the **owner's act** of 2026-10-17 (the chat ruling that opened R73, quoted in ADR-055's
@@ -1722,6 +1733,23 @@ every other case file — `CONF-45`'s six arms, `CONF-58/59/64/65`'s `skipped[]`
 series set, `CONF-88/89`'s arms, `CONF-90` (frozen by ADR-053 §8.2), `CONF-91…106`'s — stays
 **byte-identical**, and the one new file is **added**. Nothing here moves a gate definition, a
 threshold, the corpus, the loop replay contract or the L1 envelope (AGENTS 9 / ADR-012).
+
+**Allocation of `CONF-121`/`CONF-122` (R76-0 — the silence escalation, `ADR-064`) — recorded 2026-11-14 by
+the round's contract card, the same owner-act precedent as CONF-107/CONF-120 above.** The number space was
+walked before taking the ids: at this branch's HEAD the case files present run `01–47`, `53–66`, `71–78`,
+`80–97`, `100–120`; `48–51` stay reserved and `CONF-98/99` stay the parked `round/67-abandoned-attempt`
+branch's (that branch is never switched, merged or deleted by this round); `ADR-062`'s register names
+**`CONF-121`** as the first free id and `DESIGN §12.9`'s register repeats it, so this card takes **121** and
+**122** and the heading moves `CONF-01…CONF-120` → `CONF-01…CONF-122`. Both files land with the contract card
+**parked** `#[ignore = "CONF-121: depends on R76-1"]` / `"CONF-122: depends on R76-1"` (the `CONF-20…25` rule),
+and both are written to compile against the contract's surfaces only — the trace, `Query::AllEvents`,
+`Query::PlanState` and `/health`'s JSON — because the `silence_streak` projection has no query until `R76-1`
+adds one (`ADR-064` §4's preamble). The cases add two files and move **no** existing assertion: `ADR-064` §5
+claims an empty amendment list and names, one by one, the neighbours it checked (`CONF-108/109/110` declare no
+plan policy; `CONF-105` asserts no event-kind set; `CONF-21`'s fixture is additive-safe; `CONF-87`'s frozen
+series set does not move; the plan-premise cases all move their family with a `403`, whose state word is
+unchanged). Nothing here moves a gate definition, a threshold, the corpus, the loop replay contract or the L1
+envelope (AGENTS 9 / ADR-012).
 
 Case IDs are a **contract**: a new behavior in `docs/spec.md` → this section and `tests/conformance/`
 must gain it in step, and numbering only grows, never changes (a removed case keeps its ID and is marked
@@ -2104,6 +2132,30 @@ is what keeps that from reading as waste (the ledger records no content, `ADR-00
 **not** move: no product byte, no trace field, no `schema_version`, no `CONF` id (the first free stays
 `CONF-121`; the card allocates no case), no gate, threshold, corpus or L1-envelope value (AGENTS 9).
 
+**R76-0 — the silence escalation (`ADR-064`, 2026-11-14; contract only, no product byte).** The round's
+**second account mover**: a plan family whose active route collects **K = 2** counted silence facts within
+**W = 5 m** is displaced exactly as a `403` displaces it, with the new `plan_switch` reason
+**`primary_silent`** — and nothing outside a plan family, under `block`, or for any non-counted cause moves at
+all. **Contracted, not served**: the key `plan_policy[].silent_escalation` is refused by the loader until
+`R76-1` lands the parser with it (GAP-Q15), so `spec §4.21` says *contracted, not served* and `CONF-121/122`
+are parked `#[ignore]`d. **What the implementing round owes** (§6.1/§6.2 of the ADR): the `silence_streak`
+projection at **store DDL version 4** with its `rebuild_silence_streak` fold (the identity test is a
+`vadis-store` unit test, the `plan_state` precedent, because a conformance case cannot reach a rebuild);
+`plan_state.cause` (an additive column whose `NULL` a migrated v3 database reads as `primary_exhausted`);
+**S2's missing classification row** — the streaming `unknown_outcome` arm writes a trace line and no event
+today, so the log could not answer *"how many head timeouts hit route R"* (finding `R76-0-F1`, repaired as a
+forced consequence); the `route` member on both fact writers, which is what makes the fold a single-kind scan;
+`/health`'s `escalation {count, threshold, window_ms}` member; the **comment-only** example note; the
+`book/` sentence (AGENTS 8) and the two cases' un-parking. **Deliberately not moved**: `spec §4.20`'s row,
+trigger, TTL and advisory rule (ADR-056 §2.5.1's K = 1 stands for the *row*; the *streak* is a different
+artefact with a rebuild path, ADR-064 §1.3); ADR-011's class table, `demotes_provider()` and item 6's
+not-billed rule (which is why the K-th request is **not** retried); ADR-014's probe predicate, session-boundary
+rule and 15 m cooldown; ADR-063's ordering key; **`/metrics`'s frozen series set and `CONF-87`** — no series is
+added, and `R76-0-F4` registers that absence; and **no existing `CONF` assertion** (the ADR's §5 amendment list
+is empty and names each neighbour it checked). **Registered open**: `block` gets no escalation (`R76-0-F2`); the
+W default's adequacy is decided by `R76-1`'s replay, not by this contract (`R76-0-F3`); a multi-plan tier
+accumulates one run per member and escalates once (`R76-0-F5`).
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**
@@ -2442,6 +2494,42 @@ CREATE TABLE provider_cooldown (              -- ADR-011 demotions: provider-wid
   rule. Its implementation adds one table through the forward-only migration list (`const MIGRATIONS`), and no
   existing row is rewritten (ADR-009 item 7) — which is why it is version 2 rather than an edit to the DDL
   version 1 above.
+- **`silence_streak` is DDL version 4** (**ADR-064**, spec §4.21; version 3 was ADR-049 §5.2's
+  `plan_state.route` column, and the store's `const MIGRATIONS` list ends at 3 at this card's HEAD — verified).
+  One additive table and one additive column, no existing row rewritten:
+
+  ```sql
+  -- ADR-064 §2.3.1; the run of counted silence facts, keyed by the route.
+  CREATE TABLE silence_streak (
+      provider   TEXT    NOT NULL,
+      model      TEXT    NOT NULL,             -- the route's NATIVE model id (never an alias, never '')
+      count      INTEGER NOT NULL,             -- facts in the current run; >= 1
+      first_us   INTEGER NOT NULL,             -- the run's anchor (the first fact's ts_us); liveness is
+                                               -- `now - first_us <= W`, never `last_us`
+      last_us    INTEGER NOT NULL,
+      last_event INTEGER NOT NULL,             -- the classification row that wrote this state
+      PRIMARY KEY (provider, model)
+  );
+  ALTER TABLE plan_state ADD COLUMN cause TEXT; -- ADR-064 §2.8.2: the last move's reason word.
+                                                -- NULL on a v3 database = 'primary_exhausted', the only
+                                                -- cause that existed before ADR-064 (stated, not guessed).
+  ```
+
+  - **Its rebuild is a single-kind fold** (`rebuild_silence_streak`): scan `error.classified` rows in
+    `event_id` order, keep per route the §4.21.3 run (`ts_us − first_us <= W` joins, else a new run), and read
+    **only** `ts_us`, the payload's `route` member and the counted-fact predicate. **That `route` member is
+    what `R76-1` adds to both fact writers** (spec §4.21.2) — without it the fold would need a join to
+    `upstream.submitted`, and the head-timeout arm writes no classification row at all today
+    (`R76-0-F1`).
+  - **The incremental path and the rebuild must agree row for row** (CONF-21's rule, extended): a
+    `vadis-store` unit test folds one hand-written event sequence twice — the `plan_state` identity test at
+    `lib.rs:1367` is the precedent — because a conformance case cannot reach a rebuild without a store double.
+  - **It is neither a cooldown nor a refusal.** Nothing in the walk reads it for availability; its only
+    reader is the plan policy's own escalation check and `/health`'s `escalation.count`. A lost row costs one
+    escalation decision, never a request.
+  - **`plan_state.cause` rides the existing rebuild**: the `plan.switched` payload already carries `reason`
+    (ADR-014 item 8), so the rebuilt row derives the same word the incremental path stores — no new event
+    field, and the "a plan_switch's word equals its state's cause" invariant (spec §6) is rebuildable.
 - **No `CHECK` on `events.kind`, deliberately.** The vocabulary grows (ADR-010 item 2's list,
   plus `error.classified` from ADR-011); a `CHECK` would force a DDL migration per new event
   kind, and DDL migrations are exactly what must not be coupled to the truth's vocabulary. The
@@ -3138,6 +3226,33 @@ the trace row only**. A cooldown is route availability, not a verdict on the pla
 may move the account); it pairs with `failover_from` set to the abandoned primary, which is what makes the
 metered spend attributable at all. Both the trace record and that pairing are witnessed by `CONF-42` (§12.8),
 and the buffered and streaming paths are expected to carry it (writes: `forward.rs`, `stream_forward.rs`).
+
+**The silence escalation (ADR-064, spec §4.21) — where it sits, and what it reuses.** One rule, no new stage,
+no second writer of the account state's *shape*: it is the second **caller** of the move above.
+
+- **The fact writers.** Two arms produce a counted silence fact (spec §4.21.2) and share one function
+  (`record_silence_fact`): the streaming relay's truncation arm for `stream_end == "idle_timeout"`
+  (S1 — `stream_forward.rs`'s `record_classified`, which also writes ADR-056's advisory row, unchanged), and
+  the streaming head arm for `OpenHead::UnknownOutcome` (S2 — which today writes the trace only and gains
+  ADR-011 item 8's `error.classified` row). Both add the payload's `route` member `{provider, model}` and both
+  upsert `silence_streak`; no other arm writes it, and no arm branches on "is this the second one" — the
+  decision is one pure call.
+- **The predicate.** `vadis-core`'s `plan.rs` gains one pure function beside the existing policy predicates —
+  `silence_escalates(streak, silent_escalation_cfg, plan_state_row, route) -> bool` — implementing spec
+  §4.21.4's five conditions. No I/O, no clock beyond the fact's own `ts_us` (AGENTS constraint 2).
+- **The move.** On `true`, the writer calls the **existing** `record_plan_switch` with
+  `reason: "primary_silent"`, `probe: false` and the additive `silence: {count, threshold, window_us}`
+  evidence member. Everything the move already does follows unchanged: the FULL `plan.switched` row, the
+  `session.bound` re-points per live binding (note R7's anchor rule), the `plan_state` write, and the
+  `result.plan_switch` the request that *follows* carries. **The destination is the writer's, not this
+  caller's** — the escalation never computes a route.
+- **The return-trip clear.** `record_plan_switch`'s `to_account == "primary"` arm (both producers:
+  `primary_recovered` from a probe or from the plan's window boundary) also writes
+  `ProjectionWrite::SilenceStreakClear` for the abandoned plan route, which is what stops a family that returns
+  inside the run that spilled it from being re-spilled by one stall (spec §4.21.5).
+- **Deliberately not here.** No retry of the K-th request (the ordinary failure path ends it), no advisory row
+  for S2, no change to §4.20.5's trigger, no provider-wide demotion, no new `error.type`, no `/metrics`
+  series, and no read of the trace.
 
 **What this clause does not touch.** The pipeline (§3), the selector (§12.3), the classifier (§12.10.1,
 ADR-011), the byte boundary (§12.3.1, §12.10.7), the sticky binding's TTL and the meaning of `state.sticky_hit`
