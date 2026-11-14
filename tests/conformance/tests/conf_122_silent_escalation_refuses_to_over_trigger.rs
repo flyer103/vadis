@@ -290,7 +290,6 @@ fn post(addr: &str, body: &str) -> (u16, Vec<u8>, Vec<(String, String)>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-122: depends on R76-1"]
 async fn conf_122_silent_escalation_refuses_to_over_trigger() {
     // ------------------------------------------------------------------- (a)
     // One fact never escalates — **the over-trigger control**.

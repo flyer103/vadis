@@ -254,7 +254,6 @@ async fn start_vadis(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "CONF-121: depends on R76-1"]
 async fn conf_121_silent_escalation_moves_the_account() {
     // ---------------------------------------------------------------- (a)+(b)
     let dir = testkit::tempdir("conf121ab");
