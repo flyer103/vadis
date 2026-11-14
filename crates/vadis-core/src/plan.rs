@@ -1240,7 +1240,7 @@ mod tests {
         let rule = PlanFirstRule::new(p.clone(), tier);
         // On the metered tier, past the cooldown: admitted, and the pass
         // is on the HEAD (the policy's primary), not the second member.
-        let mut r = req(&p);
+        let r = req(&p);
         match rule.decide(&r) {
             PlanMove::Pass { route: got, probe } => {
                 assert!(probe);

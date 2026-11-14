@@ -2174,7 +2174,7 @@ mod tests {
             last_event: ev,
         })
         .unwrap();
-        let ev = s
+        let _ev = s
             .append(NewEvent {
                 kind: EventKind::CostComputed,
                 request_id: Some("req-1"),
