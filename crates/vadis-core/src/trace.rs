@@ -393,7 +393,10 @@ pub struct ResultRec {
 pub struct PlanSwitchRec {
     pub from: String,
     pub to: String,
-    /// `primary_exhausted` / `primary_cooling_down` / `primary_recovered`.
+    /// `primary_exhausted` / `plan_exhausted` / `primary_recovered` /
+    /// `primary_cooling_down` (ADR-011's cooldown arm, written by the
+    /// proxy) / `primary_silent` (ADR-064 §2.4.3 — the state-driven arm
+    /// reads the state's own cause word, spec §6).
     pub reason: &'static str,
     pub probe: bool,
     /// The session's prefix token count (the §6 block-token attribution,

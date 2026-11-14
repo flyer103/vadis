@@ -2084,6 +2084,8 @@ impl Forwarder {
                                         &to_account,
                                         false,
                                         session.as_deref(),
+                                        None,
+                                        None,
                                     );
                                     if policy.on_primary_exhausted
                                         == vadis_core::config::OnPrimaryExhausted::Block
@@ -2968,13 +2970,21 @@ impl Forwarder {
     /// from the routes against the tier, §5.2), `from_route`/`to_route`,
     /// `reason` (`primary_exhausted` | `plan_exhausted` |
     /// `primary_recovered` — decided by direction, the same single owner
-    /// the walk uses), `probe`, `reprefill_tokens` + `switch_cost_nano`
-    /// (both inferred — the same figures a failover prices, ADR-011
-    /// item 9's convention; a move that stays in-plan costs 0 because an
-    /// in-plan destination's marginal price is 0, §4.6 rule 4), the
-    /// `session` that carried the evidence, and `probe_eligible_us`
-    /// (`since_us +` the then-current cooldown — what the projection's
-    /// `until_us` is rebuilt from).
+    /// the walk uses — or ADR-064 §2.4.3's cause word `primary_silent`
+    /// when the caller passes one), `probe`, `reprefill_tokens` +
+    /// `switch_cost_nano` (both inferred — the same figures a failover
+    /// prices, ADR-011 item 9's convention; a move that stays in-plan
+    /// costs 0 because an in-plan destination's marginal price is 0,
+    /// §4.6 rule 4), the `session` that carried the evidence, and
+    /// `probe_eligible_us` (`since_us +` the then-current cooldown —
+    /// what the projection's `until_us` is rebuilt from). A
+    /// `primary_silent` row additionally carries the escalation's
+    /// evidence member `silence: {count, threshold, window_us}` (ADR-064
+    /// §2.8.1) and its `plan_state.cause` is the reason word itself
+    /// (§2.4.3). A move **back** to the plan tier performs ADR-064
+    /// §2.5.4's streak clear: the tier's `silence_streak` rows are
+    /// deleted, so a family that returns inside the run that spilled it
+    /// starts from zero.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_plan_switch(
         &self,
@@ -2985,11 +2995,16 @@ impl Forwarder {
         to_account: &str,
         probe: bool,
         session: Option<&str>,
+        cause: Option<&'static str>,
+        silence: Option<Value>,
     ) -> Option<vadis_core::EventId> {
         let store = self.store.as_ref()?;
         let tier = plan_tier(&self.config, policy);
         let metered = metered_walk(&self.config, policy);
-        let reason = displacement_reason(policy, &tier, &metered, from, to);
+        // ADR-064 §2.4.3: the cause word when the caller has one
+        // (silence), direction otherwise — one owner, never two words
+        // for one move.
+        let reason = cause.unwrap_or_else(|| displacement_reason(policy, &tier, &metered, from, to));
         let from_account = account_of_route(&tier, from).as_str();
         let from_route = format!("{}/{}", from.provider, from.model);
         let to_route = format!("{}/{}", to.provider, to.model);
@@ -3018,24 +3033,34 @@ impl Forwarder {
                 session,
                 body_hash: None,
                 trace_ref: None,
-                payload: json!({
-                    "family": policy.family,
-                    "from_account": from_account,
-                    "to_account": to_account,
-                    "from_route": from_route,
-                    "to_route": to_route,
-                    "reason": reason,
-                    "probe": probe,
-                    "reprefill_tokens": reprefill,
-                    "switch_cost_nano": cost_nano,
-                    // spec §4.8 (ADR-018): the unit switch_cost_nano is
-                    // denominated in — the destination route's currency.
-                    "currency": cost_currency.as_code(),
-                    "session": session,
-                    // What the projection's informational until_us is
-                    // rebuilt from (DESIGN §12.10.8's rebuild rule).
-                    "cooldown_ms": policy.cooldown.0 as i64,
-                }),
+                payload: {
+                    let mut payload = json!({
+                        "family": policy.family,
+                        "from_account": from_account,
+                        "to_account": to_account,
+                        "from_route": from_route,
+                        "to_route": to_route,
+                        "reason": reason,
+                        "probe": probe,
+                        "reprefill_tokens": reprefill,
+                        "switch_cost_nano": cost_nano,
+                        // spec §4.8 (ADR-018): the unit switch_cost_nano is
+                        // denominated in — the destination route's currency.
+                        "currency": cost_currency.as_code(),
+                        "session": session,
+                        // What the projection's informational until_us is
+                        // rebuilt from (DESIGN §12.10.8's rebuild rule).
+                        "cooldown_ms": policy.cooldown.0 as i64,
+                    });
+                    // ADR-064 §2.8.1: the evidence that caused a
+                    // `primary_silent` move rides the row that was decided
+                    // on it — one additive member, absent on every other
+                    // reason's row.
+                    if let Some(silence) = silence {
+                        payload["silence"] = silence;
+                    }
+                    payload
+                },
             })
             .ok()?;
         let _ = store.project(ProjectionWrite::PlanSwitched {
@@ -3043,8 +3068,24 @@ impl Forwarder {
             account: to_account,
             to_route: &to_route,
             cooldown_us,
+            cause: reason,
             last_event: ev,
         });
+        // ADR-064 §2.5.4: the return trip's delete — a family that moved
+        // BACK to its plan tier starts its streaks from zero, or the next
+        // single stall would be a K-th fact re-spilling a family that
+        // just proved itself (the loop the clause exists to close). The
+        // clear rides the same event as the projection write, so the
+        // rebuild's §2.5.4 mirror (facts before the last
+        // `to_route`-returning row) reproduces it.
+        if to_account == "primary" {
+            for route in &tier {
+                let _ = store.project(ProjectionWrite::SilenceStreakClear {
+                    provider: &route.provider,
+                    model: &route.model,
+                });
+            }
+        }
         // Re-point every live session bound to the abandoned route
         // (ADR-014 items 1/3: the account move is a property of the
         // binding; new sessions follow the state on their own).
@@ -3111,7 +3152,17 @@ impl Forwarder {
             .cloned()
             .unwrap_or_else(|| policy.primary.clone());
         let to_account = account_of_route(&tier, &to).as_str();
-        self.record_plan_switch(request_id, policy, &from, &to, to_account, true, session);
+        self.record_plan_switch(
+            request_id,
+            policy,
+            &from,
+            &to,
+            to_account,
+            true,
+            session,
+            None,
+            None,
+        );
     }
 
     /// ADR-056 §2.5 (spec §4.20.5): is THIS exact route silence-cooling

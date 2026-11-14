@@ -1622,6 +1622,8 @@ impl Forwarder {
                                             &to_account,
                                             false,
                                             session.as_deref(),
+                                            None,
+                                            None,
                                         );
                                         if policy.on_primary_exhausted
                                             == vadis_core::config::OnPrimaryExhausted::Block

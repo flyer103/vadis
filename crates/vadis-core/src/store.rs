@@ -193,6 +193,11 @@ pub enum Projection {
     /// The plan families' account state (ADR-014, DESIGN §12.10.8; store
     /// DDL version 2).
     PlanState,
+    /// The route-scoped silence streaks (ADR-064 §2.3, DESIGN §12.10.4;
+    /// store DDL version 4). Rebuildable from the counted
+    /// `error.classified` rows alone (§2.3.3), with the window the
+    /// rebuild is given — the projection never reads config.
+    SilenceStreak,
     All,
 }
 
@@ -271,7 +276,34 @@ pub enum ProjectionWrite<'a> {
         /// The cooldown that was current at the write; 0 ⇒ `until_us`
         /// NULL (a family on its plan tier has no probe deadline).
         cooldown_us: i64,
+        /// ADR-064 §2.4.3 (`plan_state.cause`, DDL v4): the cause word
+        /// of the row that produced this state — the event payload's own
+        /// `reason`. A DDL-v3 row's NULL reads as `primary_exhausted`
+        /// (the only cause that existed before the ADR).
+        cause: &'a str,
         last_event: EventId,
+    },
+    /// Upsert one counted silence fact into its route's streak (ADR-064
+    /// §2.3.1). The **store** owns the fold, anchored on the anchor
+    /// event's own `ts_us` (CONF-21's idiom): a fact within `window_us`
+    /// of the current run's `first_us` increments it, a later fact
+    /// starts a fresh run at count 1 — so the incremental path and the
+    /// §2.3.3 rebuild compute identical rows from the identical source.
+    /// `window_us` is the W in force for THIS fact, the caller's config;
+    /// the store never reads config and the rebuild takes its own.
+    SilenceStreak {
+        provider: &'a str,
+        model: &'a str,
+        window_us: i64,
+        last_event: EventId,
+    },
+    /// Delete one route's streak row (ADR-064 §2.5.4): a `plan.switched`
+    /// row that moves a family **back** to its plan tier deletes the
+    /// tier's streak rows, so a family that returns inside the run that
+    /// spilled it starts from zero.
+    SilenceStreakClear {
+        provider: &'a str,
+        model: &'a str,
     },
 }
 
@@ -307,6 +339,13 @@ pub enum Query<'a> {
     /// ADR-014). Absent row ⇒ the family has never switched: it is on
     /// its `primary`.
     PlanState { family: &'a str },
+    /// One route's silence streak (the `silence_streak` projection,
+    /// ADR-064 §2.3). Absent row ⇒ no counted fact has landed on the
+    /// route (or the return trip cleared it, §2.5.4).
+    SilenceStreak {
+        provider: &'a str,
+        model: &'a str,
+    },
     /// The family's metered spend in the current UTC calendar month: the
     /// sum of measured `cost.computed` totals over the family's overflow
     /// route (DESIGN §12.10.8 — "no new counter exists to disagree with
@@ -373,6 +412,31 @@ pub struct PlanStateProjRow {
     pub since_us: i64,
     pub until_us: Option<i64>,
     pub last_event: i64,
+    /// ADR-064 §2.4.3 (`plan_state.cause`, DDL v4): the cause word of
+    /// the `plan.switched` row that produced this state. `None` on a
+    /// DDL-v3 row — the reader maps it to `primary_exhausted`, the only
+    /// cause that existed before the ADR (§6.2 item 2's stated reading,
+    /// never a guess).
+    pub cause: Option<String>,
+}
+
+/// One `silence_streak` row (ADR-064 §2.3.1): the run of counted
+/// silence facts on one route. `count >= 1` whenever the row exists;
+/// the run is live iff `now - first_us <= W`, the W in force being a
+/// read-time fact (the projection stores the anchor, never the policy).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreakRow {
+    pub provider: String,
+    /// The route's NATIVE model id (never an alias, never '').
+    pub model: String,
+    /// Facts in the current run.
+    pub count: i64,
+    /// The run's anchor: the first counted fact's `ts_us`.
+    pub first_us: i64,
+    /// The latest counted fact's `ts_us`.
+    pub last_us: i64,
+    /// The classification row that wrote this state.
+    pub last_event: i64,
 }
 
 /// The answer to a `Query`.
@@ -384,6 +448,7 @@ pub enum QueryRow {
     Cooldown(Option<CooldownRow>),
     CacheLedger(Vec<LedgerBlock>),
     PlanState(Option<PlanStateProjRow>),
+    SilenceStreak(Option<StreakRow>),
     Events(Vec<StoredEvent>),
 }
 
@@ -395,6 +460,7 @@ pub struct RebuildStats {
     pub quota_counters: usize,
     pub provider_cooldown: usize,
     pub plan_state: usize,
+    pub silence_streak: usize,
     pub events_scanned: usize,
 }
 
