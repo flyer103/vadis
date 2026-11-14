@@ -2558,10 +2558,11 @@ truncation leaves one route-scoped advisory row with its 60 s bound; the next re
 
 ### 4.21 Silent exhaustion escalates (a plan family's silence counter) — ADR-064
 
-*Status: **contracted, not served** — `R76-0` (`ADR-064`) froze this contract on the owner's 2026-11-14 round
-ruling; `R76-1` implements it, and until then `plan_policy[].silent_escalation` is a key the loader **refuses**
-(`deny_unknown_fields`), no `plan.switched` row carries `reason: "primary_silent"`, `/health` has no
-`escalation` member, and `CONF-121`/`CONF-122` are parked `#[ignore]`d.*
+*Status: **served** — landed by `R76-1` on `round/76-silent-exhaustion` (2026-11-15): the loader accepts
+`plan_policy[].silent_escalation` under both spellings with the §4.21.1 defaults and the two §4.21.1 refusals,
+`plan.switched` rows carry `reason: "primary_silent"` (store DDL **v4**: the `silence_streak` projection and
+`plan_state.cause`), `/health`'s plan block carries the §9.1 `escalation` member, the S2 head-timeout
+classification row §4.21.2 requires is written (the `R76-0-F1` repair), and `CONF-121`/`CONF-122` are live.*
 
 **The finding.** A two-week trace audit of the owner's deployment (2026-10-04 → 2026-11-14, **15,040**
 requests) found the plan account's exhaustion **never** surfacing as `403 quota_exhausted` — the class §4.6

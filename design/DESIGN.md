@@ -2156,6 +2156,23 @@ is empty and names each neighbour it checked). **Registered open**: `block` gets
 W default's adequacy is decided by `R76-1`'s replay, not by this contract (`R76-0-F3`); a multi-plan tier
 accumulates one run per member and escalates once (`R76-0-F5`).
 
+**R76-1 — the silence escalation served (2026-11-15; `ADR-064` §6.1's ownership table, on
+`round/76-silent-exhaustion`).** Store DDL **v4** — the `silence_streak` projection with its
+single-kind fold over the counted `error.classified` rows, and `plan_state.cause` (a migrated DDL-v3 row's
+`NULL` reads `primary_exhausted`); §6.2's two unit obligations are `vadis-store` unit tests (rebuild ==
+incremental for `silence_streak`; the cause identity and the v3 reading). The config key
+`silent_escalation` under both spellings, with the §4.21.1 defaults and the two load refusals; the fifth
+`plan_switch.reason` word **`primary_silent`** (a state-driven displacement reads the state's own cause
+word); both counted-fact writers — S1 the truncation arm, S2 the head `OpenHead::UnknownOutcome` arm
+(`R76-0-F1`'s repair: the `error.classified` row ADR-011 item 8 already required) — carrying
+`route: {provider, model}` with **no** `EVENT_SCHEMA_VERSION` move; the escalation riding the walk's existing
+`plan.switched` displacement path (the K-th request is not retried); `/health`'s
+`plan.escalation {count, threshold, window_ms}`, absent when `plan.configured` is false; the example pair's
+comment-only note (§4.11's row set stays eight); the `book/` sentence; and both cases un-parked and green
+(`CONF-121`/`CONF-122`; `CONF-122` (c)'s `peer_aborts()` proof took `CONF-13` (c)'s bounded-poll form — the
+60 s fixture delay puts the mock's detecting write +60 s out, the assertion itself is unchanged).
+`R76-0-F3` (the W default) stays the owner's, decided on the §6.4 replay figures reported on the card.
+
 ### 12.10 Data plane and storage landing (the 2026-09-19 data-plane blueprint)
 
 The sections above name the two data-plane deliverables without landing them: the **data plane**
