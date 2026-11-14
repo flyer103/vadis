@@ -39,6 +39,10 @@ use crate::forward::{ForwardFailure, ForwardSuccess};
 /// `in_plan` mirrors the provider entry's `account` (spec §4.6): the
 /// account is a property of the provider, so the roster lookup here is
 /// the single place it becomes an accounting fact.
+/// Clone so a request's per-provider map can hand the silence
+/// escalation's shared move writer the destination's table at stream
+/// end (ADR-064 §2.4.2) without re-reading the config.
+#[derive(Debug, Clone)]
 pub struct RouteAccounting {
     /// The route's price block as one `TierTable` per band (spec §4.10):
     /// exactly one element for an entry written flat (the degenerate

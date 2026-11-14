@@ -197,9 +197,28 @@ fn health(addr: &str) -> Value {
     serde_json::from_slice(&buf[body_start..]).expect("health body is json")
 }
 
+/// A readable snapshot of the run's store. `serve` holds the writer's
+/// EXCLUSIVE lock (ADR-009 item 8), so a second open of the live file
+/// is refused `Locked` — the rig copies the db **with its `-wal`/`-shm`
+/// siblings** (the projection lives in the WAL) and opens the copy.
+/// The same rows, the same values; no limb's assertion is touched.
+fn snapshot_store(dir: &std::path::Path) -> vadis_store::SqliteStore {
+    let db = dir.join("state/vadis.db");
+    let snap = dir.join(format!("snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&snap).unwrap();
+    for ext in ["", "-wal", "-shm"] {
+        let from = db.with_file_name(format!("vadis.db{ext}"));
+        let to = snap.join(format!("vadis.db{ext}"));
+        if from.exists() {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+    vadis_store::SqliteStore::open(&snap.join("vadis.db")).unwrap()
+}
+
 /// Every stored event as (kind_raw, payload, ts_us), read after `serve` stopped.
 fn read_events(dir: &std::path::Path) -> Vec<(String, Value, i64)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
+    let store = snapshot_store(dir);
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };
@@ -210,7 +229,7 @@ fn read_events(dir: &std::path::Path) -> Vec<(String, Value, i64)> {
 
 /// The family's account state, if any row exists (absent ⇒ `primary`).
 fn plan_state(dir: &std::path::Path) -> Option<(String, String)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
+    let store = snapshot_store(dir);
     match store.query(Query::PlanState { family: "m1" }).unwrap() {
         QueryRow::PlanState(row) => row.map(|r| (r.account, r.route)),
         other => panic!("plan_state query: {other:?}"),

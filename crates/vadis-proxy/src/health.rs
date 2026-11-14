@@ -194,6 +194,12 @@ pub(crate) struct PlanHealthInputs {
     pub primary_allowed: bool,
     /// The local counter's only influence (spec §4.6 rule 3).
     pub deferred_by_window: bool,
+    /// ADR-064 §2.8.3: the ACTIVE route's silence-streak row, if one
+    /// exists (`None` ⇒ no run: the member reports `count: 0`). The
+    /// liveness verdict (§2.1's read predicate) is computed against
+    /// `now_us` and the **currently loaded** W inside the section, so a
+    /// reload moves the reading without a store write.
+    pub streak: Option<vadis_core::store::StreakRow>,
 }
 
 fn plan_section_value(state: &AppState, rev: &crate::revision::Revision) -> Value {
@@ -269,6 +275,19 @@ fn gather_plan_inputs(
         None => policy.primary.clone(),
     };
     let since_us = row.as_ref().map(|r| r.since_us).unwrap_or(0);
+    // ADR-064 §2.8.3: the active route's streak row, read once here (a
+    // projection read, the same stance as the `plan_state` row above).
+    let streak = state.store.as_ref().and_then(|s| {
+        s.query(Query::SilenceStreak {
+            provider: &route.provider,
+            model: &route.model,
+        })
+        .ok()
+        .and_then(|r| match r {
+            QueryRow::SilenceStreak(s) => s,
+            _ => None,
+        })
+    });
     PlanHealthInputs {
         route,
         tier,
@@ -295,6 +314,7 @@ fn gather_plan_inputs(
             policy,
             (now.max(0) as u64) / 1_000_000,
         ),
+        streak,
     }
 }
 
@@ -310,6 +330,8 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
     // is answerable across a tier.
     let rule = PlanFirstRule::new(policy.clone(), i.tier.clone());
     let account = rule.account_of(&i.route);
+    // ADR-064 §2.8.3: the currently loaded W, for the live-run verdict.
+    let window_us = policy.silent_escalation.window_us();
     let recover = if policy.recover == RecoveryMode::None {
         "none"
     } else {
@@ -333,6 +355,27 @@ pub(crate) fn plan_section(policy: &PlanPolicyCfg, i: &PlanHealthInputs) -> Valu
         section.insert("route".into(), json!(route_str(&i.route)));
         section.insert("since".into(), since);
         section.insert("probe".into(), probe);
+        // spec §9.1 / ADR-064 §2.8.3: the escalation's read-only member.
+        // `count` is the LIVE run's count on the family's CURRENTLY
+        // active route — 0 when the run has expired (`now − first_us >
+        // W`, §2.1's read predicate, judged against the currently
+        // loaded W), when no run exists, and when the active route is
+        // not in the plan tier (a spilled family escalates nothing).
+        // `threshold`/`window_ms` are the knobs the NEXT fact would be
+        // judged against, from the currently loaded config. A count is
+        // a count (§7's label set): it is not a cost and prices nothing.
+        let live_count = match (&i.streak, account) {
+            (Some(s), "primary") if i.now_us.saturating_sub(s.first_us) <= window_us => s.count,
+            _ => 0,
+        };
+        section.insert(
+            "escalation".into(),
+            json!({
+                "count": live_count,
+                "threshold": policy.silent_escalation.threshold,
+                "window_ms": policy.silent_escalation.window.0 as i64,
+            }),
+        );
         if let Some(metered) = &i.metered {
             section.insert(
                 "metered_candidates".into(),
@@ -527,6 +570,7 @@ mod tests {
             now_us: since_us + 60 * 1_000_000, // a minute past the transition
             primary_allowed: true,
             deferred_by_window: false,
+            streak: None,
         }
     }
 

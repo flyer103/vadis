@@ -377,6 +377,15 @@ pub(crate) struct PlanGuardOutcome {
     /// (the session did not move; the one displacement it paid is the
     /// spill that created the binding).
     pub pinned: bool,
+    /// ADR-064 §2.8.2: the state's own cause word, read from
+    /// `plan_state.cause` when the family's state is a spilled one (a
+    /// row with `account == "overflow"`). The state-driven
+    /// displacement's `result.plan_switch.reason` reads THIS — never
+    /// the literal `primary_exhausted` — so the trace and the event log
+    /// agree about why the family is spending money. `None` when the
+    /// family never switched or is on its plan tier: the reason stays
+    /// by-direction.
+    pub state_cause: Option<&'static str>,
 }
 
 /// ADR-051 §2.4's re-entry answer for one walk commitment point: the
@@ -1071,9 +1080,12 @@ impl Forwarder {
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(
-                                policy, &tier, &metered, &primary, &g.route,
-                            ),
+                            // ADR-064 §2.8.2 (the streaming path's twin):
+                            // a displacement driven by a SPILLED state
+                            // reads that state's own cause word.
+                            reason: g.state_cause.unwrap_or_else(|| {
+                                displacement_reason(policy, &tier, &metered, &primary, &g.route)
+                            }),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
@@ -1490,7 +1502,7 @@ impl Forwarder {
                 GuardReentry::Redirect { policy, outcome } => {
                     let tier = plan_tier(&self.config, &policy);
                     let metered = metered_walk(&self.config, &policy);
-                    if facts.plan_switch.is_none() {
+                    if facts.plan_switch.is_none() && !outcome.pinned {
                         let (reprefill, cost_nano) =
                             self.failover_cost(session.as_deref(), &outcome.route);
                         facts.plan_switch = Some(PlanSwitchRec {
@@ -1500,14 +1512,18 @@ impl Forwarder {
                             // owner picks for THIS move (§2.4: the
                             // displacement's reason is decided by
                             // direction, unchanged in spelling and
-                            // meaning).
-                            reason: displacement_reason(
-                                &policy,
-                                &tier,
-                                &metered,
-                                candidate,
-                                &outcome.route,
-                            ),
+                            // meaning) — except ADR-064 §2.8.2's one
+                            // arm: a state-driven displacement reads the
+                            // state's own cause word.
+                            reason: outcome.state_cause.unwrap_or_else(|| {
+                                displacement_reason(
+                                    &policy,
+                                    &tier,
+                                    &metered,
+                                    candidate,
+                                    &outcome.route,
+                                )
+                            }),
                             probe: outcome.probe,
                             reprefill_tokens: reprefill,
                             switch_cost_nano: cost_nano,
@@ -2469,6 +2485,20 @@ impl Forwarder {
         // carries the active route; the two-valued word is derived from
         // it against the tier. A legacy row with no route falls back to
         // the word it stored (a pre-tier database migrating forward).
+        // ADR-064 §2.8.2: a spilled family's displacement record carries
+        // the cause word of the row that produced the state
+        // (`plan_state.cause`; a DDL-v3 NULL reads `primary_exhausted`)
+        // — carried beside the state, into the guard's outcome.
+        let state_cause = match self.store.as_ref().map(|s| {
+            s.query(Query::PlanState {
+                family: &policy.family,
+            })
+        }) {
+            Some(Ok(QueryRow::PlanState(Some(row)))) if row.account == "overflow" => {
+                Some(state_cause_word(row.cause.as_deref()))
+            }
+            _ => None,
+        };
         let state = match self.store.as_ref().map(|s| {
             s.query(Query::PlanState {
                 family: &policy.family,
@@ -2554,11 +2584,13 @@ impl Forwarder {
                 route,
                 probe,
                 pinned,
+                state_cause,
             })),
             PlanMove::Downgrade { route } => Ok(Some(PlanGuardOutcome {
                 route,
                 probe: false,
                 pinned: false,
+                state_cause,
             })),
             PlanMove::Reject { code, message } => Err(ForwardFailure {
                 status: code.http_status(),
@@ -2999,140 +3031,22 @@ impl Forwarder {
         silence: Option<Value>,
     ) -> Option<vadis_core::EventId> {
         let store = self.store.as_ref()?;
-        let tier = plan_tier(&self.config, policy);
-        let metered = metered_walk(&self.config, policy);
-        // ADR-064 §2.4.3: the cause word when the caller has one
-        // (silence), direction otherwise — one owner, never two words
-        // for one move.
-        let reason = cause.unwrap_or_else(|| displacement_reason(policy, &tier, &metered, from, to));
-        let from_account = account_of_route(&tier, from).as_str();
-        let from_route = format!("{}/{}", from.provider, from.model);
-        let to_route = format!("{}/{}", to.provider, to.model);
-        // The switch's cache price (ADR-014 item 5): reprefill_tokens =
-        // the session's prefix tokens from the ledger (inferred,
-        // GAP-Q14), priced at the destination route's miss price — 0
-        // inside the plan tier (in-plan), the metered table leaving it.
-        let dest_in_plan = tier.contains(to);
-        let (reprefill, cost_nano) = match (session, dest_in_plan) {
-            (Some(s), false) => self.failover_cost(Some(s), to),
-            _ => {
-                // A move that stays in-plan costs 0 by definition, but
-                // the token work is still recorded when a ledger exists.
-                let (tok, _) = self.failover_cost(session, to);
-                (tok, Some(0))
-            }
-        };
-        let cooldown_us = policy.cooldown_us();
-        // §4.8: the destination route's unit denominates switch_cost_nano
-        // (the same destination the figures were priced at).
-        let cost_currency = self.route_currency(to);
-        let ev = store
-            .append(NewEvent {
-                kind: EventKind::PlanSwitched,
-                request_id: Some(request_id),
-                session,
-                body_hash: None,
-                trace_ref: None,
-                payload: {
-                    let mut payload = json!({
-                        "family": policy.family,
-                        "from_account": from_account,
-                        "to_account": to_account,
-                        "from_route": from_route,
-                        "to_route": to_route,
-                        "reason": reason,
-                        "probe": probe,
-                        "reprefill_tokens": reprefill,
-                        "switch_cost_nano": cost_nano,
-                        // spec §4.8 (ADR-018): the unit switch_cost_nano is
-                        // denominated in — the destination route's currency.
-                        "currency": cost_currency.as_code(),
-                        "session": session,
-                        // What the projection's informational until_us is
-                        // rebuilt from (DESIGN §12.10.8's rebuild rule).
-                        "cooldown_ms": policy.cooldown.0 as i64,
-                    });
-                    // ADR-064 §2.8.1: the evidence that caused a
-                    // `primary_silent` move rides the row that was decided
-                    // on it — one additive member, absent on every other
-                    // reason's row.
-                    if let Some(silence) = silence {
-                        payload["silence"] = silence;
-                    }
-                    payload
-                },
-            })
-            .ok()?;
-        let _ = store.project(ProjectionWrite::PlanSwitched {
-            family: &policy.family,
-            account: to_account,
-            to_route: &to_route,
-            cooldown_us,
-            cause: reason,
-            last_event: ev,
-        });
-        // ADR-064 §2.5.4: the return trip's delete — a family that moved
-        // BACK to its plan tier starts its streaks from zero, or the next
-        // single stall would be a K-th fact re-spilling a family that
-        // just proved itself (the loop the clause exists to close). The
-        // clear rides the same event as the projection write, so the
-        // rebuild's §2.5.4 mirror (facts before the last
-        // `to_route`-returning row) reproduces it.
-        if to_account == "primary" {
-            for route in &tier {
-                let _ = store.project(ProjectionWrite::SilenceStreakClear {
-                    provider: &route.provider,
-                    model: &route.model,
-                });
-            }
-        }
-        // Re-point every live session bound to the abandoned route
-        // (ADR-014 items 1/3: the account move is a property of the
-        // binding; new sessions follow the state on their own).
-        if let Ok(QueryRow::SessionBindings(bound)) = store.query(Query::SessionBindingsFor {
-            provider: &from.provider,
-            model: &from.model,
-        }) {
-            for b in bound {
-                // Row 4's own move arm (DESIGN §12.10.5 note R7, the
-                // R28-1 freeze): the re-point IS a binding write — one
-                // `session.bound` row per re-pointed session, the same
-                // payload shape `Accountant::bind_session` writes, and
-                // the `sessions` projection rides on THAT row
-                // (`last_event` = the move row's id, never the
-                // `plan.switched` id), so an event-derived rebuild
-                // reproduces the incremental projection element for
-                // element (ADR-010). A failed append writes no
-                // projection either (the strict pairing): the session
-                // stays on the abandoned route until its next request
-                // self-heals via `route_changed` — the account state
-                // itself is already durable in the `plan.switched` row
-                // above, and the request is unaffected (ADR-009 item 8).
-                let Ok(move_ev) = store.append(NewEvent {
-                    kind: EventKind::SessionBound,
-                    request_id: Some(request_id),
-                    session: Some(&b.session_key),
-                    body_hash: None,
-                    trace_ref: None,
-                    payload: json!({
-                        "session_key": b.session_key.as_str(),
-                        "provider": to.provider.as_str(),
-                        "model": to.model.as_str(),
-                        "ttl_us": self.session_ttl_us,
-                    }),
-                }) else {
-                    continue;
-                };
-                let _ = store.project(ProjectionWrite::SessionBound {
-                    session_key: &b.session_key,
-                    provider: &to.provider,
-                    model: &to.model,
-                    ttl_us: self.session_ttl_us,
-                    last_event: move_ev,
-                });
-            }
-        }
-        Some(ev)
+        write_plan_switch(
+            store,
+            self.session_ttl_us,
+            |route| crate::accounting::route_accounting(&self.config, route),
+            request_id,
+            policy,
+            &plan_tier(&self.config, policy),
+            &metered_walk(&self.config, policy),
+            from,
+            to,
+            to_account,
+            probe,
+            session,
+            cause,
+            silence,
+        )
     }
 
     /// A probe succeeded (a 2xx answered on a plan route while the
@@ -3153,15 +3067,7 @@ impl Forwarder {
             .unwrap_or_else(|| policy.primary.clone());
         let to_account = account_of_route(&tier, &to).as_str();
         self.record_plan_switch(
-            request_id,
-            policy,
-            &from,
-            &to,
-            to_account,
-            true,
-            session,
-            None,
-            None,
+            request_id, policy, &from, &to, to_account, true, session, None, None,
         );
     }
 
@@ -3374,36 +3280,11 @@ impl Forwarder {
         session: Option<&str>,
         to: &RouteSpec,
     ) -> (Option<u64>, Option<u64>) {
-        let Some(session) = session else {
-            return (None, None);
-        };
-        let Some(store) = &self.store else {
-            return (None, None);
-        };
-        let Ok(QueryRow::CacheLedger(blocks)) = store.query(Query::CacheLedgerBlocks {
-            session_key: session,
-        }) else {
-            return (None, None);
-        };
-        if blocks.is_empty() {
-            return (None, None);
-        }
-        let tokens: u64 = blocks.iter().map(|b| b.tokens).sum();
-        let cost_nano = crate::accounting::route_accounting(&self.config, to).map(|acc| {
-            // Pre-response (spec §4.10 rule 8): no measured `n` exists
-            // yet, so the FIRST band's prices price the estimate — a
-            // choice that invents no estimate — and the figure keeps its
-            // `inferred` label. tokens × price(USD/1K) → Nano, floored
-            // (§12.4 discipline).
-            let first = &acc.prices[0].table;
-            let v = tokens as u128 * first.input_miss.0 as u128 / 1000;
-            if v > u64::MAX as u128 {
-                u64::MAX
-            } else {
-                v as u64
-            }
-        });
-        (Some(tokens), cost_nano)
+        failover_cost_with(
+            self.store.as_ref(),
+            crate::accounting::route_accounting(&self.config, to).as_ref(),
+            session,
+        )
     }
 
     fn exhausted_failure(&self, upstream_status: Option<u16>, class: ErrorClass) -> ForwardFailure {
@@ -3448,6 +3329,423 @@ impl Forwarder {
 /// because only the two forwarding walks can produce it; the sibling
 /// words live in `vadis_core::plan` beside `plan.switched`'s writer.
 pub(crate) const REASON_PRIMARY_COOLING_DOWN: &str = "primary_cooling_down";
+
+/// `plan_state.cause`'s vocabulary mapper (ADR-064 §2.4.3/§6.2 item 2):
+/// the stored cause word of the `plan.switched` row that produced the
+/// state, as a `&'static str`. A DDL-v3 row's NULL — and any word this
+/// binary does not know (a newer binary's row) — reads
+/// `primary_exhausted`, the only cause that existed before ADR-064;
+/// stated so the reading is a rule, never a guess.
+pub(crate) fn state_cause_word(stored: Option<&str>) -> &'static str {
+    match stored {
+        Some(vadis_core::plan::REASON_PLAN_EXHAUSTED) => vadis_core::plan::REASON_PLAN_EXHAUSTED,
+        Some(vadis_core::plan::REASON_PRIMARY_RECOVERED) => {
+            vadis_core::plan::REASON_PRIMARY_RECOVERED
+        }
+        Some(vadis_core::plan::REASON_PRIMARY_SILENT) => vadis_core::plan::REASON_PRIMARY_SILENT,
+        _ => vadis_core::plan::REASON_PRIMARY_EXHAUSTED,
+    }
+}
+
+/// The failover-cost half of [`Forwarder::failover_cost`], with the
+/// destination's accounting resolved by the caller (in-walk from the
+/// config, in the relay from the per-request map) — the figures are
+/// identical whichever resolver ran, so the `plan.switched` row the
+/// silence escalation writes from the RELAY cannot drift from the one
+/// the walk writes (ADR-064 §2.4.2: the same writer, not a twin).
+pub(crate) fn failover_cost_with(
+    store: Option<&std::sync::Arc<dyn Store>>,
+    dest_accounting: Option<&crate::accounting::RouteAccounting>,
+    session: Option<&str>,
+) -> (Option<u64>, Option<u64>) {
+    let Some(session) = session else {
+        return (None, None);
+    };
+    let Some(store) = store else {
+        return (None, None);
+    };
+    let Ok(QueryRow::CacheLedger(blocks)) = store.query(Query::CacheLedgerBlocks {
+        session_key: session,
+    }) else {
+        return (None, None);
+    };
+    if blocks.is_empty() {
+        return (None, None);
+    }
+    let tokens: u64 = blocks.iter().map(|b| b.tokens).sum();
+    let cost_nano = dest_accounting.map(|acc| {
+        // Pre-response (spec §4.10 rule 8): no measured `n` exists
+        // yet, so the FIRST band's prices price the estimate — a
+        // choice that invents no estimate — and the figure keeps its
+        // `inferred` label. tokens × price(USD/1K) → Nano, floored
+        // (§12.4 discipline).
+        let first = &acc.prices[0].table;
+        let v = tokens as u128 * first.input_miss.0 as u128 / 1000;
+        if v > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            v as u64
+        }
+    });
+    (Some(tokens), cost_nano)
+}
+
+/// The account-move writer behind `record_plan_switch` (ADR-064 §2.4.2:
+/// the escalation calls the EXISTING writer — this extraction gives the
+/// relay's fact path the same body without borrowing the engine, which
+/// the response-body future outlives). `dest_accounting` resolves the
+/// destination route's price table + currency at call time; the payload,
+/// projection, session re-points and the §2.5.4 streak clear are
+/// byte-identical whichever caller ran.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_plan_switch(
+    store: &std::sync::Arc<dyn Store>,
+    session_ttl_us: i64,
+    dest_accounting: impl Fn(&RouteSpec) -> Option<crate::accounting::RouteAccounting>,
+    request_id: &str,
+    policy: &PlanPolicyCfg,
+    tier: &[RouteSpec],
+    metered: &[RouteSpec],
+    from: &RouteSpec,
+    to: &RouteSpec,
+    to_account: &str,
+    probe: bool,
+    session: Option<&str>,
+    cause: Option<&'static str>,
+    silence: Option<Value>,
+) -> Option<vadis_core::EventId> {
+    // ADR-064 §2.4.3: the cause word when the caller has one (silence),
+    // direction otherwise — one owner, never two words for one move.
+    let reason = cause.unwrap_or_else(|| displacement_reason(policy, tier, metered, from, to));
+    let from_account = account_of_route(tier, from).as_str();
+    let from_route = format!("{}/{}", from.provider, from.model);
+    let to_route = format!("{}/{}", to.provider, to.model);
+    // The switch's cache price (ADR-014 item 5): reprefill_tokens =
+    // the session's prefix tokens from the ledger (inferred, GAP-Q14),
+    // priced at the destination route's miss price — 0 inside the plan
+    // tier (in-plan), the metered table leaving it.
+    let dest_in_plan = tier.contains(to);
+    let dest_acc = dest_accounting(to);
+    let (reprefill, cost_nano) = match (session, dest_in_plan) {
+        (Some(s), false) => failover_cost_with(Some(store), dest_acc.as_ref(), Some(s)),
+        _ => {
+            // A move that stays in-plan costs 0 by definition, but the
+            // token work is still recorded when a ledger exists.
+            let (tok, _) = failover_cost_with(Some(store), dest_acc.as_ref(), session);
+            (tok, Some(0))
+        }
+    };
+    let cooldown_us = policy.cooldown_us();
+    // §4.8: the destination route's unit denominates switch_cost_nano
+    // (the same destination the figures were priced at). The accounting
+    // map's currency IS the provider entry's currency — the same value
+    // `route_currency` reads in-walk.
+    let cost_currency = dest_acc
+        .as_ref()
+        .map(|a| a.currency)
+        .unwrap_or(vadis_core::Currency::Usd);
+    let ev = store
+        .append(NewEvent {
+            kind: EventKind::PlanSwitched,
+            request_id: Some(request_id),
+            session,
+            body_hash: None,
+            trace_ref: None,
+            payload: {
+                let mut payload = json!({
+                    "family": policy.family,
+                    "from_account": from_account,
+                    "to_account": to_account,
+                    "from_route": from_route,
+                    "to_route": to_route,
+                    "reason": reason,
+                    "probe": probe,
+                    "reprefill_tokens": reprefill,
+                    "switch_cost_nano": cost_nano,
+                    // spec §4.8 (ADR-018): the unit switch_cost_nano is
+                    // denominated in — the destination route's currency.
+                    "currency": cost_currency.as_code(),
+                    "session": session,
+                    // What the projection's informational until_us is
+                    // rebuilt from (DESIGN §12.10.8's rebuild rule).
+                    "cooldown_ms": policy.cooldown.0 as i64,
+                });
+                // ADR-064 §2.8.1: the evidence that caused a
+                // `primary_silent` move rides the row that was decided
+                // on it — one additive member, absent on every other
+                // reason's row.
+                if let Some(silence) = silence {
+                    payload["silence"] = silence;
+                }
+                payload
+            },
+        })
+        .ok()?;
+    let _ = store.project(ProjectionWrite::PlanSwitched {
+        family: &policy.family,
+        account: to_account,
+        to_route: &to_route,
+        cooldown_us,
+        cause: reason,
+        last_event: ev,
+    });
+    // ADR-064 §2.5.4: the return trip's delete — a family that moved
+    // BACK to its plan tier starts its streaks from zero, or the next
+    // single stall would be a K-th fact re-spilling a family that just
+    // proved itself (the loop the clause exists to close). The clear
+    // rides the same event as the projection write, so the rebuild's
+    // §2.5.4 mirror (facts before the last `to_route`-returning row)
+    // reproduces it.
+    if to_account == "primary" {
+        for route in tier {
+            let _ = store.project(ProjectionWrite::SilenceStreakClear {
+                provider: &route.provider,
+                model: &route.model,
+            });
+        }
+    }
+    // Re-point every live session bound to the abandoned route
+    // (ADR-014 items 1/3: the account move is a property of the binding;
+    // new sessions follow the state on their own).
+    if let Ok(QueryRow::SessionBindings(bound)) = store.query(Query::SessionBindingsFor {
+        provider: &from.provider,
+        model: &from.model,
+    }) {
+        for b in bound {
+            // Row 4's own move arm (DESIGN §12.10.5 note R7, the R28-1
+            // freeze): the re-point IS a binding write — one
+            // `session.bound` row per re-pointed session, the same
+            // payload shape `Accountant::bind_session` writes, and the
+            // `sessions` projection rides on THAT row (`last_event` =
+            // the move row's id, never the `plan.switched` id), so an
+            // event-derived rebuild reproduces the incremental
+            // projection element for element (ADR-010). A failed append
+            // writes no projection either (the strict pairing): the
+            // session stays on the abandoned route until its next
+            // request self-heals via `route_changed` — the account state
+            // itself is already durable in the `plan.switched` row
+            // above, and the request is unaffected (ADR-009 item 8).
+            let Ok(move_ev) = store.append(NewEvent {
+                kind: EventKind::SessionBound,
+                request_id: Some(request_id),
+                session: Some(&b.session_key),
+                body_hash: None,
+                trace_ref: None,
+                payload: json!({
+                    "session_key": b.session_key.as_str(),
+                    "provider": to.provider.as_str(),
+                    "model": to.model.as_str(),
+                    "ttl_us": session_ttl_us,
+                }),
+            }) else {
+                continue;
+            };
+            let _ = store.project(ProjectionWrite::SessionBound {
+                session_key: &b.session_key,
+                provider: &to.provider,
+                model: &to.model,
+                ttl_us: session_ttl_us,
+                last_event: move_ev,
+            });
+        }
+    }
+    Some(ev)
+}
+
+/// ADR-064 §2.4: one family's escalation inputs, resolved once from a
+/// config (the walk's for the in-walk fact writer; the driver-entry
+/// config for the relay's, which outlives the walk's borrow of the
+/// engine). `in_plan_tier` is false for a metered member: its facts
+/// count on their own route and escalate nothing (§2.2.3 — no family's
+/// plan tier can contain a metered route by construction).
+#[derive(Clone)]
+pub(crate) struct SilenceEscalation {
+    pub policy: PlanPolicyCfg,
+    pub tier: Vec<RouteSpec>,
+    pub metered: Vec<RouteSpec>,
+    pub in_plan_tier: bool,
+}
+
+/// Every family's tier ∪ metered routes → its escalation inputs, the
+/// map both fact writers resolve facts against (ADR-064 §2.3.1: the
+/// streak itself is route-scoped and family-agnostic; the family enters
+/// only at the escalation).
+pub(crate) fn silence_families(config: &VadisConfig) -> HashMap<String, SilenceEscalation> {
+    let mut map = HashMap::new();
+    for policy in config.family_policies() {
+        let tier = plan_tier(config, policy);
+        let metered = metered_walk(config, policy);
+        for route in tier.iter().chain(metered.iter()) {
+            map.entry(format!("{}/{}", route.provider, route.model))
+                .or_insert_with(|| SilenceEscalation {
+                    policy: policy.clone(),
+                    tier: tier.clone(),
+                    metered: metered.clone(),
+                    in_plan_tier: tier.contains(route),
+                });
+        }
+    }
+    map
+}
+
+/// The ADR-064 §2.7.1 frozen default window, in µs — the W a fact on a
+/// route that belongs to NO family folds under (the streak is
+/// route-scoped, §2.3.1; only the escalation needs a family).
+pub(crate) const DEFAULT_SILENCE_WINDOW_US: i64 = 300_000_000;
+
+/// One counted silence fact, as the two writers (S1 truncation arm, S2
+/// head-timeout arm) hand it to the store side.
+pub(crate) struct SilenceFact<'a> {
+    pub request_id: &'a str,
+    pub session: Option<&'a str>,
+    pub route: RouteSpec,
+    /// The `error.classified` row the fact is: the fold's anchor.
+    pub anchor: vadis_core::EventId,
+}
+
+/// ADR-064 §2.3.1/§2.4 — the counted fact's store side effects, after
+/// the classification row exists: the streak upsert (ONE upsert, both
+/// fact writers, the fold store-owned), then — when §2.4.1's five
+/// conditions hold — the escalation through the existing account-move
+/// writer with the cause word `primary_silent` and the `silence`
+/// evidence member. `dest_accounting` resolves the destination's prices
+/// (in-walk: the config; in the relay: the per-request map). The K-th
+/// request is never retried here — its bytes were on the wire (§2.4.5);
+/// the move serves the requests that come after it.
+pub(crate) fn advance_silence_streak(
+    store: &std::sync::Arc<dyn Store>,
+    session_ttl_us: i64,
+    families: &HashMap<String, SilenceEscalation>,
+    dest_accounting: impl Fn(&RouteSpec) -> Option<crate::accounting::RouteAccounting>,
+    fact: SilenceFact<'_>,
+) {
+    let SilenceFact {
+        request_id,
+        session,
+        route,
+        anchor,
+    } = fact;
+    let label = format!("{}/{}", route.provider, route.model);
+    let entry = families.get(&label);
+    // The W in force for THIS fact: the family's window when the route
+    // belongs to one, the frozen default otherwise.
+    let window_us = entry
+        .map(|e| e.policy.silent_escalation.window_us())
+        .unwrap_or(DEFAULT_SILENCE_WINDOW_US);
+    let _ = store.project(ProjectionWrite::SilenceStreak {
+        provider: &route.provider,
+        model: &route.model,
+        window_us,
+        last_event: anchor,
+    });
+
+    // The escalation: §2.4.1's five conditions. Conditions 1/2/5 are
+    // the pure predicate's (vadis-core's single owner); 3/4 need the
+    // roster and are decided here.
+    let Some(entry) = entry.filter(|e| e.in_plan_tier) else {
+        return; // not a plan-tier route: counted, never escalating
+    };
+    if entry.policy.on_primary_exhausted != vadis_core::config::OnPrimaryExhausted::Spill {
+        return; // §2.4.4: `block` means do-not-spend — no destination
+    }
+    // The family's state: absent row ⇒ the tier's head (§2.4.1's own
+    // reading, spec §9.1's).
+    let state = match store.query(Query::PlanState {
+        family: &entry.policy.family,
+    }) {
+        Ok(QueryRow::PlanState(Some(row))) => Some(row),
+        _ => None,
+    };
+    let active = match &state {
+        Some(row) if !row.route.is_empty() => row
+            .route
+            .split_once('/')
+            .map(|(p, m)| RouteSpec {
+                provider: p.to_string(),
+                model: m.to_string(),
+            })
+            .unwrap_or_else(|| {
+                entry
+                    .tier
+                    .first()
+                    .cloned()
+                    .unwrap_or(entry.policy.primary.clone())
+            }),
+        Some(row) if row.account == "overflow" => entry.policy.overflow.clone(),
+        _ => entry
+            .tier
+            .first()
+            .cloned()
+            .unwrap_or(entry.policy.primary.clone()),
+    };
+    // Condition 3: the family is not already spilled — an active route
+    // outside the plan tier has nothing to escalate (§2.2.4).
+    if !entry.tier.contains(&active) {
+        return;
+    }
+    let streak = match store.query(Query::SilenceStreak {
+        provider: &route.provider,
+        model: &route.model,
+    }) {
+        Ok(QueryRow::SilenceStreak(s)) => s,
+        _ => None,
+    };
+    let plan_state_row = vadis_core::plan::PlanStateRow {
+        route: active.clone(),
+        since_us: state.as_ref().map_or(0, |r| r.since_us),
+    };
+    // The fact's own instant is the run's last_us — the anchor the
+    // store's fold just wrote (never a second clock read).
+    let now_us = streak.as_ref().map_or(0, |s| s.last_us);
+    if !vadis_core::plan::silence_escalates(
+        streak.as_ref(),
+        &entry.policy.silent_escalation,
+        &plan_state_row,
+        &route,
+        now_us,
+    ) {
+        return;
+    }
+    // The destination: whatever the 403 path resolves — the next plan
+    // member, else the metered tier's head, else the declared overflow
+    // (ADR-064 §2.4.2: a cause word, not a second definition of where).
+    let from = active;
+    let next_plan = entry
+        .tier
+        .iter()
+        .position(|r| *r == from)
+        .and_then(|pos| entry.tier.get(pos + 1))
+        .cloned();
+    let to = next_plan.unwrap_or_else(|| {
+        entry
+            .metered
+            .first()
+            .cloned()
+            .unwrap_or_else(|| entry.policy.overflow.clone())
+    });
+    let to_account = account_of_route(&entry.tier, &to).as_str().to_string();
+    let silence = json!({
+        "count": streak.map(|s| s.count).unwrap_or(0),
+        "threshold": entry.policy.silent_escalation.threshold,
+        "window_us": entry.policy.silent_escalation.window_us(),
+    });
+    let _ = write_plan_switch(
+        store,
+        session_ttl_us,
+        dest_accounting,
+        request_id,
+        &entry.policy,
+        &entry.tier,
+        &entry.metered,
+        &from,
+        &to,
+        &to_account,
+        false,
+        session,
+        Some(vadis_core::plan::REASON_PRIMARY_SILENT),
+        Some(silence),
+    );
+}
 
 /// The first route the request failed over from (spec §6
 /// `result.failover_from`): set once, never overwritten by later hops.

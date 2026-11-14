@@ -232,8 +232,25 @@ fn health(addr: &str) -> Value {
     serde_json::from_slice(&buf[body_start..]).expect("health body is json")
 }
 
+/// A readable snapshot of the run's store (CONF-121's helper, verbatim
+/// in purpose): `serve` holds the writer's EXCLUSIVE lock, so the rig
+/// copies the db with its `-wal`/`-shm` siblings and opens the copy.
+fn snapshot_store(dir: &std::path::Path) -> vadis_store::SqliteStore {
+    let db = dir.join("state/vadis.db");
+    let snap = dir.join(format!("snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&snap).unwrap();
+    for ext in ["", "-wal", "-shm"] {
+        let from = db.with_file_name(format!("vadis.db{ext}"));
+        let to = snap.join(format!("vadis.db{ext}"));
+        if from.exists() {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+    vadis_store::SqliteStore::open(&snap.join("vadis.db")).unwrap()
+}
+
 fn read_events(dir: &std::path::Path) -> Vec<(String, Value, i64)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
+    let store = snapshot_store(dir);
     let QueryRow::Events(rows) = store.query(Query::AllEvents).unwrap() else {
         panic!("events query");
     };
@@ -243,7 +260,7 @@ fn read_events(dir: &std::path::Path) -> Vec<(String, Value, i64)> {
 }
 
 fn plan_state(dir: &std::path::Path) -> Option<(String, String)> {
-    let store = vadis_store::SqliteStore::open(&dir.join("state/vadis.db")).unwrap();
+    let store = snapshot_store(dir);
     match store.query(Query::PlanState { family: "m1" }).unwrap() {
         QueryRow::PlanState(row) => row.map(|r| (r.account, r.route)),
         other => panic!("plan_state query: {other:?}"),
@@ -425,8 +442,22 @@ async fn conf_122_silent_escalation_refuses_to_over_trigger() {
         },
     );
     assert_eq!(cs3, 200, "the head was read before the abandonment");
+    // The mock only registers the reader's departure when one of its own
+    // SSE writes fails — and this leg's fixture holds its next write 60 s
+    // out (the stream must not end before the client leaves, or the leg
+    // misclassifies as `upstream_ended_early`). CONF-13 (c)'s own
+    // precedent: bounded poll, same assertion.
+    let departed = tokio::time::timeout(Duration::from_secs(65), async {
+        loop {
+            if plan_c.peer_aborts() >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
     assert!(
-        plan_c.peer_aborts() >= 1,
+        departed.is_ok() && plan_c.peer_aborts() >= 1,
         "the mock saw the reader leave — the client_closed fixture is real"
     );
 
