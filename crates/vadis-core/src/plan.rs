@@ -912,6 +912,46 @@ pub const REASON_PRIMARY_RECOVERED: &str = "primary_recovered";
 /// in-plan** (ADR-049 §5.2): the metered tier was not reached, `account`
 /// is still `primary`.
 pub const REASON_PLAN_EXHAUSTED: &str = "plan_exhausted";
+/// ADR-064 §2.4.3: the family's active plan route reached K counted
+/// silence facts within W — the **fifth** `plan_switch.reason` member
+/// and the only cause-shaped one (the existing four encode *where the
+/// family went*; this one says *why it moved* without an upstream
+/// having declared exhaustion). Where it went still reads from
+/// `from_route`/`to_route` and the state it lands in.
+pub const REASON_PRIMARY_SILENT: &str = "primary_silent";
+
+/// ADR-064 §2.4.1: does THIS counted fact spill the family? Pure over
+/// its arguments — no I/O, and the only clock is the fact's own
+/// `now_us` (the classification row's `ts_us`). Owns the three
+/// conditions the streak itself can answer: (1) the run's count has
+/// reached K while live (`now_us - first_us <= W`, §2.1's read
+/// predicate), (2) the fact's route IS the family's active route
+/// (`state.route`, §2.4.1's clause 2), and (5) the rule is enabled.
+/// The two conditions that need the config's roster — (3) the active
+/// route is in the plan tier (the family is not already spilled) and
+/// (4) `on_primary_exhausted == spill` — are the caller's, who resolves
+/// the family and the destination anyway; `silence_escalates` is the
+/// arithmetic they wrap, so the two writers cannot disagree about it.
+pub fn silence_escalates(
+    streak: Option<&crate::store::StreakRow>,
+    policy: &crate::config::SilentEscalationCfg,
+    state: &PlanStateRow,
+    route: &RouteSpec,
+    now_us: i64,
+) -> bool {
+    if !policy.enabled {
+        return false;
+    }
+    let Some(streak) = streak else {
+        return false;
+    };
+    // §2.1: an expired run contributes 0 — the anchor, never a clock of
+    // the caller's own, decides.
+    if now_us.saturating_sub(streak.first_us) > policy.window_us() {
+        return false;
+    }
+    streak.count >= policy.threshold as i64 && &state.route == route
+}
 
 /// A displacement's reason, decided by direction (spec §6's producer
 /// table, extended by ADR-049 §5.2): a move to the metered tier is
@@ -964,6 +1004,7 @@ mod tests {
             cooldown: DurationVal(15 * 60 * 1_000),
             overflow_monthly_cap_usd: None,
             overflow_selection: OverflowSelection::Declared,
+            silent_escalation: Default::default(),
         }
     }
 
@@ -1199,7 +1240,7 @@ mod tests {
         let rule = PlanFirstRule::new(p.clone(), tier);
         // On the metered tier, past the cooldown: admitted, and the pass
         // is on the HEAD (the policy's primary), not the second member.
-        let mut r = req(&p);
+        let r = req(&p);
         match rule.decide(&r) {
             PlanMove::Pass { route: got, probe } => {
                 assert!(probe);

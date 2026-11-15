@@ -107,6 +107,9 @@ fn seed_and_read_used(
             account: "overflow",
             to_route: "p-api/m1",
             cooldown_us: 0,
+            // DDL v4 (ADR-064 §2.4.3): the row's own cause word — the event
+            // this projection anchors on carries `reason: "primary_exhausted"`.
+            cause: "primary_exhausted",
             last_event: ev,
         })
         .unwrap();

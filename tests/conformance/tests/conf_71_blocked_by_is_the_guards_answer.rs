@@ -67,6 +67,7 @@ fn policy(recover: RecoveryMode) -> PlanPolicyCfg {
         cooldown: DurationVal(0),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
         overflow_selection: vadis_core::config::OverflowSelection::Declared,
+        silent_escalation: Default::default(),
     }
 }
 
@@ -153,6 +154,8 @@ async fn arm(tag: &str, policy_yaml: &str, quota_yaml: &str, seed: Seed) -> serd
                 account: "overflow",
                 to_route: "p-api/m1",
                 cooldown_us: 0,
+                // DDL v4 (ADR-064 §2.4.3): the row's own cause word.
+                cause: "primary_exhausted",
                 last_event: ev,
             })
             .unwrap();

@@ -192,6 +192,16 @@ struct RelayCtx {
     /// counter and the terminal take both go through it, so a drop at
     /// any chunk boundary reads the facts the relay last recorded.
     cancel: Arc<crate::cancel::CancelSlot>,
+    /// ADR-064 §2.3/§2.4: every family's tier ∪ metered routes → its
+    /// escalation inputs, resolved once at driver entry from the config
+    /// then in force. The relay's truncation arm (the S1 fact writer)
+    /// reads it at stream end; an empty map (no policy) still counts
+    /// facts under the frozen default window — the streak is
+    /// route-scoped, the family enters only at the escalation.
+    silence_families: HashMap<String, crate::forward::SilenceEscalation>,
+    /// The binding TTL, for the shared account-move writer the
+    /// escalation rides (`write_plan_switch`).
+    session_ttl_us: i64,
 }
 
 /// The relay's mutable state, threaded through `unfold`.
@@ -529,16 +539,20 @@ impl Forwarder {
                     // `primary_exhausted`, a move within the plan tier
                     // is `plan_exhausted`, a move back into the tier is
                     // `primary_recovered` — never the pre-request
-                    // account state.
+                    // account state. ADR-064 §2.8.2's one exception: a
+                    // displacement driven by a SPILLED state reads that
+                    // state's own cause word — `primary_silent` when
+                    // silence moved it, never a false
+                    // `primary_exhausted` no upstream declared.
                     if let Some(policy) = plan_policy.as_ref() {
                         let tier = plan_tier(&self.config, policy);
                         let metered = metered_walk(&self.config, policy);
                         facts.plan_switch = Some(PlanSwitchRec {
                             from: primary.to_string(),
                             to: g.route.to_string(),
-                            reason: displacement_reason(
-                                policy, &tier, &metered, &primary, &g.route,
-                            ),
+                            reason: g.state_cause.unwrap_or_else(|| {
+                                displacement_reason(policy, &tier, &metered, &primary, &g.route)
+                            }),
                             probe: g.probe,
                             reprefill_tokens: None,
                             switch_cost_nano: None,
@@ -1114,7 +1128,7 @@ impl Forwarder {
                         let offered = cand.route.clone();
                         let tier = plan_tier(&self.config, &policy);
                         let metered = metered_walk(&self.config, &policy);
-                        if facts.plan_switch.is_none() {
+                        if facts.plan_switch.is_none() && !outcome.pinned {
                             let (reprefill, cost_nano) =
                                 self.failover_cost(session.as_deref(), &outcome.route);
                             facts.plan_switch = Some(PlanSwitchRec {
@@ -1122,14 +1136,19 @@ impl Forwarder {
                                 to: outcome.route.to_string(),
                                 // The direction word the existing
                                 // single owner picks for THIS move —
-                                // the same owner, the same spelling.
-                                reason: displacement_reason(
-                                    &policy,
-                                    &tier,
-                                    &metered,
-                                    &offered,
-                                    &outcome.route,
-                                ),
+                                // the same owner, the same spelling —
+                                // except ADR-064 §2.8.2's one arm: a
+                                // state-driven displacement reads the
+                                // state's own cause word.
+                                reason: outcome.state_cause.unwrap_or_else(|| {
+                                    displacement_reason(
+                                        &policy,
+                                        &tier,
+                                        &metered,
+                                        &offered,
+                                        &outcome.route,
+                                    )
+                                }),
                                 probe: outcome.probe,
                                 reprefill_tokens: reprefill,
                                 switch_cost_nano: cost_nano,
@@ -1470,6 +1489,16 @@ impl Forwarder {
                                         _ => None,
                                     },
                                     cancel: Arc::clone(cancel),
+                                    // ADR-064 §2.3/§2.4: the silence inputs the
+                                    // relay needs at stream end — resolved once
+                                    // from the config in force when the request
+                                    // entered the driver (the relay outlives the
+                                    // walk's borrow of the engine), plus the
+                                    // binding TTL the shared move writer needs.
+                                    silence_families: crate::forward::silence_families(
+                                        &self.config,
+                                    ),
+                                    session_ttl_us: self.session_ttl_us,
                                 };
                                 let state = RelayState {
                                     tap: SseUsageExtractor::new(cand.wire, client_requested_usage),
@@ -1622,6 +1651,8 @@ impl Forwarder {
                                             &to_account,
                                             false,
                                             session.as_deref(),
+                                            None,
+                                            None,
                                         );
                                         if policy.on_primary_exhausted
                                             == vadis_core::config::OnPrimaryExhausted::Block
@@ -1905,6 +1936,51 @@ impl Forwarder {
                             // ADR-060 D1: the request bytes were fully
                             // written — the guard's `stage` evidence.
                             cancel.note_wrote_full_request();
+                            // ADR-064 §2.2.2 (finding R76-0-F1's repair):
+                            // a head that never arrives gets the
+                            // `error.classified` row ADR-011 item 8 already
+                            // requires of every classification — before this
+                            // round the log could not answer "how many head
+                            // timeouts hit route R". The row carries the
+                            // `route` member like every counted fact, and
+                            // the streak upsert + escalation follow (the
+                            // S2 half of the owner's sentence).
+                            if let Some(store) = &self.store {
+                                let payload = json!({
+                                    "attempt_index": attempt_index,
+                                    "status": Value::Null,
+                                    "reason": "timeout",
+                                    "action": "abort",
+                                    "matched": false,
+                                    "detail": message.clone(),
+                                    "stream": true,
+                                    "stage": "unknown_outcome",
+                                    "route": {
+                                        "provider": cand.route.provider.as_str(),
+                                        "model": cand.route.model.as_str(),
+                                    },
+                                });
+                                if let Some(anchor) = self.append_event(
+                                    EventKind::ErrorClassified,
+                                    request_id,
+                                    None,
+                                    payload,
+                                    session.as_deref(),
+                                ) {
+                                    crate::forward::advance_silence_streak(
+                                        store,
+                                        self.session_ttl_us,
+                                        &crate::forward::silence_families(&self.config),
+                                        |r| crate::accounting::route_accounting(&self.config, r),
+                                        crate::forward::SilenceFact {
+                                            request_id,
+                                            session: session.as_deref(),
+                                            route: cand.route.clone(),
+                                            anchor,
+                                        },
+                                    );
+                                }
+                            }
                             return StreamOutcome::Failure(ForwardFailure {
                                 status: 502,
                                 code: ErrorCode::UpstreamError,
@@ -2327,6 +2403,7 @@ fn relay_stream(
 /// SAME `until_us` value (CONF-21's identity: the rebuild reads the
 /// payload, the live row reads this write, and the two cannot differ).
 fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
+    let (provider, model) = split_route_label(&st.route_label);
     let mut payload = json!({
         "attempt_index": st.attempt_count.saturating_sub(1),
         "status": Value::Null,
@@ -2340,9 +2417,14 @@ fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
     // the classification row too, beside its `detail` — the sequence of
     // causes across attempts is readable from the log alone.
     payload["stream_end"] = json!(trunc.stream_end);
+    // ADR-064 §2.2.2: the `route` member — the counted fact names its
+    // own route (the native model id, never an alias), on every row
+    // this writer emits, so the streak's fold needs no join to
+    // `upstream.submitted`. Additive on an events payload: no
+    // EVENT_SCHEMA_VERSION move, no existing reader moves.
+    payload["route"] = json!({"provider": provider, "model": model});
     let mut cooldown_write: Option<(String, String, i64)> = None;
     if trunc.stream_end == "idle_timeout" {
-        let (provider, model) = split_route_label(&st.route_label);
         let until_us = now_us() + (crate::forward::STREAM_SILENCE_TTL_S as i64) * 1_000_000;
         payload["demotion"] = crate::forward::demotion_json(
             "route",
@@ -2364,6 +2446,33 @@ fn record_classified(ctx: &RelayCtx, st: &RelayState, trunc: &TruncationInfo) {
             reason: crate::forward::REASON_STREAM_SILENCE,
             last_event: anchor.unwrap_or(EventId(0)),
         });
+    }
+    // ADR-064 §2.2.1/§2.3.1: the counted fact's remaining side effects —
+    // the streak upsert and, when §2.4.1's five conditions hold, the
+    // escalation. The advisory row above is S1's alone (§2.5.3: the
+    // trigger's population is frozen); the streak's predicate is wider
+    // on purpose (a head that never arrives is evidence too).
+    if trunc.stream_end == "idle_timeout" {
+        if let Some(store) = &ctx.store {
+            if let Some(anchor) = anchor {
+                let route = RouteSpec {
+                    provider: provider.to_string(),
+                    model: model.to_string(),
+                };
+                crate::forward::advance_silence_streak(
+                    store,
+                    ctx.session_ttl_us,
+                    &ctx.silence_families,
+                    |r| ctx.accounting.get(&r.provider).cloned(),
+                    crate::forward::SilenceFact {
+                        request_id: &ctx.request_id,
+                        session: ctx.session.as_deref(),
+                        route,
+                        anchor,
+                    },
+                );
+            }
+        }
     }
 }
 

@@ -29,7 +29,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use vadis_core::store::{
     CooldownRow, EventId, EventKind, LedgerBlock, NewEvent, PlanStateProjRow, Projection,
     ProjectionWrite, Query, QueryRow, RebuildStats, SessionBindingRow, Store, StoreError,
-    StoredEvent, EVENT_SCHEMA_VERSION,
+    StoredEvent, StreakRow, EVENT_SCHEMA_VERSION,
 };
 
 /// Store DDL version 1: the tables of DESIGN §12.10.4, verbatim in shape.
@@ -120,6 +120,28 @@ CREATE TABLE plan_state (
 ALTER TABLE plan_state ADD COLUMN route TEXT;
 "#,
     ),
+    (
+        // DDL version 4 (ADR-064 §2.3/§2.4.3, DESIGN §12.10.4): the
+        // route-scoped silence streak — one new table, one run row per
+        // (provider, model) — and the plan state's cause word, one
+        // nullable column whose NULL is a DDL-v3 row and reads
+        // `primary_exhausted` (the only cause that existed before the
+        // ADR; the reader maps it, §6.2 item 2). Additive: no existing
+        // row is rewritten (ADR-009 item 7).
+        4,
+        r#"
+CREATE TABLE silence_streak (
+    provider   TEXT    NOT NULL,
+    model      TEXT    NOT NULL,
+    count      INTEGER NOT NULL,
+    first_us   INTEGER NOT NULL,
+    last_us    INTEGER NOT NULL,
+    last_event INTEGER NOT NULL,
+    PRIMARY KEY (provider, model)
+);
+ALTER TABLE plan_state ADD COLUMN cause TEXT;
+"#,
+    ),
 ];
 
 /// The SQLite implementation. Construct through [`SqliteStore::open`].
@@ -163,6 +185,52 @@ fn now_us() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0)
+}
+
+/// The W a config-less `rebuild` folds the silence streak with: the
+/// ADR-064 §2.7.1 frozen default (5 m), the only value the store can
+/// name without reading config. The serving path never calls `rebuild`
+/// (verified at this round's HEAD: only conformance and unit tests do),
+/// and a deployment whose families write a different W rebuilds through
+/// [`SqliteStore::rebuild_with_silence_window`], which takes it
+/// explicitly. ADR-064 §2.3.3's fold needs a window; this constant is
+/// the honest default, never a second source of the contract's value.
+const REBUILD_DEFAULT_SILENCE_WINDOW_US: i64 = 300_000_000;
+
+/// ADR-064 §2.2.1's counted-fact predicate, in the **event's** spelling
+/// (`record_classified`'s shape): exactly two shapes count — a stream
+/// that went silent mid-body (`reason: stream_truncated` ∧
+/// `stream_end: idle_timeout`) and a head that never arrived
+/// (`reason: timeout` ∧ `stage: unknown_outcome`), both demanding
+/// `stream == true` (a buffered failure is never a silence fact) and
+/// both carrying the `route` member §2.2.2 added. One predicate, one
+/// home, read by the rebuild — the live path classifies before it
+/// writes, so the two spellings cannot disagree about one attempt.
+fn counted_silence_fact(payload: &serde_json::Value) -> Option<(&str, &str)> {
+    let stream = payload
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !stream {
+        return None;
+    }
+    let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    let s1 = reason == "stream_truncated"
+        && payload.get("stream_end").and_then(|v| v.as_str()) == Some("idle_timeout");
+    let s2 = reason == "timeout"
+        && payload.get("stage").and_then(|v| v.as_str()) == Some("unknown_outcome");
+    if !s1 && !s2 {
+        return None;
+    }
+    let route = payload.get("route")?;
+    let provider = route.get("provider").and_then(|v| v.as_str())?;
+    let model = route.get("model").and_then(|v| v.as_str())?;
+    // '' is never a legal native model id — a malformed member counts
+    // nothing rather than keying a run on the empty route.
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some((provider, model))
 }
 
 /// unix days → (year, month, day), Howard Hinnant's `civil_from_days`.
@@ -363,12 +431,60 @@ impl SqliteStore {
         }
         if want(Projection::PlanState) {
             push(
-                "SELECT family, account, route, since_us, until_us, last_event \
+                "SELECT family, account, route, since_us, until_us, last_event, cause \
                   FROM plan_state ORDER BY family",
+            )?;
+        }
+        if want(Projection::SilenceStreak) {
+            push(
+                "SELECT provider, model, count, first_us, last_us, last_event \
+                  FROM silence_streak ORDER BY provider, model",
             )?;
         }
         out.sort();
         Ok(out)
+    }
+
+    /// `Store::rebuild`'s body, with the silence window stated
+    /// explicitly (ADR-064 §2.3.3: the streak's fold needs a W, and the
+    /// store never reads config — `rebuild` itself folds with the
+    /// contract's frozen default, which is wrong for a deployment that
+    /// writes a different `silent_escalation.window`; this method is the
+    /// faithful form for that case and the §6.2 identity test).
+    pub fn rebuild_with_silence_window(
+        &self,
+        which: Projection,
+        silence_window_us: i64,
+    ) -> Result<RebuildStats, StoreError> {
+        let conn = self.conn.lock().expect("store mutex");
+        conn.execute_batch("PRAGMA synchronous = NORMAL;")
+            .map_err(|e| map_err(false, e))?;
+        let events = self.read_events(&conn)?;
+        let want = |p: Projection| which == p || which == Projection::All;
+        let mut stats = RebuildStats {
+            events_scanned: events.len(),
+            ..RebuildStats::default()
+        };
+        if want(Projection::Sessions) {
+            stats.sessions = self.rebuild_sessions(&conn, &events)?;
+        }
+        if want(Projection::CacheLedger) {
+            stats.cache_ledger = self.rebuild_cache_ledger(&conn, &events)?;
+        }
+        if want(Projection::QuotaCounters) {
+            stats.quota_counters = self.rebuild_quota(&conn, &events)?;
+        }
+        if want(Projection::ProviderCooldown) {
+            stats.provider_cooldown = self.rebuild_cooldown(&conn, &events)?;
+        }
+        if want(Projection::PlanState) {
+            stats.plan_state = self.rebuild_plan_state(&conn, &events)?;
+        }
+        if want(Projection::SilenceStreak) {
+            stats.silence_streak =
+                self.rebuild_silence_streak(&conn, &events, silence_window_us)?;
+        }
+        Ok(stats)
     }
 
     /// Escape hatch for tests and the future `vadis state` surface (a
@@ -617,6 +733,15 @@ impl SqliteStore {
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0)
                 .saturating_mul(1_000);
+            // ADR-064 §2.4.3 (`plan_state.cause`): the row's own `reason`
+            // — the same word the incremental write passed, so an
+            // incremental move and a rebuilt one carry the same cause
+            // (CONF-21's rule, extended to the new column).
+            let cause = ev
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("primary_exhausted");
             let until_us = if account == "overflow" && cooldown_us > 0 {
                 // Derived display value, not a source of truth: no verdict
                 // path reads it — /health and the guard both recompute the
@@ -626,8 +751,88 @@ impl SqliteStore {
                 None
             };
             conn.execute(
-                "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route",
-                params![family, account, ev.ts_us, until_us, ev.event_id.0, route],
+                "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route, cause) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route, cause = excluded.cause",
+                params![family, account, ev.ts_us, until_us, ev.event_id.0, route, cause],
+            )
+            .map_err(|e| map_err(false, e))?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// ADR-064 §2.3.3: `rebuild_silence_streak` — the single-kind fold
+    /// over the counted `error.classified` rows. Reads only each row's
+    /// `ts_us`, the payload's `route` member and the §2.2.1 predicate's
+    /// own keys: no config, no clock, no trace. The window is the
+    /// caller's (the fold needs a W; `rebuild` itself has none and the
+    /// store never reads config — see [`Self::rebuild_with_silence_window`]).
+    /// §2.5.4's delete is mirrored generically: a counted fact that
+    /// landed before the LAST `plan.switched` row whose `to_route` is
+    /// this route (a return to the plan tier) is dropped, exactly what
+    /// the incremental `SilenceStreakClear` removed.
+    fn rebuild_silence_streak(
+        &self,
+        conn: &Connection,
+        events: &[StoredEvent],
+        window_us: i64,
+    ) -> Result<usize, StoreError> {
+        conn.execute("DELETE FROM silence_streak", [])
+            .map_err(|e| map_err(false, e))?;
+        // §2.5.4's mirror: the latest return-to-route move per route.
+        let mut returned_at: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for ev in events {
+            if ev.kind_raw != EventKind::PlanSwitched.as_str() {
+                continue;
+            }
+            if let Some(to) = ev.payload.get("to_route").and_then(|v| v.as_str()) {
+                let e = returned_at.entry(to.to_string()).or_insert(ev.ts_us);
+                if ev.ts_us > *e {
+                    *e = ev.ts_us;
+                }
+            }
+        }
+        // The §2.1 fold, per (provider, model): (count, first_us, last_us,
+        // last_event).
+        let mut runs: std::collections::HashMap<(String, String), (i64, i64, i64, i64)> =
+            std::collections::HashMap::new();
+        for ev in events {
+            if ev.kind_raw != EventKind::ErrorClassified.as_str() {
+                continue;
+            }
+            let Some((provider, model)) = counted_silence_fact(&ev.payload) else {
+                continue;
+            };
+            let label = format!("{provider}/{model}");
+            if let Some(cleared) = returned_at.get(&label) {
+                if ev.ts_us <= *cleared {
+                    continue;
+                }
+            }
+            let key = (provider.to_string(), model.to_string());
+            match runs.get_mut(&key) {
+                // §2.1: a fact joins the current run iff it lands within
+                // W of the run's `first_us`; otherwise it starts a new
+                // run at count 1 and becomes its anchor.
+                Some(run) if ev.ts_us.saturating_sub(run.1) <= window_us => {
+                    run.0 += 1;
+                    run.2 = ev.ts_us;
+                    run.3 = ev.event_id.0;
+                }
+                _ => {
+                    runs.insert(key, (1, ev.ts_us, ev.ts_us, ev.event_id.0));
+                }
+            }
+        }
+        let mut count = 0usize;
+        for ((provider, model), (n, first_us, last_us, last_event)) in runs {
+            conn.execute(
+                "INSERT INTO silence_streak (provider, model, count, first_us, last_us, last_event) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(provider, model) DO UPDATE SET count = excluded.count, \
+                 first_us = excluded.first_us, last_us = excluded.last_us, \
+                 last_event = excluded.last_event",
+                params![provider, model, n, first_us, last_us, last_event],
             )
             .map_err(|e| map_err(false, e))?;
             count += 1;
@@ -747,6 +952,7 @@ impl Store for SqliteStore {
                 account,
                 to_route,
                 cooldown_us,
+                cause,
                 last_event,
             } => {
                 // since_us anchors on the event row's own ts_us (never a
@@ -767,8 +973,65 @@ impl Store for SqliteStore {
                     None
                 };
                 tx.execute(
-                    "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route",
-                    params![family, account, since_us, until_us, last_event.0, to_route],
+                    "INSERT INTO plan_state (family, account, since_us, until_us, last_event, route, cause) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(family) DO UPDATE SET account = excluded.account, since_us = excluded.since_us, until_us = excluded.until_us, last_event = excluded.last_event, route = excluded.route, cause = excluded.cause",
+                    params![family, account, since_us, until_us, last_event.0, to_route, cause],
+                )
+                .map_err(|e| map_err(false, e))?;
+            }
+            ProjectionWrite::SilenceStreak {
+                provider,
+                model,
+                window_us,
+                last_event,
+            } => {
+                // ADR-064 §2.3.1's ONE upsert, store-owned so the fold
+                // anchors on the classification row's own `ts_us`
+                // (CONF-21's idiom): a fact within `window_us` of the
+                // run's `first_us` joins it; a later fact starts a fresh
+                // run at count 1. The incremental path and the §2.3.3
+                // rebuild therefore compute identical rows from the
+                // identical source — the caller never folds.
+                let anchor_ts: i64 = tx
+                    .query_row(
+                        "SELECT ts_us FROM events WHERE event_id = ?1",
+                        params![last_event.0],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| map_err(false, e))?;
+                let prev: Option<(i64, i64)> = tx
+                    .query_row(
+                        "SELECT count, first_us FROM silence_streak WHERE provider = ?1 AND model = ?2",
+                        params![provider, model],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .map(Some)
+                    .or_else(|e| match e {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        other => Err(other),
+                    })
+                    .map_err(|e| map_err(false, e))?;
+                let (count, first_us) = match prev {
+                    Some((c, first_us)) if anchor_ts.saturating_sub(first_us) <= window_us => {
+                        (c + 1, first_us)
+                    }
+                    _ => (1, anchor_ts),
+                };
+                tx.execute(
+                    "INSERT INTO silence_streak (provider, model, count, first_us, last_us, last_event) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                     ON CONFLICT(provider, model) DO UPDATE SET count = excluded.count, \
+                     first_us = excluded.first_us, last_us = excluded.last_us, \
+                     last_event = excluded.last_event",
+                    params![provider, model, count, first_us, anchor_ts, last_event.0],
+                )
+                .map_err(|e| map_err(false, e))?;
+            }
+            ProjectionWrite::SilenceStreakClear { provider, model } => {
+                // ADR-064 §2.5.4: the return trip's delete — a family
+                // that comes back to its plan tier starts from zero.
+                tx.execute(
+                    "DELETE FROM silence_streak WHERE provider = ?1 AND model = ?2",
+                    params![provider, model],
                 )
                 .map_err(|e| map_err(false, e))?;
             }
@@ -919,7 +1182,7 @@ impl Store for SqliteStore {
             }
             Query::PlanState { family } => {
                 let row = conn.query_row(
-                    "SELECT family, account, route, since_us, until_us, last_event FROM plan_state \
+                    "SELECT family, account, route, since_us, until_us, last_event, cause FROM plan_state \
                      WHERE family = ?1",
                     params![family],
                     |r| {
@@ -930,11 +1193,34 @@ impl Store for SqliteStore {
                             since_us: r.get(3)?,
                             until_us: r.get(4)?,
                             last_event: r.get(5)?,
+                            cause: r.get(6)?,
                         })
                     },
                 );
                 QueryRow::PlanState(match row {
                     Ok(p) => Some(p),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(map_err(false, e)),
+                })
+            }
+            Query::SilenceStreak { provider, model } => {
+                let row = conn.query_row(
+                    "SELECT provider, model, count, first_us, last_us, last_event FROM silence_streak \
+                     WHERE provider = ?1 AND model = ?2",
+                    params![provider, model],
+                    |r| {
+                        Ok(StreakRow {
+                            provider: r.get(0)?,
+                            model: r.get(1)?,
+                            count: r.get(2)?,
+                            first_us: r.get(3)?,
+                            last_us: r.get(4)?,
+                            last_event: r.get(5)?,
+                        })
+                    },
+                );
+                QueryRow::SilenceStreak(match row {
+                    Ok(s) => Some(s),
                     Err(rusqlite::Error::QueryReturnedNoRows) => None,
                     Err(e) => return Err(map_err(false, e)),
                 })
@@ -1003,31 +1289,7 @@ impl Store for SqliteStore {
     }
 
     fn rebuild(&self, which: Projection) -> Result<RebuildStats, StoreError> {
-        let conn = self.conn.lock().expect("store mutex");
-        conn.execute_batch("PRAGMA synchronous = NORMAL;")
-            .map_err(|e| map_err(false, e))?;
-        let events = self.read_events(&conn)?;
-        let want = |p: Projection| which == p || which == Projection::All;
-        let mut stats = RebuildStats {
-            events_scanned: events.len(),
-            ..RebuildStats::default()
-        };
-        if want(Projection::Sessions) {
-            stats.sessions = self.rebuild_sessions(&conn, &events)?;
-        }
-        if want(Projection::CacheLedger) {
-            stats.cache_ledger = self.rebuild_cache_ledger(&conn, &events)?;
-        }
-        if want(Projection::QuotaCounters) {
-            stats.quota_counters = self.rebuild_quota(&conn, &events)?;
-        }
-        if want(Projection::ProviderCooldown) {
-            stats.provider_cooldown = self.rebuild_cooldown(&conn, &events)?;
-        }
-        if want(Projection::PlanState) {
-            stats.plan_state = self.rebuild_plan_state(&conn, &events)?;
-        }
-        Ok(stats)
+        self.rebuild_with_silence_window(which, REBUILD_DEFAULT_SILENCE_WINDOW_US)
     }
 
     fn schema_version(&self) -> Result<u32, StoreError> {
@@ -1372,7 +1634,7 @@ mod tests {
         let dir = tempdir("plan-state");
         let db = dir.join("state/vadis.db");
         let s = SqliteStore::open(&db).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 3, "DDL version 3");
+        assert_eq!(s.schema_version().unwrap(), 4, "DDL version 4");
 
         let switched = || NewEvent {
             kind: EventKind::PlanSwitched,
@@ -1397,6 +1659,7 @@ mod tests {
             account: "overflow",
             to_route: "zai/glm-5.3",
             cooldown_us: 900_000 * 1_000,
+            cause: "primary_exhausted",
             last_event: ev,
         })
         .unwrap();
@@ -1446,6 +1709,285 @@ mod tests {
         assert_eq!(after.expect("still switched"), inc);
     }
 
+    // (6b) ADR-064 §6.2 item 1: `silence_streak` incremental == rebuild —
+    //      the same hand-written event sequence folded twice, through the
+    //      writer (one `ProjectionWrite::SilenceStreak` per counted fact,
+    //      the §2.3.1 shape the two proxy writers call) and through the
+    //      §2.3.3 fold, must produce byte-equal rows; and rebuilding the
+    //      incremental store's own rows is a no-op. Includes §2.5.4's
+    //      mirror: facts before the last return-to-route `plan.switched`
+    //      row are cleared in both paths.
+    #[test]
+    fn silence_streak_rebuild_equals_incremental() {
+        let dir_a = tempdir("silence-inc");
+        let a = SqliteStore::open(&dir_a.join("state/vadis.db")).unwrap();
+        let dir_b = tempdir("silence-reb");
+        let b = SqliteStore::open(&dir_b.join("state/vadis.db")).unwrap();
+        assert_eq!(a.schema_version().unwrap(), 4, "DDL version 4");
+
+        // W = 60 s in force for every fact and for the rebuild.
+        const W: i64 = 60_000_000;
+        let base = 1_800_000_000_000_000i64; // an arbitrary µs anchor
+
+        // One counted fact as an event, with its ts_us pinned so the
+        // fold's arithmetic is exact (append stamps now; the test sets
+        // the row's own ts immediately after, BEFORE the incremental
+        // write that anchors on it).
+        let fact = |store: &SqliteStore, payload: serde_json::Value, ts: i64| {
+            EventId({
+                let id = store
+                    .append(NewEvent {
+                        kind: EventKind::ErrorClassified,
+                        request_id: Some("req-1"),
+                        session: Some("sess-1"),
+                        body_hash: None,
+                        trace_ref: None,
+                        payload,
+                    })
+                    .unwrap()
+                    .0;
+                store
+                    .raw_connection()
+                    .execute(
+                        "UPDATE events SET ts_us = ?1 WHERE event_id = ?2",
+                        params![ts, id],
+                    )
+                    .unwrap();
+                id
+            })
+        };
+        let plan_switched = |store: &SqliteStore, ts: i64| {
+            EventId({
+                let id = store
+                    .append(NewEvent {
+                        kind: EventKind::PlanSwitched,
+                        request_id: Some("req-1"),
+                        session: Some("sess-1"),
+                        body_hash: None,
+                        trace_ref: None,
+                        payload: json!({
+                            "family": "m1",
+                            "from_account": "overflow",
+                            "to_account": "primary",
+                            "from_route": "p-api/m1",
+                            "to_route": "p-plan/m1",
+                            "reason": "primary_recovered",
+                            "probe": true,
+                            "cooldown_ms": 0i64,
+                        }),
+                    })
+                    .unwrap()
+                    .0;
+                store
+                    .raw_connection()
+                    .execute(
+                        "UPDATE events SET ts_us = ?1 WHERE event_id = ?2",
+                        params![ts, id],
+                    )
+                    .unwrap();
+                id
+            })
+        };
+        let s1 = |provider: &str| {
+            json!({
+                "reason": "stream_truncated",
+                "action": "abort",
+                "matched": false,
+                "stream": true,
+                "stream_end": "idle_timeout",
+                "route": {"provider": provider, "model": "m1"},
+            })
+        };
+        let s2 = json!({
+            "reason": "timeout",
+            "action": "abort",
+            "matched": false,
+            "stream": true,
+            "stage": "unknown_outcome",
+            "route": {"provider": "p-plan", "model": "m1"},
+        });
+        let not_counted = json!({
+            "reason": "stream_truncated",
+            "action": "abort",
+            "matched": false,
+            "stream": true,
+            "stream_end": "upstream_ended_early",
+            "route": {"provider": "p-plan", "model": "m1"},
+        });
+
+        // The sequence (both stores append identically):
+        //   t0        S1 on p-plan/m1     — run 1 starts
+        //   t0+10s    S2 on p-plan/m1     — same run, count 2
+        //   t0+20s    not-counted cause   — no fact
+        //   t0+30s    S1 on p-api/m1      — another route's own run
+        //   t0+200s   S1 on p-plan/m1     — outside W: a fresh run of 1
+        //   t0+210s   plan.switched back to p-plan/m1 (§2.5.4's clear)
+        //   t0+220s   S1 on p-plan/m1     — post-return: count 1
+        let seq: Vec<(serde_json::Value, i64)> = vec![
+            (s1("p-plan"), base),
+            (s2.clone(), base + 10_000_000),
+            (not_counted, base + 20_000_000),
+            (s1("p-api"), base + 30_000_000),
+            (s1("p-plan"), base + 200_000_000),
+        ];
+        for (i, (payload, ts)) in seq.iter().enumerate() {
+            let ea = fact(&a, payload.clone(), *ts);
+            let _eb = fact(&b, payload.clone(), *ts);
+            // The incremental path: one upsert per counted fact, the
+            // route read off the payload the same way the writer does.
+            let route = payload["route"]["provider"].as_str().unwrap();
+            let model = payload["route"]["model"].as_str().unwrap();
+            a.project(ProjectionWrite::SilenceStreak {
+                provider: route,
+                model,
+                window_us: W,
+                last_event: ea,
+            })
+            .unwrap();
+            if i == 1 {
+                // The escalation's run of 2, observed at the instant it
+                // would fire: t0 and t0+10s joined one run (the t0+200s
+                // fact below has not reset it yet).
+                let QueryRow::SilenceStreak(pre) = a
+                    .query(Query::SilenceStreak {
+                        provider: "p-plan",
+                        model: "m1",
+                    })
+                    .unwrap()
+                else {
+                    panic!("expected a streak row");
+                };
+                assert_eq!(pre.as_ref().unwrap().count, 2, "t0 and t0+10s join one run");
+            }
+        }
+
+        // §2.5.4: the return trip clears the plan route's rows (the
+        // incremental clear is the writer's — the delete the rebuild
+        // must mirror).
+        let _ret_a = plan_switched(&a, base + 210_000_000);
+        let _ret_b = plan_switched(&b, base + 210_000_000);
+        a.project(ProjectionWrite::SilenceStreakClear {
+            provider: "p-plan",
+            model: "m1",
+        })
+        .unwrap();
+
+        // One post-return fact: a fresh run of 1.
+        let post = s1("p-plan");
+        let ea = fact(&a, post.clone(), base + 220_000_000);
+        let _eb = fact(&b, post, base + 220_000_000);
+        a.project(ProjectionWrite::SilenceStreak {
+            provider: "p-plan",
+            model: "m1",
+            window_us: W,
+            last_event: ea,
+        })
+        .unwrap();
+
+        // The rebuild folds the same log with the same W.
+        b.rebuild_with_silence_window(Projection::All, W).unwrap();
+        let rows_a = a.projection_rows(Projection::SilenceStreak).unwrap();
+        let rows_b = b.projection_rows(Projection::SilenceStreak).unwrap();
+        assert_eq!(rows_a, rows_b, "incremental != rebuild for silence_streak");
+        // And the rows say what the sequence means: p-plan/m1 is a
+        // post-return run of 1, p-api/m1 a run of 1.
+        assert_eq!(rows_a.len(), 2, "two routes, two rows: {rows_a:?}");
+        let QueryRow::SilenceStreak(plan_row) = a
+            .query(Query::SilenceStreak {
+                provider: "p-plan",
+                model: "m1",
+            })
+            .unwrap()
+        else {
+            panic!("expected a streak row");
+        };
+        let plan_row = plan_row.expect("the post-return fact re-created it");
+        assert_eq!(plan_row.count, 1);
+        assert_eq!(plan_row.first_us, base + 220_000_000);
+
+        // The strongest form: rebuilding the incremental store's own
+        // rows is a no-op.
+        let before = a.projection_rows(Projection::SilenceStreak).unwrap();
+        a.rebuild_with_silence_window(Projection::SilenceStreak, W)
+            .unwrap();
+        assert_eq!(
+            a.projection_rows(Projection::SilenceStreak).unwrap(),
+            before
+        );
+    }
+
+    // (6c) ADR-064 §6.2 item 2: `plan_state.cause` — an incremental move
+    //      and a rebuilt one carry the same cause word, and a DDL-v3 row
+    //      (cause NULL after the additive migration) reads back `None`,
+    //      which the guard maps to `primary_exhausted` (the only cause
+    //      that existed before the ADR; the mapping itself is witnessed
+    //      by CONF-121 (b)/(e) end to end).
+    #[test]
+    fn plan_state_cause_identity_and_ddl_v3_null_reading() {
+        let dir_a = tempdir("cause-inc");
+        let a = SqliteStore::open(&dir_a.join("state/vadis.db")).unwrap();
+        let dir_b = tempdir("cause-reb");
+        let b = SqliteStore::open(&dir_b.join("state/vadis.db")).unwrap();
+
+        let switched = || NewEvent {
+            kind: EventKind::PlanSwitched,
+            request_id: Some("req-1"),
+            session: Some("sess-1"),
+            body_hash: None,
+            trace_ref: None,
+            payload: json!({
+                "family": "m1",
+                "from_account": "primary",
+                "to_account": "overflow",
+                "from_route": "p-plan/m1",
+                "to_route": "p-api/m1",
+                "reason": "primary_silent",
+                "probe": false,
+                "silence": {"count": 2, "threshold": 2, "window_us": 300_000_000i64},
+                "cooldown_ms": 0i64,
+            }),
+        };
+        let ev = a.append(switched()).unwrap();
+        a.project(ProjectionWrite::PlanSwitched {
+            family: "m1",
+            account: "overflow",
+            to_route: "p-api/m1",
+            cooldown_us: 0,
+            cause: "primary_silent",
+            last_event: ev,
+        })
+        .unwrap();
+        let _ = b.append(switched()).unwrap();
+        b.rebuild(Projection::PlanState).unwrap();
+
+        for (label, s) in [("incremental", &a), ("rebuild", &b)] {
+            let QueryRow::PlanState(row) = s.query(Query::PlanState { family: "m1" }).unwrap()
+            else {
+                panic!("expected a plan_state row");
+            };
+            assert_eq!(
+                row.expect("the family switched").cause.as_deref(),
+                Some("primary_silent"),
+                "{label}: the cause word is the row's own reason"
+            );
+        }
+
+        // A DDL-v3 row migrated forward: the ALTER added `cause` as
+        // NULL and nothing backfills it — the read is `None`, and the
+        // consumer (the guard) maps it to `primary_exhausted`.
+        a.raw_connection()
+            .execute("UPDATE plan_state SET cause = NULL", [])
+            .unwrap();
+        let QueryRow::PlanState(row) = a.query(Query::PlanState { family: "m1" }).unwrap() else {
+            panic!("expected a plan_state row");
+        };
+        assert_eq!(
+            row.expect("the family switched").cause,
+            None,
+            "a DDL-v3 row reads NULL, mapped by the reader — never here"
+        );
+    }
+
     // (7) a v1 database migrates forward (v2, then v3) without touching
     //     events.
     #[test]
@@ -1465,7 +2007,11 @@ mod tests {
             .unwrap();
         }
         let s = SqliteStore::open(&db).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 3);
+        assert_eq!(
+            s.schema_version().unwrap(),
+            4,
+            "v1 migrates to the current DDL"
+        );
         let QueryRow::Events(evs) = s.query(Query::AllEvents).unwrap() else {
             panic!("expected events");
         };
@@ -1506,6 +2052,7 @@ mod tests {
             account: "overflow",
             to_route: "zai/glm-5.3",
             cooldown_us: 0,
+            cause: "primary_exhausted",
             last_event: ev,
         })
         .unwrap();
@@ -1623,10 +2170,11 @@ mod tests {
             account: "overflow",
             to_route: "prov-b/glm-5.3",
             cooldown_us: 0,
+            cause: "primary_exhausted",
             last_event: ev,
         })
         .unwrap();
-        let ev = s
+        let _ev = s
             .append(NewEvent {
                 kind: EventKind::CostComputed,
                 request_id: Some("req-1"),

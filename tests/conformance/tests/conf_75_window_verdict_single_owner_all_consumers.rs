@@ -57,6 +57,7 @@ fn policy() -> PlanPolicyCfg {
         cooldown: DurationVal(0),
         overflow_monthly_cap_usd: Some(CapUsdVal(20.0)),
         overflow_selection: vadis_core::config::OverflowSelection::Declared,
+        silent_escalation: Default::default(),
     }
 }
 

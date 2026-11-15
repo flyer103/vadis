@@ -243,6 +243,15 @@ its probe deadline, and why a probe would not be admitted yet. It can hold a pro
 plan's own reset has passed, but it will never refuse a request, and it will never move you to the
 metered account on its own.
 
+**And when the plan goes quiet.** A plan route that keeps going silent — a stream that stalls after
+its head, or a head that never arrives — can also move the family to the metered account, even though
+the provider never said `quota exhausted`: a *run* of such silences escalates exactly as a `403` does,
+the switch is recorded with `reason: primary_silent`, and the family comes back the usual way (a probe
+after the cooldown). The move spends money, so it is deliberate and it is tunable: how many silences
+over how long — and whether the rule runs at all — is [`plan_policy.silent_escalation`'s](../docs/spec.md)
+to say (spec §4.21; the reasoning is
+[`design/decisions/ADR-064-silent-exhaustion-escalation.md`](../design/decisions/ADR-064-silent-exhaustion-escalation.md)).
+
 **It sticks per session.** A session stays on one account. Leaving the plan is forced (the plan
 is gone); coming back is a *probe*, and a probe only ever happens at the **start** of a session
 — a new session, or a session's first request. A session that is already running on the metered

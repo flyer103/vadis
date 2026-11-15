@@ -320,3 +320,36 @@ per-request re-decision of the route the client asked for, which is the flip thi
 **What this note does not do.** It re-opens no decision of this ADR — the session granularity (item 1), the
 probe (item 3), the rule order (item 9) and the guard's mechanism are untouched, no key is added, no case
 moves, and no price or threshold is touched.
+
+## Dated note (2026-11-14, `R76-0` — append-only, `ADR-064`)
+
+**Item 2's "only signal that may move the account" keeps its billing half and gains one narrow second member.**
+The sentence is *"Only an upstream `403` classified `quota_exhausted` may move the account"*, and after
+`ADR-064` (`design/decisions/ADR-064-silent-exhaustion-escalation.md`, spec §4.21) it reads: a `403`
+`quota_exhausted` classification remains **the only mover on a billing fact**, and the silence escalation is
+**the only mover on a silence fact** — a run of K = 2 counted silence facts within W = 5 m on the family's
+active plan route, under `on_primary_exhausted: spill` only. The measured reason is the same audit item 2's
+own logic implies: the plan's exhaustion never arrived as a `403` in the fortnight (113 mid-body truncations,
+4 head-never-arrived timeouts), so a vocabulary with one mover had no member for the shape the upstream
+actually sends.
+
+What does **not** move, item by item, stated so no reader errors in either direction:
+
+- **Item 2's warning half is untouched.** The local `quota_counters` still may not refuse or force a spill,
+  and still only defers a probe at the plan's declared window boundary (`GAP-Q1`'s reason stands).
+- **Item 3 is untouched.** The probe predicate, the session-boundary hard rule (`turn_index == 1`, never
+  mid-session), the `recover: none` arm and the 15 m cooldown are exactly as written. Probe requests **do**
+  count toward the escalation's run (`ADR-064` §2.5.1), and escalation during a cooldown cannot re-move an
+  already-spilled family, so there is no probe/escalation loop; the 15 m cooldown and the 5 m window are
+  different clocks that never read each other.
+- **Item 5 is untouched, and it is what makes the new move cheap to explain.** The move is a cache-namespace
+  change and is still priced as a failover (`reprefill_tokens`, `switch_cost_nano`, `inferred` at decision
+  time, `measured` once the switched request's usage lands — ADR-058's labels). `result.failover_from` still
+  stays null for a state-caused move: nothing failed *in the request that is displaced*.
+- **Item 8 is reused, not reshaped.** One `plan.switched` row, durability `FULL`, same payload, plus the
+  additive `silence: {count, threshold, window_us}` member on a `primary_silent` row; `reason` gains that one
+  cause word. **Item 9's rule order and its three-way `GuardOutcome` are untouched** — the escalation is a
+  post-attempt writer (the same site the `403` move uses), and the guard's rule 4 does the rest.
+
+No key of §4.6 changes its meaning, no price moves, and no case is amended (`ADR-064` §5's amendment list is
+empty).
