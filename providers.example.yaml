@@ -70,6 +70,21 @@ providers:
         # TODO verify against official source: re-read 2026-09-21 — the id is the page's current name; the legacy
         #   names (deepseek-v4-flash, deepseek-v4-flash-vision-exp) are accepted but retired, and this entry uses
         #   the current one. The page also lists Vision for Flash and not for the pro model — not modelled here.
+    tools:
+        # spec §4.23 / ADR-066 — the tool relay surface's endpoints. Optional and
+        #   per-verb: declaring `search` promises nothing about `asr`, and an
+        #   undeclared verb answers 501 not_implemented rather than dialling a
+        #   guessed path. A relay is not a model call — the caller's bytes travel
+        #   untouched (an `asr` multipart boundary lives in the body), so these
+        #   URLs are complete endpoints exactly as `urls` above are; nothing is
+        #   composed at request time.
+        #   source: https://api-docs.deepseek.com/ @2026-11-25 — its Tools pages
+        #   (Search, Fetch, Text to Speech, Speech to Text) state base
+        #   https://api.deepseek.com plus the path of each verb below.
+      search: https://api.deepseek.com/v1/tools/search
+      fetch:  https://api.deepseek.com/v1/tools/fetch
+      tts:    https://api.deepseek.com/v1/tools/tts
+      asr:    https://api.deepseek.com/v1/tools/asr
 
   # The subscription account. spec §4.6: `account` is a property of the *entry*
   # (the key, the endpoint and the allowance belong to the account), so one

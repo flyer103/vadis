@@ -279,6 +279,7 @@ mod tests {
 
     fn provider(quota: Option<Vec<QuotaCfg>>) -> ProviderCfg {
         ProviderCfg {
+            tools: None,
             name: "p-plan".into(),
             region: vadis_core::config::Region::Intl,
             currency: vadis_core::Currency::Usd,
@@ -347,6 +348,7 @@ mod tests {
 
     fn config(quota: Option<Vec<QuotaCfg>>) -> VadisConfig {
         VadisConfig {
+            tools: None,
             media: None,
             server: vadis_core::config::ServerCfg {
                 addr: "127.0.0.1:0".into(),

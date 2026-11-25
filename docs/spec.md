@@ -2897,6 +2897,175 @@ even with the section written; an unusable body is `400` with no upstream contac
 `media.max_body_bytes` is `413` and under it is `200`; the surface is behind the guard). DESIGN §12.26
 carries the landing; `ADR-065` is the reasoning.
 
+### 4.23 Tool relay surface — ADR-066
+
+*Status: **served** — `POST /v1/tools/{search,fetch,tts,asr}` relay a provider's tool endpoint: the
+caller's bytes out, the provider's bytes back, one `DecisionRecord` per call. The surface exists because
+the tool verbs (§4.22's neighbourhood) have no protocol body vadis can read: a search query, a fetched
+page, a spoken sentence and an audio file are the provider's own contract, and any vadis-side
+re-serialization of them would be a second, unverified transcription of a request it does not own.*
+
+**The finding.** A tool endpoint is not a model route: there is no `model` to select, no usage to
+normalize, and the answer may be JSON, audio or a Markdown page. Two failure modes follow from treating it
+as one. First, **re-serializing is lossy** — a multipart `asr` envelope carries a boundary in its content
+type, and a JSON round-trip of a `tts` request is a different request; the bytes the provider validated
+were the caller's, and they must arrive as sent. Second, **re-shaping an upstream refusal is a lie** — the
+provider's `error.type` and `code` are the caller's to read and act on, and §8's envelope would replace
+them with vadis's own words for a decision vadis did not take. The surface therefore relays in both
+directions and charges only what it can see.
+
+#### 4.23.1 The four paths
+
+| Path | Body | Answer | When it does not serve |
+|---|---|---|---|
+| `POST /v1/tools/search` | the provider's own JSON | whatever the provider answers, verbatim | `501` when not configured; `413` over the bound; `401` without the guard token; `502` when no answer arrives |
+| `POST /v1/tools/fetch` | the provider's own JSON | as above | as above |
+| `POST /v1/tools/tts` | the provider's own JSON | as above (audio is a `200` body, not a JSON envelope) | as above |
+| `POST /v1/tools/asr` | the provider's own **multipart** body | as above (`{"text": …}` for the reference provider, but vadis does not read it) | as above |
+
+Every path is behind the same guard as every other route (§4.7). The four paths are **registered
+unconditionally** so that a client asking for a capability this deployment does not serve gets a typed
+`501 not_implemented`, never a `404` — "vadis cannot do this here" and "this path does not exist" are
+different answers (§8's `not_implemented` row, amended in this change). The three conditions that leave a
+verb unserved are all **load-time** states of the effective configuration: no `tools:` section, a section
+whose provider is not in the roster, and a provider that declares no URL for **that** verb — declaring
+`search` promises nothing about `asr`. A provider that declares the URL but holds no readable credential is
+the fourth: the surface cannot dial it, and a `501` says so before a byte of the caller's body is read.
+
+#### 4.23.2 What "relay" means, exactly
+
+The protocol routes' byte boundary (§2.1) permits two mutations of a client's body: strip vadis-owned
+top-level fields and replace the top-level `model`. **This surface mutates nothing.** It does not parse the
+request at all — no JSON reader, no multipart reader, no model rewrite — so it cannot reformat a number,
+reorder a key or normalize a boundary. What it changes is one header and nothing else:
+
+| Direction | Header | What happens |
+|---|---|---|
+| out | `authorization` | set to the provider's own credential from the entry's pool (§4.6.1); the caller's token never travels to the provider |
+| out | `content-type` | copied **as received**, and omitted when the caller sent none (the boundary's only home) |
+| out | everything else | not forwarded: a tool call has no protocol header of its own, and the caller's `accept`/`user-agent` would describe the wrong client |
+| back | `status`, `content-type`, body | relayed verbatim, plus `x-vadis-request-id` |
+| back | everything else | dropped (the provider's framing is not vadis's to forward) |
+
+The bytes travel as bytes: a `tts` answer is audio, `fetch` answers Markdown, and neither is decoded on the
+way through. The `asr` multipart body and its boundary reach the provider unchanged — the property that
+makes the verb usable at all.
+
+#### 4.23.3 The `tools:` section
+
+One top-level section, optional like `media:` (§4.22.3), plus one optional block on the provider entry it
+names:
+
+```yaml
+tools:
+  provider: deepseek     # required once written: a roster entry that declares the verbs below
+  max_body_bytes: 9437184      # default 9 MiB (floor 1024)
+  max_response_bytes: 16777216 # default 16 MiB
+  attempt_timeout: 10m         # default 600s; the dial's own bound
+
+providers:
+  - name: deepseek
+    tools:
+      search: https://api.deepseek.com/v1/tools/search
+      fetch:  https://api.deepseek.com/v1/tools/fetch
+      tts:    https://api.deepseek.com/v1/tools/tts
+      asr:    https://api.deepseek.com/v1/tools/asr
+```
+
+| Key | Type | Default | Constraint |
+|---|---|---|---|
+| `tools.provider` | string | — (required) | an existing `providers[].name` |
+| `tools.max_body_bytes` | integer | `9437184` | `≥ 1024` |
+| `tools.max_response_bytes` | integer | `16777216` | `≥ 1024` |
+| `tools.attempt_timeout` | duration | `600s` | `> 0` |
+| `providers[].tools.{search,fetch,tts,asr}` | string | absent | `http://` or `https://` |
+
+The section and the provider's verbs are validated **at load**: a `tools.provider` that is not a roster
+entry, an entry with no `tools` URL at all, or a URL that is not `http(s)` refuses the file naming the
+path (`tools.provider`, `providers[i] (name).tools.search`). A deployment that never writes the section
+serves four `501`s and dials nothing — the default, because a tool call spends on an account the deployment
+picks.
+
+**`attempt_timeout` is separate from `server.upstream_attempt_timeout` on purpose.** That knob (120s) is a
+model call's patience; a `tts` request for a long text may legitimately take minutes, and a bound that
+truncated it would bill the provider and refuse the caller. The dial has exactly this one bound: this
+surface has no request-level deadline of its own, because a tool call's cost is the provider's, not a
+model's.
+
+#### 4.23.4 The answers
+
+A reached provider's answer is relayed **as received**: status, content type and body, including a
+`4xx`/`5xx`. This is the one place where §8's envelope is deliberately **not** used for an upstream
+refusal: the provider's error body names the field it rejected and the code its caller can act on, and
+re-wrapping it would delete exactly the information the caller needs. The distinction the record keeps is
+the one a reader cannot get from the wire: `tools.upstream_status` says an answer arrived (and what it
+was), while a `502` with `upstream_status` absent says nothing came back at all.
+
+vadis speaks only for itself: an unserved verb, an oversize body, a failed dial and an oversize answer are
+§8 envelopes (`not_implemented`, `request_too_large`, `upstream_error`), each with the request id header
+and, for the size refusals, `details` naming the bound, the limit and the observed count.
+
+An answer **larger than `tools.max_response_bytes`** is refused with `502 upstream_error`, never truncated:
+a cut `fetch` page or a cut `tts` file is a silent corruption the caller cannot detect, and the provider
+has already billed for it. The bound is a deployment's statement about the largest answer it will hold in
+memory; the default 16 MiB fits a long page and a short audio clip.
+
+#### 4.23.5 Bounds, time, and what does not happen
+
+- **The body bound is checked header-first** (§4.13's rule, applied to this surface's own knob): a declared
+  `content-length` over `tools.max_body_bytes` is refused `413` before a byte is read; a body whose read
+  fails or overruns is refused the same way. The refused connection is closed, because an undrained body on
+  a keep-alive connection would parse as the next request.
+- **One attempt, one provider.** There is no retry and no failover walk on this surface: a replay is a second
+  bill, and the caller — not vadis — owns the decision to repeat a search that answered `503`. A dial that
+  fails after the request was fully written answers `502` naming that fact, so the caller knows the call
+  may have been billed upstream.
+- **The answer is buffered** (bounded by `tools.max_response_bytes`). A `tts` stream is therefore held and
+  relayed as one body; streaming audio is a phase-2 change of this section, not a hidden behaviour of it.
+- **Nothing else applies**: no transform, no cache, no plan policy, no model slot, no statefulness. The
+  record's `transform_mode` is `passthrough`, `cache` is absent and `decision.model` is empty, because a
+  verb names an endpoint, not a model.
+
+#### 4.23.6 The record
+
+One `§6` record per call, with the `tools` group present **iff** the row was written by a tool call:
+
+```json
+"tools": {"verb": "search", "provider": "deepseek", "upstream_status": 200,
+          "request_bytes": 34, "response_bytes": 812, "priced": false}
+```
+
+`verb` is the route's own word, never parsed back out of a URL. `upstream_status` is absent when no answer
+arrived (a refusal before the dial, or a dial that produced nothing). The two byte counts are the caller's
+body as received and the answer as relayed — the multipart envelope included for `asr`. `priced` is
+`false` in v0.1 because vadis has no price table for these verbs: the record's `usage_missing` is `true`
+and its `cost` is all zeros with `currency` still set, so a reader sees **unpriced**, never **free**
+(§7's rule — an unmeasured saving is not a saving; the same patience applies to an unmeasured cost). The
+row's `protocol.protocol_in` is `tools`, `protocol_out` is `null`, and `errors[]` carries
+`upstream_error` when the provider answered `≥ 400` (the answer still relays) or nothing arrived.
+
+#### 4.23.7 Non-goals
+
+- **Tool pricing and quota.** `cost` stays zero with `priced: false`; a price table, per-verb quotas and a
+  budget that bounds them are a later change (ADR-066's phase 2).
+- **The provider's multipart `ocr`.** This section's `ocr` is §4.22's JSON surface; the reference
+  provider's own `/v1/tools/ocr` takes multipart and answers pages, and relaying it under the same path
+  would collide with §4.22's contract.
+- **Streaming `tts` and a websocket.** Buffered only.
+- **Fallback, cache and plan policies on the tool surface.** A tool call has no model to fail over from.
+
+#### 4.23.8 Assertions
+
+`CONF-123` (`tests/conformance/tests/conf_123_tools_relay_verbatim.rs`: a `search` call is relayed both
+ways byte for byte — the upstream's body is the caller's, the key is the provider's, the caller's content
+type travels as received, and the answer arrives with the upstream's status, content type and bytes; an
+`asr` multipart envelope and its boundary arrive unchanged; a non-JSON `tts` answer is relayed as bytes; an
+upstream `422` reaches the caller with the provider's own error body, not §8's; an absent `tools:` section
+answers `501` on all four verbs and dials nothing; a verb without its URL answers `501`; a keyless provider
+answers `501`; a body over `tools.max_body_bytes` answers `413` before the dial and under it is served; no
+guard token is `401`; the record carries the `tools` group with `priced: false`, `usage_missing: true`
+and a zero cost). DESIGN §12.27 carries the landing; `ADR-066` is the reasoning.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
@@ -2935,10 +3104,11 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | `transform_mode` (`passthrough` \| `transform`; always present — the mode in effect for **this request's outbound body**, §2.1), and `transforms[]`: one entry per step **that changed the payload**, each `plugin` (the rule id), `edited_paths[]` (`{ path, bytes_in, bytes_out }`, where the two byte counts are the **payload text's** length before and after the step — the length of the spliced JSON string span differs by its escaping and is not claimed here), `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1). **Every step must report its token delta**: a step that cannot is not admissible as one |
 | response cache | `cache` — **present iff this record's response came from the recorded store** (§4.17), i.e. iff no upstream call was made: `verdict` (`inferred`, always — §7 / constraint 4), `key_digest` (the `sha256` of the client's inbound body bytes **as received**), `replayed` (`request_id` of the record the bytes came from + its `session` + its `turn_index`), `replayed_bytes` (how many response bytes were returned — a count of bytes, never a price and never a saving). See the paragraph below for the three properties a reader must not have to derive |
+| tools | `tools` — **present iff this record was written by a tool call** (§4.23), i.e. a `/v1/tools/{search,fetch,tts,asr}` relay: `verb` (the route's own word), `provider` (the entry the call dialled), `upstream_status` (absent when no answer arrived), `request_bytes`, `response_bytes`, `priced` (always `false` in v0.1 — the zero cost beside it is **unpriced**, never free: §4.23.6). A record **without** the group is a model call |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), **`failover_order`** (**ADR-063**: the order the walk held at the move that abandoned a route — **present-and-`null`** whenever no route moved, the stance `failover_from` takes, so the key set never changes shape; its members are the paragraph **`result.failover_order`** below), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
-| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, not_implemented, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound, `not_implemented` is §4.22's media surface — an unsupported capability is not a fault of the machinery, so it never wears `internal`). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, not_implemented, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound, `not_implemented` is §4.22's media surface and §4.23's tool relay — an unsupported capability is not a fault of the machinery, so it never wears `internal`). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
 
 **The `identity` group's attribution is derived, and one of its words is a declared constant.** `client` is
 produced by one pure function of the request's `User-Agent` header, evaluated **once** per request at the
@@ -3512,7 +3682,7 @@ rely on each upstream's own error shape):
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not declaring the inbound protocol in its `supports`** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | **the media surface is its producer (§4.22)**: `/v1/tools/transcribe` and `/v1/tools/synthesize` — this build has no audio route kind — and any of the three when the config writes no `media:` section. Both arms are answered before the pipeline: no upstream is contacted, nothing is attempted, and one §6 pre-pipeline record carries `errors[].kind: "not_implemented"`. The row's original subject — a **protocol cell** a client asked for — still has **no producer reachable from a request in this build (ADR-051)**: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
+| `not_implemented` | 501 | **the two tool surfaces are its producers (§4.22, §4.23)**: `/v1/tools/transcribe` and `/v1/tools/synthesize` — this build has no audio route kind — and any of the three when the config writes no `media:` section; §4.23's `search`/`fetch`/`tts`/`asr` when the config writes no `tools:` section, when `tools.provider` declares no URL for that verb, or when the provider holds no readable credential. Both arms are answered before the pipeline: no upstream is contacted, nothing is attempted, and one §6 pre-pipeline record carries `errors[].kind: "not_implemented"`. The row's original subject — a **protocol cell** a client asked for — still has **no producer reachable from a request in this build (ADR-051)**: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a session was resolved),

@@ -199,6 +199,7 @@ pub fn refused_record(
         transforms: Vec::new(),
         // A pre-pipeline refusal can never be a hit: no cache group.
         cache: None,
+        tools: None,
         usage: vadis_core::Usage::default(),
         usage_missing: true,
         cost: CostRec {

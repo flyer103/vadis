@@ -69,11 +69,44 @@ pub struct DecisionRecord {
     /// is not a hit and must never be read as one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheRec>,
+    /// The tools group (spec §4.23, ADR-066): present **iff** the record was
+    /// written by a tool call — a search/fetch/tts/asr request — and its
+    /// presence *is* the statement "this call left for a provider's tool
+    /// endpoint, not its model endpoints". Additive: the version stays
+    /// **2**, and a record **without** the group is a model call.
+    ///
+    /// A tool call is relayed byte-for-byte and carries no usage the
+    /// provider would report in the chat envelope, so the record's
+    /// `usage_missing` is true and its cost is all zeros with
+    /// `priced: false` — an unpriced call, never a free one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolsRec>,
     pub usage: Usage,
     pub usage_missing: bool,
     pub cost: CostRec,
     pub result: ResultRec,
     pub errors: Vec<TraceError>,
+}
+
+/// A tool call's group (spec §4.23 / ADR-066): the four facts that make
+/// "the provider refused it" distinguishable from "we never dialled" and
+/// from "the answer was ours". `verb` is the route's own word
+/// (`search`/`fetch`/`tts`/`asr`), never parsed back out of a URL.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolsRec {
+    pub verb: String,
+    pub provider: String,
+    /// The upstream's HTTP status when one arrived; `None` when the call
+    /// never reached an answer (dial failure, or a refusal before dial).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_status: Option<u16>,
+    /// Bytes of the client's body as received (the multipart envelope
+    /// included for `asr`), and of the answer relayed back.
+    pub request_bytes: u64,
+    pub response_bytes: u64,
+    /// Always false in v0.1: vadis has no price table for the tool verbs,
+    /// so the zero cost above must never be read as "this call was free".
+    pub priced: bool,
 }
 
 /// identity: `request_id` + `event_id` are the join key into `events`
@@ -807,6 +840,7 @@ mod tests {
             transform_mode: TransformMode::Passthrough,
             transforms: Vec::new(),
             cache: None,
+            tools: None,
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {

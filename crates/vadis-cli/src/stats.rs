@@ -1204,6 +1204,7 @@ mod tests {
             trace_dir: PathBuf::from("/cfg/state/traces"),
             state_db: PathBuf::from("/cfg/state/vadis.db"),
             vadis: VadisConfig {
+                tools: None,
                 media: None,
                 server: ServerCfg {
                     addr: "127.0.0.1:0".into(),

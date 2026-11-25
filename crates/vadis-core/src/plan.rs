@@ -1016,6 +1016,7 @@ mod tests {
             AccountKind, CacheCfg, ModelCfg, PriceCfg, ProviderCfg, ServerCfg, SessionCfg, TraceCfg,
         };
         let plan_provider = |name: &str| ProviderCfg {
+            tools: None,
             name: name.into(),
             region: crate::config::Region::Intl,
             currency: crate::Currency::Usd,
@@ -1054,6 +1055,7 @@ mod tests {
         let mut other_tag = plan_provider("plan-c");
         other_tag.models[0].family = Some("other-family".into());
         VadisConfig {
+            tools: None,
             media: None,
             server: ServerCfg {
                 addr: "127.0.0.1:0".into(),
@@ -2367,6 +2369,7 @@ mod tests {
         let p = tiered_policy();
         let mut cfg = tiered_config(&p);
         let mut provider = ProviderCfg {
+            tools: None,
             name: "p-band".into(),
             region: crate::config::Region::Intl,
             currency: crate::Currency::Cny,

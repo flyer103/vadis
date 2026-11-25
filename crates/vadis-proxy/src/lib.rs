@@ -15,6 +15,7 @@ mod revision;
 mod state_read;
 mod stream_forward;
 mod stubs;
+mod tools_surface;
 mod upstream_body;
 
 pub use accounting::{
@@ -38,3 +39,4 @@ pub use state_read::{
 };
 pub use stream_forward::{StreamOutcome, StreamSuccess};
 pub use stubs::protocol_stub;
+pub use tools_surface::{tool_record, ToolCallFacts, ToolSurface, ToolsMount};

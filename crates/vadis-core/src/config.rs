@@ -703,6 +703,132 @@ fn default_media_max_body_bytes() -> i64 {
     8_388_608
 }
 
+/// Spec §4.23: the four tool verbs a deployment can expose through
+/// `POST /v1/tools/<verb>`. A verb is a name for an outbound call, not a
+/// wire protocol: every one of them is a plain HTTP POST whose request and
+/// answer vadis relays byte-for-byte, which is why a provider declares them
+/// as full URLs ([`ToolUrlsCfg`]) rather than as a [`WireApi`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolKind {
+    Search,
+    Fetch,
+    Tts,
+    Asr,
+}
+
+impl ToolKind {
+    pub const ALL: [ToolKind; 4] = [Self::Search, Self::Fetch, Self::Tts, Self::Asr];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::Fetch => "fetch",
+            Self::Tts => "tts",
+            Self::Asr => "asr",
+        }
+    }
+}
+
+/// Spec §4.23: one provider entry's `tools:` map — the verb's URL on that
+/// provider, written in full (`https://api.deepseek.com/v1/tools/search`).
+/// Never composed from a base: the four endpoints do not share a prefix
+/// across vendors, and a vadis-composed path would be a guess about someone
+/// else's routing (the same stance as §4.9's `urls`). A verb left unwritten
+/// is a verb this provider does not serve — `501 not_implemented` on that
+/// path, never a default.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolUrlsCfg {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub fetch: Option<String>,
+    #[serde(default)]
+    pub tts: Option<String>,
+    #[serde(default)]
+    pub asr: Option<String>,
+}
+
+impl ToolUrlsCfg {
+    pub fn url(&self, verb: ToolKind) -> Option<&str> {
+        match verb {
+            ToolKind::Search => self.search.as_deref(),
+            ToolKind::Fetch => self.fetch.as_deref(),
+            ToolKind::Tts => self.tts.as_deref(),
+            ToolKind::Asr => self.asr.as_deref(),
+        }
+    }
+
+    /// `true` when at least one verb carries a URL: a written `tools:` map
+    /// with none serves nothing, which §4.23 refuses at load rather than
+    /// leaving as a section that only ever answers `501`.
+    pub fn any(&self) -> bool {
+        ToolKind::ALL.iter().any(|verb| self.url(*verb).is_some())
+    }
+}
+
+/// Spec §4.23: the tools surface — `POST /v1/tools/{search,fetch,tts,asr}`,
+/// the paths that relay one of DeepSeek's tool calls (web search, page
+/// fetch, text-to-speech, speech-to-text). The second **optional** section,
+/// with the same stance as §4.22's `media:`: writing nothing is the
+/// operator saying the surface is off, and every path then answers `501
+/// not_implemented` (§8's body) instead of refusing to load.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolsCfg {
+    /// The roster entry the four verbs are dialled through. Required when
+    /// `tools:` is written: the caller names a verb, never a provider, so
+    /// a deployment that cannot name one has nothing to relay. It must be a
+    /// `providers` entry that declares at least one `tools:` URL
+    /// ([`VadisConfig::validate`]); the verb's URL is the one written on
+    /// that entry, and no other provider is ever dialled.
+    pub provider: String,
+    /// Spec §4.23: the largest inbound body the tools routes read. Above it
+    /// the call is refused `413 request_too_large` before the request is
+    /// dialled (the header-first rule of §4.13). A bound of its own, not
+    /// `server.max_body_bytes`: an `asr` upload is an audio file (8 MiB of
+    /// call audio plus multipart framing) while the protocol routes stay at
+    /// their text-sized cap.
+    #[serde(default = "default_tools_max_body_bytes")]
+    pub max_body_bytes: i64,
+    /// Spec §4.23: the largest upstream answer vadis relays and records.
+    /// Above it the call answers `502 upstream_error` naming the bound and
+    /// nothing is handed to the caller — a truncated binary answer is worse
+    /// than a refusal. The transport still buffers the answer before the
+    /// bound is applied (§4.23's phase-1 note): this key governs what is
+    /// relayed, not what the process allocates.
+    #[serde(default = "default_tools_max_response_bytes")]
+    pub max_response_bytes: i64,
+    /// Spec §4.23: the per-attempt timeout of a tool call. Ten minutes by
+    /// default because the verbs are not chat: `tts` synthesizes up to 30
+    /// minutes of audio in one answer, and `server.upstream_attempt_timeout`
+    /// (120s) would cut a legitimate narration mid-stream. It does not lift
+    /// `server.request_timeout`, which still bounds the whole request.
+    #[serde(default = "default_tools_attempt_timeout")]
+    pub attempt_timeout: DurationVal,
+}
+
+/// Spec §4.23: 9 MiB. Sized for the one verb whose body is a file: `asr`
+/// accepts 8 MiB of audio, and multipart framing adds a few hundred bytes on
+/// top (`Content-Disposition`, boundary markers, the filename).
+fn default_tools_max_body_bytes() -> i64 {
+    9_437_184
+}
+
+/// Spec §4.23: 16 MiB. A one-minute `wav` answer at the vendor's 24 kHz
+/// 16-bit mono is ~2.9 MiB, so the default leaves room for a few minutes of
+/// narration while staying far below the point where one answer would be
+/// abusive to hold in memory.
+fn default_tools_max_response_bytes() -> i64 {
+    16_777_216
+}
+
+/// Spec §4.23: 10m, the bound a long narration needs (see `attempt_timeout`).
+fn default_tools_attempt_timeout() -> DurationVal {
+    DurationVal(600_000)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCfg {
@@ -993,6 +1119,15 @@ pub struct ProviderCfg {
     pub models: Vec<ModelCfg>,
     #[serde(default)]
     pub quota: Option<Vec<QuotaCfg>>,
+    /// Spec §4.23: the tool verbs this entry serves, each written as the
+    /// complete URL of that verb's endpoint. Absent ⇒ this provider serves
+    /// no tool verb, and a written map with a verb missing says the same
+    /// for that verb — `501 not_implemented` on its path. Declared on the
+    /// *provider* rather than in the `tools:` section because a URL is a
+    /// property of the vendor's API; the section only names which provider
+    /// the surface dials.
+    #[serde(default)]
+    pub tools: Option<ToolUrlsCfg>,
 }
 
 impl ProviderCfg {
@@ -1266,6 +1401,13 @@ pub struct VadisConfig {
     /// of "serve the tools as 501").
     #[serde(default)]
     pub media: Option<MediaCfg>,
+    /// Spec §4.23: the tools surface — the sibling of §4.22's media
+    /// section, with the same stance (absent ⇒ every `POST
+    /// /v1/tools/<verb>` answers `501 not_implemented`). It names the
+    /// provider the four verbs are dialled through and their bounds; the
+    /// URLs themselves are the provider entry's `tools:` map.
+    #[serde(default)]
+    pub tools: Option<ToolsCfg>,
     // Never serializes: a present `state:` key refuses the load, so the
     // value is always None — and `StateKeyForbidden` deliberately has no
     // `Serialize` (its one job is to fail deserialization).
@@ -1415,6 +1557,10 @@ pub struct RootFile {
     /// unchanged: the media tools read it at call time, never a copy.
     #[serde(default)]
     pub media: Option<MediaCfg>,
+    /// Spec §4.23's section, threaded through the join unchanged on the
+    /// same terms as `media`.
+    #[serde(default)]
+    pub tools: Option<ToolsCfg>,
     // As on VadisConfig: never serialized (`StateKeyForbidden` has no
     // `Serialize`; a present key refuses the load).
     #[serde(default, skip_serializing)]
@@ -1458,6 +1604,7 @@ impl RootFile {
             plan_policy,
             plan_policies,
             media,
+            tools,
             state,
         } = self;
         let providers = match (providers, providers_file, roster) {
@@ -1545,6 +1692,7 @@ impl RootFile {
             plan_policy,
             plan_policies,
             media,
+            tools,
             state,
         })
     }
@@ -2274,6 +2422,89 @@ impl VadisConfig {
                          (spec §4.22)"
                     ),
                 ));
+            }
+        }
+
+        // Spec §4.23: the tools section's load-time rules. Every one of
+        // them is a fact that cannot change at request time, and each names
+        // the key it belongs to — a surface that would only ever answer 501
+        // is a typo to report here, not a puzzle to debug from a log line.
+        if let Some(tools) = &self.tools {
+            if tools.max_body_bytes < MIN_MAX_BODY_BYTES {
+                return Err(ConfigError::new(
+                    "tools.max_body_bytes",
+                    format!(
+                        "{} — the tools body limit must be an integer of bytes ≥ {}",
+                        tools.max_body_bytes, MIN_MAX_BODY_BYTES
+                    ),
+                ));
+            }
+            if tools.max_response_bytes < MIN_MAX_BODY_BYTES {
+                return Err(ConfigError::new(
+                    "tools.max_response_bytes",
+                    format!(
+                        "{} — the tools answer limit must be an integer of bytes ≥ {} \
+                         (a smaller bound would refuse every answer, including a search result)",
+                        tools.max_response_bytes, MIN_MAX_BODY_BYTES
+                    ),
+                ));
+            }
+            if tools.attempt_timeout.0 == 0 {
+                return Err(ConfigError::new(
+                    "tools.attempt_timeout",
+                    "0ms — a zero per-attempt timeout would cut every tool call before the \
+                     upstream could answer (spec §4.23)"
+                        .to_string(),
+                ));
+            }
+            let provider_name = tools.provider.trim();
+            if provider_name.is_empty() {
+                return Err(ConfigError::new(
+                    "tools.provider",
+                    "empty — the four verbs are dialled through the provider this key names"
+                        .to_string(),
+                ));
+            }
+            let Some((pi, provider)) = self
+                .providers
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.name == provider_name)
+            else {
+                return Err(ConfigError::new(
+                    "tools.provider",
+                    format!(
+                        "unknown provider '{provider_name}': the tools surface relays through \
+                         a declared `providers` entry (spec §4.23)"
+                    ),
+                ));
+            };
+            let declared = provider.tools.as_ref().filter(|t| t.any());
+            if declared.is_none() {
+                return Err(ConfigError::new(
+                    "tools.provider",
+                    format!(
+                        "provider '{provider_name}' declares no tools URL: a tools: section \
+                         whose provider serves none of the four verbs would answer only 501, \
+                         which the absence of the section already states (spec §4.23)"
+                    ),
+                ));
+            }
+            for verb in ToolKind::ALL {
+                if let Some(url) = declared.and_then(|t| t.url(verb)) {
+                    let url = url.trim();
+                    if !(url.starts_with("http://") || url.starts_with("https://")) {
+                        return Err(ConfigError::new(
+                            format!("providers[{pi}] ({provider_name}).tools.{}", verb.as_str()),
+                            format!(
+                                "'{url}' — a tool verb's URL is written in full \
+                                 (e.g. https://api.deepseek.com/v1/tools/{}), never composed \
+                                 from a base (spec §4.23)",
+                                verb.as_str()
+                            ),
+                        ));
+                    }
+                }
             }
         }
 

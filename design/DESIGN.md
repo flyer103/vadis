@@ -5129,6 +5129,69 @@ new event kind, no `/metrics` series, no state. Audio is a capability this build
 documented-but-unreachable defect). `CONF-108` is the case that holds all of it; the unit tests beside
 `media_tools.rs` and `body_limit.rs` hold the pure and the record shapes.
 
+### 12.27 The tool relay surface (the landing of spec §4.23, ADR-066)
+
+**What this section is.** Spec §4.23's four paths, landed **without a body on either side**: nothing is
+parsed, nothing is synthesized, and the two directions are a header map and a byte string. That is the
+whole difference from §12.26 — a media call has no client body, so vadis writes one and hands it to the
+pipeline; a tool call *is* the client's body, and the only correct treatment of a body vadis cannot
+interpret is to carry it.
+
+| Piece | Home | Kind |
+|---|---|---|
+| `ToolKind { Search, Fetch, Tts, Asr }`, `ToolUrlsCfg { search, fetch, tts, asr: Option<String> }`, `ToolsCfg { provider, max_body_bytes, max_response_bytes, attempt_timeout }` and their load-time refusals (`tools.provider` unknown, the entry declares no verb URL, a URL that is not `http(s)`, a bound under the floor) | `crates/vadis-core/src/config.rs` | the one optional `VadisConfig` section + the provider's optional `tools:` block |
+| `ToolsMount { Unserved(String), Served(Arc<ToolSurface>) }`, `ToolSurface { provider, max_body_bytes, max_response_bytes, urls, keys, transport, cursor }`, `prepare(verb, content_type, body)`, `send(req)`, `ToolCallFacts`, `tool_record` | `crates/vadis-proxy/src/tools_surface.rs` | the mount is built once per revision; `prepare` and the record are pure, the dial is the one I/O |
+| `guarded_tools_route`, `tools_endpoint` | `crates/vadis-cli/src/lib.rs` | guard (`GuardState { proto_in: "tools" }`), the two bounds, the four verbs, the relay |
+| `ToolsRec { verb, provider, upstream_status, request_bytes, response_bytes, priced }` beside `cache` in `DecisionRecord` | `crates/vadis-core/src/trace.rs` | the group that says a relay wrote this row |
+
+**Why the protocol enum stays closed.** `Chat | Responses | Anthropic` name **model protocols**: each has
+a message array, a usage block and a set of provider URL kinds, and the config's `supports`/`urls` maps are
+keyed by them. A tool call has none of those — its body is the provider's own contract and its answer may be
+analytics JSON, Markdown or a WAV file — so a fourth variant would have claimed a normalization vadis does
+not perform, and would have forced every `urls`/`supports` map to grow a key no route kind can validate.
+`protocol.protocol_in` is a plain string in the trace (§6), so the surface names itself `"tools"` without
+touching the protocol enum; `protocol_out` is null, `decision.model` is empty, and `identity.client` is
+the caller's own word — the bytes are the client's, so the client here is genuinely the client, unlike
+§12.26 where vadis authors the upstream request and writes `vadis-media`.
+
+**Why relaying is a stronger reading of constraint 1, not an exception to it.** The byte boundary forbids
+mutation because a client's request is data vadis must not silently rewrite; the two permitted mutations in
+the protocol path exist only because vadis must strip its own fields and select a model. Here there is no
+vadis-owned field (the section names the endpoint, not the body) and no model to select, so the allowed set
+is empty and the implementation is correspondingly bare: `prepare` sets `authorization` from the pool and
+copies `content-type` when present, then hands the caller's bytes through. A multipart `asr` boundary
+survives because no reader ever sees it.
+
+**Why one attempt, no failover, no retry.** The forwarder's failover walk exists because another model can
+answer the same message; a replayed tool call is a second **bill** on an account the provider charges per
+request (a search, a fetch, a page of speech). A caller who owns a `503` — or a `422` naming a field they
+can fix — is better served by the provider's own error than by vadis's guess at a replacement. So each call
+dials once, and the failure message distinguishes *no byte left the process* from *the request was fully
+written, so it may have been billed*: that distinction is the difference between a safe retry and a double
+charge, and only the caller can act on it.
+
+**Why the answer is buffered.** `tools.max_response_bytes` bounds what the process holds, and a hold is what
+buffering means; streaming would hand the caller partial bytes whose accounting (what was billed, what was
+delivered) no bounded unit can describe, and a cut `tts` file is undetectable corruption. An answer over
+the bound is refused `502` rather than truncated for the same reason. Streaming audio is a change to the
+section, not a hidden mode of it.
+
+**The record is built inline, not through §12.26's pre-pipeline helper.** A tool row carries facts a model
+row does not have — the verb, the provider as the *dialled* thing rather than a resolved route, the two byte
+counts — so `tool_record` owns the shape and `media_error` is reused only for the §8 envelope of a
+refusal. `priced: false` with `usage_missing: true` and an all-zero `cost` is the one honest way to say
+that the call's price is not in vadis's books: §7's rule that an unmeasured number is not a zero applies to
+a cost exactly as it applies to a saving.
+
+**The mount is per revision.** URLs, the key pool and the transport are captured when `build_revision`
+assembles a `Revision`, so a reload swaps all three together and no call can dial a new URL with an old
+credential — the same whole-configuration atomicity the protocol routes already rely on.
+
+**Deliberately absent.** No protocol variant, no price table or quota, no multipart or JSON reader, no
+streaming, no response cache, no failover or plan policy, no `/metrics` series, no state, no new event
+kind. `CONF-123` is the case that holds all of it; the unit tests beside `tools_surface.rs` hold the
+mount's refusals and the record's shape.
+
 ## Publication note (2026-10-03, R62-2)
 
 The `R<n>` labels and finding ids in this document name iterations of the project's own

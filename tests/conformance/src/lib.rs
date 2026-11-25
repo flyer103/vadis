@@ -268,7 +268,16 @@ pub mod testkit {
             stream.shutdown().await?;
             return Ok(());
         }
-        out.push_str("content-type: application/json\r\n");
+        // The default content type is a convenience, not an override: a
+        // canned response that names its own must be observable as it was
+        // written (an audio answer is not JSON).
+        if !canned
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        {
+            out.push_str("content-type: application/json\r\n");
+        }
         for (k, v) in &canned.headers {
             out.push_str(&format!("{k}: {v}\r\n"));
         }

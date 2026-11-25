@@ -61,6 +61,12 @@ pub struct Revision {
     /// takes effect without a restart. The *value* of an unchanged name is
     /// the startup's one read, unchanged — §4.7's "read once" contract.
     pub auth_gate: Option<AuthGate>,
+    /// The tools surface this revision serves (spec §4.23, ADR-066): the
+    /// provider entry the four verbs are dialled through with the credential
+    /// pool read at this publish, or the sentence saying why the surface is
+    /// unserved. Per-revision like every other member: a reload that adds or
+    /// drops a `tools:` section switches the surface with the rest.
+    pub tools: crate::tools_surface::ToolsMount,
 }
 
 /// The published handle: one store a reader either sees complete or does
@@ -153,6 +159,7 @@ mod tests {
             },
             provider_keys: Vec::new(),
             auth_gate: None,
+            tools: crate::tools_surface::ToolsMount::Unserved("test".to_string()),
         }
     }
 

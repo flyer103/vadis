@@ -207,6 +207,7 @@ mod tests {
             transform_mode: vadis_core::transform::TransformMode::Passthrough,
             transforms: Vec::new(),
             cache: None,
+            tools: None,
             usage: Usage::default(),
             usage_missing: false,
             cost: CostRec {

@@ -246,3 +246,25 @@ media:
   # prompt: "Read every character in this picture."
   #   ^ the fallback instruction when a caller sends its own `prompt` nowhere;
   #   omitted, vadis uses its own transcribe-all-text instruction.
+
+tools:
+  # spec §4.23 / ADR-066 — the tool relay surface. POST /v1/tools/{search,fetch,tts,asr}
+  # relay a provider's own tool endpoint: the caller's bytes out, the provider's
+  # answer back, one trace record per call. The section is optional: written
+  # nowhere, all four paths answer 501 not_implemented — the default, because a
+  # tool call spends on an account this deployment picks.
+  provider: deepseek         # required once the section is written: a roster entry that
+                             # declares the verbs below (providers.example.yaml's `tools:`
+                             # block). Resolved at load — an unknown name, an entry with no
+                             # verb URL, or a URL that is not http(s) refuses the file.
+  max_body_bytes: 9437184    # default 9 MiB (floor 1024). Checked header-first: a declared
+                             # content-length above it is 413 before a byte is read, so an
+                             # `asr` upload of the wrong size costs the caller only a header.
+  max_response_bytes: 16777216  # default 16 MiB (floor 1024). Above it the call is 502
+                             # upstream_error naming the bound: a truncated relay (a cut
+                             # page, a cut WAV) is silent corruption the caller has paid for.
+  attempt_timeout: 10m       # default 600s. Separate from server.upstream_attempt_timeout
+                             # on purpose: 120s is a model call's patience, and a paragraph
+                             # of speech may legitimately take minutes. One attempt only —
+                             # no retry and no failover on this surface, because a replayed
+                             # tool call is a second bill.

@@ -661,6 +661,7 @@ impl<'a> Accountant<'a> {
             transform_mode: ctx.transform_mode,
             transforms: ctx.transforms.clone(),
             cache,
+            tools: None,
             usage,
             usage_missing,
             cost: CostRec {

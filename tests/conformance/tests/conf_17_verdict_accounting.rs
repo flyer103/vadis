@@ -122,6 +122,7 @@ fn empty_record() -> DecisionRecord {
         transforms: Vec::new(),
         // The additive group (spec §6): this fixture's record is no hit.
         cache: None,
+        tools: None,
         usage: Usage::default(),
         usage_missing: false,
         cost: CostRec {

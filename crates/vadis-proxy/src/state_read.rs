@@ -143,6 +143,7 @@ mod tests {
 
     fn cfg() -> VadisConfig {
         VadisConfig {
+            tools: None,
             media: None,
             server: ServerCfg {
                 addr: "127.0.0.1:0".into(),
@@ -200,6 +201,7 @@ mod tests {
                 },
                 provider_keys: Vec::new(),
                 auth_gate: None,
+                tools: crate::tools_surface::ToolsMount::Unserved("test".to_string()),
             }),
             trace_dir: String::new(),
             state_db: String::new(),

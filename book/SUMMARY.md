@@ -5,6 +5,7 @@
 * [Connecting clients](connecting-clients.md)
 * [Protocols](protocols.md)
 * [Media tools](media-tools.md)
+* [Tool relay](tools-relay.md)
 * [Cost and caching](cost-and-caching.md)
 * [Plugins](plugins.md)
 * [Observability and accounting](observability-and-accounting.md)

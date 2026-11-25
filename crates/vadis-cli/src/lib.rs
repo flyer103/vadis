@@ -340,6 +340,54 @@ pub(crate) fn build_revision(
             .saturating_mul(1_000),
     };
 
+    // The tools surface (spec §4.23, ADR-066): `tools:` names one provider,
+    // and the four verbs dial that entry's own tool URLs. The mount is built
+    // here, once per publish, so the serving path reads one immutable value —
+    // the same discipline as every other per-revision fact (DESIGN §12.20).
+    // The section's absence is a statement ("this deployment serves no tool
+    // verb"), which is why it is an `Unserved` with the sentence that says so
+    // rather than a silently missing route.
+    let tools = match &rc.vadis.tools {
+        None => vadis_proxy::ToolsMount::Unserved(
+            "the config writes no tools: section, so /v1/tools/* is not served here (spec §4.23)"
+                .to_string(),
+        ),
+        Some(cfg) => match rc.vadis.providers.iter().find(|p| p.name == cfg.provider) {
+            // validate() refuses an unknown tools.provider at load, so this
+            // arm is unreachable from a served config; it stays a refusal
+            // rather than an unwrap because the build must not panic on the
+            // serving path even when a rule it relied on was bypassed.
+            None => vadis_proxy::ToolsMount::Unserved(format!(
+                "tools.provider '{}' names no providers entry (spec §4.23)",
+                cfg.provider
+            )),
+            Some(provider) => {
+                // ADR-049 §3 rule 7's read-once discipline, one surface over:
+                // the values are read at publish, never on the request path.
+                let keys: Vec<String> = provider
+                    .key_pool()
+                    .iter()
+                    .filter_map(|n| std::env::var_os(n).map(|v| v.to_string_lossy().into_owned()))
+                    .collect();
+                let transport: Option<std::sync::Arc<dyn vadis_proxy::ProviderTransport>> =
+                    if keys.is_empty() {
+                        None
+                    } else {
+                        match vadis_providers::ReqwestProviderClient::new(
+                            std::time::Duration::from_millis(cfg.attempt_timeout.0),
+                        ) {
+                            Ok(client) => Some(std::sync::Arc::new(client)),
+                            Err(e) => {
+                                note(format!("tools: provider client build failed: {e}"));
+                                None
+                            }
+                        }
+                    };
+                vadis_proxy::ToolsMount::from_config(cfg, provider, keys, transport)
+            }
+        },
+    };
+
     vadis_proxy::Revision {
         forwarder,
         // Spec §9.1's `config` member: the loader-computed identity,
@@ -358,6 +406,7 @@ pub(crate) fn build_revision(
         },
         provider_keys,
         auth_gate,
+        tools,
     }
 }
 
@@ -368,7 +417,7 @@ pub async fn serve(config_path: &str) -> i32 {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Json;
-    use vadis_core::config::WireApi;
+    use vadis_core::config::{ToolKind, WireApi};
     use vadis_core::error::ErrorBody;
 
     use vadis_proxy::{AppState, ForwardOutcome};
@@ -1042,6 +1091,393 @@ pub async fn serve(config_path: &str) -> i32 {
             ))
     }
 
+    /// `POST /v1/tools/{search,fetch,tts,asr}` (spec §4.23, ADR-066): the
+    /// provider tool surface — the paths a caller uses when it wants *an
+    /// action performed upstream* (a search, a page, speech, a transcript)
+    /// rather than a model opinion about bytes it already holds. The sixth
+    /// guarded non-protocol route family: the same guard middleware as
+    /// `/metrics` and `/v1/tools/*`'s media verbs, its own word `"tools"`,
+    /// and its own body bound (`tools.max_body_bytes`).
+    ///
+    /// Unlike the media verbs, nothing is synthesized or parsed here: the
+    /// client's body and content type travel **byte-for-byte** to the
+    /// provider's endpoint (a rewritten multipart boundary makes an `asr`
+    /// upload unparsable), and the upstream's status, content type and bytes
+    /// come back unchanged — an upstream `4xx` is relayed, never re-shaped
+    /// into §8's envelope (spec §4.23's error rule). vadis's own refusals
+    /// (unserved verb, oversized body, no answer at all) are §8's, and each
+    /// one is written to the trace in the same breath as the answer.
+    fn guarded_tools_route(revision: vadis_proxy::SharedRevision) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/v1/tools/search",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        tools_endpoint(rev, ToolKind::Search, headers, body, client).await
+                    },
+                ),
+            )
+            .route(
+                "/v1/tools/fetch",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        tools_endpoint(rev, ToolKind::Fetch, headers, body, client).await
+                    },
+                ),
+            )
+            .route(
+                "/v1/tools/tts",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        tools_endpoint(rev, ToolKind::Tts, headers, body, client).await
+                    },
+                ),
+            )
+            .route(
+                "/v1/tools/asr",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        tools_endpoint(rev, ToolKind::Asr, headers, body, client).await
+                    },
+                ),
+            )
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            .route_layer(axum::middleware::from_fn_with_state(
+                GuardState {
+                    revision,
+                    proto_in: "tools",
+                },
+                guard_mw,
+            ))
+    }
+
+    /// One tool call (§4.23): refuse (unserved verb, oversized body, no
+    /// answer) or relay the upstream's own answer, and write exactly one §6
+    /// row either way — a call whose bytes left is never silent, and a
+    /// refusal is never a bare 404.
+    async fn tools_endpoint(
+        rev: std::sync::Arc<vadis_proxy::Revision>,
+        verb: ToolKind,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Body,
+        client: ClientWord,
+    ) -> Response {
+        let request_id = request_id();
+        let rid = request_id.as_str();
+        let started = std::time::Instant::now();
+        let client = client.0;
+        let digest = rev
+            .forwarder
+            .trace
+            .as_ref()
+            .map(|t| t.config_digest())
+            .unwrap_or("");
+        let write = |status: u16,
+                     provider: &str,
+                     upstream_status: Option<u16>,
+                     request_bytes: u64,
+                     response_bytes: u64,
+                     error: Option<(vadis_core::error::ErrorCode, String)>| {
+            let now_us = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_micros() as i64)
+                .unwrap_or(0);
+            let record = vadis_proxy::tool_record(&vadis_proxy::ToolCallFacts {
+                request_id: rid,
+                verb: verb.as_str(),
+                provider,
+                status,
+                upstream_status,
+                request_bytes,
+                response_bytes,
+                now_us,
+                overhead_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                upstream_ms: 0,
+                config_digest: digest,
+                client,
+                error,
+            });
+            if let Some(t) = rev.forwarder.trace.as_ref() {
+                let _ = t.write(&record);
+            }
+        };
+        let surface = match &rev.tools {
+            vadis_proxy::ToolsMount::Served(surface) => surface.clone(),
+            vadis_proxy::ToolsMount::Unserved(message) => {
+                let message = message.clone();
+                write(
+                    vadis_core::error::ErrorCode::NotImplemented.http_status(),
+                    "",
+                    None,
+                    0,
+                    0,
+                    Some((
+                        vadis_core::error::ErrorCode::NotImplemented,
+                        message.clone(),
+                    )),
+                );
+                return media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    message,
+                    None,
+                );
+            }
+        };
+        let provider = surface.provider().to_string();
+        if surface.verb_url(verb).is_none() {
+            let message = format!(
+                "provider '{provider}' declares no tools.{} URL: this deployment does not \
+                 serve the verb (spec §4.23)",
+                verb.as_str()
+            );
+            write(
+                vadis_core::error::ErrorCode::NotImplemented.http_status(),
+                &provider,
+                None,
+                0,
+                0,
+                Some((
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    message.clone(),
+                )),
+            );
+            return media_error(
+                rid,
+                vadis_core::error::ErrorCode::NotImplemented,
+                message,
+                None,
+            );
+        }
+        let limit = surface.max_body_bytes();
+        // §4.13's header-first rule, on this surface's own bound: a declared
+        // length over it is refused before a byte is read, so an `asr` upload
+        // of the wrong size costs the caller nothing but the header.
+        let declared: Option<u64> = headers
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        if let Some(len) = declared {
+            if len > limit as u64 {
+                let message = format!(
+                    "request body exceeds tools.max_body_bytes: {len} bytes declared, the \
+                     configured bound is {limit}"
+                );
+                write(
+                    vadis_core::error::ErrorCode::RequestTooLarge.http_status(),
+                    &provider,
+                    None,
+                    0,
+                    0,
+                    Some((
+                        vadis_core::error::ErrorCode::RequestTooLarge,
+                        message.clone(),
+                    )),
+                );
+                return media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::RequestTooLarge,
+                    message,
+                    Some(serde_json::json!({
+                        "bound": "tools.max_body_bytes",
+                        "limit_bytes": limit,
+                        "content_length": declared,
+                    })),
+                );
+            }
+        }
+        let raw = match axum::body::to_bytes(body, limit).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let message = format!(
+                    "request body exceeds tools.max_body_bytes: the configured bound is \
+                     {limit}"
+                );
+                write(
+                    vadis_core::error::ErrorCode::RequestTooLarge.http_status(),
+                    &provider,
+                    None,
+                    0,
+                    0,
+                    Some((
+                        vadis_core::error::ErrorCode::RequestTooLarge,
+                        message.clone(),
+                    )),
+                );
+                return media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::RequestTooLarge,
+                    message,
+                    Some(serde_json::json!({
+                        "bound": "tools.max_body_bytes",
+                        "limit_bytes": limit,
+                        "content_length": serde_json::Value::Null,
+                    })),
+                );
+            }
+        };
+        let request_bytes = raw.len() as u64;
+        // The caller's content type travels as received: for `asr` it is the
+        // multipart boundary's only home, and a value rewritten here would be
+        // a body the upstream cannot parse. Its absence is sent as absence —
+        // vadis does not invent one.
+        let content_type = headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
+        let request = match surface.prepare(verb, content_type.as_deref(), raw) {
+            Ok(request) => request,
+            Err(message) => {
+                write(
+                    vadis_core::error::ErrorCode::UpstreamError.http_status(),
+                    &provider,
+                    None,
+                    request_bytes,
+                    0,
+                    Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                );
+                return media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::UpstreamError,
+                    message,
+                    None,
+                );
+            }
+        };
+        let upstream_started = std::time::Instant::now();
+        let outcome = surface.send(request).await;
+        let upstream_ms = upstream_started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        let (status, upstream_status, answer, answer_type) = match outcome {
+            vadis_providers::AttemptOutcome::Responded(response) => {
+                if response.body.len() > surface.max_response_bytes() {
+                    let message = format!(
+                        "the upstream answer is {} bytes, above tools.max_response_bytes {}: \
+                         a truncated relay is worse than a refusal (spec §4.23)",
+                        response.body.len(),
+                        surface.max_response_bytes()
+                    );
+                    write(
+                        vadis_core::error::ErrorCode::UpstreamError.http_status(),
+                        &provider,
+                        Some(response.status),
+                        request_bytes,
+                        response.body.len() as u64,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                    );
+                    return media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        Some(serde_json::json!({
+                            "bound": "tools.max_response_bytes",
+                            "limit_bytes": surface.max_response_bytes(),
+                            "upstream_status": response.status,
+                        })),
+                    );
+                }
+                (
+                    response.status,
+                    Some(response.status),
+                    response.body,
+                    response.content_type,
+                )
+            }
+            vadis_providers::AttemptOutcome::NotSent(e)
+            | vadis_providers::AttemptOutcome::WrittenNoResponse(e) => {
+                let message = format!(
+                    "no answer from the tools endpoint: {} ({})",
+                    e.message,
+                    if e.wrote_full_request {
+                        "the request was fully written, so the call may have been billed"
+                    } else {
+                        "no request byte left this process"
+                    }
+                );
+                write(
+                    vadis_core::error::ErrorCode::UpstreamError.http_status(),
+                    &provider,
+                    None,
+                    request_bytes,
+                    0,
+                    Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                );
+                return media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::UpstreamError,
+                    message,
+                    None,
+                );
+            }
+        };
+        let response_bytes = answer.len() as u64;
+        // The relayed upstream error is still a call that produced no answer;
+        // the row carries it so a reader of `result.status` is not left to
+        // guess, and the client receives the upstream's own body untouched
+        // (spec §4.23: upstream errors are relayed, not re-shaped).
+        let error = (status >= 400).then(|| {
+            (
+                vadis_core::error::ErrorCode::UpstreamError,
+                format!("upstream answered HTTP {status}"),
+            )
+        });
+        // The one row this call writes: the relayed status is the record's
+        // `result.status` (it is what the caller received), and `upstream_ms`
+        // is the dial's own time — the two times a tool call has, since nothing
+        // was decided and nothing was transformed.
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+        let record = vadis_proxy::tool_record(&vadis_proxy::ToolCallFacts {
+            request_id: rid,
+            verb: verb.as_str(),
+            provider: &provider,
+            status,
+            upstream_status,
+            request_bytes,
+            response_bytes,
+            now_us,
+            overhead_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+            upstream_ms,
+            config_digest: digest,
+            client,
+            error,
+        });
+        if let Some(t) = rev.forwarder.trace.as_ref() {
+            let _ = t.write(&record);
+        }
+        let mut relayed = axum::response::Response::new(axum::body::Body::from(answer));
+        *relayed.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        if let Some(value) = answer_type.as_deref().and_then(|v| v.parse().ok()) {
+            relayed
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_TYPE, value);
+        }
+        if let Ok(v) = request_id.parse() {
+            relayed.headers_mut().insert("x-vadis-request-id", v);
+        }
+        relayed
+    }
     /// §8's answer with the request id header, for the arms that never reach
     /// the pipeline.
     fn media_error(
@@ -1487,6 +1923,7 @@ pub async fn serve(config_path: &str) -> i32 {
         .merge(guarded_metrics_route(cell.clone(), state.clone()))
         .merge(guarded_models_route(cell.clone()))
         .merge(guarded_media_tools_route(cell.clone()))
+        .merge(guarded_tools_route(cell.clone()))
         .merge(guarded_state_route(cell.clone(), state.clone()))
         .with_state(());
 
