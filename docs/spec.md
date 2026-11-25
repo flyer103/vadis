@@ -2763,11 +2763,12 @@ accumulate; the three non-counted causes never count; a metered route's facts ne
 
 ### 4.22 Media tool surface — ADR-065
 
-*Status: **served** — `POST /v1/tools/ocr` answers with the configured model's reading of an image;
-`POST /v1/tools/transcribe` and `POST /v1/tools/synthesize` are **registered** and answer
-`501 not_implemented`. The surface exists because a client edge that turns a file into text has no
-protocol body to replay: `kian`'s media edge (ADR-065's motivating case) reached for a hand-written
-proxy on a second port, and that proxy is what this section retires.*
+*Status: **served** — `POST /v1/tools/ocr` answers with the configured model's reading of an
+image; `POST /v1/tools/transcribe` and `POST /v1/tools/synthesize` answer on the caller's JSON shapes
+by adapting them to the provider's own `asr`/`tts` endpoints (§4.22.9; the conversion runs through
+`media.ffmpeg`). The surface exists because a client edge that turns a file into text has no protocol
+body to replay: `kian`'s media edge (ADR-065's motivating case) reached for a hand-written proxy on a
+second port, and that proxy is what this section retires.*
 
 **The finding.** Every route above this section replays a **client's** bytes (constraint 1, §2.1) and is
 selected by a `model` the client names. A media edge has neither: the file is a JPEG or a HEIC, the
@@ -2783,14 +2784,16 @@ not a chat completion whose bytes must survive.
 | Path | Body | Answer | When it does not serve |
 |---|---|---|---|
 | `POST /v1/tools/ocr` | `{"image": {"media_type": "image/jpeg", "base64": "…"}, "prompt": "…"}` | `200` `{"text": "…"}` | `400` unusable image, `413` over `media.max_body_bytes`, `502` the route model answered nothing usable |
-| `POST /v1/tools/transcribe` | — | — | `501 not_implemented`, always |
-| `POST /v1/tools/synthesize` | — | — | `501 not_implemented`, always |
+| `POST /v1/tools/transcribe` | `{"audio": {"media_type": "audio/mp4", "base64": "…"}, "language": "zh"}` | `200` `{"text": "…"}` | `400` unusable audio, `413` over the bound or over 120 s, `501` the audio arms are not wired (§4.22.9), `502` no usable answer — the provider's own refusal is **relayed verbatim** |
+| `POST /v1/tools/synthesize` | `{"text": "…", "format": "mp3", "voice": "stella"}` | `200` `{"audio": {"base64": "…", "media_type": "audio/mpeg"}}` | `400` unusable text/format, `413` over the bound or over 10,000 characters, `501` the audio arms are not wired, `502` no usable answer — the provider's own refusal is **relayed verbatim** |
 
 All three are behind the same guard as every other route (§4.7): no token is `401 unauthorized`. All three
-answer `501 not_implemented` when the config writes **no** `media:` section (§4.22.3). The audio verbs are
-**registered 501s, never 404s**: a client that asks for a capability this build does not have must be able
-to tell "vadis cannot do this" from "this path does not exist", and only a typed refusal carries that
-(§8's `not_implemented` row, amended in this change). Nothing reaches an upstream on either arm.
+answer `501 not_implemented` when the config writes **no** `media:` section (§4.22.3), and the two audio
+arms answer it again when their own prerequisite is missing — no `tools:` section, no `asr`/`tts` URL on
+`tools.provider`, or no usable converter (`media.ffmpeg`, §4.22.9). None of these is a `404`: a client
+that asks for a capability this build cannot reach must be able to tell "vadis will not do this here" from
+"this path does not exist", and only a typed refusal carries that (§8's `not_implemented` row). Every
+pre-dial refusal above contacts no upstream.
 
 #### 4.22.2 The OCR request
 
@@ -2826,6 +2829,7 @@ that answers nothing is not a successful reading, and this surface never fabrica
 | `model` | string | **required** | an alias, or a roster `provider/model` | the route the three paths read pictures with. Resolved **at load**: an alias that does not exist, or a `provider/model` not in the roster, is a config error naming `media.model` |
 | `max_body_bytes` | integer | `8388608` | `≥ 1024` | this surface's own body bound (§4.22.4) |
 | `prompt` | string | absent | any | the fallback prompt (§4.22.2) |
+| `ffmpeg` | string | `"ffmpeg"` | non-blank | the converter the audio arms run (§4.22.9). A **name** `PATH` resolves at call time, so a deployment may point it at any `ffmpeg`-compatible binary. A value that does not run is **not** a config error — the arms that need it answer `501` and `ocr` keeps serving, so a host without the binary loses audio, not images. A blank value is refused at load (`media.ffmpeg`), because it would make every transcribe/synthesize call fail while looking configured |
 
 `media:` is the **only** optional section: every other section is required because a hidden default is the
 most expensive silent failure (§4's preamble), and this one is optional with the **safe** default — absent
@@ -2865,37 +2869,139 @@ native id — the permitted mutation of constraint 1. Consequences a reader shou
   the pipeline writes the ordinary row and **no extra refusal row**.
 - **The trace's `errors[].kind` for an unsupported verb is `not_implemented`, never `internal`**: the
   machinery is fine, the capability is absent. §6's kind set and §8's row were amended with this surface.
+- **The two audio arms do not move through this pipeline** (§4.22.9): they dial the provider's own
+  `asr`/`tts` URL from the `tools:` section, so there is no route, no fallback walk, no response cache
+  entry and no model substitution to reason about. Their record is the **tool relay's** shape carrying the
+  `media` protocol word, so the ledger still says what was called, for how many bytes, and that it is
+  unpriced.
 
 #### 4.22.6 What a refusal records
 
 `/v1/tools/*` refusals are **§6 pre-pipeline records**: `identity.event_id` is 0, `usage` is marked missing,
 nothing is priced, `result.attempts` is 0, `protocol.protocol_in` is `"media"` (a word the protocol path
 never produces — no cell is named `media`) and `errors[].kind` is the refusal's own kind —
-`not_implemented` for the two arms of §4.22.1, `request_too_large` for the bound, `transform_error` for an
-unusable body, `unauthorized` for the guard. The guard's `401` writes the same shape from its own path
-(§4.7). A refusal that is answered from the trace itself (`trace_write_failed`) is not the request's
-failure and never changes its status.
+`not_implemented` for an arm whose prerequisite is missing (`media:` absent, or — for the audio
+arms — no `tools:` section, no `asr`/`tts` URL, or no usable converter), `request_too_large` for the
+bound, `transform_error` for an unusable body, `unauthorized` for the guard. The guard's `401` writes the
+same shape from its own path (§4.7). A refusal that is answered from the trace itself
+(`trace_write_failed`) is not the request's failure and never changes its status.
+
+**An audio arm that dials writes the tool relay's record instead** (§4.22.9): `protocol.protocol_in` is
+still `"media"`, `result.attempts` is 1, and the §6 `tools` group is present with `verb` =
+`transcribe`/`synthesize`, `priced: false` and `usage_missing: true`. The provider's own non-`2xx`
+answer is not a vadis refusal at all — it is relayed to the caller byte-for-byte, and the record carries
+`errors[].kind: "upstream_error"` with `result.status` /`tools.upstream_status` set to it.
 
 #### 4.22.7 What this section does not change
 
-No new `WireApi` and no provider URL kind (`urls`/`supports` stay keyed by the three protocol cells); **no
-audio**: `/v1/tools/transcribe` and `/v1/tools/synthesize` answer `501` because this build has no audio
-route kind, a multipart reader, or an audio price, and a `200` with invented semantics would be worse than
-a typed refusal; no new event kind; no new `/metrics` series; no state; no §8 row beyond the `not_implemented`
-amendment; `server.max_body_bytes` and every protocol cell's bound untouched; §2.1's byte-faithfulness
-untouched, because this surface has no client body to preserve — the synthesized body **is** the request and
-§6 records it as the upstream request; the `failover`/`fallback` rules, the plan policies and the response
-cache (§4.17) apply unchanged (a media call is cacheable by the same rules, and its key is the synthesized
-body's digest, not the tool request's).
+No new `WireApi` and no provider URL kind (`urls`/`supports` stay keyed by the three protocol cells);
+the audio arms are an **adapter, not a provider concept** — they dial the URL the `tools:` block already
+declares (§4.23), so a deployment that has not written one keeps the typed `501`, and neither `urls` nor
+`supports` gains a member. **No audio price and no streaming**: a transcript is one buffered JSON object and
+speech is one buffered container, so there is no stream to meter and the record stays unpriced (§4.23.6); a
+client that wants the provider's streaming `tts` form talks to §4.23's relay instead, which relays any body.
+No new event kind; no new `/metrics` series; no state; no §8 row beyond the `not_implemented` amendment;
+`server.max_body_bytes` and every protocol cell's bound untouched; §2.1's byte-faithfulness untouched, because
+this surface has no client body to preserve — the synthesized body **is** the request and §6 records it as
+the upstream request; the `failover`/`fallback` rules, the plan policies and the response cache (§4.17)
+apply unchanged **to the OCR arm** — a media call is cacheable by the same rules, and its key is the
+synthesized body's digest, not the tool request's. The audio arms are not cacheable and have no failover walk:
+they dial one URL once (§4.22.9).
 
 #### 4.22.8 Assertions
 
 `CONF-108` (`ocr` answers `{"text"}` and forwards the synthesized chat body — `model` is the route's native
 id, `stream` is `false`, the text part is the caller's prompt, the image part is the `data:` URI; a config
-with no `media:` answers `501` on all three paths and contacts no upstream; the audio verbs answer `501`
-even with the section written; an unusable body is `400` with no upstream contact; a body over
-`media.max_body_bytes` is `413` and under it is `200`; the surface is behind the guard). DESIGN §12.26
-carries the landing; `ADR-065` is the reasoning.
+with no `media:` answers `501` on all three paths and contacts no upstream; with `media:` written but no
+`tools:` block both audio verbs still answer `501`; an unusable body is `400` with no upstream contact; a
+body over `media.max_body_bytes` is `413` and under it is `200`; the surface is behind the guard).
+
+`CONF-124` covers the audio arms end to end (§4.22.9): `transcribe` sends the provider a multipart `file`
+part (boundary from the request id, `audio.wav`, the optional language field) and answers the provider's
+`text`; `synthesize` asks for `wav` and returns `audio/wav` / `audio/pcm` untouched and `audio/mpeg`
+transcoded; a provider `422` is relayed byte-for-byte; no `tools:` block, no `asr`/`tts` URL and a
+converter that does not run are each a `501` **before the dial**, with the `wav` synthesis still served
+when only the converter is missing; unusable bodies are `400`/`413`; the body bound is
+`media.max_body_bytes`; the arms are behind the guard; and the record carries `protocol_in: "media"` with
+the `tools` group. The stub converter the test writes into its own temp directory stands in for ffmpeg, so
+the test needs no host binary. DESIGN §12.26 carries the landing; `ADR-065` is the reasoning.
+
+#### 4.22.9 The audio arms
+
+`transcribe` and `synthesize` keep the caller contract §4.22.1 lists — kian's JSON/base64 shape
+(ADR-061) — and answer by **adapting** it to the provider's own `asr`/`tts` endpoint. The adapter exists
+because the two vocabularies differ, not because vadis grew an audio route: no `WireApi` member, no route,
+no price, no stream.
+
+**The prerequisite is a written `tools:` block** (§4.23). The arms dial `tools.provider`'s `tools.asr` /
+`tools.tts` URL with that entry's credential pool, exactly as the relay does — one dialling path, not a
+second one. The refusals are therefore the relay's: no `tools:` section, no URL for the verb, or a provider
+with no readable credential answer `501 not_implemented` naming the missing fact (§4.22.1), and the fourth
+refusal — a converter that does not run — is described below. `tools.max_body_bytes` does **not** bound the
+caller here (that is §4.22.4's `media.max_body_bytes`); `tools.max_response_bytes` bounds the provider's
+answer on both arms, and `tools.attempt_timeout` bounds the dial. One attempt, no retry, no failover walk, no
+response cache: a tool call is a purchase, and a replay is a second purchase (§4.23.5).
+
+**`transcribe` takes `{"audio": {"media_type", "base64"}, "language"?}`.**
+
+- `audio.media_type` is required and must be `audio/*`; the surface never guesses a container from the
+  bytes, and any other family is `400`.
+- `audio.base64` is RFC 4648 with padding, decoded here (a body that is not base64 is `400`); zero bytes is
+  `400`, more than the provider's 8 MiB upload bound is `413`.
+- `language` is an optional tag: at most 35 characters from `[A-Za-z0-9-_]` (`zh-CN`), `400` otherwise.
+- **The bytes are converted, always**, through `media.ffmpeg`: `-vn -ac 1 -ar 16000 -c:a pcm_s16le` into a
+  16 kHz mono 16-bit WAV, in a scratch directory named from the request id and removed afterwards. ffmpeg's
+  own demuxers are the reader, so `audio/mp4` (m4a), `audio/mpeg`, `audio/ogg` and `audio/wav` all work
+  without vadis carrying a per-container decoder; a container ffmpeg cannot read is `400` naming the
+  declared type. The converter runs under a 60 s process bound.
+- **The duration is checked on the converted WAV and refused, never truncated**: more than 120 s (the
+  provider's ASR bound) is `413`, and so is more than 8 MiB after conversion. A transcript of the first two
+  minutes presented as the file's transcript would be a lie, so the call does not happen.
+- **The provider request is multipart**: one `file` part (`filename="audio.wav"`,
+  `Content-Type: audio/wav`) carrying the converted WAV, plus the `language` hint as its own field when the
+  caller wrote one, with a boundary derived from the request id. vadis writes the bearer credential and the
+  content type; nothing else is added.
+- **The answer is the provider's `text`, trimmed**: `200 {"text": "…"}`. A body that is not JSON, or with no
+  non-blank `text`, is `502 upstream_error` — an empty string would tell the caller's model the audio said
+  nothing, which is a different claim from "the provider did not answer".
+
+**`synthesize` takes `{"text", "format"?, "voice"?}`.**
+
+- `text` is required and must be non-blank (`400`); over the provider's 10,000-character bound is `413`.
+  `format` is `mp3` (default), `wav` or `pcm`; any other value is `400` naming the supported set.
+  `voice` is an optional provider voice name of at most 64 characters; absent means `stella`.
+- **The provider request is JSON**: `{"text", "format", "voice_id"}`, where the provider's format is `wav`
+  for both `mp3` and `wav` and `pcm` for `pcm` — the provider speaks no compressed container, so `mp3` is
+  served by transcoding its WAV afterwards. For that reason `media.ffmpeg` is probed **before the dial only
+  when the caller asked `mp3`**: a `wav`/`pcm` call still answers on a host without ffmpeg, and only the mp3
+  path is `501` there.
+- **The provider's bytes are the speech**: `wav` returns `audio/wav`, `pcm` returns `audio/pcm`, and `mp3`
+  is transcoded with libmp3lame at 64 kbit/s and returned as `audio/mpeg`. The caller gets
+  `{"audio": {"base64", "media_type"}}`. An empty provider body is `502 upstream_error`, not a `200` with
+  zero bytes of audio.
+
+Members neither arm names are ignored and never forwarded: the provider body is built from the members
+listed here, so an unknown field can neither reach the provider nor change the request's bytes.
+
+**What the caller gets when the provider refuses.** A provider `4xx`/`5xx` on either arm is **relayed
+verbatim** — status, content type and body — because the provider's own error body (a content filter, a
+quota, a bad voice) is the only honest explanation, and §8's envelope would replace it with a guess.
+vadis-side failures keep §8's shape: no converter, no credential, an unusable caller body, a transport
+failure, or an answer above `tools.max_response_bytes` (`502`, never a truncation).
+
+**What one call records.** A dialled arm writes one §6 record with `protocol.protocol_in: "media"`,
+`identity.client: "vadis-media"`, `result.attempts: 1`, the `tools` group
+`{verb, provider, upstream_status, request_bytes, response_bytes, priced: false}` and `usage_missing: true`;
+the cost is zero **because the surface is unpriced in v0.1, never because the call was free** (§4.23.6).
+`request_bytes` is what went on the wire toward the provider (the multipart envelope for `transcribe`, the
+JSON body for `synthesize`), not the caller's body. A refusal before the dial is §4.22.6's pre-pipeline
+record instead. Neither arm reads or writes the response cache, and neither carries a `transform` ledger
+entry — a tool call is not a protocol body.
+
+**The converter is a deployment fact, not a config guarantee.** `media.ffmpeg` is a name `PATH` resolves at
+call time; the probe (`<ffmpeg> -version`) is cached per name for the process, so pointing the key at a
+different binary re-probes, while replacing the binary behind the same path needs a restart (§4.15's reload
+otherwise applies to the section). With no ffmpeg at all, `ocr` keeps serving: images do not need it.
 
 ### 4.23 Tool relay surface — ADR-066
 
@@ -3104,7 +3210,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | prefix | `prefix_blocks[]` (token count + hash per block; **block granularity and hash definition below**), `prefix_continuity` (longest common block ratio relative to the previous request in the same session) |
 | transform | `transform_mode` (`passthrough` \| `transform`; always present — the mode in effect for **this request's outbound body**, §2.1), and `transforms[]`: one entry per step **that changed the payload**, each `plugin` (the rule id), `edited_paths[]` (`{ path, bytes_in, bytes_out }`, where the two byte counts are the **payload text's** length before and after the step — the length of the spliced JSON string span differs by its escaping and is not claimed here), `added_input_tokens`, `saved_input_tokens`, `saved_output_tokens`, `cache_impact`, `verdict` (verified/inferred), `tee_id` (optional; `null` when tee is not enabled in v0.1). **Every step must report its token delta**: a step that cannot is not admissible as one |
 | response cache | `cache` — **present iff this record's response came from the recorded store** (§4.17), i.e. iff no upstream call was made: `verdict` (`inferred`, always — §7 / constraint 4), `key_digest` (the `sha256` of the client's inbound body bytes **as received**), `replayed` (`request_id` of the record the bytes came from + its `session` + its `turn_index`), `replayed_bytes` (how many response bytes were returned — a count of bytes, never a price and never a saving). See the paragraph below for the three properties a reader must not have to derive |
-| tools | `tools` — **present iff this record was written by a tool call** (§4.23), i.e. a `/v1/tools/{search,fetch,tts,asr}` relay: `verb` (the route's own word), `provider` (the entry the call dialled), `upstream_status` (absent when no answer arrived), `request_bytes`, `response_bytes`, `priced` (always `false` in v0.1 — the zero cost beside it is **unpriced**, never free: §4.23.6). A record **without** the group is a model call |
+| tools | `tools` — **present iff this record was written by a tool call**: a `/v1/tools/{search,fetch,tts,asr}` relay (§4.23) or one of §4.22.9's audio arms (`transcribe`, `synthesize`). `verb` is the route's own word, `provider` is the entry the call dialled, `upstream_status` is absent when no answer arrived, then `request_bytes`, `response_bytes`, and `priced` (always `false` in v0.1 — the zero cost beside it is **unpriced**, never free: §4.23.6). A record **without** the group is a model call — including `ocr` (`/v1/tools/ocr`), which forwards a chat body and is priced as one |
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), **`failover_order`** (**ADR-063**: the order the walk held at the move that abandoned a route — **present-and-`null`** whenever no route moved, the stance `failover_from` takes, so the key set never changes shape; its members are the paragraph **`result.failover_order`** below), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
@@ -3682,7 +3788,7 @@ rely on each upstream's own error shape):
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not declaring the inbound protocol in its `supports`** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | **the two tool surfaces are its producers (§4.22, §4.23)**: `/v1/tools/transcribe` and `/v1/tools/synthesize` — this build has no audio route kind — and any of the three when the config writes no `media:` section; §4.23's `search`/`fetch`/`tts`/`asr` when the config writes no `tools:` section, when `tools.provider` declares no URL for that verb, or when the provider holds no readable credential. Both arms are answered before the pipeline: no upstream is contacted, nothing is attempted, and one §6 pre-pipeline record carries `errors[].kind: "not_implemented"`. The row's original subject — a **protocol cell** a client asked for — still has **no producer reachable from a request in this build (ADR-051)**: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
+| `not_implemented` | 501 | **the two tool surfaces are its producers (§4.22, §4.23)**: the media surface's three paths when the config writes no `media:` section, and its two audio arms again when no `tools:` section is written, when `tools.provider` declares no `asr`/`tts` URL, when the provider holds no readable credential, or when `media.ffmpeg` does not run (§4.22.9 — every `transcribe` converts, and `synthesize` needs it only for `mp3`); §4.23's `search`/`fetch`/`tts`/`asr` when the config writes no `tools:` section, when `tools.provider` declares no URL for that verb, or when the provider holds no readable credential. Both arms are answered before the pipeline: no upstream is contacted, nothing is attempted, and one §6 pre-pipeline record carries `errors[].kind: "not_implemented"`. The row's original subject — a **protocol cell** a client asked for — still has **no producer reachable from a request in this build (ADR-051)**: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a session was resolved),

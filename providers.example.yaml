@@ -78,6 +78,10 @@ providers:
         #   untouched (an `asr` multipart boundary lives in the body), so these
         #   URLs are complete endpoints exactly as `urls` above are; nothing is
         #   composed at request time.
+        #   `tts` and `asr` back two surfaces, not one: §4.23 relays them to a
+        #   caller as they are, and §4.22.9's audio arms dial them to answer the
+        #   media surface's JSON shapes (an mp3 ask is converted from the wav
+        #   this endpoint produces).
         #   source: https://api-docs.deepseek.com/ @2026-11-25 — its Tools pages
         #   (Search, Fetch, Text to Speech, Speech to Text) state base
         #   https://api.deepseek.com plus the path of each verb below.

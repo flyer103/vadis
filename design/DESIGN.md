@@ -5094,20 +5094,25 @@ order and not the order of ambition.
 
 ### 12.26 The media tool surface (the landing of spec §4.22, ADR-065)
 
-**What this section is.** Spec §4.22's three paths and the one section that configures them, landed as two
-pieces: a **pure** module that turns a tool request into an upstream chat body and an upstream answer into
-the tool's answer, and a **route** that owns the guard, the bound and the trace. The split is §12.3's and
-`models_read.rs`'s: the module knows no HTTP, no clock, no I/O and no config lookup, so every byte it emits is
-a function of its arguments and a test can assert the exact JSON.
+**What this section is.** Spec §4.22's three paths and the one section that configures them, landed as
+three pieces: a **pure** module for the OCR arm (a tool request became an upstream chat body and an upstream
+answer became the tool's answer), an **adapter** for the audio arms (`media_audio.rs`: parses the caller's
+JSON, drives the converter, builds the provider's own request, shapes its answer back), and a **route** that
+owns the guard, the bound and the trace. The OCR split is §12.3's and `models_read.rs`'s: that module knows
+no HTTP, no clock, no I/O and no config lookup, so every byte it emits is a function of its arguments and a
+test can assert the exact JSON. The adapter is where the I/O lives, and it is the only place `vadis-proxy`
+runs a subprocess — a deliberate exception, confined to the container conversion the caller's shape cannot
+avoid.
 
 | Piece | Home | Kind |
 |---|---|---|
 | `DEFAULT_OCR_PROMPT`, `MediaToolError { code: ErrorCode, message: String }`, `ocr_chat_body(raw: &[u8], cfg: &MediaCfg) -> Result<Vec<u8>, MediaToolError>`, `ocr_text(body: &[u8]) -> Result<String, MediaToolError>` | `crates/vadis-proxy/src/media_tools.rs` | pure; re-exported from `vadis_proxy` |
-| `MediaCfg { model, max_body_bytes, prompt }` and its two load-time refusals (`media.model` blank / unresolvable, `media.max_body_bytes` under the floor) | `crates/vadis-core/src/config.rs` | the one optional `VadisConfig` section |
-| `guarded_media_tools_route`, `media_tool_endpoint`, `media_error` | `crates/vadis-cli/src/lib.rs` | guard (`GuardState { proto_in: "media" }`), the `media.max_body_bytes` bound, the three verbs, the forward |
+| `MediaCfg { model, max_body_bytes, prompt, ffmpeg }` and its three load-time refusals (`media.model` blank / unresolvable, `media.max_body_bytes` under the floor, `media.ffmpeg` blank) | `crates/vadis-core/src/config.rs` | the one optional `VadisConfig` section |
+| `guarded_media_tools_route`, `media_tool_endpoint`, `media_audio_endpoint`, `media_error`, `media_refusal`, `json_answer`, `relayed_media_answer` | `crates/vadis-cli/src/lib.rs` | guard (`GuardState { proto_in: "media" }`), the `media.max_body_bytes` bound, the three verbs, the OCR forward, the audio dial |
+| `transcribe_request`, `synthesize_request`, `tts_body`, `multipart_audio`, `transcribe_text`, `transcribe_answer`, `synthesize_answer`, `decode_base64`/`encode_base64`, `to_wav16k`, `mp3_from_wav`, `ffmpeg_unavailable` | `crates/vadis-proxy/src/media_audio.rs` | the audio arms' adapter: parses the caller's JSON, converts with `media.ffmpeg`, shapes the provider's answer back |
 | `pre_pipeline_record` + `tool_refused_record` | `crates/vadis-proxy/src/body_limit.rs` | one §6 pre-pipeline row per refusal, `protocol.protocol_in = "media"` |
 
-**The one thing it adds to the pipeline is a body vadis writes.** `ocr_chat_body` emits
+**The one thing the OCR arm adds to the pipeline is a body vadis writes.** `ocr_chat_body` emits
 `{model: media.model, stream: false, messages: [user: [text part, image_url data-URI]]}`, and
 `media_tool_endpoint` hands it to `Forwarder::forward_with_client(WireApi::Chat, …, "vadis-media")` — the
 serving entry, not a second pipeline. So `protocol_in == protocol_out == chat`, the bytes the trace records as
@@ -5116,18 +5121,31 @@ ledger and `/metrics` all apply unchanged, and constraint 1 is not bent: a media
 faithfulness could be lost, and the synthesized body is vadis's own request.
 
 **The refusals are classified, not improvised.** Nothing on the surface is answered by a bare `404` or a
-generic `500`: absent `media:`, either audio verb, an unusable image and the body bound are four distinct
-arms, each writing one pre-pipeline row whose `errors[].kind` is §8's word for it
-(`not_implemented`, `invalid_request`, `request_too_large`), plus the guard's own `unauthorized`. The audio
-verbs are registered so that the refusal is **typed** — a client can tell "vadis has no audio route kind" from
-"wrong path" — and `ErrorCode::NotImplemented` now serializes as `kind: "not_implemented"` rather than
-`"internal"`, which had told an operator to hunt a bug that does not exist.
+generic `500`: absent `media:`, an unusable body, the body bound and each missing audio prerequisite are
+distinct arms, each writing one pre-pipeline row whose `errors[].kind` is §8's word for it
+(`not_implemented`, `invalid_request`, `request_too_large`), plus the guard's own `unauthorized`. Every
+one of them is **typed** — a client can tell "vadis will not do this here" from "wrong path" — because
+`ErrorCode::NotImplemented` serializes as `kind: "not_implemented"` rather than `"internal"`, which had
+told an operator to hunt a bug that does not exist.
 
-**Deliberately absent.** No `WireApi` variant, no provider URL kind, no multipart reader, no audio price, no
-new event kind, no `/metrics` series, no state. Audio is a capability this build does not have, and §4.22's
-`501` is the honest way to say so (spec §9.3: a surface declared before its types exist is a
-documented-but-unreachable defect). `CONF-108` is the case that holds all of it; the unit tests beside
-`media_tools.rs` and `body_limit.rs` hold the pure and the record shapes.
+**The audio arms are an adapter over §12.27's dialler, not a second pipeline.** `media_audio.rs` turns the
+caller's JSON/base64 shape into the provider's own request — a 16 kHz mono WAV via `media.ffmpeg` wrapped in
+a multipart `asr` form, or a `{"text","format","voice_id"}` `tts` body — and shapes the provider's answer
+back into the caller's JSON. `media_audio_endpoint` dials it through the **same** `ToolsMount` and
+credential pool §12.27 uses, which is why the prerequisite is a written `tools:` block rather than a key of
+its own: one dialler, one credential pool, one place where a request leaves the process. Consequences: no
+route is selected, the `fallback` walk and the response cache do not apply, one attempt is made, the
+provider's `4xx`/`5xx` is relayed verbatim (its error body is the only honest explanation), and the record
+is §12.27's row with `protocol.protocol_in = "media"` — the media word with the tool group, so the ledger
+says both what was called and that the call is unpriced. The converter is probed once per binary name and
+the arms that need it answer `501` when it does not run (`transcribe` always, `synthesize` only for `mp3`:
+the provider speaks `wav`/`pcm`, so `mp3` is transcoded on arrival).
+
+**Deliberately absent.** No `WireApi` variant, no provider URL kind, no caller-side multipart reader (the
+caller sends JSON; only the provider request is multipart), no audio price, no audio streaming, no new event
+kind, no `/metrics` series, no state. `CONF-108` holds the OCR surface and the typed `501`s; `CONF-124` holds
+the audio arms end to end with a stub converter in its own temp directory; the unit tests beside
+`media_tools.rs`, `media_audio.rs` and `body_limit.rs` hold the pure and the record shapes.
 
 ### 12.27 The tool relay surface (the landing of spec §4.23, ADR-066)
 

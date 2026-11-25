@@ -191,6 +191,12 @@ pub struct ToolCallFacts<'a> {
     pub request_id: &'a str,
     pub verb: &'a str,
     pub provider: &'a str,
+    /// The surface that made the call: `"tools"` for §4.23's relay, and
+    /// `"media"` for §4.22's audio arms, which dial the same provider
+    /// endpoints but answer a media call. It is the record's
+    /// `protocol.protocol_in` — the caller's own surface, not the
+    /// upstream's shape.
+    pub protocol_in: &'a str,
     /// The status the caller received (§8's envelope's own value).
     pub status: u16,
     /// The upstream's status when an answer arrived at all.
@@ -231,7 +237,7 @@ pub fn tool_record(facts: &ToolCallFacts<'_>) -> DecisionRecord {
             turn_index: 0,
         },
         protocol: ProtocolRec {
-            protocol_in: "tools".to_string(),
+            protocol_in: facts.protocol_in.to_string(),
             // No wire protocol answered this call: the upstream is a tool
             // endpoint, and the tool group names the verb.
             protocol_out: None,

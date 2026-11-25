@@ -205,3 +205,43 @@ In the deployment that motivated this ADR: write `media:` naming the vision rout
 the client's media base URL at vadis (`http://127.0.0.1:8290`, without a `/v1` suffix — the client appends
 `/v1/tools/…`), and stop the second proxy. The client change is a config line; no client code changes because
 the shapes are the ones the retired proxy already spoke.
+
+## 6. Amendment (2026-11-25): the audio arms serve by adapting the provider's own endpoints
+
+§2.8's premise — "this build has no audio route kind, no multipart reader, no audio usage or price" — is
+still true, and the conclusion drawn from it is now wrong for a reason the premise never covered: the
+provider **already** exposes `asr` and `tts`, and ADR-066's relay surface already dials them. A caller
+that speaks the media shape (ADR-061) therefore had two honest paths: a typed `501` that says "reserved",
+or an adapter that turns its JSON into the provider's request. This amendment takes the second, under four
+boundaries that keep the original decision intact.
+
+1. **No new route kind.** The arms reuse ADR-066's dialler (`ToolsMount`, its credential pool, its two
+   bounds, one attempt). The prerequisite is a written `tools:` section naming `asr`/`tts` — so a
+   deployment keeps the typed `501` unless it opts in twice: `media:` **and** `tools:`. `urls`/`supports`
+   gain no member and `WireApi` is untouched, because nothing here is a protocol cell.
+2. **The conversion is explicit.** A `transcribe` request is converted **always** — `media.ffmpeg` to a
+   16 kHz mono 16-bit WAV, the only container the provider's ASR accepts — and the duration is checked on
+   the converted file and refused past 120 s, never truncated. `synthesize` asks for the provider's `wav`
+   or `pcm`; `mp3` is transcoded on arrival. A converter that does not run is a typed `501` before the
+   dial, and `ocr` keeps serving on such a host, because images never need it.
+3. **A provider refusal is not a vadis refusal.** A provider `4xx`/`5xx` is relayed verbatim — status,
+   content type, body — because its own error (a content filter, a quota, a voice the provider does not
+   know) is the only honest explanation. §8's envelope remains for vadis-side failures: no converter, no
+   credential, an unusable caller body, a transport failure, an answer over `tools.max_response_bytes`.
+4. **The ledger says unpriced, not free.** The record is ADR-066's row with `protocol.protocol_in: "media"`
+   and the `tools` group, `priced: false`, `usage_missing: true`. No audio price is invented in v0.1
+   (constraint 5), and neither arm carries a `transform` ledger entry or touches the response cache.
+
+**Rejected.** A new `WireApi::Audio` (a provider concept for a capability one surface uses, and it would
+re-open `urls`/`supports`, the protocol stubs and every conformance cell); streaming the speech through to
+the caller (the caller's contract is one JSON object; a client that wants the provider's stream talks to the
+relay); pricing audio in this change (no verified price source — §4.23.6's `priced: false` is the honest
+state until one exists); and encoding the provider request without ffmpeg (vadis would have to carry a
+per-container demuxer and an MP3 encoder, which is a worse dependency than a binary the host already has for
+every other media job).
+
+**Consequences.** The host needs `ffmpeg` for the audio arms (documented as `media.ffmpeg`; absent, audio is
+`501` and images are unaffected). The media surface now has two ways to reach the provider — a synthesized
+chat body and a relayed native tool call — and §4.22.9 states which arm takes which, so a reader does not have
+to infer it from the code. `CONF-124` pins all of it with a stub converter, so the test suite needs no host
+binary.

@@ -12,10 +12,11 @@
 //!   `media.prompt`.
 //! - (b) **no `media:` ⇒ 501** for every one of the three paths, with §8's
 //!   body and no upstream dial (the tools are opt-in).
-//! - (c) **audio is reserved, never faked** — with `media:` written,
-//!   `transcribe` and `synthesize` still answer `501 not_implemented`:
-//!   vadis has no audio route kind, and a fabricated answer would be a
-//!   lie the caller's model reads next.
+//! - (c) **audio needs its own prerequisite** — with `media:` written but no
+//!   `tools:` block, `transcribe` and `synthesize` answer `501
+//!   not_implemented`: the arms dial the provider's own endpoints through
+//!   `tools:` (spec §4.22.9), and a fabricated answer would be a lie the
+//!   caller's model reads next.
 //! - (d) **an unusable body is a `400`** naming the field, never a
 //!   best-effort guess.
 //! - (e) **the media body bound** — a request over `media.max_body_bytes`
@@ -230,9 +231,9 @@ async fn an_absent_media_section_answers_501_on_every_path() {
     );
 }
 
-/// (c) Audio verbs are reserved, never faked — even with `media:` written.
+/// (c) Audio verbs need a `tools:` block too — `media:` alone is not enough.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_audio_verbs_answer_501_with_a_media_section_written() {
+async fn the_audio_verbs_answer_501_without_a_tools_section() {
     let (_dir, addr, upstream, _task) = rig("conf108-audio", MEDIA, "tok-108").await;
     for tool in ["transcribe", "synthesize"] {
         let (status, body, _h) = post_tool(
@@ -241,7 +242,7 @@ async fn the_audio_verbs_answer_501_with_a_media_section_written() {
             &json!({ "audio": { "media_type": "audio/wav", "base64": "AAAA" } }),
             Some("tok-108"),
         );
-        assert_eq!(status, 501, "{tool} has no route kind: {body}");
+        assert_eq!(status, 501, "{tool} has no tools: block: {body}");
         assert_eq!(error_type(&body), "not_implemented", "{tool}: {body}");
     }
     assert!(

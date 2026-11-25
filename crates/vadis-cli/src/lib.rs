@@ -1035,10 +1035,12 @@ pub async fn serve(config_path: &str) -> i32 {
     /// protocol routes stay text-sized. Each path answers a **verb**; the
     /// request the pipeline forwards is synthesized in `vadis-proxy`'s
     /// `media_tools`, which is also where the answer is parsed back into
-    /// `{"text": ...}`. A config with no `media:` section serves `501
-    /// not_implemented` on all three (§4.22: writing nothing is the operator
-    /// saying the surface is off), and so do the two audio verbs even when
-    /// `media:` is written — vadis has no audio route kind, and an honest 501
+    /// `{"text": ...}`. The audio verbs adapt the caller's shape onto the
+    /// provider's own `asr`/`tts` endpoints (`media_audio`), which also needs
+    /// a written `tools:` block and a working converter. A config with no
+    /// `media:` section serves `501 not_implemented` on all three (§4.22:
+    /// writing nothing is the operator saying the surface is off), and each
+    /// missing audio prerequisite is its own typed 501 (§4.22.9); an honest 501
     /// is the contract (§8), not a silent 404.
     fn guarded_media_tools_route(revision: vadis_proxy::SharedRevision) -> axum::Router {
         axum::Router::new()
@@ -1206,6 +1208,7 @@ pub async fn serve(config_path: &str) -> i32 {
                 request_id: rid,
                 verb: verb.as_str(),
                 provider,
+                protocol_in: "tools",
                 status,
                 upstream_status,
                 request_bytes,
@@ -1452,6 +1455,7 @@ pub async fn serve(config_path: &str) -> i32 {
             request_id: rid,
             verb: verb.as_str(),
             provider: &provider,
+            protocol_in: "tools",
             status,
             upstream_status,
             request_bytes,
@@ -1478,6 +1482,45 @@ pub async fn serve(config_path: &str) -> i32 {
         }
         relayed
     }
+    /// Spec §4.22: a media refusal, in the one shape both media arms use —
+    /// the pre-pipeline §6 row (no model, no route, no attempt) and §8's
+    /// answer carrying the same sentence, written in that order (ADR-040
+    /// D2).
+    #[allow(clippy::too_many_arguments)]
+    fn media_refusal(
+        rev: &vadis_proxy::Revision,
+        request_id: &str,
+        tool: &str,
+        started: std::time::Instant,
+        client: &'static str,
+        code: vadis_core::error::ErrorCode,
+        message: String,
+        details: Option<serde_json::Value>,
+    ) -> Response {
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+        let record = vadis_proxy::tool_refused_record(
+            request_id,
+            tool,
+            code,
+            message.clone(),
+            now_us,
+            started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+            rev.forwarder
+                .trace
+                .as_ref()
+                .map(|t| t.config_digest())
+                .unwrap_or(""),
+            client,
+        );
+        if let Some(t) = rev.forwarder.trace.as_ref() {
+            let _ = t.write(&record);
+        }
+        media_error(request_id, code, message, details)
+    }
+
     /// §8's answer with the request id header, for the arms that never reach
     /// the pipeline.
     fn media_error(
@@ -1530,30 +1573,7 @@ pub async fn serve(config_path: &str) -> i32 {
         let refuse = |code: vadis_core::error::ErrorCode,
                       message: String,
                       details: Option<serde_json::Value>| {
-            let now_us = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_micros() as i64)
-                .unwrap_or(0);
-            let record = vadis_proxy::tool_refused_record(
-                rid,
-                tool,
-                code,
-                message.clone(),
-                now_us,
-                started.elapsed().as_millis() as u32,
-                rev.forwarder
-                    .trace
-                    .as_ref()
-                    .map(|t| t.config_digest())
-                    .unwrap_or(""),
-                client,
-            );
-            // Write, then answer — the order every boundary refusal uses
-            // (ADR-040 D2); a trace write failure is §8's non-blocking case.
-            if let Some(t) = rev.forwarder.trace.as_ref() {
-                let _ = t.write(&record);
-            }
-            media_error(rid, code, message, details)
+            media_refusal(&rev, rid, tool, started, client, code, message, details)
         };
         let cfg = match rev.forwarder.config.media.clone() {
             Some(cfg) => cfg,
@@ -1569,16 +1589,6 @@ pub async fn serve(config_path: &str) -> i32 {
                 )
             }
         };
-        if tool != "ocr" {
-            return refuse(
-                vadis_core::error::ErrorCode::NotImplemented,
-                format!(
-                    "POST /v1/tools/{tool} is not implemented: vadis has no audio route kind \
-                     (spec §4.22 reserves the verb; OCR is the one verb that serves today)"
-                ),
-                None,
-            );
-        }
         let limit = cfg.max_body_bytes as usize;
         let declared: Option<u64> = headers
             .get(axum::http::header::CONTENT_LENGTH)
@@ -1617,6 +1627,12 @@ pub async fn serve(config_path: &str) -> i32 {
                 )
             }
         };
+        // Spec §4.22: the audio arms dial the provider's own endpoints through
+        // the `tools:` section's credential pool, so they branch here — after
+        // the shared body bound, before the chat pipeline.
+        if tool != "ocr" {
+            return media_audio_endpoint(rev.clone(), tool, &cfg, &raw, rid, started, client).await;
+        }
         let pairs: Vec<(String, String)> = headers
             .iter()
             .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
@@ -1670,6 +1686,493 @@ pub async fn serve(config_path: &str) -> i32 {
                     Json(eb),
                 )
                     .into_response()
+            }
+        }
+    }
+
+    /// One JSON answer for a media call, carrying the request id (§8's
+    /// header rule) and no other shape: the caller's own contract is the
+    /// body `ADR-061` describes.
+    fn json_answer(request_id: &str, answer: Vec<u8>) -> Response {
+        let mut response = Response::new(axum::body::Body::from(answer));
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        if let Ok(value) = request_id.parse() {
+            response.headers_mut().insert("x-vadis-request-id", value);
+        }
+        response
+    }
+
+    /// A relayed upstream answer on a media arm: the provider's status, its
+    /// content type and its bytes, verbatim (§4.23's rule for upstream
+    /// errors, which §4.22's audio arms share).
+    fn relayed_media_answer(
+        request_id: &str,
+        status: u16,
+        content_type: Option<&str>,
+        body: axum::body::Bytes,
+    ) -> Response {
+        let mut response = Response::new(axum::body::Body::from(body));
+        *response.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        if let Some(value) = content_type.and_then(|v| v.parse().ok()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_TYPE, value);
+        }
+        if let Ok(value) = request_id.parse() {
+            response.headers_mut().insert("x-vadis-request-id", value);
+        }
+        response
+    }
+
+    /// Spec §4.22's audio arms: the caller's JSON/base64 shape adapted onto
+    /// the provider's own `asr`/`tts` endpoints, dialled through the same
+    /// `tools:` credential pool the relay surface uses (§4.23), then shaped
+    /// back into the caller's JSON. Nothing is retried (a replay would be a
+    /// second billed call, ADR-011): one attempt, one §6 row, and an
+    /// upstream `4xx`/`5xx` relayed verbatim rather than re-shaped.
+    #[allow(clippy::too_many_arguments)]
+    async fn media_audio_endpoint(
+        rev: std::sync::Arc<vadis_proxy::Revision>,
+        tool: &'static str,
+        cfg: &vadis_core::config::MediaCfg,
+        raw: &axum::body::Bytes,
+        request_id: &str,
+        started: std::time::Instant,
+        client: &'static str,
+    ) -> Response {
+        let rid = request_id;
+        let digest = rev
+            .forwarder
+            .trace
+            .as_ref()
+            .map(|t| t.config_digest())
+            .unwrap_or("");
+        let verb = match tool {
+            "transcribe" => ToolKind::Asr,
+            "synthesize" => ToolKind::Tts,
+            other => {
+                return media_refusal(
+                    &rev,
+                    rid,
+                    other,
+                    started,
+                    client,
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    format!(
+                        "POST /v1/tools/{other} is not a media verb: the surface serves ocr, \
+                         transcribe and synthesize (spec §4.22)"
+                    ),
+                    None,
+                )
+            }
+        };
+        let surface = match &rev.tools {
+            vadis_proxy::ToolsMount::Served(surface) => surface.clone(),
+            vadis_proxy::ToolsMount::Unserved(reason) => {
+                return media_refusal(
+                    &rev,
+                    rid,
+                    tool,
+                    started,
+                    client,
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    format!(
+                        "POST /v1/tools/{tool} is not served here: the audio arms dial the \
+                         provider's own {} endpoint through the tools: section, and {reason} \
+                         (spec §4.22)",
+                        verb.as_str()
+                    ),
+                    None,
+                )
+            }
+        };
+        let provider = surface.provider().to_string();
+        if surface.verb_url(verb).is_none() {
+            return media_refusal(
+                &rev,
+                rid,
+                tool,
+                started,
+                client,
+                vadis_core::error::ErrorCode::NotImplemented,
+                format!(
+                    "POST /v1/tools/{tool} is not served here: provider '{provider}' declares \
+                     no tools.{} URL, and the audio arms dial the provider's own endpoint \
+                     through it (spec §4.22)",
+                    verb.as_str()
+                ),
+                None,
+            );
+        }
+        let write = |status: u16,
+                     upstream_status: Option<u16>,
+                     request_bytes: u64,
+                     response_bytes: u64,
+                     upstream_ms: u32,
+                     error: Option<(vadis_core::error::ErrorCode, String)>| {
+            let now_us = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_micros() as i64)
+                .unwrap_or(0);
+            let record = vadis_proxy::tool_record(&vadis_proxy::ToolCallFacts {
+                request_id: rid,
+                verb: tool,
+                provider: &provider,
+                protocol_in: "media",
+                status,
+                upstream_status,
+                request_bytes,
+                response_bytes,
+                now_us,
+                overhead_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                upstream_ms,
+                config_digest: digest,
+                client: "vadis-media",
+                error,
+            });
+            if let Some(t) = rev.forwarder.trace.as_ref() {
+                let _ = t.write(&record);
+            }
+        };
+
+        if tool == "transcribe" {
+            let request = match vadis_proxy::transcribe_request(raw) {
+                Ok(request) => request,
+                Err(e) => {
+                    return media_refusal(&rev, rid, tool, started, client, e.code, e.message, None)
+                }
+            };
+            if let Some(problem) = vadis_proxy::ffmpeg_unavailable(&cfg.ffmpeg).await {
+                return media_refusal(
+                    &rev,
+                    rid,
+                    tool,
+                    started,
+                    client,
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    format!(
+                        "POST /v1/tools/{tool} is not served here: the audio arms convert with \
+                         ffmpeg, and {problem} (spec §4.22)"
+                    ),
+                    None,
+                );
+            }
+            let wav = match vadis_proxy::to_wav16k(&cfg.ffmpeg, &request.bytes, rid).await {
+                Ok(wav) => wav,
+                Err(e) => {
+                    return media_refusal(&rev, rid, tool, started, client, e.code, e.message, None)
+                }
+            };
+            let boundary = vadis_proxy::boundary_for(rid);
+            let body = vadis_proxy::multipart_audio(&wav, &boundary, request.language.as_deref());
+            let request_bytes = body.len() as u64;
+            let content_type = format!("multipart/form-data; boundary={boundary}");
+            let prepared = match surface.prepare(verb, Some(&content_type), body.into()) {
+                Ok(request) => request,
+                Err(message) => {
+                    return media_refusal(
+                        &rev,
+                        rid,
+                        tool,
+                        started,
+                        client,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        None,
+                    )
+                }
+            };
+            let upstream_started = std::time::Instant::now();
+            let outcome = surface.send(prepared).await;
+            let upstream_ms = upstream_started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+            return match outcome {
+                vadis_providers::AttemptOutcome::Responded(response) => {
+                    let answer_len = response.body.len() as u64;
+                    if response.status >= 400 {
+                        let message = format!("upstream answered HTTP {}", response.status);
+                        write(
+                            response.status,
+                            Some(response.status),
+                            request_bytes,
+                            answer_len,
+                            upstream_ms,
+                            Some((vadis_core::error::ErrorCode::UpstreamError, message)),
+                        );
+                        return relayed_media_answer(
+                            rid,
+                            response.status,
+                            response.content_type.as_deref(),
+                            response.body,
+                        );
+                    }
+                    if response.body.len() > surface.max_response_bytes() {
+                        let message = format!(
+                            "the upstream answer is {} bytes, above tools.max_response_bytes {}: \
+                             a truncated relay is worse than a refusal (spec §4.23)",
+                            response.body.len(),
+                            surface.max_response_bytes()
+                        );
+                        write(
+                            502,
+                            Some(response.status),
+                            request_bytes,
+                            answer_len,
+                            upstream_ms,
+                            Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                        );
+                        return media_error(
+                            rid,
+                            vadis_core::error::ErrorCode::UpstreamError,
+                            message,
+                            Some(serde_json::json!({
+                                "bound": "tools.max_response_bytes",
+                                "limit_bytes": surface.max_response_bytes(),
+                                "upstream_status": response.status,
+                            })),
+                        );
+                    }
+                    let text = match vadis_proxy::transcribe_text(&response.body) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            write(
+                                e.code.http_status(),
+                                Some(response.status),
+                                request_bytes,
+                                answer_len,
+                                upstream_ms,
+                                Some((e.code, e.message.clone())),
+                            );
+                            return media_error(rid, e.code, e.message, None);
+                        }
+                    };
+                    let answer = vadis_proxy::transcribe_answer(&text);
+                    write(
+                        200,
+                        Some(response.status),
+                        request_bytes,
+                        answer.len() as u64,
+                        upstream_ms,
+                        None,
+                    );
+                    json_answer(rid, answer)
+                }
+                vadis_providers::AttemptOutcome::NotSent(e)
+                | vadis_providers::AttemptOutcome::WrittenNoResponse(e) => {
+                    let message = format!(
+                        "no answer from the asr endpoint: {} ({})",
+                        e.message,
+                        if e.wrote_full_request {
+                            "the request was fully written, so the call may have been billed"
+                        } else {
+                            "no request byte left this process"
+                        }
+                    );
+                    write(
+                        502,
+                        None,
+                        request_bytes,
+                        0,
+                        upstream_ms,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                    );
+                    media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        None,
+                    )
+                }
+            };
+        }
+
+        let request = match vadis_proxy::synthesize_request(raw) {
+            Ok(request) => request,
+            Err(e) => {
+                return media_refusal(&rev, rid, tool, started, client, e.code, e.message, None)
+            }
+        };
+        if request.format == vadis_proxy::SpeechFormat::Mp3 {
+            if let Some(problem) = vadis_proxy::ffmpeg_unavailable(&cfg.ffmpeg).await {
+                return media_refusal(
+                    &rev,
+                    rid,
+                    tool,
+                    started,
+                    client,
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    format!(
+                        "POST /v1/tools/{tool} is not served here: an mp3 answer is transcoded \
+                         from the provider's wav with ffmpeg, and {problem} (spec §4.22)"
+                    ),
+                    None,
+                );
+            }
+        }
+        let body = vadis_proxy::tts_body(&request);
+        let request_bytes = body.len() as u64;
+        let prepared = match surface.prepare(verb, Some("application/json"), body.into()) {
+            Ok(request) => request,
+            Err(message) => {
+                return media_refusal(
+                    &rev,
+                    rid,
+                    tool,
+                    started,
+                    client,
+                    vadis_core::error::ErrorCode::UpstreamError,
+                    message,
+                    None,
+                )
+            }
+        };
+        let upstream_started = std::time::Instant::now();
+        let outcome = surface.send(prepared).await;
+        let upstream_ms = upstream_started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        match outcome {
+            vadis_providers::AttemptOutcome::Responded(response) => {
+                let answer_len = response.body.len() as u64;
+                if response.status >= 400 {
+                    let message = format!("upstream answered HTTP {}", response.status);
+                    write(
+                        response.status,
+                        Some(response.status),
+                        request_bytes,
+                        answer_len,
+                        upstream_ms,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message)),
+                    );
+                    return relayed_media_answer(
+                        rid,
+                        response.status,
+                        response.content_type.as_deref(),
+                        response.body,
+                    );
+                }
+                if response.body.len() > surface.max_response_bytes() {
+                    let message = format!(
+                        "the upstream answer is {} bytes, above tools.max_response_bytes {}: \
+                         a truncated relay is worse than a refusal (spec §4.23)",
+                        response.body.len(),
+                        surface.max_response_bytes()
+                    );
+                    write(
+                        502,
+                        Some(response.status),
+                        request_bytes,
+                        answer_len,
+                        upstream_ms,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                    );
+                    return media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        Some(serde_json::json!({
+                            "bound": "tools.max_response_bytes",
+                            "limit_bytes": surface.max_response_bytes(),
+                            "upstream_status": response.status,
+                        })),
+                    );
+                }
+                if response.body.is_empty() {
+                    let message = "the tts endpoint answered with no audio: there is nothing \
+                                   to return (spec §4.22)"
+                        .to_string();
+                    write(
+                        502,
+                        Some(response.status),
+                        request_bytes,
+                        0,
+                        upstream_ms,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                    );
+                    return media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        None,
+                    );
+                }
+                let audio: axum::body::Bytes = if request.format == vadis_proxy::SpeechFormat::Mp3 {
+                    match vadis_proxy::mp3_from_wav(&cfg.ffmpeg, &response.body, rid).await {
+                        Ok(mp3) => mp3.into(),
+                        Err(e) => {
+                            write(
+                                e.code.http_status(),
+                                Some(response.status),
+                                request_bytes,
+                                answer_len,
+                                upstream_ms,
+                                Some((e.code, e.message.clone())),
+                            );
+                            return media_error(rid, e.code, e.message, None);
+                        }
+                    }
+                } else {
+                    response.body
+                };
+                let answer =
+                    vadis_proxy::synthesize_answer(&audio, request.format.answer_media_type());
+                if answer.len() > surface.max_response_bytes() {
+                    let message = format!(
+                        "the answer is {} bytes after base64, above tools.max_response_bytes {}: \
+                         a truncated relay is worse than a refusal (spec §4.23)",
+                        answer.len(),
+                        surface.max_response_bytes()
+                    );
+                    write(
+                        502,
+                        Some(response.status),
+                        request_bytes,
+                        answer.len() as u64,
+                        upstream_ms,
+                        Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                    );
+                    return media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        message,
+                        None,
+                    );
+                }
+                write(
+                    200,
+                    Some(response.status),
+                    request_bytes,
+                    answer.len() as u64,
+                    upstream_ms,
+                    None,
+                );
+                json_answer(rid, answer)
+            }
+            vadis_providers::AttemptOutcome::NotSent(e)
+            | vadis_providers::AttemptOutcome::WrittenNoResponse(e) => {
+                let message = format!(
+                    "no answer from the tts endpoint: {} ({})",
+                    e.message,
+                    if e.wrote_full_request {
+                        "the request was fully written, so the call may have been billed"
+                    } else {
+                        "no request byte left this process"
+                    }
+                );
+                write(
+                    502,
+                    None,
+                    request_bytes,
+                    0,
+                    upstream_ms,
+                    Some((vadis_core::error::ErrorCode::UpstreamError, message.clone())),
+                );
+                media_error(
+                    rid,
+                    vadis_core::error::ErrorCode::UpstreamError,
+                    message,
+                    None,
+                )
             }
         }
     }

@@ -233,10 +233,12 @@ plan_policies:
 
 media:
   # spec §4.22 / ADR-065 — the media tool surface. POST /v1/tools/ocr answers the
-  # text in a picture; /v1/tools/transcribe and /v1/tools/synthesize answer 501
-  # not_implemented (vadis has no audio route kind yet). The section is optional:
-  # written nowhere, all three paths answer 501 — the default, because a media
-  # call spends on a model the deployment picks, never on one the caller names.
+  # text in a picture; /v1/tools/transcribe and /v1/tools/synthesize answer on the
+  # same JSON shapes by adapting them to the provider's own asr/tts endpoints
+  # (spec §4.22.9), which also needs a `tools:` block below and a working
+  # `ffmpeg`. The section is optional: written nowhere, all three paths answer
+  # 501 — the default, because a media call spends on a model the deployment
+  # picks, never on one the caller names.
   model: zai/glm-4.6v        # required once the section is written: an alias, or a roster
                              # `provider/model` that reads pictures. Resolved at load — an
                              # unknown name refuses the file instead of failing on the first photo.
@@ -246,6 +248,10 @@ media:
   # prompt: "Read every character in this picture."
   #   ^ the fallback instruction when a caller sends its own `prompt` nowhere;
   #   omitted, vadis uses its own transcribe-all-text instruction.
+  # ffmpeg: ffmpeg           # default; the audio arms' converter, resolved through PATH at
+                             # call time. A name that does not run is not a load error: the arms
+                             # that need it answer 501 and `ocr` keeps serving. Every
+                             # `transcribe` needs it; `synthesize` needs it only for `mp3`.
 
 tools:
   # spec §4.23 / ADR-066 — the tool relay surface. POST /v1/tools/{search,fetch,tts,asr}

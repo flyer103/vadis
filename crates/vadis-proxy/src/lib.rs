@@ -9,6 +9,7 @@ mod body_limit;
 mod cancel;
 mod forward;
 mod health;
+mod media_audio;
 mod media_tools;
 mod models_read;
 mod revision;
@@ -30,6 +31,12 @@ pub use forward::{
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
 pub use health::{health_json, AppState, ConfigIdentity, KeyFact, ProviderKeyFacts};
+pub use media_audio::{
+    boundary_for, decode_base64, encode_base64, ffmpeg_unavailable, mp3_from_wav, multipart_audio,
+    synthesize_answer, synthesize_request, to_wav16k, transcribe_answer, transcribe_request,
+    transcribe_text, tts_body, SpeechFormat, SynthesizeRequest, TranscribeRequest,
+    DEFAULT_TTS_VOICE, MAX_ASR_BYTES, MAX_AUDIO_SECONDS, MAX_TTS_CHARS, SPEECH_FORMATS,
+};
 pub use media_tools::{ocr_chat_body, ocr_text, MediaToolError, DEFAULT_OCR_PROMPT};
 pub use models_read::{models_body, models_body_from_config};
 pub use revision::{Revision, RevisionCell, SharedRevision};

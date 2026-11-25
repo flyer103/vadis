@@ -692,6 +692,16 @@ pub struct MediaCfg {
     /// however it likes, which is not the OCR contract.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Spec §4.22: the binary the audio arms use to convert between the
+    /// caller's container and the provider's own (`asr` takes a 16-bit
+    /// PCM WAV; `tts` answers WAV or raw PCM, and an `mp3` caller needs a
+    /// transcode). A name, resolved through `PATH` at call time — never a
+    /// path vadis validates at load, because whether the binary runs is an
+    /// environment fact, not a config fact. Absent ⇒ `ffmpeg`; a binary
+    /// that cannot run turns the audio arms into `501 not_implemented`
+    /// naming the fact, never a `500`.
+    #[serde(default = "default_media_ffmpeg")]
+    pub ffmpeg: String,
 }
 
 /// Spec §4.22: the media routes' default inbound body bound, 8 MiB. Sized
@@ -701,6 +711,13 @@ pub struct MediaCfg {
 /// local request would be abusive.
 fn default_media_max_body_bytes() -> i64 {
     8_388_608
+}
+
+/// Spec §4.22: the audio arms' converter, as a name `PATH` resolves. The
+/// default matches what the deployment images ship (vadis calls it for both
+/// directions); an operator who keeps ffmpeg elsewhere writes the path.
+fn default_media_ffmpeg() -> String {
+    "ffmpeg".to_string()
 }
 
 /// Spec §4.23: the four tool verbs a deployment can expose through
@@ -2398,6 +2415,17 @@ impl VadisConfig {
                     "media.model",
                     "empty — the media tools answer as the model this key names, so a \
                      blank value would route nowhere"
+                        .to_string(),
+                ));
+            }
+            // Spec §4.22: the audio arms convert through this name; a blank
+            // value is a typo the loader can catch, unlike whether the
+            // binary actually runs (that stays an environment fact).
+            if media.ffmpeg.trim().is_empty() {
+                return Err(ConfigError::new(
+                    "media.ffmpeg",
+                    "empty — the audio arms convert with this binary, so a blank value \
+                     would make every transcribe/synthesize call fail"
                         .to_string(),
                 ));
             }
@@ -4353,8 +4381,8 @@ mod tests {
     // spec §4.22 (ADR-065): the media section's load-time rules.
     // -------------------------------------------------------------
 
-    /// A `media:` section's two refusals and its two accepted spellings.
-    /// Both refusals name the key, because the loader is the last place a
+    /// A `media:` section's refusals and its two accepted spellings.
+    /// Every refusal names the key, because the loader is the last place a
     /// typo can be reported before the first photograph is read.
     #[test]
     fn the_media_section_validates_its_bound_and_its_route() {
@@ -4363,6 +4391,7 @@ mod tests {
             model: "zai/glm-5.3".into(),
             max_body_bytes: default_media_max_body_bytes(),
             prompt: None,
+            ffmpeg: default_media_ffmpeg(),
         });
         cfg.validate().expect("a roster route resolves");
 
@@ -4391,6 +4420,7 @@ mod tests {
             model: "zai/glm-5.3".into(),
             max_body_bytes: MIN_MAX_BODY_BYTES - 1,
             prompt: None,
+            ffmpeg: default_media_ffmpeg(),
         });
         let err = cfg
             .validate()
@@ -4403,11 +4433,25 @@ mod tests {
             model: "   ".into(),
             max_body_bytes: default_media_max_body_bytes(),
             prompt: None,
+            ffmpeg: default_media_ffmpeg(),
         });
         let err = cfg
             .validate()
             .expect_err("a blank model refuses")
             .to_string();
         assert!(err.contains("media.model"), "got: {err}");
+
+        let mut cfg = planned();
+        cfg.media = Some(MediaCfg {
+            model: "zai/glm-5.3".into(),
+            max_body_bytes: default_media_max_body_bytes(),
+            prompt: None,
+            ffmpeg: "   ".into(),
+        });
+        let err = cfg
+            .validate()
+            .expect_err("a blank converter refuses")
+            .to_string();
+        assert!(err.contains("media.ffmpeg"), "got: {err}");
     }
 }

@@ -36,14 +36,14 @@ pub struct MediaToolError {
 }
 
 impl MediaToolError {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
         }
     }
 
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::InvalidRequest, message)
     }
 }
@@ -176,6 +176,7 @@ mod tests {
             model: "vision/ocr".to_string(),
             max_body_bytes: 8_388_608,
             prompt: None,
+            ffmpeg: "ffmpeg".to_string(),
         }
     }
 
