@@ -407,7 +407,7 @@ parse → session resolution → transform chain → selector → guard chain �
 
 ```rust
 pub enum Protocol { Chat, Responses, Anthropic }
-pub enum ClientKind { Codex, Hermes, ClaudeCode, Other }
+pub enum ClientKind { Codex, Hermes, ClaudeCode, VadisMedia, Other }   // VadisMedia is server-derived only: the media tool surface writes it (spec §4.22, ADR-065); no User-Agent rule can produce it (ADR-061 D3)
 pub struct RouteSpec { pub provider: String, pub model: String }
 pub enum SelectionSource { Explicit, Alias, Plugin }
 pub struct Decision { pub route: RouteSpec, pub source: SelectionSource, pub plugin_chain: Vec<PluginId> }
@@ -5091,6 +5091,43 @@ arithmetic has one path, `verified` has one definition — the same trick ADR-01
 cross-currency addition a compile error. And a surface declared before its types exist is a
 documented-but-unreachable defect (spec §9.3), which is why the order above is the **leak register's**
 order and not the order of ambition.
+
+### 12.26 The media tool surface (the landing of spec §4.22, ADR-065)
+
+**What this section is.** Spec §4.22's three paths and the one section that configures them, landed as two
+pieces: a **pure** module that turns a tool request into an upstream chat body and an upstream answer into
+the tool's answer, and a **route** that owns the guard, the bound and the trace. The split is §12.3's and
+`models_read.rs`'s: the module knows no HTTP, no clock, no I/O and no config lookup, so every byte it emits is
+a function of its arguments and a test can assert the exact JSON.
+
+| Piece | Home | Kind |
+|---|---|---|
+| `DEFAULT_OCR_PROMPT`, `MediaToolError { code: ErrorCode, message: String }`, `ocr_chat_body(raw: &[u8], cfg: &MediaCfg) -> Result<Vec<u8>, MediaToolError>`, `ocr_text(body: &[u8]) -> Result<String, MediaToolError>` | `crates/vadis-proxy/src/media_tools.rs` | pure; re-exported from `vadis_proxy` |
+| `MediaCfg { model, max_body_bytes, prompt }` and its two load-time refusals (`media.model` blank / unresolvable, `media.max_body_bytes` under the floor) | `crates/vadis-core/src/config.rs` | the one optional `VadisConfig` section |
+| `guarded_media_tools_route`, `media_tool_endpoint`, `media_error` | `crates/vadis-cli/src/lib.rs` | guard (`GuardState { proto_in: "media" }`), the `media.max_body_bytes` bound, the three verbs, the forward |
+| `pre_pipeline_record` + `tool_refused_record` | `crates/vadis-proxy/src/body_limit.rs` | one §6 pre-pipeline row per refusal, `protocol.protocol_in = "media"` |
+
+**The one thing it adds to the pipeline is a body vadis writes.** `ocr_chat_body` emits
+`{model: media.model, stream: false, messages: [user: [text part, image_url data-URI]]}`, and
+`media_tool_endpoint` hands it to `Forwarder::forward_with_client(WireApi::Chat, …, "vadis-media")` — the
+serving entry, not a second pipeline. So `protocol_in == protocol_out == chat`, the bytes the trace records as
+the upstream request are exactly the ones sent, the `fallback` walk, the plan policies, the response cache, the
+ledger and `/metrics` all apply unchanged, and constraint 1 is not bent: a media call has no client body whose
+faithfulness could be lost, and the synthesized body is vadis's own request.
+
+**The refusals are classified, not improvised.** Nothing on the surface is answered by a bare `404` or a
+generic `500`: absent `media:`, either audio verb, an unusable image and the body bound are four distinct
+arms, each writing one pre-pipeline row whose `errors[].kind` is §8's word for it
+(`not_implemented`, `invalid_request`, `request_too_large`), plus the guard's own `unauthorized`. The audio
+verbs are registered so that the refusal is **typed** — a client can tell "vadis has no audio route kind" from
+"wrong path" — and `ErrorCode::NotImplemented` now serializes as `kind: "not_implemented"` rather than
+`"internal"`, which had told an operator to hunt a bug that does not exist.
+
+**Deliberately absent.** No `WireApi` variant, no provider URL kind, no multipart reader, no audio price, no
+new event kind, no `/metrics` series, no state. Audio is a capability this build does not have, and §4.22's
+`501` is the honest way to say so (spec §9.3: a surface declared before its types exist is a
+documented-but-unreachable defect). `CONF-108` is the case that holds all of it; the unit tests beside
+`media_tools.rs` and `body_limit.rs` hold the pure and the record shapes.
 
 ## Publication note (2026-10-03, R62-2)
 

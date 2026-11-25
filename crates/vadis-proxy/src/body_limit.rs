@@ -73,6 +73,66 @@ pub fn too_large_record(
     // the word this record carries.
     client: &'static str,
 ) -> DecisionRecord {
+    pre_pipeline_record(
+        request_id,
+        proto_in.as_str(),
+        ErrorCode::RequestTooLarge.http_status(),
+        TraceError::kind_for_code(ErrorCode::RequestTooLarge),
+        too_large_message(limit, content_length),
+        serde_json::json!({ "limit_bytes": limit, "content_length": content_length }),
+        now_us,
+        overhead_ms,
+        config_digest,
+        client,
+    )
+}
+
+/// §4.22's refusal, in the same §6 pre-pipeline class: the media surface
+/// answers before the pipeline — no model is named, no route is selected,
+/// no byte is read from an upstream — so its record carries the surface's
+/// own protocol word (`media`), the refusal's §8 word, and the tool that
+/// was asked for. A refusal is never silent: the client's answer and the
+/// trace agree about which rule refused it.
+#[allow(clippy::too_many_arguments)]
+pub fn tool_refused_record(
+    request_id: &str,
+    tool: &str,
+    code: ErrorCode,
+    message: String,
+    now_us: i64,
+    overhead_ms: u32,
+    config_digest: &str,
+    client: &'static str,
+) -> DecisionRecord {
+    pre_pipeline_record(
+        request_id,
+        "media",
+        code.http_status(),
+        TraceError::kind_for_code(code),
+        message,
+        serde_json::json!({ "tool": tool }),
+        now_us,
+        overhead_ms,
+        config_digest,
+        client,
+    )
+}
+
+/// The one builder both refusals share: §6's pre-pipeline class, field by
+/// field. Private because the class is the contract, not the arguments.
+#[allow(clippy::too_many_arguments)]
+fn pre_pipeline_record(
+    request_id: &str,
+    protocol_in: &str,
+    status: u16,
+    kind: &str,
+    message: String,
+    details: serde_json::Value,
+    now_us: i64,
+    overhead_ms: u32,
+    config_digest: &str,
+    client: &'static str,
+) -> DecisionRecord {
     DecisionRecord {
         schema_version: TRACE_SCHEMA_VERSION,
         ts: crate::accounting::rfc3339_millis(now_us),
@@ -88,7 +148,7 @@ pub fn too_large_record(
             turn_index: 0,
         },
         protocol: ProtocolRec {
-            protocol_in: proto_in.as_str().to_string(),
+            protocol_in: protocol_in.to_string(),
             // No route was selected; no upstream was contacted.
             protocol_out: None,
             translated: false,
@@ -136,7 +196,7 @@ pub fn too_large_record(
             quota_after: None,
         },
         result: ResultRec {
-            status: ErrorCode::RequestTooLarge.http_status(),
+            status,
             upstream_status: None,
             // §4.13's bound refuses before any attempt (ADR-060 D3).
             attempts: 0,
@@ -148,13 +208,10 @@ pub fn too_large_record(
             upstream_ms: None,
         },
         errors: vec![TraceError {
-            kind: TraceError::kind_for_code(ErrorCode::RequestTooLarge).to_string(),
-            message: too_large_message(limit, content_length),
+            kind: kind.to_string(),
+            message,
             plugin: None,
-            details: Some(serde_json::json!({
-                "limit_bytes": limit,
-                "content_length": content_length,
-            })),
+            details: Some(details),
         }],
     }
 }
@@ -206,5 +263,32 @@ mod tests {
             v["errors"][0]["details"]["content_length"],
             serde_json::Value::Null
         );
+    }
+
+    /// §4.22: the media surface's refusal is the same §6 pre-pipeline
+    /// class as the body bound's, carrying the surface's own protocol
+    /// word and the tool the caller asked for.
+    #[test]
+    fn a_tool_refusal_is_the_same_class_with_the_media_word() {
+        let rec = tool_refused_record(
+            "req-3",
+            "transcribe",
+            ErrorCode::NotImplemented,
+            "not today".to_string(),
+            1_789_256_462_000_000,
+            0,
+            "0123456789abcdef",
+            "vadis-media",
+        );
+        let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(v["protocol"]["protocol_in"], "media");
+        assert_eq!(v["protocol"]["protocol_out"], serde_json::Value::Null);
+        assert_eq!(v["result"]["status"], 501);
+        assert_eq!(v["errors"][0]["kind"], "not_implemented");
+        assert_eq!(v["errors"][0]["message"], "not today");
+        assert_eq!(v["errors"][0]["details"]["tool"], "transcribe");
+        assert_eq!(v["identity"]["event_id"], 0);
+        assert_eq!(v["identity"]["client"], "vadis-media");
+        assert_eq!(v["usage_missing"], true);
     }
 }

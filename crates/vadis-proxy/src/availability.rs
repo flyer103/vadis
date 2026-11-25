@@ -347,6 +347,7 @@ mod tests {
 
     fn config(quota: Option<Vec<QuotaCfg>>) -> VadisConfig {
         VadisConfig {
+            media: None,
             server: vadis_core::config::ServerCfg {
                 addr: "127.0.0.1:0".into(),
                 upstream_attempt_timeout: vadis_core::config::DurationVal(60_000),

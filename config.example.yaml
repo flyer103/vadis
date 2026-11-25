@@ -230,3 +230,19 @@ plan_policies:
   #   credential `api_keys:` pool. `vadis setup` shows a pool — never prompted, never written by a run. The
   #   families above **are** prompted and written, one family at a time, by the keys inside each entry
   #   (spec §4.11).
+
+media:
+  # spec §4.22 / ADR-065 — the media tool surface. POST /v1/tools/ocr answers the
+  # text in a picture; /v1/tools/transcribe and /v1/tools/synthesize answer 501
+  # not_implemented (vadis has no audio route kind yet). The section is optional:
+  # written nowhere, all three paths answer 501 — the default, because a media
+  # call spends on a model the deployment picks, never on one the caller names.
+  model: zai/glm-4.6v        # required once the section is written: an alias, or a roster
+                             # `provider/model` that reads pictures. Resolved at load — an
+                             # unknown name refuses the file instead of failing on the first photo.
+  max_body_bytes: 8388608    # default 8 MiB (floor 1024). Separate from `server.max_body_bytes`:
+                             # base64 is a third larger than the file, and the 2 MiB request
+                             # bound is far below one photograph.
+  # prompt: "Read every character in this picture."
+  #   ^ the fallback instruction when a caller sends its own `prompt` nowhere;
+  #   omitted, vadis uses its own transcribe-all-text instruction.

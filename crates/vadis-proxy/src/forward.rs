@@ -4041,6 +4041,7 @@ mod walk_tests {
             }),
         );
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4115,6 +4116,7 @@ mod walk_tests {
             }),
         );
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4167,6 +4169,7 @@ mod walk_tests {
             }),
         );
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4336,6 +4339,7 @@ mod walk_tests {
             }),
         );
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4461,6 +4465,7 @@ mod walk_tests {
         }
 
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4585,6 +4590,7 @@ mod walk_tests {
     async fn dropping_the_buffered_future_mid_attempt_writes_the_canceled_row() {
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4672,6 +4678,7 @@ mod walk_tests {
     async fn a_deterministic_refusal_carries_the_redacted_slice_on_the_trace_only() {
         let trace = std::sync::Arc::new(CaptureTrace::default());
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -4818,6 +4825,7 @@ mod walk_tests {
         trace: &std::sync::Arc<CaptureTrace>,
     ) -> (Forwarder, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -5108,6 +5116,7 @@ mod walk_tests {
     #[test]
     fn the_three_resolution_branches_are_indistinguishable() {
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),
@@ -5146,6 +5155,7 @@ mod walk_tests {
     #[test]
     fn the_404_body_leaks_no_roster_string_the_client_did_not_send() {
         let config = VadisConfig {
+            media: None,
             server: server_cfg(),
             session: session_cfg(),
             cache: cache_cfg(),

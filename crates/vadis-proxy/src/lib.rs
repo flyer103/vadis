@@ -9,6 +9,7 @@ mod body_limit;
 mod cancel;
 mod forward;
 mod health;
+mod media_tools;
 mod models_read;
 mod revision;
 mod state_read;
@@ -21,13 +22,14 @@ pub use accounting::{
     Accountant, RouteAccounting,
 };
 pub use auth::{refused_message, refused_record, AuthGate, AuthVerdict};
-pub use body_limit::{check_declared, too_large_message, too_large_record};
+pub use body_limit::{check_declared, too_large_message, too_large_record, tool_refused_record};
 pub use cancel::set_shutdown_draining;
 pub use forward::{
     mode_refused_record, resolve_transform_mode, BoxedAttempt, ForwardFailure, ForwardOutcome,
     ForwardSuccess, Forwarder, ProviderSend, ProviderTransport,
 };
 pub use health::{health_json, AppState, ConfigIdentity, KeyFact, ProviderKeyFacts};
+pub use media_tools::{ocr_chat_body, ocr_text, MediaToolError, DEFAULT_OCR_PROMPT};
 pub use models_read::{models_body, models_body_from_config};
 pub use revision::{Revision, RevisionCell, SharedRevision};
 pub use state_read::{

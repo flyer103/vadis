@@ -1054,6 +1054,7 @@ mod tests {
         let mut other_tag = plan_provider("plan-c");
         other_tag.models[0].family = Some("other-family".into());
         VadisConfig {
+            media: None,
             server: ServerCfg {
                 addr: "127.0.0.1:0".into(),
                 upstream_attempt_timeout: DurationVal(60_000),

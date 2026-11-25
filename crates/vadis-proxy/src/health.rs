@@ -813,6 +813,7 @@ mod tests {
             BreakevenCfg, CacheCfg, PluginCfg, ServerCfg, SessionCfg, TraceCfg, VadisConfig,
         };
         VadisConfig {
+            media: None,
             server: ServerCfg {
                 addr: "127.0.0.1:0".into(),
                 upstream_attempt_timeout: DurationVal(60_000),

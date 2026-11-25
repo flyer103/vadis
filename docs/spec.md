@@ -2761,6 +2761,142 @@ accumulate; the three non-counted causes never count; a metered route's facts ne
 `block` and a no-policy roster never move anything account-level; a reload does not zero the run).
 `DESIGN` §12.8's rows carry them; `ADR-064` is the reasoning.
 
+### 4.22 Media tool surface — ADR-065
+
+*Status: **served** — `POST /v1/tools/ocr` answers with the configured model's reading of an image;
+`POST /v1/tools/transcribe` and `POST /v1/tools/synthesize` are **registered** and answer
+`501 not_implemented`. The surface exists because a client edge that turns a file into text has no
+protocol body to replay: `kian`'s media edge (ADR-065's motivating case) reached for a hand-written
+proxy on a second port, and that proxy is what this section retires.*
+
+**The finding.** Every route above this section replays a **client's** bytes (constraint 1, §2.1) and is
+selected by a `model` the client names. A media edge has neither: the file is a JPEG or a HEIC, the
+question is "what does it say", and the model that reads pictures is a property of the **deployment**,
+not of the caller. Writing a proxy outside the repo for that turned one supported capability into a
+second, unaccounted service: its own port, its own logs, no `DecisionRecord`, no price, no guard. This
+section is that capability inside the accounting boundary — one route family whose outbound body
+**vadis writes**, because the operation the caller asked for is a vadis operation ("read this image"),
+not a chat completion whose bytes must survive.
+
+#### 4.22.1 The three paths
+
+| Path | Body | Answer | When it does not serve |
+|---|---|---|---|
+| `POST /v1/tools/ocr` | `{"image": {"media_type": "image/jpeg", "base64": "…"}, "prompt": "…"}` | `200` `{"text": "…"}` | `400` unusable image, `413` over `media.max_body_bytes`, `502` the route model answered nothing usable |
+| `POST /v1/tools/transcribe` | — | — | `501 not_implemented`, always |
+| `POST /v1/tools/synthesize` | — | — | `501 not_implemented`, always |
+
+All three are behind the same guard as every other route (§4.7): no token is `401 unauthorized`. All three
+answer `501 not_implemented` when the config writes **no** `media:` section (§4.22.3). The audio verbs are
+**registered 501s, never 404s**: a client that asks for a capability this build does not have must be able
+to tell "vadis cannot do this" from "this path does not exist", and only a typed refusal carries that
+(§8's `not_implemented` row, amended in this change). Nothing reaches an upstream on either arm.
+
+#### 4.22.2 The OCR request
+
+`image.media_type` is required and must be an `image/*` type (`audio/*` on `/ocr`, or any other family,
+is `400 invalid_request` naming the field); `image.base64` is required and must be non-empty. `prompt` is
+the **only** other member read. Members this section does not name are ignored and never forwarded — the
+synthesized body is built from the two `image` members and the effective prompt, so an unknown member can
+neither reach the model nor change the request's bytes.
+
+**The prompt is chosen in one order: the caller's non-blank `prompt`, else the config's non-blank
+`media.prompt`, else `DEFAULT_OCR_PROMPT`** — "transcribe every piece of text in this image exactly as it
+appears; if the image contains no text, describe what it shows in one or two sentences". The default is a
+**transcription** instruction rather than "describe this picture" because the transcript is what the
+caller's model reads next: `kian` appends it to the message text as `[image transcript]`, and a model
+handed a paraphrase of a signboard has lost the characters the request existed for. A caller that wants a
+description sends its own prompt.
+
+The **synthesized** body is an OpenAI chat request: `model` is `media.model`, `stream` is `false` (the tool
+answer is one JSON object; a stream would have to be buffered anyway), and `messages` holds one user turn
+whose content is the text part followed by `image_url` with the image inlined as a
+`data:<media_type>;base64,<base64>` URI — the shape §2's protocol cells already accept, so a route whose
+model reads pictures needs no new provider concept.
+
+The **answer** is `choices[0].message.content`, read as a string (trimmed) or as an array of parts whose
+`text` members are joined by newlines; text that is empty after trimming, a non-`2xx` upstream status, or
+an answer with no content is `502 upstream_error` (`details.upstream_status` for the second case). A model
+that answers nothing is not a successful reading, and this surface never fabricates one.
+
+#### 4.22.3 The `media:` section
+
+| Key | Type | Default | Range | Semantics |
+|---|---|---|---|---|
+| `model` | string | **required** | an alias, or a roster `provider/model` | the route the three paths read pictures with. Resolved **at load**: an alias that does not exist, or a `provider/model` not in the roster, is a config error naming `media.model` |
+| `max_body_bytes` | integer | `8388608` | `≥ 1024` | this surface's own body bound (§4.22.4) |
+| `prompt` | string | absent | any | the fallback prompt (§4.22.2) |
+
+`media:` is the **only** optional section: every other section is required because a hidden default is the
+most expensive silent failure (§4's preamble), and this one is optional with the **safe** default — absent
+means *the capability is off*, three typed `501`s, and no spend. The model is a **config** decision rather
+than a request field on purpose: a caller-chosen model on an operation that inlines a customer's image
+would let any token holder spend on any route in the roster. A deployment that wants OCR names the vision
+route once. The section is read per call, so §4.15's reload applies to it like any other.
+
+#### 4.22.4 The body bound
+
+The three paths carry base64, so a 5 MiB photograph is ~7 MiB of JSON — far above `server.max_body_bytes`
+(2 MiB default, §4.13), which stays the bound for protocol cell bodies. `media.max_body_bytes` is checked
+**in the handler**, before the body is read: a declared `Content-Length` over the bound is refused without
+draining, and a body without one is read through `to_bytes` with the same bound. Both arms are `413
+request_too_large` with `details` naming `bound`, `limit_bytes` and `content_length` (null when undeclared)
+and `connection: close` — a refused body may be undrained, and keep-alive would parse the rest of it as the
+next request (§4.13's reasoning, applied to the second bound). Every other route's limit is unchanged.
+
+#### 4.22.5 The call this surface makes
+
+A served OCR request is an **ordinary forward**, moved by the same pipeline with
+`protocol_in == protocol_out == chat`, the client's received headers travelling with it (a route that reads
+pictures may need a provider-specific header, §2.1), and the top-level `model` replaced by the route's
+native id — the permitted mutation of constraint 1. Consequences a reader should not have to derive:
+
+- **The accounting is the existing accounting.** The call writes one `DecisionRecord` with the ordinary
+  fields: route, attempt, usage, cost, `status`. A media call's spend is visible in `/state/events` and
+  `/health` exactly like a chat request's, and priced by the same rules (§4.8, §4.10).
+- **The `fallback` chain applies as written** (§4.2): a media route is a route, so a deployment whose OCR
+  must not silently answer from a different model leaves `fallback` empty or names the media route as its own
+  first cell. Nothing in this section narrows or widens the walk.
+- **The client word is `vadis-media`, and it is server-derived** (DESIGN §12.3, ADR-061 D3): the protocol
+  path derives `identity.client` from `User-Agent` prefixes alone, so no client can produce this word, the
+  anti-oracle property is unchanged, and an operator can tell the media model's spend from client chat
+  traffic. It is a fifth value of a closed vocabulary, not a free-form field.
+- **A refusal before the pipeline writes no upstream attempt and no usage** (§4.22.6); a call that reaches
+  the pipeline writes the ordinary row and **no extra refusal row**.
+- **The trace's `errors[].kind` for an unsupported verb is `not_implemented`, never `internal`**: the
+  machinery is fine, the capability is absent. §6's kind set and §8's row were amended with this surface.
+
+#### 4.22.6 What a refusal records
+
+`/v1/tools/*` refusals are **§6 pre-pipeline records**: `identity.event_id` is 0, `usage` is marked missing,
+nothing is priced, `result.attempts` is 0, `protocol.protocol_in` is `"media"` (a word the protocol path
+never produces — no cell is named `media`) and `errors[].kind` is the refusal's own kind —
+`not_implemented` for the two arms of §4.22.1, `request_too_large` for the bound, `transform_error` for an
+unusable body, `unauthorized` for the guard. The guard's `401` writes the same shape from its own path
+(§4.7). A refusal that is answered from the trace itself (`trace_write_failed`) is not the request's
+failure and never changes its status.
+
+#### 4.22.7 What this section does not change
+
+No new `WireApi` and no provider URL kind (`urls`/`supports` stay keyed by the three protocol cells); **no
+audio**: `/v1/tools/transcribe` and `/v1/tools/synthesize` answer `501` because this build has no audio
+route kind, a multipart reader, or an audio price, and a `200` with invented semantics would be worse than
+a typed refusal; no new event kind; no new `/metrics` series; no state; no §8 row beyond the `not_implemented`
+amendment; `server.max_body_bytes` and every protocol cell's bound untouched; §2.1's byte-faithfulness
+untouched, because this surface has no client body to preserve — the synthesized body **is** the request and
+§6 records it as the upstream request; the `failover`/`fallback` rules, the plan policies and the response
+cache (§4.17) apply unchanged (a media call is cacheable by the same rules, and its key is the synthesized
+body's digest, not the tool request's).
+
+#### 4.22.8 Assertions
+
+`CONF-108` (`ocr` answers `{"text"}` and forwards the synthesized chat body — `model` is the route's native
+id, `stream` is `false`, the text part is the caller's prompt, the image part is the `data:` URI; a config
+with no `media:` answers `501` on all three paths and contacts no upstream; the audio verbs answer `501`
+even with the section written; an unusable body is `400` with no upstream contact; a body over
+`media.max_body_bytes` is `413` and under it is `200`; the surface is behind the guard). DESIGN §12.26
+carries the landing; `ADR-065` is the reasoning.
+
 ## 5. Onboarding prerequisite (mandatory)
 
 The client must bypass any local system proxy, otherwise **the request does not reach vadis at all**:
@@ -2802,7 +2938,7 @@ The trace is the **analysis truth**: one JSON line per request, and the only pro
 | usage | normalized `Usage { input_total, input_cached, cache_write, output, reasoning }` |
 | cost | `cost.input_miss`, `cost.input_hit`, `cost.cache_write`, `cost.output`, `cost.total`, **`cost.currency`** (§4.8: the unit every amount in this group is denominated in), `quota_after` |
 | result | `status`, `upstream_status`, `failover_from`, `plan_switch` (present only when the plan policy of §4.6 displaced the request's account), **`failover_order`** (**ADR-063**: the order the walk held at the move that abandoned a route — **present-and-`null`** whenever no route moved, the stance `failover_from` takes, so the key set never changes shape; its members are the paragraph **`result.failover_order`** below), `overhead_ms`, `upstream_ms`, **`attempts`** (ADR-060 D3: how many upstream attempts this request made, across all routes — always present, `≥ 1` on every record that attempted anything and `0` on the classes that attempted nothing: the boundary refusals, `no_available_route`, and a cancelled request that submitted no attempt. It is the field that lets a reader tell *a retry served this* (`attempts ≥ 2` with `failover_from` null) from *the walk moved* (`attempts ≥ 2` with `failover_from` set) from *no retry happened* (`attempts == 1`)) |
-| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
+| failure details | `errors[]` (an array; **no failure = empty array, do not omit**), each `{ kind, message, plugin?, details? }`; `kind ∈ {transform_error, upstream_error, trace_write_failed, internal, not_implemented, unauthorized, request_too_large, canceled}` (§8 — the vocabulary is shared with §8's `error.type` table and the two lists move together **for the kinds that answer a client**: `unauthorized` is §4.7's guard, `request_too_large` is §4.13's bound, `not_implemented` is §4.22's media surface — an unsupported capability is not a fault of the machinery, so it never wears `internal`). Two kinds are **trace-only**, because the request they describe produces no client-visible body for §8 to name: `trace_write_failed` (the observation failed, the request did not) and `canceled` (ADR-060 D1: the client abandoned the request, §6's class below) |
 
 **The `identity` group's attribution is derived, and one of its words is a declared constant.** `client` is
 produced by one pure function of the request's `User-Agent` header, evaluated **once** per request at the
@@ -3376,7 +3512,7 @@ rely on each upstream's own error shape):
 | `quota_exceeded` | 429 | `quota.over_quota = block` and the allowance is exhausted, or `plan_policy.on_primary_exhausted: block` and the primary account is exhausted (§4.6) |
 | `upstream_error` | 502 | an upstream attempt errored and the chain is exhausted — the **attempt-exhausted** shape: the class-based sentence with `details.upstream_status` / `details.error_class`, and **neither `stage` nor `skipped[]`** — **or** nothing in the chain may serve this request at all, in which case **nothing was attempted**: every candidate demoted, keyless or **not declaring the inbound protocol in its `supports`** (`details.stage: "no_available_route"`, shape frozen in the clauses below) |
 | `upstream_timeout` | 504 | upstream attempt timed out and the chain is exhausted |
-| `not_implemented` | 501 | **no producer reachable from a request in this build (ADR-051).** The row is kept because a client parses `error.type` and the vocabulary is not deleted for a build in which it is unreachable: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
+| `not_implemented` | 501 | **the media surface is its producer (§4.22)**: `/v1/tools/transcribe` and `/v1/tools/synthesize` — this build has no audio route kind — and any of the three when the config writes no `media:` section. Both arms are answered before the pipeline: no upstream is contacted, nothing is attempted, and one §6 pre-pipeline record carries `errors[].kind: "not_implemented"`. The row's original subject — a **protocol cell** a client asked for — still has **no producer reachable from a request in this build (ADR-051)**: a declared cell is served natively and an undeclared one is the `400` above (§2), so no legal configuration reaches a "declared but not implemented" cell. It named the cell the **client** asked for; it was never the failover walk's answer to a candidate the client did not name (§2, §4.2 — that is the `502` above), and it must not be repurposed as one |
 | `internal` | 500 | everything else |
 
 Response headers: `X-Vadis-Request-Id` (always), `X-Vadis-Session` (when a session was resolved),

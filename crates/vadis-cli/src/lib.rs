@@ -977,6 +977,267 @@ pub async fn serve(config_path: &str) -> i32 {
             ))
     }
 
+    /// `POST /v1/tools/{ocr,transcribe,synthesize}` (spec §4.22, ADR-065):
+    /// the media tool surface — the paths a client calls when it wants an
+    /// answer *about* a file rather than a chat completion. The fifth
+    /// guarded non-protocol route family: the same guard middleware as
+    /// `/metrics`, its own word `"media"`, and its own body bound
+    /// (`media.max_body_bytes`) because base64 media is megabytes while the
+    /// protocol routes stay text-sized. Each path answers a **verb**; the
+    /// request the pipeline forwards is synthesized in `vadis-proxy`'s
+    /// `media_tools`, which is also where the answer is parsed back into
+    /// `{"text": ...}`. A config with no `media:` section serves `501
+    /// not_implemented` on all three (§4.22: writing nothing is the operator
+    /// saying the surface is off), and so do the two audio verbs even when
+    /// `media:` is written — vadis has no audio route kind, and an honest 501
+    /// is the contract (§8), not a silent 404.
+    fn guarded_media_tools_route(revision: vadis_proxy::SharedRevision) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/v1/tools/ocr",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        media_tool_endpoint(rev, "ocr", headers, body, client).await
+                    },
+                ),
+            )
+            .route(
+                "/v1/tools/transcribe",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        media_tool_endpoint(rev, "transcribe", headers, body, client).await
+                    },
+                ),
+            )
+            .route(
+                "/v1/tools/synthesize",
+                post(
+                    |axum::extract::Extension(rev): axum::extract::Extension<
+                        std::sync::Arc<vadis_proxy::Revision>,
+                    >,
+                     axum::extract::Extension(client): axum::extract::Extension<ClientWord>,
+                     headers: axum::http::HeaderMap,
+                     body: axum::body::Body| async move {
+                        media_tool_endpoint(rev, "synthesize", headers, body, client).await
+                    },
+                ),
+            )
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            .route_layer(axum::middleware::from_fn_with_state(
+                GuardState {
+                    revision,
+                    proto_in: "media",
+                },
+                guard_mw,
+            ))
+    }
+
+    /// §8's answer with the request id header, for the arms that never reach
+    /// the pipeline.
+    fn media_error(
+        request_id: &str,
+        code: vadis_core::error::ErrorCode,
+        message: String,
+        details: Option<serde_json::Value>,
+    ) -> Response {
+        let status = StatusCode::from_u16(code.http_status()).expect("media status maps");
+        let mut body = ErrorBody::new(code, message, request_id);
+        body.error.details = details;
+        let mut resp = (status, Json(body)).into_response();
+        if let Ok(v) = request_id.parse() {
+            resp.headers_mut().insert("x-vadis-request-id", v);
+        }
+        // §4.13's reasoning holds on this surface too: a refused request's
+        // body may not have been drained, and a keep-alive connection
+        // holding unread request bytes would parse them as the next request.
+        if code == vadis_core::error::ErrorCode::RequestTooLarge {
+            resp.headers_mut().insert(
+                axum::http::header::CONNECTION,
+                axum::http::HeaderValue::from_static("close"),
+            );
+        }
+        resp
+    }
+
+    /// One media call (§4.22): the 501/invalid/too-large arms answer before
+    /// the pipeline; the admitted arm synthesizes the chat request, forwards
+    /// it as an ordinary Chat call (so accounting, tracing, failover and the
+    /// roster's own routing are the pipeline's, not a second code path's)
+    /// and parses the answer back into `{"text": ...}`.
+    async fn media_tool_endpoint(
+        rev: std::sync::Arc<vadis_proxy::Revision>,
+        tool: &'static str,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Body,
+        client: ClientWord,
+    ) -> Response {
+        let request_id = request_id();
+        let rid = request_id.as_str();
+        let started = std::time::Instant::now();
+        let client = client.0;
+        // Spec §4.22: a refusal answered BEFORE the pipeline writes the §6
+        // pre-pipeline record — no model named, no route selected, no byte
+        // read from an upstream — so the client's answer and the trace agree
+        // about which rule refused the call. A refusal AFTER the pipeline (a
+        // non-2xx upstream, an unparsable answer) writes nothing extra: the
+        // forward already wrote the ordinary chat row.
+        let refuse = |code: vadis_core::error::ErrorCode,
+                      message: String,
+                      details: Option<serde_json::Value>| {
+            let now_us = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_micros() as i64)
+                .unwrap_or(0);
+            let record = vadis_proxy::tool_refused_record(
+                rid,
+                tool,
+                code,
+                message.clone(),
+                now_us,
+                started.elapsed().as_millis() as u32,
+                rev.forwarder
+                    .trace
+                    .as_ref()
+                    .map(|t| t.config_digest())
+                    .unwrap_or(""),
+                client,
+            );
+            // Write, then answer — the order every boundary refusal uses
+            // (ADR-040 D2); a trace write failure is §8's non-blocking case.
+            if let Some(t) = rev.forwarder.trace.as_ref() {
+                let _ = t.write(&record);
+            }
+            media_error(rid, code, message, details)
+        };
+        let cfg = match rev.forwarder.config.media.clone() {
+            Some(cfg) => cfg,
+            None => {
+                return refuse(
+                    vadis_core::error::ErrorCode::NotImplemented,
+                    format!(
+                        "POST /v1/tools/{tool} is not served here: the config writes no media: \
+                         section (spec §4.22 — the tools are opt-in, and writing nothing is the \
+                         operator saying they are off)"
+                    ),
+                    None,
+                )
+            }
+        };
+        if tool != "ocr" {
+            return refuse(
+                vadis_core::error::ErrorCode::NotImplemented,
+                format!(
+                    "POST /v1/tools/{tool} is not implemented: vadis has no audio route kind \
+                     (spec §4.22 reserves the verb; OCR is the one verb that serves today)"
+                ),
+                None,
+            );
+        }
+        let limit = cfg.max_body_bytes as usize;
+        let declared: Option<u64> = headers
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        if let Some(len) = declared {
+            if len > limit as u64 {
+                return refuse(
+                    vadis_core::error::ErrorCode::RequestTooLarge,
+                    format!(
+                        "request body exceeds media.max_body_bytes: {len} bytes declared, the \
+                         configured bound is {limit}"
+                    ),
+                    Some(serde_json::json!({
+                        "bound": "media.max_body_bytes",
+                        "limit_bytes": limit,
+                        "content_length": declared,
+                    })),
+                );
+            }
+        }
+        let raw = match axum::body::to_bytes(body, limit).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return refuse(
+                    vadis_core::error::ErrorCode::RequestTooLarge,
+                    format!(
+                        "request body exceeds media.max_body_bytes: the configured bound is \
+                         {limit}"
+                    ),
+                    Some(serde_json::json!({
+                        "bound": "media.max_body_bytes",
+                        "limit_bytes": limit,
+                        "content_length": serde_json::Value::Null,
+                    })),
+                )
+            }
+        };
+        let pairs: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let transform_mode = match vadis_proxy::resolve_transform_mode(&pairs) {
+            Ok(m) => m,
+            Err(f) => return refuse(f.code, f.message, f.details),
+        };
+        let chat = match vadis_proxy::ocr_chat_body(&raw, &cfg) {
+            Ok(chat) => chat,
+            Err(e) => return refuse(e.code, e.message, None),
+        };
+        match rev
+            .forwarder
+            .forward_with_client(
+                WireApi::Chat,
+                &chat,
+                rid,
+                &pairs,
+                transform_mode,
+                "vadis-media",
+            )
+            .await
+        {
+            ForwardOutcome::Success(s) => {
+                if !(200..300).contains(&s.status) {
+                    return media_error(
+                        rid,
+                        vadis_core::error::ErrorCode::UpstreamError,
+                        format!(
+                            "the media model's route answered HTTP {}: the upstream's own \
+                             refusal is not a tool answer (spec §4.22)",
+                            s.status
+                        ),
+                        Some(serde_json::json!({ "upstream_status": s.status })),
+                    );
+                }
+                match vadis_proxy::ocr_text(&s.body) {
+                    Ok(text) => {
+                        (StatusCode::OK, Json(serde_json::json!({ "text": text }))).into_response()
+                    }
+                    Err(e) => media_error(rid, e.code, e.message, None),
+                }
+            }
+            ForwardOutcome::Failure(f) => {
+                let details = f.client_body_details();
+                let mut eb = ErrorBody::new(f.code, f.message, rid);
+                eb.error.details = details;
+                (
+                    StatusCode::from_u16(f.status).expect("failure status maps"),
+                    Json(eb),
+                )
+                    .into_response()
+            }
+        }
+    }
+
     /// `GET /state/events` (spec §4.18, ADR-054, DESIGN §12.24): the live
     /// event-log figure, answered by the running process from its own
     /// store. The third guarded non-protocol route: same guard middleware
@@ -1225,6 +1486,7 @@ pub async fn serve(config_path: &str) -> i32 {
         ))
         .merge(guarded_metrics_route(cell.clone(), state.clone()))
         .merge(guarded_models_route(cell.clone()))
+        .merge(guarded_media_tools_route(cell.clone()))
         .merge(guarded_state_route(cell.clone(), state.clone()))
         .with_state(());
 

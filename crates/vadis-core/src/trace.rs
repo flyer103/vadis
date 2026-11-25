@@ -561,8 +561,8 @@ pub struct FailoverOrderRec {
 #[serde(rename_all = "snake_case")]
 pub struct TraceError {
     /// `transform_error` / `upstream_error` / `trace_write_failed` /
-    /// `internal` — serialized from the client-facing `ErrorCode`'s own
-    /// vocabulary mapping (spec §8 table).
+    /// `internal` / `not_implemented` — serialized from the client-facing
+    /// `ErrorCode`'s own vocabulary mapping (spec §8 table).
     pub kind: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -579,7 +579,10 @@ impl TraceError {
             ErrorCode::UpstreamError | ErrorCode::UpstreamTimeout | ErrorCode::QuotaExceeded => {
                 "upstream_error"
             }
-            ErrorCode::NotImplemented => "internal",
+            // The capability the build does not serve is not a fault of
+            // the build's own machinery: "internal" would tell an operator
+            // to look for a bug that does not exist (spec §4.22).
+            ErrorCode::NotImplemented => "not_implemented",
             ErrorCode::InvalidRequest
             | ErrorCode::AutoNotSupported
             | ErrorCode::CapabilityUnsupported

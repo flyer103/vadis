@@ -657,6 +657,52 @@ pub struct ServerCfg {
     pub auth_token_env: Option<String>,
 }
 
+/// Spec §4.22: the media tool surface — `POST /v1/tools/*`, the routes a
+/// client uses when it wants an answer *about* a file rather than a chat
+/// completion. This is the one **optional** section of the file: the tools
+/// are a capability a deployment opts into, and a config without `media:`
+/// serves `501 not_implemented` on those paths (spec §8's body) instead of
+/// refusing to load. The "every section is required" rule above forbids
+/// silently *defaulting* a section; writing nothing here is the operator
+/// saying the surface is off, which is a statement, not a default.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaCfg {
+    /// The model that answers a media call, in either roster spelling (an
+    /// alias, or `provider/model`). Required when `media:` is written:
+    /// the tools surface carries no client-chosen model (§4.22 — the
+    /// caller asks for a verb, not a route), so a deployment that cannot
+    /// name one has nothing to serve. Resolution is the forwarder's, so a
+    /// model that does not resolve fails the call with §8's own
+    /// `unknown_model`/`unknown_provider` answer, never a silent
+    /// fallback.
+    pub model: String,
+    /// Spec §4.22: the largest inbound body the media routes read. A
+    /// bound of its own, not `server.max_body_bytes`, because the
+    /// payloads are base64 media (a 5 MiB photo is ~7 MiB of JSON) while
+    /// the protocol routes stay at their text-sized cap. Above it the
+    /// request is refused `413 request_too_large` before the pipeline —
+    /// the same §8 shape and the same header-first rule (§4.13).
+    #[serde(default = "default_media_max_body_bytes")]
+    pub max_body_bytes: i64,
+    /// Spec §4.22: the instruction a media call carries when the caller
+    /// sends no `prompt`. Absent ⇒ the documented default (the constant
+    /// in `vadis-proxy`'s `media_tools`) rather than a hidden empty
+    /// string — an empty instruction asks a model to summarise the file
+    /// however it likes, which is not the OCR contract.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+/// Spec §4.22: the media routes' default inbound body bound, 8 MiB. Sized
+/// for the phone-photo path this surface exists for: a 5 MiB image (kian's
+/// own `media.max_input_bytes`) becomes ~7 MiB once base64 and JSON
+/// framing are added, and the bound stays far below the point where one
+/// local request would be abusive.
+fn default_media_max_body_bytes() -> i64 {
+    8_388_608
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCfg {
@@ -1214,6 +1260,12 @@ pub struct VadisConfig {
     /// by `plan_policies:` itself (the roster's own presence rule).
     #[serde(default, deserialize_with = "de_plan_policies_presence")]
     pub plan_policies: Option<Vec<PlanPolicyCfg>>,
+    /// Spec §4.22: the media tool surface. The one optional section (this
+    /// file's "every section is required" rule governs the chat half of
+    /// the config; §4.22 makes writing nothing here the explicit spelling
+    /// of "serve the tools as 501").
+    #[serde(default)]
+    pub media: Option<MediaCfg>,
     // Never serializes: a present `state:` key refuses the load, so the
     // value is always None — and `StateKeyForbidden` deliberately has no
     // `Serialize` (its one job is to fail deserialization).
@@ -1359,6 +1411,10 @@ pub struct RootFile {
     /// rule with `plan_policy` is validated after the join.
     #[serde(default, deserialize_with = "de_plan_policies_presence")]
     pub plan_policies: Option<Vec<PlanPolicyCfg>>,
+    /// Spec §4.22's one optional section, threaded through the join
+    /// unchanged: the media tools read it at call time, never a copy.
+    #[serde(default)]
+    pub media: Option<MediaCfg>,
     // As on VadisConfig: never serialized (`StateKeyForbidden` has no
     // `Serialize`; a present key refuses the load).
     #[serde(default, skip_serializing)]
@@ -1401,6 +1457,7 @@ impl RootFile {
             fallback,
             plan_policy,
             plan_policies,
+            media,
             state,
         } = self;
         let providers = match (providers, providers_file, roster) {
@@ -1487,6 +1544,7 @@ impl RootFile {
             fallback,
             plan_policy,
             plan_policies,
+            media,
             state,
         })
     }
@@ -2172,6 +2230,51 @@ impl VadisConfig {
                      network jitter, over 300s it is no bound at all)"
                 ),
             ));
+        }
+
+        // Spec §4.22: the media body bound is the same kind of scalar rule
+        // as the two above, with the same floor — a limit that cannot bound
+        // anything is a load error, not a runtime surprise.
+        if let Some(media) = &self.media {
+            if media.max_body_bytes < MIN_MAX_BODY_BYTES {
+                return Err(ConfigError::new(
+                    "media.max_body_bytes",
+                    format!(
+                        "{} — the media body limit must be an integer of bytes ≥ {}",
+                        media.max_body_bytes, MIN_MAX_BODY_BYTES
+                    ),
+                ));
+            }
+            if media.model.trim().is_empty() {
+                return Err(ConfigError::new(
+                    "media.model",
+                    "empty — the media tools answer as the model this key names, so a \
+                     blank value would route nowhere"
+                        .to_string(),
+                ));
+            }
+            // Spec §4.22: the name resolves at load, not on the first photo.
+            // The media surface carries no client-chosen model, so an
+            // unresolvable `media.model` would make every call fail after
+            // the file had been read and base64-encoded — the one place a
+            // typo costs the most.
+            let media_name = media.model.trim();
+            let resolves = self.aliases.contains_key(media_name)
+                || media_name.split_once('/').is_some_and(|(provider, model)| {
+                    self.providers
+                        .iter()
+                        .any(|p| p.name == provider && p.models.iter().any(|m| m.id == model))
+                });
+            if !resolves {
+                return Err(ConfigError::new(
+                    "media.model",
+                    format!(
+                        "unknown route '{media_name}': the media tools answer as the \
+                         model this key names — an alias, or a roster `provider/model` \
+                         (spec §4.22)"
+                    ),
+                ));
+            }
         }
 
         for (i, src) in self.session.key_sources.iter().enumerate() {
@@ -4013,5 +4116,67 @@ mod tests {
             .is_none(),
             "the empty list serves the ordinary path"
         );
+    }
+
+    // -------------------------------------------------------------
+    // spec §4.22 (ADR-065): the media section's load-time rules.
+    // -------------------------------------------------------------
+
+    /// A `media:` section's two refusals and its two accepted spellings.
+    /// Both refusals name the key, because the loader is the last place a
+    /// typo can be reported before the first photograph is read.
+    #[test]
+    fn the_media_section_validates_its_bound_and_its_route() {
+        let mut cfg = planned();
+        cfg.media = Some(MediaCfg {
+            model: "zai/glm-5.3".into(),
+            max_body_bytes: default_media_max_body_bytes(),
+            prompt: None,
+        });
+        cfg.validate().expect("a roster route resolves");
+
+        cfg.aliases.insert(
+            "glm-plan".into(),
+            RouteSpec {
+                provider: "zai-plan".into(),
+                model: "glm-5.3".into(),
+            },
+        );
+        cfg.media.as_mut().expect("a section").model = "glm-plan".into();
+        cfg.validate().expect("an alias resolves");
+
+        cfg.media.as_mut().expect("a section").model = "zai/nope".into();
+        let err = cfg
+            .validate()
+            .expect_err("an unknown route refuses")
+            .to_string();
+        assert!(
+            err.contains("media.model") && err.contains("zai/nope"),
+            "got: {err}"
+        );
+
+        let mut cfg = planned();
+        cfg.media = Some(MediaCfg {
+            model: "zai/glm-5.3".into(),
+            max_body_bytes: MIN_MAX_BODY_BYTES - 1,
+            prompt: None,
+        });
+        let err = cfg
+            .validate()
+            .expect_err("a bound below the floor refuses")
+            .to_string();
+        assert!(err.contains("media.max_body_bytes"), "got: {err}");
+
+        let mut cfg = planned();
+        cfg.media = Some(MediaCfg {
+            model: "   ".into(),
+            max_body_bytes: default_media_max_body_bytes(),
+            prompt: None,
+        });
+        let err = cfg
+            .validate()
+            .expect_err("a blank model refuses")
+            .to_string();
+        assert!(err.contains("media.model"), "got: {err}");
     }
 }
